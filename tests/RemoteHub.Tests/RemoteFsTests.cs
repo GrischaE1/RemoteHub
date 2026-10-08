@@ -58,7 +58,19 @@ public class RemoteFsTests : IDisposable
         Assert.Equal("", drives.Path);
         Assert.Contains(drives.Entries, d => d.Kind == EntryKind.Drive && d.Name.StartsWith("C:", StringComparison.OrdinalIgnoreCase));
         Assert.Throws<RemoteCommandException>(() => RemoteFs.ListRemote(_rs, Path.Combine(_root, "missing")));
-        Assert.Equal(Environment.ExpandEnvironmentVariables("%TEMP%").TrimEnd('\\'), RemoteFs.ListRemote(_rs, "%TEMP%").Path.TrimEnd('\\'));
+        // Compare long names: %TEMP% may be stored in 8.3 form (e.g. C:\Users\RUNNER~1\... on CI runners).
+        Assert.Equal(LongPath(Environment.ExpandEnvironmentVariables("%TEMP%")), LongPath(RemoteFs.ListRemote(_rs, "%TEMP%").Path),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern uint GetLongPathName(string shortPath, char[] longPath, uint size);
+
+    private static string LongPath(string path)
+    {
+        var buffer = new char[1024];
+        var n = GetLongPathName(path, buffer, (uint)buffer.Length);
+        return (n > 0 && n < buffer.Length ? new string(buffer, 0, (int)n) : path).TrimEnd('\\');
     }
 
     [Theory]
