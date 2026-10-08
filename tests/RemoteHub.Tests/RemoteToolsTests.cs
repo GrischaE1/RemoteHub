@@ -175,8 +175,13 @@ public class RemoteToolsTests
 
             // cmd.exe starts ping.exe: the tree option ends both.
             var parent = Sleeper("cmd.exe", "/c ping.exe -n 120 127.0.0.1");
-            System.Threading.Thread.Sleep(1000);
-            var child = RemoteProcesses.List(rs).Processes.Single(p => p.ParentId == parent.Id && p.Name.Equals("ping.exe", StringComparison.OrdinalIgnoreCase));
+            ProcessSample? child = null;
+            for (var i = 0; i < 20 && child is null; i++) // wait until cmd.exe has started ping.exe (slow on CI runners)
+            {
+                System.Threading.Thread.Sleep(500);
+                child = RemoteProcesses.List(rs).Processes.SingleOrDefault(p => p.ParentId == parent.Id && p.Name.Equals("ping.exe", StringComparison.OrdinalIgnoreCase));
+            }
+            Assert.NotNull(child);
             RemoteProcesses.Stop(rs, [(parent.Id, "cmd.exe")], tree: true);
             Assert.True(parent.WaitForExit(10_000));
             try { using var c = Process.GetProcessById(child.Id); Assert.True(c.WaitForExit(10_000)); } catch (ArgumentException) { /* already gone */ }

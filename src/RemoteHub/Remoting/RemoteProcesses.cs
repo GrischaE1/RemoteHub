@@ -43,10 +43,38 @@ public static class RemoteProcesses
         $ErrorActionPreference = 'Stop'
         foreach ($id in $Ids) {
             if ($id -eq $PID) { throw 'This is the PowerShell remoting process of this tab.' }
-            if ($Tree) {
-                $out = & taskkill.exe /PID $id /T /F 2>&1
-                if ($LASTEXITCODE -ne 0) { throw (($out | Out-String).Trim()) }
-            } else { Stop-Process -Id $id -Force }
+            if (-not $Tree) { Stop-Process -Id $id -Force; continue }
+
+            # The process and everything it started. A child must be younger than its parent (guards against reused PIDs).
+            $null = Get-Process -Id $id   # a clear error when it's gone already
+            $all = @(Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId, CreationDate, Name)
+            $targets = [System.Collections.Generic.List[object]]::new()
+            $queue = [System.Collections.Generic.Queue[object]]::new()
+            $all | Where-Object { $_.ProcessId -eq $id } | ForEach-Object { $targets.Add($_); $queue.Enqueue($_) }
+            while ($queue.Count) {
+                $p = $queue.Dequeue()
+                foreach ($c in $all) {
+                    if ($c.ParentProcessId -eq $p.ProcessId -and $c.ProcessId -ne $p.ProcessId -and $c.ProcessId -ne $PID -and
+                        $c.CreationDate -ge $p.CreationDate -and -not ($targets | Where-Object { $_.ProcessId -eq $c.ProcessId })) {
+                        $targets.Add($c); $queue.Enqueue($c)
+                    }
+                }
+            }
+
+            # End the top first (so it can't start new ones), then the rest. Processes that exit on their own meanwhile are fine.
+            $failed = @{}
+            foreach ($t in $targets) {
+                try { Stop-Process -Id $t.ProcessId -Force -ErrorAction Stop }
+                catch { if (Get-Process -Id $t.ProcessId -ErrorAction SilentlyContinue) { $failed[[int]$t.ProcessId] = $_.Exception.Message } }
+            }
+            $ids = @($targets | ForEach-Object { [int]$_.ProcessId })
+            Get-Process -Id $ids -ErrorAction SilentlyContinue | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+            $left = @(Get-Process -Id $ids -ErrorAction SilentlyContinue)
+            if ($left.Count) {
+                throw ('Could not end: ' + (($left | ForEach-Object {
+                    "$($_.ProcessName) (PID $($_.Id))" + $(if ($failed[$_.Id]) { " – $($failed[$_.Id])" })
+                }) -join '; '))
+            }
         }
         """;
 
