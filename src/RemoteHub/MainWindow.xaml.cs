@@ -50,7 +50,7 @@ public partial class MainWindow : FluentWindow
         _promptWatcher.PromptShown += OnCredentialPrompt;
         vm.Conflict += () => Dispatcher.BeginInvoke(OnSettingsConflict);
         SettingsStore.ExternalChange += () => Dispatcher.BeginInvoke(OnExternalSettingsChange);
-        BuildSwitchKeysMenu();
+        UpdateShortcutHint();
 
         vm.PropertyChanged += Vm_PropertyChanged;
         vm.Sessions.CollectionChanged += Sessions_CollectionChanged;
@@ -62,6 +62,7 @@ public partial class MainWindow : FluentWindow
         DragOver += Window_DragOver;
         Drop += Window_Drop;
         Loaded += (_, _) => ApplyTheme(vm.Data.Ui.Theme);
+        Loaded += (_, _) => StartupChecks();
         Closing += Window_Closing;
     }
 
@@ -87,7 +88,6 @@ public partial class MainWindow : FluentWindow
             AppChrome.ApplyPalette(theme != "Light");
         }
         foreach (var w in _detached.Values) ApplicationThemeManager.Apply(w);
-        foreach (MenuItem mi in ThemeMenu.Items) mi.IsChecked = (string)mi.Tag == theme;
     }
 
     // =====================================================================
@@ -196,31 +196,20 @@ public partial class MainWindow : FluentWindow
         catch (Exception ex) { _ = Dialogs.Info(this, "Reload failed", ex.Message); }
     }
 
-    private void BuildSwitchKeysMenu()
+    private void SetSwitchKeys(string id)
     {
-        SwitchKeysMenu.Items.Clear();
-        foreach (var preset in SwitchHotkeys.All)
-        {
-            var mi = new MenuItem { Header = preset.Label, Tag = preset.Id, IsChecked = preset == SwitchHotkeys.Current };
-            mi.Click += (_, _) =>
-            {
-                SwitchHotkeys.Current = preset;
-                _vm.Data.Ui.SwitchKeys = preset.Id;
-                foreach (var s in _vm.Sessions.OfType<RdpSession>()) s.RefreshSwitchHotkeys();
-                BuildSwitchKeysMenu();
-                _vm.RequestSave();
-            };
-            SwitchKeysMenu.Items.Add(mi);
-        }
+        SwitchHotkeys.Current = SwitchHotkeys.Get(id);
+        _vm.Data.Ui.SwitchKeys = SwitchHotkeys.Current.Id;
+        foreach (var s in _vm.Sessions.OfType<RdpSession>()) s.RefreshSwitchHotkeys();
+        UpdateShortcutHint();
+    }
+
+    private void UpdateShortcutHint()
+    {
         ShortcutHint.Text = "Ctrl+N new connection  ·  Ctrl+F search / quick connect\n" +
                             SwitchHotkeys.Current.Hint + " – also inside a session and in full screen (use the left Alt key)";
     }
 
-    private void Theme_Click(object sender, RoutedEventArgs e)
-    {
-        ApplyTheme((string)((MenuItem)sender).Tag);
-        _vm.RequestSave();
-    }
 
     // =====================================================================
     // Session hosting
@@ -464,6 +453,7 @@ public partial class MainWindow : FluentWindow
             SearchBox.Focus(); SearchBox.SelectAll(); e.Handled = true;
         }
         else if (ctrl && e.Key == Key.B) { ToggleSidebar(); e.Handled = true; }
+        else if (ctrl && e.Key == Key.OemComma) { OpenSettings(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.Tab) { _vm.SelectNextSession(shift ? -1 : 1); e.Handled = true; }
         else if (ctrl && e.Key == Key.W && _vm.SelectedSession is { } s) { s.Close(); e.Handled = true; }
     }
@@ -1206,9 +1196,90 @@ public partial class MainWindow : FluentWindow
         if (await Dialogs.Confirm(this, "Delete", what, "Delete")) _vm.Remove(n);
     }
 
-    private void Defaults_Click(object sender, RoutedEventArgs e)
+    // =====================================================================
+    // Settings window, update check and telemetry
+    // =====================================================================
+
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings(null);
+
+    private void Defaults_Click(object sender, RoutedEventArgs e) => OpenSettings(EditorWindow.PageDefaults);
+
+    private void OpenSettings(string? page)
     {
-        if (new EditorWindow(null, _vm.Data, isNew: false) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
+        var e = new RoutedEventArgs();
+        var host = new AppSettingsHost(
+            ApplyTheme: ApplyTheme,
+            ApplySwitchKeys: SetSwitchKeys,
+            StartupProtection: () => StartupProtection_Click(this, e),
+            ManageCredentials: () => Credentials_Click(this, e),
+            ChangeLocation: () => SettingsLocation_Click(this, e),
+            OpenFolder: () => OpenSettingsFolder_Click(this, e),
+            OpenLog: () => OpenLog_Click(this, e),
+            ExportBackup: () => ExportBackup_Click(this, e),
+            DefaultApp: () => DefaultApp_Click(this, e),
+            CheckForUpdates: channel => ShowUpdateWindow(null, channel));
+        if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
+    }
+
+    private UpdateCheckResult? _availableUpdate;
+
+    /// <summary>After the window is shown: the anonymous start ping (if on) and the update check (if on). Neither delays the start.</summary>
+    private async void StartupChecks()
+    {
+        var ui = _vm.Data.Ui;
+        Telemetry.AppStart(ui);
+        // Everything below runs on a background thread (policy lookup, network, parsing); only the result comes back here.
+        var check = await Task.Run(async () =>
+        {
+            if (!UpdateService.CheckEnabled(ui)) return default((string, UpdateCheckResult)?);
+            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            var ch = UpdateService.EffectiveChannel(ui);
+            return (ch, await UpdateService.CheckAsync(ch).ConfigureAwait(false));
+        });
+        if (check is not var (channel, result)) return;
+        DiagLog.Write($"Update check ({channel}): {result.Status}" + (result.Info is { } i ? $", latest {i.Version}" : ""));
+        if (result.Status != UpdateStatus.Available) return;
+        if (result.Required) { ShowUpdateWindow(result, channel); return; }
+        if (result.Info!.Version == ui.SkippedUpdateVersion) return;
+        _availableUpdate = result;
+        UpdateBannerText.Text = $"RemoteHub {result.Info.Version} is available – you have {UpdateService.Current}.";
+        UpdateBanner.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateDetails_Click(object sender, RoutedEventArgs e) => ShowUpdateWindow(_availableUpdate, null);
+
+    private void UpdateBannerClose_Click(object sender, RoutedEventArgs e) => UpdateBanner.Visibility = Visibility.Collapsed;
+
+    private void CheckUpdates_Click(object sender, RoutedEventArgs e) => ShowUpdateWindow(null, null);
+
+    /// <summary>Shows an update (or checks now when <paramref name="result"/> is null), owned by whichever window is in front.</summary>
+    private void ShowUpdateWindow(UpdateCheckResult? result, string? channel)
+    {
+        var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this;
+        var host = new UpdateHost(ConfirmExitForUpdate, ExitForUpdate, _vm.RequestSave);
+        new UpdateWindow(_vm.Data.Ui, host, result, channel) { Owner = owner }.ShowDialog();
+        if (_availableUpdate?.Info is { } shown && shown.Version == _vm.Data.Ui.SkippedUpdateVersion) UpdateBanner.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task<bool> ConfirmExitForUpdate()
+    {
+        var active = _vm.Sessions.Count(s => s.State is SessionState.Connected or SessionState.Connecting);
+        var transfers = _vm.ActiveTransfers;
+        if (active == 0 && transfers == 0) return true;
+        var what = string.Join(" and ", new[]
+        {
+            active > 0 ? $"{active} session(s) are still connected" : null,
+            transfers > 0 ? $"{transfers} file transfer(s) are not finished" : null,
+        }.Where(x => x is not null));
+        var owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this;
+        return await Dialogs.Confirm(owner, "Install update", $"{what}. Installing the update disconnects them and closes RemoteHub. Continue?", "Install");
+    }
+
+    private void ExitForUpdate()
+    {
+        _forceClose = true;
+        Shutdown();
+        Close();
     }
 
     private void Menu_Click(object sender, RoutedEventArgs e)

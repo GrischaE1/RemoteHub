@@ -13,8 +13,22 @@
     <Grid Background="{DynamicResource ChromeBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+
+        <!-- A newer version is available (shown after the start-up update check) -->
+        <Border x:Name="UpdateBanner" Grid.Row="1" Visibility="Collapsed" Margin="10,0,10,8" CornerRadius="8" Padding="12,6" BorderThickness="1"
+                Background="{DynamicResource SidebarBackgroundBrush}" BorderBrush="{DynamicResource BrandAccentBrush}">
+            <DockPanel>
+                <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowCircleDown24" FontSize="18" Margin="0,0,10,0" VerticalAlignment="Center" />
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <ui:Button Content="Details…" Appearance="Primary" Click="UpdateDetails_Click" Margin="0,0,6,0" />
+                    <ui:Button Icon="{ui:SymbolIcon Dismiss24}" Click="UpdateBannerClose_Click" ToolTip="Later" AutomationProperties.Name="Hide until next start" />
+                </StackPanel>
+                <TextBlock x:Name="UpdateBannerText" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+        </Border>
 
         <ui:TitleBar x:Name="AppTitleBar" Grid.Row="0" Title="RemoteHub">
             <ui:TitleBar.Icon>
@@ -22,7 +36,7 @@
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="SidebarColumn" Width="360" MinWidth="300" MaxWidth="700" />
                 <ColumnDefinition Width="Auto" />
@@ -79,21 +93,12 @@
                                 <MenuItem Header="Export backup…" Click="ExportBackup_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
                                 <MenuItem Header="Import backup…" Click="ImportBackup_Click" Icon="{ui:SymbolIcon ArrowImport24}" />
                                 <Separator />
+                                <MenuItem Header="Settings…" Click="Settings_Click" Icon="{ui:SymbolIcon Settings24}" InputGestureText="Ctrl+,"
+                                          ToolTip="Theme, keys, updates &amp; privacy, startup protection, storage and the connection defaults" />
                                 <MenuItem Header="Settings overview…" Click="SettingsOverview_Click" Icon="{ui:SymbolIcon TextBulletListSquare24}"
                                           ToolTip="Review all settings in one place: storage, global defaults, remote tools, credentials, appearance" />
-                                <MenuItem Header="Global defaults…" Click="Defaults_Click" Icon="{ui:SymbolIcon Settings24}" />
-                                <MenuItem Header="Settings location (OneDrive / shared)…" Click="SettingsLocation_Click" Icon="{ui:SymbolIcon Folder24}" />
                                 <MenuItem Header="Saved credentials…" Click="Credentials_Click" Icon="{ui:SymbolIcon Key24}" />
-                                <MenuItem Header="Startup protection…" Click="StartupProtection_Click" Icon="{ui:SymbolIcon LockClosed24}"
-                                          ToolTip="Ask for a password or Windows Hello when RemoteHub starts" />
-                                <MenuItem x:Name="SwitchKeysMenu" Header="Session switch keys" Icon="{ui:SymbolIcon Keyboard24}" />
-                                <MenuItem Header="Use for .rdp files…" Click="DefaultApp_Click" Icon="{ui:SymbolIcon Open24}" />
-                                <MenuItem x:Name="ThemeMenu" Header="Theme" Icon="{ui:SymbolIcon WeatherMoon24}">
-                                    <MenuItem Header="System" Tag="System" Click="Theme_Click" />
-                                    <MenuItem Header="Dark" Tag="Dark" Click="Theme_Click" />
-                                    <MenuItem Header="Light" Tag="Light" Click="Theme_Click" />
-                                </MenuItem>
-                                <MenuItem Header="Open settings folder" Click="OpenSettingsFolder_Click" Icon="{ui:SymbolIcon Open24}" />
+                                <MenuItem Header="Check for updates…" Click="CheckUpdates_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
                                 <MenuItem Header="Open diagnostic log" Click="OpenLog_Click" Icon="{ui:SymbolIcon Bug24}"
                                           ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
                                 <Separator />

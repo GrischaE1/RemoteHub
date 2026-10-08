@@ -147,6 +147,14 @@ public sealed class UiState
     public string SwitchKeys { get; set; } = "Less";
     /// <summary>Folder shown on the "this PC" side of the file transfer tab last time.</summary>
     public string? LastLocalFolder { get; set; }
+    /// <summary>Anonymous start counter (see <see cref="Services.Telemetry"/>). IT policy can turn it off.</summary>
+    public bool TelemetryEnabled { get; set; } = true;
+    /// <summary>Look for a newer version when RemoteHub starts.</summary>
+    public bool UpdateCheckEnabled { get; set; } = true;
+    /// <summary>"stable" or "beta"; null = the default for the running version (see <see cref="Services.UpdateService.DefaultChannel"/>).</summary>
+    public string? UpdateChannel { get; set; }
+    /// <summary>Version the user chose to skip; it isn't offered at start-up again (a newer one is).</summary>
+    public string? SkippedUpdateVersion { get; set; }
     /// <summary>Obsolete (v1.5.0 menu toggle). Read once and migrated to <see cref="RdpOptions.CopyPasswordOnPrompt"/>.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool? CopyPasswordOnPrompt { get; set; }

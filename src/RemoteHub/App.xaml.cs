@@ -20,6 +20,9 @@ public partial class App : Application
             return;
         }
 
+        // Crashes are only written to a local file now; the next start sends them (if usage data is on).
+        CrashReporter.Start();
+
         DispatcherUnhandledException += (_, args) =>
         {
             System.Windows.MessageBox.Show(args.Exception.Message, "RemoteHub – unexpected error",
@@ -109,6 +112,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _instance?.Dispose();
+        if (_instance is not null) CrashReporter.Stop();
         base.OnExit(e);
     }
 }

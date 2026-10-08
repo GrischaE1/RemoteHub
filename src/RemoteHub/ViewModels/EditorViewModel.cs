@@ -71,7 +71,7 @@ public sealed partial class EditorViewModel : ObservableObject
     public bool IsFolder => _node is Folder;
     public bool CanInherit => !IsDefaults;
 
-    public string WindowTitle => IsDefaults ? "Global defaults"
+    public string WindowTitle => IsDefaults ? "Settings"
         : IsConnection ? (IsNew ? "New connection" : "Edit connection")
         : (IsNew ? "New folder" : "Edit folder");
 

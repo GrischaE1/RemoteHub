@@ -3,7 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:vm="clr-namespace:RemoteHub.ViewModels"
-                 Title="{Binding WindowTitle}" Width="720" Height="800" MinWidth="520" MinHeight="480"
+                 Title="{Binding WindowTitle}" Width="960" Height="780" MinWidth="760" MinHeight="520"
                  WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
                  ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica">
     <ui:FluentWindow.Resources>
@@ -32,13 +32,25 @@
 
         <ui:TitleBar Title="{Binding WindowTitle}" ShowMaximize="False" ShowMinimize="False" />
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,12">
-            <StackPanel>
-                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,4" />
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="272" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
+            <!-- Navigation: one page per group (built in code, depends on what is edited) -->
+            <ScrollViewer Margin="12,0,6,12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="Nav" AutomationProperties.Name="Settings pages" />
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="PageScroll" Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="18,0,24,12">
+                <StackPanel>
+                    <TextBlock x:Name="PageTitle" FontSize="22" FontWeight="SemiBold" Margin="0,2,0,4" />
+                    <TextBlock x:Name="PageHint" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,12" />
+
+                <StackPanel x:Name="PageGeneral" Visibility="Collapsed">
                 <!-- General -->
-                <StackPanel Visibility="{Binding IsDefaults, Converter={StaticResource InvBoolToVis}}">
-                    <TextBlock Text="General" Style="{StaticResource SectionHeader}" />
+                <StackPanel>
                     <TextBlock Text="Display name" Margin="0,0,0,4" />
                     <ui:TextBox x:Name="NameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                 PlaceholderText="{Binding Host, TargetNullValue='e.g. File server'}" Margin="0,0,0,10" />
@@ -59,9 +71,10 @@
                     <TextBlock Text="Notes" Margin="0,0,0,4" />
                     <ui:TextBox Text="{Binding Notes}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="56" PlaceholderText="Optional" />
                 </StackPanel>
+                </StackPanel>
 
+                <StackPanel x:Name="PageAppearance" Visibility="Collapsed">
                 <!-- Appearance -->
-                <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}" />
                 <StackPanel Visibility="{Binding ShowIconPicker, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="Icon" Margin="0,0,0,6" />
                     <ListBox ItemsSource="{Binding IconChoices}" SelectedItem="{Binding SelectedIcon}"
@@ -181,9 +194,10 @@
                 </StackPanel>
                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
                            Text="Colours the icon in the list, the tab and the session frame – e.g. red for production. Folders pass their colour on to everything inside." />
+                </StackPanel>
 
+                <StackPanel x:Name="PageCredentials" Visibility="Collapsed">
                 <!-- Credentials -->
-                <TextBlock Text="Credentials" Style="{StaticResource SectionHeader}" />
                 <StackPanel Margin="0,0,0,8">
                     <StackPanel Visibility="{Binding CanInherit, Converter={StaticResource BoolToVis}}">
                         <RadioButton GroupName="Cred" Content="Inherit from parent folder" IsChecked="{Binding IsInherit}" Margin="0,0,0,2" />
@@ -232,27 +246,99 @@
                                    Text="Stored encrypted with Windows DPAPI for your user account. If left empty, Windows asks for the password when connecting – credentials of the parent folder are NOT used in this mode." />
                     </StackPanel>
                 </Grid>
+                </StackPanel>
 
-                <TextBlock Text="Display" Style="{StaticResource SectionHeader}" />
+                <StackPanel x:Name="PageDisplay" Visibility="Collapsed">
+
                 <ItemsControl ItemsSource="{Binding DisplayRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+                </StackPanel>
 
-                <TextBlock Text="Local resources &amp; keyboard" Style="{StaticResource SectionHeader}" />
+                <StackPanel x:Name="PageResources" Visibility="Collapsed">
+
                 <ItemsControl ItemsSource="{Binding ResourceRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+                </StackPanel>
 
-                <TextBlock Text="Security &amp; session" Style="{StaticResource SectionHeader}" />
+                <StackPanel x:Name="PageSecurity" Visibility="Collapsed">
+
                 <ItemsControl ItemsSource="{Binding SecurityRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+                </StackPanel>
 
-                <TextBlock Text="PowerShell remoting" Style="{StaticResource SectionHeader}" />
+                <StackPanel x:Name="PagePs" Visibility="Collapsed">
+
                 <ItemsControl ItemsSource="{Binding PsRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
                 <TextBlock Text="{Binding PsStatusText}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,2,0,0"
                            Visibility="{Binding PsStatusText, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
 
-                <StackPanel Visibility="{Binding IsDefaults, Converter={StaticResource BoolToVis}}">
-                    <TextBlock Text="Remote tools" Style="{StaticResource SectionHeader}" />
+                <StackPanel x:Name="PageTools" Visibility="Collapsed">
+                <StackPanel>
                     <ItemsControl ItemsSource="{Binding ToolRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
                 </StackPanel>
-            </StackPanel>
-        </ScrollViewer>
+                </StackPanel>
+
+                <!-- ===== App settings (global settings only) ===== -->
+                <StackPanel x:Name="PageApp" Visibility="Collapsed">
+                    <TextBlock Text="Theme" Margin="0,0,0,4" />
+                    <ComboBox x:Name="ThemeBox" Width="320" HorizontalAlignment="Left" Margin="0,0,0,14" />
+                    <TextBlock Text="Session switch keys" Margin="0,0,0,4" />
+                    <ComboBox x:Name="SwitchKeysBox" Width="440" HorizontalAlignment="Left" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,14"
+                               Text="Switch between open sessions – also inside a session and in full screen (use the left Alt key)." />
+                    <TextBlock Text=".rdp files" Margin="0,0,0,4" />
+                    <ui:Button x:Name="DefaultAppButton" Content="Use RemoteHub for .rdp files…" Icon="{ui:SymbolIcon Open24}" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
+                               Text="Opens Windows Settings → Default apps, where you choose RemoteHub for .rdp files." />
+                </StackPanel>
+
+                <StackPanel x:Name="PageUpdates" Visibility="Collapsed">
+                    <TextBlock Text="Updates" Style="{StaticResource SectionHeader}" Margin="0,0,0,8" />
+                    <TextBlock x:Name="VersionText" Margin="0,0,0,10" />
+                    <ui:ToggleSwitch x:Name="UpdateCheckToggle" Content="Check for updates when RemoteHub starts" Margin="0,0,0,12" />
+                    <TextBlock Text="Update channel" Margin="0,0,0,4" />
+                    <RadioButton x:Name="ChannelStable" GroupName="Channel" Content="GA – stable releases" Margin="0,0,0,2" />
+                    <RadioButton x:Name="ChannelBeta" GroupName="Channel" Content="Beta – pre-releases (newer features, less tested)" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,6,0,10"
+                               Text="RemoteHub only updates to a higher version. Switching from Beta to GA doesn't go back to an older version – you get the next GA release that is newer than the one installed." />
+                    <ui:Button x:Name="CheckNowButton" Content="Check for updates now" Icon="{ui:SymbolIcon ArrowSync24}" />
+                    <TextBlock x:Name="UpdatePolicyText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0" Visibility="Collapsed" />
+
+                    <TextBlock Text="Privacy" Style="{StaticResource SectionHeader}" />
+                    <ui:ToggleSwitch x:Name="TelemetryToggle" Content="Send anonymous usage data and crash reports" Margin="0,0,0,8" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None"
+                               Text="When on, RemoteHub sends one small message each time it starts, so we know roughly how many installs are in use: the event &quot;app_start&quot;, the RemoteHub version, the update channel, Windows 10 / 11 / Server, the processor type (x64 / arm64) and a random install ID created on this PC. If RemoteHub crashed, the next start also sends a crash report: the error type, the error message and the program's call stack – with paths, user, computer and server names, IP addresses and quoted values removed. Nothing about your connections, servers, credentials, user or computer name is sent. Like any web request, the server sees your public IP address. Turning it off deletes the install ID, and crashes are no longer reported." />
+                    <TextBlock x:Name="TelemetryPolicyText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0" Visibility="Collapsed" />
+                </StackPanel>
+
+                <StackPanel x:Name="PageData" Visibility="Collapsed">
+                    <TextBlock Text="Startup protection" Style="{StaticResource SectionHeader}" Margin="0,0,0,4" />
+                    <TextBlock x:Name="ProtectionText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
+                    <ui:Button x:Name="ProtectionButton" Content="Startup protection…" Icon="{ui:SymbolIcon LockClosed24}" />
+
+                    <TextBlock Text="Saved credentials" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock x:Name="CredentialsText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
+                    <ui:Button x:Name="CredentialsButton" Content="Manage saved credentials…" Icon="{ui:SymbolIcon Key24}" />
+
+                    <TextBlock Text="Where settings are stored" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock x:Name="LocationText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button x:Name="LocationButton" Content="Change location…" Icon="{ui:SymbolIcon Folder24}" Margin="0,0,8,0"
+                                   ToolTip="Closes this window first (unsaved changes here are discarded)" />
+                        <ui:Button x:Name="FolderButton" Content="Open settings folder" Icon="{ui:SymbolIcon Open24}" />
+                    </StackPanel>
+
+                    <TextBlock Text="Backup &amp; diagnostics" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button x:Name="ExportButton" Content="Export backup…" Icon="{ui:SymbolIcon ArrowExport24}" Margin="0,0,8,0" />
+                        <ui:Button x:Name="LogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}"
+                                   ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,6,0,0"
+                               Text="Import a backup via Menu → Import backup." />
+                </StackPanel>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
 
         <Border Grid.Row="2" Padding="24,14" Background="{DynamicResource LayerFillColorDefaultBrush}"
                 BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
