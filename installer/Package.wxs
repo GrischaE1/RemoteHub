@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Per-machine MSI for RemoteHub.
+  Silent install:   msiexec /i RemoteHub-<ver>-x64.msi /qn
+  Silent uninstall: msiexec /x RemoteHub-<ver>-x64.msi /qn
+
+  .rdp handling: registers the "RemoteHub.rdp" ProgId, adds it to the .rdp "Open with" list and to
+  Settings > Default apps. It does NOT take over the default from mstsc – the user (or IT policy) chooses.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="RemoteHub"
+           Manufacturer="Grischa Ernst"
+           Version="$(var.Version)"
+           UpgradeCode="{6D3B0F2E-7A41-4C5B-9E83-2B1F4A7C9D10}"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of RemoteHub is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RemoteHub" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="RemoteHub">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="MainExe" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <!-- Everything from the self-contained publish folder except the main exe (declared below for the shortcut). -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.PublishDir)\**">
+        <Exclude Files="$(var.PublishDir)\RemoteHub.exe" />
+      </Files>
+    </ComponentGroup>
+
+    <Component Id="MainExe" Directory="INSTALLFOLDER">
+      <File Id="RemoteHubExe" Source="$(var.PublishDir)\RemoteHub.exe" KeyPath="yes">
+        <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="RemoteHub"
+                  Description="Remote desktop, PowerShell and admin tools in one place" WorkingDirectory="INSTALLFOLDER"
+                  Icon="AppIcon.ico" Advertise="yes" />
+      </File>
+
+      <!-- .rdp ProgId (same component as the exe it points to) -->
+      <RegistryKey Root="HKLM" Key="Software\Classes\RemoteHub.rdp">
+        <RegistryValue Type="string" Value="Remote Desktop file (RemoteHub)" />
+        <RegistryKey Key="DefaultIcon">
+          <RegistryValue Type="string" Value="&quot;[#RemoteHubExe]&quot;,0" />
+        </RegistryKey>
+        <RegistryKey Key="shell\open\command">
+          <RegistryValue Type="string" Value="&quot;[#RemoteHubExe]&quot; &quot;%1&quot;" />
+        </RegistryKey>
+      </RegistryKey>
+
+      <!-- "Open with" list for .rdp -->
+      <RegistryValue Root="HKLM" Key="Software\Classes\.rdp\OpenWithProgids" Name="RemoteHub.rdp" Type="string" Value="" />
+      <RegistryKey Root="HKLM" Key="Software\Classes\Applications\RemoteHub.exe">
+        <RegistryValue Name="FriendlyAppName" Type="string" Value="RemoteHub" />
+        <RegistryKey Key="SupportedTypes">
+          <RegistryValue Name=".rdp" Type="string" Value="" />
+        </RegistryKey>
+      </RegistryKey>
+
+      <!-- Settings > Default apps -->
+      <RegistryKey Root="HKLM" Key="Software\RemoteHub\Capabilities">
+        <RegistryValue Name="ApplicationName" Type="string" Value="RemoteHub" />
+        <RegistryValue Name="ApplicationDescription" Type="string" Value="Remote desktop, PowerShell and admin tools in one place" />
+        <RegistryValue Name="ApplicationIcon" Type="string" Value="&quot;[#RemoteHubExe]&quot;,0" />
+        <RegistryKey Key="FileAssociations">
+          <RegistryValue Name=".rdp" Type="string" Value="RemoteHub.rdp" />
+        </RegistryKey>
+      </RegistryKey>
+      <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="RemoteHub" Type="string"
+                     Value="Software\RemoteHub\Capabilities" />
+    </Component>
+  </Fragment>
+</Wix>

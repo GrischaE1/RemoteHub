@@ -1,0 +1,87 @@
+name: Release
+
+# Push a tag like v0.9.1 (or v0.9.1-beta.1): build, test, build the MSI and publish a GitHub Release.
+# The tag is the version; tags below 1.0.0 or with a suffix become pre-releases.
+on:
+  push:
+    tags: [ 'v[0-9]+.[0-9]+.[0-9]+*' ]
+
+permissions:
+  contents: write   # create the release
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Compute version
+        id: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')            # v0.9.1 -> 0.9.1
+          if ($version -notmatch '^(\d+)\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
+            throw "Tag '${{ github.ref_name }}' is not a version tag like v0.9.1 or v0.9.1-beta.1."
+          }
+          $prerelease = ([int]$Matches[1] -eq 0 -or $version.Contains('-')).ToString().ToLower()
+          $csproj = [xml](Get-Content -Raw src/RemoteHub/RemoteHub.csproj)
+          $projectVersion = @($csproj.Project.PropertyGroup.Version | Where-Object { $_ })[0]
+          if ($projectVersion -ne $version) {
+            "::warning::Tag version $version differs from <Version>$projectVersion</Version> in RemoteHub.csproj. The release uses $version."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore RemoteHub.sln
+
+      - name: Build
+        run: dotnet build RemoteHub.sln --configuration Release --no-restore -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Test
+        run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: '**/test-results.trx'
+          if-no-files-found: ignore
+
+      # WiX comes from NuGet (WixToolset.Sdk, pinned in the .wixproj), so no tool install is needed.
+      - name: Build installer
+        shell: pwsh
+        run: ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts
+
+      - name: Locate MSI
+        id: msi
+        shell: pwsh
+        run: |
+          $msi = "artifacts/RemoteHub-${{ steps.version.outputs.version }}-x64.msi"
+          if (-not (Test-Path $msi)) { throw "$msi was not produced - check build-installer.ps1." }
+          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $msi -Leaf)" | Out-File -Encoding ascii "$msi.sha256"
+          "path=$msi" >> $env:GITHUB_OUTPUT
+
+      # Code signing goes here once a certificate is available (see the runbook, section 07).
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: RemoteHub ${{ steps.version.outputs.version }}
+          files: |
+            ${{ steps.msi.outputs.path }}
+            ${{ steps.msi.outputs.path }}.sha256
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

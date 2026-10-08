@@ -1,0 +1,12 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Build via build\build-installer.ps1 (publishes the app first). WiX comes from NuGet, pinned by the Sdk version above. -->
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <!-- Version is the numeric MSI version; ReleaseVersion may carry a pre-release suffix and only names the file. -->
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">$(Version)</ReleaseVersion>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish</PublishDir>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputName>RemoteHub-$(ReleaseVersion)-x64</OutputName>
+    <DefineConstants>Version=$(Version);PublishDir=$(PublishDir);IconPath=$(MSBuildThisFileDirectory)..\src\RemoteHub\Assets\app.ico</DefineConstants>
+  </PropertyGroup>
+</Project>

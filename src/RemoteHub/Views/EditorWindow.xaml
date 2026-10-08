@@ -1,0 +1,268 @@
+<ui:FluentWindow x:Class="RemoteHub.Views.EditorWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:RemoteHub.ViewModels"
+                 Title="{Binding WindowTitle}" Width="720" Height="800" MinWidth="520" MinHeight="480"
+                 WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+                 ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica">
+    <ui:FluentWindow.Resources>
+        <DataTemplate x:Key="OptionRowTemplate" DataType="{x:Type vm:OptionRow}">
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="320" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
+                    <TextBlock Text="{Binding Label}" />
+                    <TextBlock Text="{Binding Hint}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None"
+                               Visibility="{Binding Hint, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+                <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected}" VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Title="{Binding WindowTitle}" ShowMaximize="False" ShowMinimize="False" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,0,24,12">
+            <StackPanel>
+                <TextBlock Text="{Binding Subtitle}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,4" />
+
+                <!-- General -->
+                <StackPanel Visibility="{Binding IsDefaults, Converter={StaticResource InvBoolToVis}}">
+                    <TextBlock Text="General" Style="{StaticResource SectionHeader}" />
+                    <TextBlock Text="Display name" Margin="0,0,0,4" />
+                    <ui:TextBox x:Name="NameBox" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                PlaceholderText="{Binding Host, TargetNullValue='e.g. File server'}" Margin="0,0,0,10" />
+                    <Grid Visibility="{Binding IsConnection, Converter={StaticResource BoolToVis}}" Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="120" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,10,0">
+                            <TextBlock Text="Computer name or IP address" Margin="0,0,0,4" />
+                            <ui:TextBox x:Name="HostBox" Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="server01.contoso.local" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Port" Margin="0,0,0,4" />
+                            <ui:TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="3389" />
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="Notes" Margin="0,0,0,4" />
+                    <ui:TextBox Text="{Binding Notes}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="56" PlaceholderText="Optional" />
+                </StackPanel>
+
+                <!-- Appearance -->
+                <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}" />
+                <StackPanel Visibility="{Binding ShowIconPicker, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Icon" Margin="0,0,0,6" />
+                    <ListBox ItemsSource="{Binding IconChoices}" SelectedItem="{Binding SelectedIcon}"
+                             Background="Transparent" BorderThickness="0" Padding="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Margin" Value="0,0,4,4" />
+                                <Setter Property="Cursor" Value="Hand" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Bd" Width="38" Height="38" CornerRadius="6" BorderThickness="2"
+                                                    BorderBrush="Transparent" Background="{DynamicResource SessionHeaderBrush}"
+                                                    ToolTip="{Binding Label}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ChromeStrokeBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource BrandAccentBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <ui:SymbolIcon Symbol="{Binding Symbol, TargetNullValue=Sparkle24}" FontSize="20"
+                                                   Visibility="{Binding Symbol, Converter={StaticResource BoolToVis}}" />
+                                    <TextBlock Text="Auto" FontSize="11" VerticalAlignment="Center"
+                                               Visibility="{Binding Symbol, Converter={StaticResource InvBoolToVis}}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <ui:Button Content="Custom image…" Icon="{ui:SymbolIcon Image24}" Click="PickIconImage_Click" />
+                        <Border Width="34" Height="34" Margin="10,0,0,0" CornerRadius="6" Background="{DynamicResource SessionHeaderBrush}"
+                                Visibility="{Binding HasIconImage, Converter={StaticResource BoolToVis}}">
+                            <Image Source="{Binding IconImage, Converter={StaticResource Base64Image}}" Width="24" Height="24" />
+                        </Border>
+                        <ui:Button Content="Remove image" Margin="8,0,0,0" Click="RemoveIconImage_Click"
+                                   Visibility="{Binding HasIconImage, Converter={StaticResource BoolToVis}}" />
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,12"
+                               Text="PNG, ICO or JPG – scaled to 64 px and stored in the settings file. A custom image wins over the icon above." />
+                </StackPanel>
+
+                <TextBlock Text="Colour" Margin="0,0,0,6" />
+                <ListBox ItemsSource="{Binding ColourChoices}" SelectedItem="{Binding SelectedColour}"
+                         Background="Transparent" BorderThickness="0" Padding="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Margin" Value="0,0,6,6" />
+                            <Setter Property="Cursor" Value="Hand" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Bd" MinWidth="34" Height="34" CornerRadius="17" BorderThickness="2" Padding="3"
+                                                BorderBrush="Transparent" ToolTip="{Binding Label}">
+                                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource ChromeStrokeBrush}" />
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Bd" Property="BorderBrush" Value="{DynamicResource TextFillColorPrimaryBrush}" />
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <!-- palette colour / inherited colour -->
+                                <Ellipse Width="22" Height="22" Fill="{Binding SwatchBrush}"
+                                         Visibility="{Binding SwatchBrush, Converter={StaticResource BoolToVis}}" />
+                                <!-- inherit: small dot with the inherited colour + label -->
+                                <StackPanel Orientation="Horizontal" Margin="6,0" VerticalAlignment="Center"
+                                            Visibility="{Binding IsInherit, Converter={StaticResource BoolToVis}}">
+                                    <Ellipse Width="10" Height="10" Margin="0,0,5,0" Fill="{Binding Brush}"
+                                             Visibility="{Binding Brush, Converter={StaticResource BoolToVis}}" />
+                                    <TextBlock Text="Inherit" FontSize="11" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <!-- none -->
+                                <ui:SymbolIcon Symbol="Prohibited24" FontSize="20"
+                                               Visibility="{Binding IsNone, Converter={StaticResource BoolToVis}}" />
+                                <!-- custom -->
+                                <ui:SymbolIcon Symbol="Color24" FontSize="20"
+                                               Visibility="{Binding IsCustom, Converter={StaticResource BoolToVis}}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                    <TextBlock Text="Custom:" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <ui:TextBox Width="130" Text="{Binding CustomColour, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="#1E90FF" />
+                    <Ellipse Width="22" Height="22" Margin="10,0,0,0" Fill="{Binding CustomColourBrush}"
+                             Visibility="{Binding CustomColourBrush, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
+                           Text="Colours the icon in the list, the tab and the session frame – e.g. red for production. Folders pass their colour on to everything inside." />
+
+                <!-- Credentials -->
+                <TextBlock Text="Credentials" Style="{StaticResource SectionHeader}" />
+                <StackPanel Margin="0,0,0,8">
+                    <StackPanel Visibility="{Binding CanInherit, Converter={StaticResource BoolToVis}}">
+                        <RadioButton GroupName="Cred" Content="Inherit from parent folder" IsChecked="{Binding IsInherit}" Margin="0,0,0,2" />
+                        <TextBlock Text="{Binding InheritedCredentialsText}" Style="{StaticResource Caption}" Margin="28,0,0,8" />
+                    </StackPanel>
+                    <RadioButton GroupName="Cred" Content="Use a saved credential" IsChecked="{Binding IsSaved}" Margin="0,0,0,4"
+                                 IsEnabled="{Binding HasSavedOptions}" />
+                    <ComboBox Margin="28,0,0,8" ItemsSource="{Binding SavedOptions}" SelectedItem="{Binding SelectedSaved}"
+                              Visibility="{Binding IsSaved, Converter={StaticResource BoolToVis}}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock><Run Text="{Binding Name, Mode=OneWay}" /><Run Text="   " /><Run Text="{Binding Display, Mode=OneWay}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" /></TextBlock>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="No saved credentials yet – create them via Menu → Saved credentials." Style="{StaticResource Caption}" Margin="28,0,0,8"
+                               Visibility="{Binding HasSavedOptions, Converter={StaticResource InvBoolToVis}}" />
+                    <RadioButton GroupName="Cred" Content="Enter credentials for this item" IsChecked="{Binding IsCustom}" />
+                </StackPanel>
+                <Grid Visibility="{Binding IsCustom, Converter={StaticResource BoolToVis}}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,10,10">
+                        <TextBlock Text="Username" Margin="0,0,0,4" />
+                        <ui:TextBox Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="user or DOMAIN\user" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,0,10">
+                        <TextBlock Text="Domain" Margin="0,0,0,4" />
+                        <ui:TextBox Text="{Binding Domain, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Optional"
+                                    IsEnabled="{Binding DomainEditable}" />
+                    </StackPanel>
+                    <CheckBox Grid.Row="1" Grid.ColumnSpan="2" Margin="0,0,0,10" IsChecked="{Binding LocalAccount}"
+                              Content="Local account on the target computer  (.\user)"
+                              ToolTip="Signs in with a local account of whichever computer you connect to – useful for one folder of standalone (non-domain) servers." />
+                    <StackPanel Grid.Row="2" Grid.ColumnSpan="2">
+                        <TextBlock Text="Password" Margin="0,0,0,4" />
+                        <ui:PasswordBox x:Name="PasswordInput" PlaceholderText="Leave empty to be asked when connecting" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
+                                   Text="Stored encrypted with Windows DPAPI for your user account. If left empty, Windows asks for the password when connecting – credentials of the parent folder are NOT used in this mode." />
+                    </StackPanel>
+                </Grid>
+
+                <TextBlock Text="Display" Style="{StaticResource SectionHeader}" />
+                <ItemsControl ItemsSource="{Binding DisplayRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+
+                <TextBlock Text="Local resources &amp; keyboard" Style="{StaticResource SectionHeader}" />
+                <ItemsControl ItemsSource="{Binding ResourceRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+
+                <TextBlock Text="Security &amp; session" Style="{StaticResource SectionHeader}" />
+                <ItemsControl ItemsSource="{Binding SecurityRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+
+                <TextBlock Text="PowerShell remoting" Style="{StaticResource SectionHeader}" />
+                <ItemsControl ItemsSource="{Binding PsRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+                <TextBlock Text="{Binding PsStatusText}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,2,0,0"
+                           Visibility="{Binding PsStatusText, Converter={StaticResource BoolToVis}}" />
+
+                <StackPanel Visibility="{Binding IsDefaults, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Remote tools" Style="{StaticResource SectionHeader}" />
+                    <ItemsControl ItemsSource="{Binding ToolRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2" Padding="24,14" Background="{DynamicResource LayerFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <ui:Button Content="Save" Appearance="Primary" IsDefault="True" MinWidth="100" Click="Save_Click" Margin="0,0,8,0" />
+                    <ui:Button Content="Cancel" IsCancel="True" MinWidth="100" />
+                </StackPanel>
+                <TextBlock Text="{Binding Error}" Foreground="#E5484D" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </DockPanel>
+        </Border>
+    </Grid>
+</ui:FluentWindow>
