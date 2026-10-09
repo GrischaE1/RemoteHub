@@ -21,10 +21,16 @@ public abstract partial class SessionBase : ObservableObject, IDisposable
     [ObservableProperty] private bool _isSelected;
     /// <summary>Non-secret description of the credentials used for the last connect (source, user format, password yes/no).</summary>
     [ObservableProperty] private string _credentialInfo = "";
+    /// <summary>How a remote tool tab reaches the device: "RemoteHub Agent" or "PowerShell remoting (HTTP/HTTPS)". Empty for RDP.</summary>
+    [ObservableProperty] private string _transport = "";
     /// <summary>Frame/tab colour: the connection's colour tag, or the app accent.</summary>
     [ObservableProperty] private System.Windows.Media.Brush _accentBrush = Views.ColorTags.Frozen(Views.AppChrome.Accent);
     /// <summary>True while keystrokes go to this session.</summary>
     [ObservableProperty] private bool _hasKeyboardFocus;
+    /// <summary>True while this tab is recorded to a video file.</summary>
+    [ObservableProperty] private bool _isRecording;
+    /// <summary>"REC 01:23" while recording, otherwise empty.</summary>
+    [ObservableProperty] private string _recordingText = "";
 
     public bool IsConnected => State == SessionState.Connected;
     public bool ShowsOverlay => State is SessionState.Disconnected or SessionState.Failed or SessionState.Idle;

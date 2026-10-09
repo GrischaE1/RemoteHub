@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Per-machine MSI for the RemoteHub Agent (the same MSI for every device; the device identity comes from the
+  per-device enrollment file).
+
+  Install:   msiexec /i RemoteHub-Agent-<ver>-x64.msi ENROLLMENT="C:\path\device.rhagent" /qn
+             Without ENROLLMENT the .rhagent file next to the MSI is used. An already enrolled agent can be updated
+             without any enrollment file.
+  Uninstall: msiexec /x RemoteHub-Agent-<ver>-x64.msi /qn   (removes firewall rule, certificate and configuration)
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="RemoteHub Agent"
+           Manufacturer="Grischa Ernst"
+           Version="$(var.Version)"
+           UpgradeCode="{71CF9765-2EB2-4B8F-B884-6207058C99F8}"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <!-- Same version allowed too: a rebuilt agent replaces the installed one (test builds, re-deploys). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of the RemoteHub Agent is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AgentIcon.ico" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AgentIcon.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ENROLLMENT" Secure="yes" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="RemoteHub Agent" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="RemoteHub Agent">
+      <ComponentRef Id="AgentService" />
+    </Feature>
+
+    <!-- Enrollment: deferred, as LocalSystem, after the files are in place and before the service starts.
+         It also sets "Automatic (Delayed Start)" – MSI's own ServiceConfig table is unreliable for that. -->
+    <!-- No ENROLLMENT given: the agent looks for the .rhagent file in the MSI's folder. -->
+    <SetProperty Id="ENROLLMENT" Value="[OriginalDatabase]" Before="SetAgentEnroll" Sequence="execute" Condition="NOT ENROLLMENT" />
+    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="deferred" Impersonate="no" Return="check" />
+
+    <SetProperty Id="AgentCleanup" Value="&quot;[#AgentExe]&quot; cleanup"
+                 Before="AgentCleanup" Sequence="execute" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    <CustomAction Id="AgentCleanup" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <Custom Action="AgentCleanup" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+  </Package>
+
+  <Fragment>
+    <Component Id="AgentService" Directory="INSTALLFOLDER">
+      <File Id="AgentExe" Source="$(var.AgentPublishDir)\RemoteHubAgent.exe" KeyPath="yes" />
+      <ServiceInstall Id="AgentServiceInstall"
+                      Name="RemoteHubAgent"
+                      DisplayName="RemoteHub Agent"
+                      Description="Gives RemoteHub a PowerShell session and the remote desktop on this device over TLS (port and allowed accounts: %ProgramData%\RemoteHub\Agent\agent.json)."
+                      Type="ownProcess"
+                      Start="auto"
+                      ErrorControl="normal"
+                      Account="LocalSystem"
+                      Vital="yes">
+        <util:ServiceConfig FirstFailureActionType="restart" SecondFailureActionType="restart" ThirdFailureActionType="restart"
+                            RestartServiceDelayInSeconds="10" ResetPeriodInDays="1" />
+      </ServiceInstall>
+      <ServiceControl Id="AgentServiceControl" Name="RemoteHubAgent" Start="install" Stop="both" Remove="uninstall" Wait="yes" />
+      <!-- Audit entries in the Application log (source "RemoteHub Agent"); the text is shown through .NET Framework's
+           message file, which is part of Windows. Removed with the agent. -->
+      <RegistryKey Root="HKLM" Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\RemoteHub Agent" ForceDeleteOnUninstall="yes">
+        <RegistryValue Name="EventMessageFile" Type="expandable" Value="%SystemRoot%\Microsoft.NET\Framework64\v4.0.30319\EventLogMessages.dll" />
+      </RegistryKey>
+    </Component>
+  </Fragment>
+</Wix>

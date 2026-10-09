@@ -18,8 +18,10 @@ using ProgressBar = System.Windows.Controls.ProgressBar;
 namespace RemoteHub.Views;
 
 /// <summary>Tab content of a PowerShell remoting session: coloured output, an input line, and a status overlay.</summary>
-public sealed class PsConsoleView : Border
+public sealed class PsConsoleView : Border, IRecordableView
 {
+    public FrameworkElement RecordingArea { get; }
+
     private const int MaxInlines = 12000;
     private static readonly Brush ConsoleBackground = ColorTags.Frozen(Color.FromRgb(0x0C, 0x0F, 0x15));
     private static readonly Brush DefaultText = ColorTags.Frozen(Color.FromRgb(0xD6, 0xDB, 0xE4));
@@ -74,6 +76,8 @@ public sealed class PsConsoleView : Border
         left.Children.Add(new SymbolIcon(SymbolRegular.WindowConsole20) { FontSize = 15, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
         left.Children.Add(title);
         left.Children.Add(kind);
+        left.Children.Add(RemoteToolChrome.TransportBadge());
+        left.Children.Add(RemoteToolChrome.RecordingBadge());
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
         tools.Children.Add(HeaderButton(SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder (or drop files here to upload them)", () => UploadPickRequested?.Invoke()));
@@ -90,6 +94,7 @@ public sealed class PsConsoleView : Border
         var content = new Grid();
         Grid.SetRow(content, 1);
         root.Children.Add(content);
+        RecordingArea = content;
 
         var console = new Grid { Margin = new Thickness(10, 6, 4, 8) };
         console.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -514,7 +519,8 @@ public sealed class PsConsoleView : Border
         status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         var title = new TextBlock { FontSize = 22, FontWeight = FontWeights.SemiBold, TextAlignment = TextAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(PsSession.Title));
-        var sub = new TextBlock { FontSize = 13, TextAlignment = TextAlignment.Center, Text = "PowerShell remoting · " + session.Connection.Host, Margin = new Thickness(0, 4, 0, 0) };
+        var sub = new TextBlock { FontSize = 13, TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 4, 0, 0) };
+        sub.SetBinding(TextBlock.TextProperty, new Binding(nameof(SessionBase.Transport)) { StringFormat = "{0} · " + session.Connection.Host, TargetNullValue = session.Connection.Host });
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         var credInfo = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 560, Margin = new Thickness(0, -6, 0, 18) };
         credInfo.SetBinding(TextBlock.TextProperty, nameof(PsSession.CredentialInfo));

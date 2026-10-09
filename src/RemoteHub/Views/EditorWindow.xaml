@@ -326,14 +326,89 @@
                         <ui:Button x:Name="FolderButton" Content="Open settings folder" Icon="{ui:SymbolIcon Open24}" />
                     </StackPanel>
 
-                    <TextBlock Text="Backup &amp; diagnostics" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
+                    <TextBlock Text="Backup" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                               Text="A password-protected file with all folders, connections, credentials and settings – to move to another PC or keep as a copy." />
                     <StackPanel Orientation="Horizontal">
                         <ui:Button x:Name="ExportButton" Content="Export backup…" Icon="{ui:SymbolIcon ArrowExport24}" Margin="0,0,8,0" />
-                        <ui:Button x:Name="LogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}"
+                        <ui:Button x:Name="ImportButton" Content="Import backup…" Icon="{ui:SymbolIcon ArrowImport24}"
+                                   ToolTip="Closes this window first (unsaved changes here are discarded)" />
+                    </StackPanel>
+
+                </StackPanel>
+
+                <StackPanel x:Name="PageRecordings" Visibility="Collapsed">
+                    <TextBlock x:Name="RecordingIntroText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,4" />
+
+                    <TextBlock Text="Quality" Style="{StaticResource SectionHeader}" Margin="0,14,0,4" />
+                    <TextBlock Text="Frame rate" Margin="0,0,0,4" />
+                    <ComboBox x:Name="RecordingFpsBox" Width="360" HorizontalAlignment="Left" Margin="0,0,0,10" />
+                    <TextBlock Text="Video size" Margin="0,0,0,4" />
+                    <ComboBox x:Name="RecordingResolutionBox" Width="360" HorizontalAlignment="Left" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
+                               Text="For presentations choose 30 fps and Full HD or 4K – the tab's content (without its header) is scaled to that size. Higher values make larger files and need more CPU; if the PC can't keep up, single frames are skipped. Applies to the next recording." />
+
+                    <TextBlock Text="Graphics card" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <ui:ToggleSwitch x:Name="RecordingDetailsToggle" Content="Include the connection details" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,12"
+                               Text="On: the video shows the bar above the tab too – which connection, its address and how it connects. Off (default): only what is in the tab." />
+                    <ui:ToggleSwitch x:Name="RecordingGpuToggle" Content="Capture with the graphics card (needed for 30 and 60 fps)" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
+                               Text="Off (default): works everywhere, also on servers and virtual machines without a graphics card – about 10 fps. On: Full HD reaches 30–60 fps and 4K about 30; where no graphics card can be used, RemoteHub falls back to the default way by itself. Turn it off again if the PC becomes unstable while recording." />
+
+                    <TextBlock Text="Where recordings are saved" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock x:Name="RecordingInfoText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button x:Name="RecordingFolderButton" Content="Change folder…" Icon="{ui:SymbolIcon Folder24}" Margin="0,0,8,0" />
+                        <ui:Button x:Name="RecordingDefaultButton" Content="Use the default folder" Icon="{ui:SymbolIcon ArrowReset24}" Margin="0,0,8,0" />
+                        <ui:Button x:Name="RecordingOpenButton" Content="Open folder" Icon="{ui:SymbolIcon Open24}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel x:Name="PageHelp" Visibility="Collapsed">
+                    <TextBlock x:Name="HelpVersionText" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <ui:Button x:Name="AboutButton" Content="About RemoteHub…" Icon="{ui:SymbolIcon Info24}" Margin="0,0,8,0"
+                                   ToolTip="Version, build, .NET, Windows, remote desktop client and where the program, settings and log are" />
+                        <ui:Button x:Name="OverviewButton" Content="Settings overview…" Icon="{ui:SymbolIcon TextBulletListSquare24}" Margin="0,0,8,0"
+                                   ToolTip="Every setting in one place, with Copy as text for support" />
+                        <ui:Button x:Name="HelpLogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}"
                                    ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
                     </StackPanel>
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,6,0,0"
-                               Text="Import a backup via Menu → Import backup." />
+
+                    <TextBlock Text="Keyboard shortcuts" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
+                    <StackPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Ctrl+N" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="New connection" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Ctrl+Shift+N" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="New folder" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Ctrl+F" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="Search folders and connections, or quick-connect to a computer name" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Ctrl+B" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="Show or hide the navigation" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Ctrl+," Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="Settings" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="F2" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="Edit the selected folder or connection" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <DockPanel Margin="0,3">
+                            <TextBlock Text="Del" Width="150" FontFamily="Cascadia Mono, Consolas" VerticalAlignment="Center" />
+                            <TextBlock Text="Delete the selected folder or connection" TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </DockPanel>
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0"
+                               Text="Switching between sessions uses the keys chosen under General." />
                 </StackPanel>
 
                 </StackPanel>

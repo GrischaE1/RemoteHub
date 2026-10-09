@@ -15,7 +15,7 @@
            Scope="perMachine"
            Compressed="yes">
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of RemoteHub is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of RemoteHub is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="AppIcon.ico" SourceFile="$(var.IconPath)" />

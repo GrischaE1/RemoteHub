@@ -4,6 +4,8 @@ public enum DisplayResize { DynamicResolution, SmartSizing, Fixed }
 public enum AudioMode { PlayLocal = 0, PlayRemote = 1, None = 2 }
 public enum ServerAuth { ConnectWithoutWarning = 0, DoNotConnect = 1, Warn = 2 }
 public enum VisualQuality { Best, Balanced, Fast }
+/// <summary>How "Remote desktop" opens: through the RemoteHub Agent when one is installed (otherwise RDP), always RDP, or always the agent.</summary>
+public enum DesktopVia { Automatic, Rdp, Agent }
 /// <summary>What to do when Windows asks for the password during connect (e.g. the server refuses saved credentials).</summary>
 public enum PasswordPromptAction
 {
@@ -47,6 +49,13 @@ public sealed class RdpOptions
     public bool? PsRemoting { get; set; }
     /// <summary>PowerShell remoting over HTTPS (port 5986) instead of HTTP (5985).</summary>
     public bool? PsUseSsl { get; set; }
+    /// <summary>
+    /// Use the RemoteHub Agent on the device instead of WinRM for PowerShell, files, registry, services and processes
+    /// (needs the agent installed – right-click → Install RemoteHub Agent).
+    /// </summary>
+    public bool? UseAgent { get; set; }
+    /// <summary>Remote desktop through RDP or the RemoteHub Agent's own screen sharing (for devices where RDP is off).</summary>
+    public DesktopVia? RemoteDesktopVia { get; set; }
 
     public static RdpOptions BuiltInDefaults() => new()
     {
@@ -69,6 +78,8 @@ public sealed class RdpOptions
         PasswordPrompt = PasswordPromptAction.Clipboard,
         PsRemoting = false,
         PsUseSsl = false,
+        UseAgent = false,
+        RemoteDesktopVia = DesktopVia.Automatic,
     };
 
     public RdpOptions Clone() => (RdpOptions)MemberwiseClone();

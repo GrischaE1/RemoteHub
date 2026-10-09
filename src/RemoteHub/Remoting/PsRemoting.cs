@@ -8,11 +8,16 @@ using RemoteHub.Models;
 
 namespace RemoteHub.Remoting;
 
-/// <summary>Where and as whom to open a PowerShell remoting (WinRM) session. Holds the password in memory only.</summary>
-public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials)
+/// <summary>
+/// Where and as whom to open a PowerShell session: over WinRM, or through the RemoteHub Agent when <see cref="Agent"/> is
+/// set. Holds the password in memory only.
+/// </summary>
+public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials, AgentEndpoint? Agent = null)
 {
-    public int Port => UseSsl ? 5986 : 5985;
-    public string Display => $"{Host} ({(UseSsl ? "HTTPS" : "HTTP")} {Port})";
+    public int Port => Agent?.Port ?? (UseSsl ? 5986 : 5985);
+    public string Display => Agent is null ? $"{Host} ({(UseSsl ? "HTTPS" : "HTTP")} {Port})" : $"{Host} (RemoteHub Agent {Port})";
+    /// <summary>The way the session goes, for the tab header.</summary>
+    public string Transport => Agent is null ? $"PowerShell remoting ({(UseSsl ? "HTTPS" : "HTTP")})" : "RemoteHub Agent";
 }
 
 public static class PsRemoting
@@ -39,19 +44,36 @@ public static class PsRemoting
     /// <summary>True when a username is set but no password: the caller has to ask for it.</summary>
     public static bool NeedsPassword(CredentialSet c) => !c.IsEmpty && string.IsNullOrEmpty(c.Password);
 
-    public static WSManConnectionInfo ConnectionInfo(PsTarget t)
+    public static RunspaceConnectionInfo ConnectionInfo(PsTarget t) => t.Agent is null ? WsManConnectionInfo(t) : AgentConnectionInfo(t);
+
+    /// <summary>The agent signs the account in on the device itself: a local account is ".\user" there.</summary>
+    public static string? AgentUserName(CredentialSet c)
+    {
+        if (c.IsEmpty) return null;
+        var user = c.Username!.Trim();
+        if (user.Contains('\\') || user.Contains('@')) return user;
+        return c.IsLocalAccount || string.IsNullOrEmpty(c.Domain) ? $".\\{user}" : $"{c.Domain}\\{user}";
+    }
+
+    private static PSCredential? Credential(string? user, CredentialSet c)
+    {
+        if (user is null) return null;
+        var pw = new SecureString();
+        foreach (var ch in c.Password ?? "") pw.AppendChar(ch);
+        pw.MakeReadOnly();
+        return new PSCredential(user, pw);
+    }
+
+    // The agent has no "current Windows user" sign-in: without credentials it refuses the session.
+    private static AgentConnectionInfo AgentConnectionInfo(PsTarget t) =>
+        new(t.Host.Trim(), t.Agent!, Credential(AgentUserName(t.Credentials), t.Credentials));
+
+    private static WSManConnectionInfo WsManConnectionInfo(PsTarget t)
     {
         var host = t.Host.Trim();
         if (host.Contains(':') && !host.StartsWith('[')) host = $"[{host}]"; // IPv6
         var uri = new Uri($"{(t.UseSsl ? "https" : "http")}://{host}:{t.Port}/wsman");
-        PSCredential? cred = null;
-        if (UserName(t.Credentials, t.Host) is { } user)
-        {
-            var pw = new SecureString();
-            foreach (var ch in t.Credentials.Password ?? "") pw.AppendChar(ch);
-            pw.MakeReadOnly();
-            cred = new PSCredential(user, pw);
-        }
+        var cred = Credential(UserName(t.Credentials, t.Host), t.Credentials);
         // No credential: the current Windows user is used (Kerberos/Negotiate).
         return new WSManConnectionInfo(uri, ShellUri, cred)
         {
@@ -92,6 +114,7 @@ public static class PsRemoting
     /// <summary>Short, actionable text for the usual WinRM failures. Never contains the password.</summary>
     public static string Explain(Exception ex, PsTarget t)
     {
+        if (t.Agent is not null) return AgentExplain(ex);
         var inner = ex;
         while (inner.InnerException is not null && inner is not PSRemotingTransportException) inner = inner.InnerException;
         var msg = inner.Message;
@@ -113,6 +136,14 @@ public static class PsRemoting
                 return "The HTTPS certificate of the computer is not trusted by this PC, or its name does not match the host name.";
         }
         return Trim(msg);
+    }
+
+    /// <summary>Agent errors already carry a readable message from the transport.</summary>
+    private static string AgentExplain(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+            if (e is PSRemotingTransportException te && te.Message.Contains("RemoteHub Agent", StringComparison.Ordinal)) return Trim(te.Message);
+        return Trim(ex.GetBaseException().Message);
     }
 
     private static string Trim(string s)

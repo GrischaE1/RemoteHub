@@ -98,6 +98,9 @@ public sealed class SettingsOverviewWindow : FluentWindow
         {
             ("Processes tab", Interval(d.Tools.ProcessRefreshSeconds)),
             ("Services tab", Interval(d.Tools.ServiceRefreshSeconds)),
+            ("Recordings", AppPolicy.RecordingDisabled ? "Turned off by your IT policy"
+                : Recordings.Describe(Recordings.Options(d.Ui)) + (d.Ui.RecordingShowDetails ? " · with connection details" : "") + " · " +
+                  Recordings.Folder(d.Ui) + (AppPolicy.RecordingFolder is not null ? " (set by your IT policy)" : "")),
         };
 
         var creds = new List<(string, string)>

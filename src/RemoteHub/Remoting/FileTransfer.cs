@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Security.Cryptography;
+using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace RemoteHub.Remoting;
@@ -43,6 +44,53 @@ public sealed partial class TransferItem : ObservableObject
     [ObservableProperty] private double _percent;
     [ObservableProperty] private string _statusText;
     [ObservableProperty] private string? _remotePath;
+    /// <summary>Speed for this file: current while running, average when done (files of 1 MB and more only).</summary>
+    [ObservableProperty] private string _speedText = "";
+
+    /// <summary>When this file started / stopped moving (for its average and the overall average).</summary>
+    public DateTime? StartedUtc { get; private set; }
+    public DateTime? FinishedUtc { get; private set; }
+
+    private long _sampleBytes;
+    private DateTime _sampleAt;
+    private double _rate;
+
+    /// <summary>Current speed in bytes/s (smoothed); 0 when not running.</summary>
+    public double Rate => IsActive ? _rate : 0;
+
+    /// <summary>Bytes per second from start to finish (or to now while running).</summary>
+    public double AverageRate
+    {
+        get
+        {
+            if (StartedUtc is not { } start) return 0;
+            var secs = ((FinishedUtc ?? DateTime.UtcNow) - start).TotalSeconds;
+            return secs > 0.05 ? SentBytes / secs : 0;
+        }
+    }
+
+    private const long SpeedMinimum = 1024 * 1024;
+
+    partial void OnSentBytesChanged(long value)
+    {
+        var now = DateTime.UtcNow;
+        StartedUtc ??= now;
+        if (_sampleAt == default) { _sampleAt = now; _sampleBytes = value; }
+        else if ((now - _sampleAt).TotalSeconds >= 0.25)
+        {
+            var current = (value - _sampleBytes) / (now - _sampleAt).TotalSeconds;
+            _rate = _rate == 0 ? current : _rate * 0.6 + current * 0.4;
+            _sampleAt = now;
+            _sampleBytes = value;
+        }
+        UpdateSpeedText();
+    }
+
+    private void UpdateSpeedText() => SpeedText =
+        TotalBytes < SpeedMinimum || SentBytes == 0 ? ""
+        : IsActive ? (_rate > 0 ? $"{Size((long)_rate)}/s" : "")
+        : State == TransferState.Done ? $"avg {Size((long)AverageRate)}/s"
+        : "";
 
     public bool IsActive => State is TransferState.Queued or TransferState.Running;
     public bool IsDone => State == TransferState.Done;
@@ -58,6 +106,10 @@ public sealed partial class TransferItem : ObservableObject
 
     partial void OnStateChanged(TransferState value)
     {
+        var now = DateTime.UtcNow;
+        if (value == TransferState.Running) { StartedUtc ??= now; _sampleAt = now; _sampleBytes = SentBytes; }
+        else if (value != TransferState.Queued && StartedUtc is not null) FinishedUtc ??= now;
+        UpdateSpeedText();
         OnPropertyChanged(nameof(IsActive));
         OnPropertyChanged(nameof(IsDone));
         OnPropertyChanged(nameof(IsProblem));
@@ -75,13 +127,23 @@ public sealed partial class TransferItem : ObservableObject
 }
 
 /// <summary>
-/// Sends files over a PowerShell remoting session in 1 MB chunks: written to "&lt;name&gt;.remotehub-part" on the remote
-/// side, checked with SHA-256 and only then renamed to the final name. No PowerShell window is needed.
+/// Sends files over a PowerShell session (WinRM or the RemoteHub Agent) as one stream per batch: every file is read in
+/// 1 MB chunks, gzip-compressed where that helps, and streamed into a single remote pipeline without waiting for an
+/// answer per chunk. The remote side always decompresses, writes "&lt;name&gt;.remotehub-part", checks the SHA-256 of
+/// what it wrote against this PC's hash of the original, and only then renames it – no archive or compressed file is
+/// ever left on the target, and nothing needs to be installed there (.NET's GZipStream is part of Windows).
+/// Many small files share one pipeline (no per-file round trips); at most <see cref="WindowBytes"/> are in flight.
 /// </summary>
 public static class FileUploader
 {
     public const int ChunkSize = 1024 * 1024;
-    private const string PartSuffix = ".remotehub-part";
+
+    /// <summary>Data sent but not yet written on the remote side (bounds memory for big files).</summary>
+    internal static int WindowBytes = 8 * 1024 * 1024;
+
+    /// <summary>A new pipeline after this many files or bytes, so one failure can't take down a huge batch.</summary>
+    private const int BatchFiles = 1000;
+    private const long BatchBytes = 512L * 1024 * 1024;
 
     private const string ResolveFolderScript = """
         param([string]$Folder)
@@ -92,36 +154,94 @@ public static class FileUploader
         [IO.Directory]::CreateDirectory($f).FullName
         """;
 
-    private const string BeginScript = """
-        param([string]$Path, [bool]$Overwrite)
-        if ((Test-Path -LiteralPath $Path) -and -not $Overwrite) { 'exists'; return }
-        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Path)) | Out-Null
-        [IO.File]::WriteAllBytes($Path + '.remotehub-part', [byte[]]@())
-        'ok'
-        """;
-
-    private const string ChunkScript = """
-        param([string]$Path, [byte[]]$Data)
-        $s = [IO.File]::Open($Path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try { $s.Write($Data, 0, $Data.Length) } finally { $s.Dispose() }
-        """;
-
-    private const string FinishScript = """
-        param([string]$Path, [string]$Hash)
-        $part = $Path + '.remotehub-part'
-        $s = [IO.File]::OpenRead($part)
-        try { $h = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($s)).Replace('-', '') } finally { $s.Dispose() }
-        if ($h -ne $Hash) { Remove-Item -LiteralPath $part -Force; throw 'Checksum mismatch – the file was damaged during the transfer.' }
-        Move-Item -LiteralPath $part -Destination $Path -Force
-        """;
-
-    private const string CleanupScript = """
-        param([string]$Path)
-        Remove-Item -LiteralPath ($Path + '.remotehub-part') -Force -ErrorAction SilentlyContinue
+    private const string ExistingScript = """
+        param([string[]]$Paths)
+        foreach ($p in $Paths) { if (Test-Path -LiteralPath $p) { $p } }
         """;
 
     /// <summary>
-    /// Uploads <paramref name="items"/> one after another. <paramref name="post"/> runs UI updates on the UI thread.
+    /// Input messages: begin|i|path, data|i|bytes|gzip, end|i|sha256, abort|i, and for files that fit in one chunk
+    /// file|i|path|bytes|gzip|sha256 (all in one). Output lines: ack|i|bytes, done|i, skip|i, fail|i|reason,
+    /// cancelled|i. A failing file never stops the others. Plain .NET calls only (cmdlets cost milliseconds per file).
+    /// </summary>
+    private const string StreamScript = """
+        param([bool]$Overwrite)
+        begin {
+            $files = @{}
+            $sha = [Security.Cryptography.SHA256]::Create()
+            function Unzip([byte[]]$d) {
+                $z = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,$d)), [IO.Compression.CompressionMode]::Decompress)
+                $o = New-Object IO.MemoryStream
+                try { $z.CopyTo($o) } finally { $z.Dispose() }
+                ,$o.ToArray()
+            }
+            function Open($i, [string]$p) {
+                if (-not $Overwrite -and [IO.File]::Exists($p)) { $files[$i] = @{ Dead = $true }; return $false }
+                [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($p))
+                $files[$i] = @{ P = $p; Dead = $false; H = [Security.Cryptography.SHA256]::Create()
+                                S = [IO.File]::Open($p + '.remotehub-part', [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::None) }
+                $true
+            }
+            function Finish($i, [string]$hash) {
+                $f = $files[$i]
+                [void]$f.H.TransformFinalBlock([byte[]]@(), 0, 0)
+                $f.S.Dispose(); $f.S = $null
+                $part = $f.P + '.remotehub-part'
+                if ([BitConverter]::ToString($f.H.Hash).Replace('-', '') -ne $hash) {
+                    [IO.File]::Delete($part)
+                    $files[$i] = @{ Dead = $true }
+                    return "fail|$i|Checksum mismatch – the file was damaged during the transfer."
+                }
+                if ([IO.File]::Exists($f.P)) { [IO.File]::Delete($f.P) }
+                [IO.File]::Move($part, $f.P)
+                $files.Remove($i)
+                "done|$i"
+            }
+            function Drop($i) {
+                $f = $files[$i]
+                if ($f -and $f.S) { try { $f.S.Dispose() } catch { }; try { [IO.File]::Delete($f.P + '.remotehub-part') } catch { } }
+                $files[$i] = @{ Dead = $true }
+            }
+        }
+        process {
+            $m = $_; $i = [int]$m[1]
+            try {
+                switch ([string]$m[0]) {
+                    'file' {
+                        # Whole file in memory: verified before anything is written, so it goes straight to its final
+                        # name (a rename per file costs ~10 ms where a virus scanner checks renamed files).
+                        $p = [string]$m[2]
+                        if (-not $Overwrite -and [IO.File]::Exists($p)) { "skip|$i"; break }
+                        $d = [byte[]]$m[3]; if ($m[4]) { $d = Unzip $d }
+                        if ([BitConverter]::ToString($sha.ComputeHash($d)).Replace('-', '') -ne [string]$m[5]) { "fail|$i|Checksum mismatch – the file was damaged during the transfer."; break }
+                        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($p))
+                        try { [IO.File]::WriteAllBytes($p, $d) } catch { try { [IO.File]::Delete($p) } catch { }; throw }
+                        "done|$i"
+                    }
+                    'begin' { if (-not (Open $i ([string]$m[2]))) { "skip|$i" } }
+                    'data' {
+                        $f = $files[$i]; if ($null -eq $f -or $f.Dead) { break }
+                        $d = [byte[]]$m[2]; if ($m[3]) { $d = Unzip $d }
+                        $f.S.Write($d, 0, $d.Length)
+                        [void]$f.H.TransformBlock($d, 0, $d.Length, $null, 0)
+                        "ack|$i|$($d.Length)"
+                    }
+                    'end' {
+                        $f = $files[$i]; if ($null -eq $f -or $f.Dead) { break }
+                        Finish $i ([string]$m[2])
+                    }
+                    'abort' { Drop $i; "cancelled|$i" }
+                }
+            } catch {
+                Drop $i
+                "fail|$i|$($_.Exception.Message)"
+            }
+        }
+        end { foreach ($k in @($files.Keys)) { if ($files[$k].S) { Drop $k } } }
+        """;
+
+    /// <summary>
+    /// Uploads <paramref name="items"/>. <paramref name="post"/> runs UI updates on the UI thread.
     /// Never throws: failures end up in the items' state.
     /// </summary>
     public static Task UploadAsync(Func<Runspace> openRunspace, Func<Exception, string> explain, string remoteFolder, bool overwrite,
@@ -145,20 +265,34 @@ public static class FileUploader
                 return;
             }
 
+            var work = new List<(TransferItem Item, string Target)>();
             foreach (var item in items)
             {
-                if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); continue; }
                 var target = folder.TrimEnd('\\') + "\\" + item.RelativePath.Replace('/', '\\').TrimStart('\\');
-                post(() => { item.RemotePath = target; item.State = TransferState.Running; item.StatusText = "Starting…"; });
-                try { SendOne(rs, item, target, overwrite, post); }
+                post(() => { item.RemotePath = target; if (item.State == TransferState.Queued) item.StatusText = "Waiting…"; });
+                work.Add((item, target));
+            }
+
+            // Without overwrite: find existing files first, so they aren't sent at all (one round trip for all).
+            if (!overwrite && work.Count > 0)
+            {
+                var existing = new HashSet<string>(Invoke(rs, ExistingScript, ("Paths", work.Select(w => w.Target).ToArray())).Select(o => o.ToString()),
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (var (item, _) in work.Where(w => existing.Contains(w.Target)))
+                    post(() => { item.State = TransferState.Skipped; item.StatusText = "Skipped – the file already exists"; });
+                work.RemoveAll(w => existing.Contains(w.Target));
+            }
+
+            foreach (var batch in Batches(work))
+            {
+                try { SendBatch(rs, batch, overwrite, post); }
                 catch (Exception ex)
                 {
-                    TryCleanup(rs, target);
                     var why = ex is RemoteCommandException ? ex.Message : explain(ex);
-                    post(() => Fail(item, why));
+                    foreach (var (item, _) in batch) post(() => { if (item.IsActive) Fail(item, why); });
                     if (rs.RunspaceStateInfo.State != RunspaceState.Opened)
                     {
-                        foreach (var rest in items.Where(x => x != item)) post(() => { if (rest.IsActive) Fail(rest, why); });
+                        foreach (var (item, _) in work) post(() => { if (item.IsActive) Fail(item, why); });
                         return;
                     }
                 }
@@ -170,54 +304,156 @@ public static class FileUploader
         }
     });
 
-    private static void SendOne(Runspace rs, TransferItem item, string target, bool overwrite, Action<Action> post)
+    private static IEnumerable<List<(TransferItem Item, string Target)>> Batches(List<(TransferItem Item, string Target)> work)
     {
-        if (Invoke(rs, BeginScript, ("Path", target), ("Overwrite", overwrite)).FirstOrDefault()?.ToString() == "exists")
+        var batch = new List<(TransferItem, string)>();
+        long bytes = 0;
+        foreach (var w in work)
         {
-            post(() => { item.State = TransferState.Skipped; item.StatusText = "Skipped – the file already exists"; });
-            return;
+            if (batch.Count > 0 && (batch.Count >= BatchFiles || bytes + w.Item.TotalBytes > BatchBytes)) { yield return batch; batch = []; bytes = 0; }
+            batch.Add(w);
+            bytes += w.Item.TotalBytes;
         }
+        if (batch.Count > 0) yield return batch;
+    }
 
-        using var file = new FileStream(item.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkSize, FileOptions.SequentialScan);
-        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[ChunkSize];
-        long sent = 0;
-        var sw = Stopwatch.StartNew();
-        int read;
-        while ((read = ReadFull(file, buffer)) > 0)
+    /// <summary>Per-file progress of one batch, updated from the remote answers.</summary>
+    private sealed class Progress(TransferItem item)
+    {
+        public readonly TransferItem Item = item;
+        public long Written, Sent, Wire;
+        public bool Finished;
+        public readonly Stopwatch Clock = new();
+    }
+
+    private static void SendBatch(Runspace rs, List<(TransferItem Item, string Target)> batch, bool overwrite, Action<Action> post)
+    {
+        using var ps = PowerShell.Create();
+        ps.Runspace = rs;
+        ps.AddScript(StreamScript).AddParameter("Overwrite", overwrite);
+        var input = new PSDataCollection<object>();
+        var output = new PSDataCollection<PSObject>();
+        var files = batch.Select(b => new Progress(b.Item)).ToArray();
+        var gate = new object();
+        long inFlight = 0;
+
+        output.DataAdded += (_, e) =>
         {
-            if (item.CancelRequested)
+            var parts = (output[e.Index]?.ToString() ?? "").Split('|', 3);
+            if (parts.Length < 2 || !int.TryParse(parts[1], out var i) || i < 0 || i >= files.Length) return;
+            var f = files[i];
+            var item = f.Item;
+            switch (parts[0])
             {
-                TryCleanup(rs, target);
-                post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; });
-                return;
+                case "ack":
+                    var n = long.Parse(parts[2]);
+                    long written;
+                    lock (gate) { f.Written += n; written = f.Written; inFlight -= n; Monitor.PulseAll(gate); }
+                    post(() =>
+                    {
+                        item.SentBytes = written;
+                        item.Percent = item.TotalBytes == 0 ? 100 : written * 100.0 / item.TotalBytes;
+                        item.StatusText = $"{TransferItem.Size(written)} of {TransferItem.Size(item.TotalBytes)}";
+                    });
+                    break;
+                case "done":
+                    lock (gate) { f.Finished = true; Monitor.PulseAll(gate); }
+                    var secs = f.Clock.Elapsed.TotalSeconds;
+                    var total = item.TotalBytes;
+                    var saved = f.Sent > 0 && f.Wire < f.Sent * 0.9 ? $" · sent compressed ({f.Wire * 100 / f.Sent}%)" : "";
+                    post(() =>
+                    {
+                        item.SentBytes = total;
+                        item.Percent = 100;
+                        item.State = TransferState.Done;
+                        item.StatusText = $"Done · {TransferItem.Size(total)} in {secs:0.#} s{saved} · SHA-256 verified";
+                    });
+                    break;
+                case "skip":
+                    lock (gate) { f.Finished = true; Monitor.PulseAll(gate); }
+                    post(() => { item.State = TransferState.Skipped; item.StatusText = "Skipped – the file already exists"; });
+                    break;
+                case "cancelled":
+                    lock (gate) { f.Finished = true; Monitor.PulseAll(gate); }
+                    post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; });
+                    break;
+                case "fail":
+                    lock (gate) { f.Finished = true; Monitor.PulseAll(gate); }
+                    var why = parts.Length > 2 ? parts[2] : "the remote computer reported an error";
+                    post(() => Fail(item, why));
+                    break;
             }
-            var chunk = read == buffer.Length ? buffer : buffer[..read];
-            sha.AppendData(chunk);
-            Invoke(rs, ChunkScript, ("Path", target + PartSuffix), ("Data", chunk));
-            sent += read;
-            var s = sent;
-            var rate = s / Math.Max(0.001, sw.Elapsed.TotalSeconds);
-            post(() =>
-            {
-                item.SentBytes = s;
-                item.Percent = item.TotalBytes == 0 ? 100 : s * 100.0 / item.TotalBytes;
-                item.StatusText = $"{TransferItem.Size(s)} of {TransferItem.Size(item.TotalBytes)} · {TransferItem.Size((long)rate)}/s";
-            });
-        }
+        };
 
-        post(() => item.StatusText = "Verifying…");
-        var hash = Convert.ToHexString(sha.GetHashAndReset());
-        Invoke(rs, FinishScript, ("Path", target), ("Hash", hash));
-        var total = item.TotalBytes;
-        var secs = sw.Elapsed.TotalSeconds;
-        post(() =>
+        var run = ps.BeginInvoke(input, output);
+        var buffer = new byte[ChunkSize];
+        for (var i = 0; i < files.Length && !run.IsCompleted; i++)
         {
-            item.SentBytes = total;
-            item.Percent = 100;
-            item.State = TransferState.Done;
-            item.StatusText = $"Done · {TransferItem.Size(total)} in {secs:0.#} s · SHA-256 verified";
-        });
+            var f = files[i];
+            var item = f.Item;
+            if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); f.Finished = true; continue; }
+            post(() => { item.State = TransferState.Running; item.StatusText = "Starting…"; });
+            f.Clock.Start();
+            var tryCompress = !LikelyCompressed(item.LocalPath);
+
+            if (item.TotalBytes <= ChunkSize)
+            {
+                // Small file: begin, data and checksum in one message – no extra round trips per file.
+                var whole = File.ReadAllBytes(item.LocalPath);
+                var (small, zipped) = tryCompress ? Compress(whole) : (whole, false);
+                lock (gate) { f.Sent += whole.Length; f.Wire += small.Length; }
+                input.Add(new object[] { "file", i, batch[i].Target, small, zipped, Convert.ToHexString(SHA256.HashData(whole)) });
+                continue;
+            }
+            input.Add(new object[] { "begin", i, batch[i].Target });
+
+            var misses = 0;
+            using var file = new FileStream(item.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkSize, FileOptions.SequentialScan);
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var aborted = false;
+            int read;
+            while ((read = ReadFull(file, buffer)) > 0)
+            {
+                lock (gate)
+                {
+                    // Bounded: wait while too much is unwritten on the remote side (or stop if this file already failed).
+                    while (inFlight > WindowBytes && !f.Finished && !run.IsCompleted) Monitor.Wait(gate, 200);
+                    if (f.Finished || run.IsCompleted) { aborted = true; break; }
+                }
+                if (item.CancelRequested) { input.Add(new object[] { "abort", i }); aborted = true; break; }
+                var chunk = buffer.AsSpan(0, read).ToArray();
+                sha.AppendData(chunk);
+                var (payload, gzip) = tryCompress ? Compress(chunk) : (chunk, false);
+                if (tryCompress && !gzip && ++misses >= 2) tryCompress = false; // incompressible content: stop trying
+                lock (gate) { inFlight += read; f.Sent += read; f.Wire += payload.Length; }
+                input.Add(new object[] { "data", i, payload, gzip });
+            }
+            if (aborted) continue;
+            if (item.CancelRequested) { input.Add(new object[] { "abort", i }); continue; }
+            input.Add(new object[] { "end", i, Convert.ToHexString(sha.GetHashAndReset()) });
+        }
+        input.Complete();
+        try { ps.EndInvoke(run); }
+        catch (RuntimeException ex) when (ex is not System.Management.Automation.Remoting.PSRemotingTransportException)
+        {
+            throw new RemoteCommandException(ex.ErrorRecord?.Exception?.Message ?? ex.Message);
+        }
+        foreach (var f in files.Where(f => !f.Finished))
+            post(() => { if (f.Item.IsActive) Fail(f.Item, "no answer from the remote computer for this file"); });
+    }
+
+    /// <summary>Files that are already compressed: gzip would only cost time.</summary>
+    internal static bool LikelyCompressed(string path) => Path.GetExtension(path).ToLowerInvariant() is
+        ".zip" or ".7z" or ".rar" or ".gz" or ".tgz" or ".bz2" or ".xz" or ".zst" or ".cab" or ".msi" or ".msix" or ".msixbundle" or ".appx"
+        or ".jpg" or ".jpeg" or ".png" or ".gif" or ".webp" or ".heic" or ".mp3" or ".aac" or ".mp4" or ".mkv" or ".avi" or ".mov" or ".wmv"
+        or ".docx" or ".xlsx" or ".pptx" or ".nupkg" or ".jar" or ".apk" or ".wim" or ".esd";
+
+    /// <summary>gzip (fastest level); kept only if it saves at least 10 %.</summary>
+    internal static (byte[] Payload, bool Gzip) Compress(byte[] chunk)
+    {
+        using var ms = new MemoryStream(chunk.Length / 2 + 64);
+        using (var z = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true)) z.Write(chunk);
+        return ms.Length < chunk.Length * 0.9 ? (ms.ToArray(), true) : (chunk, false);
     }
 
     private static int ReadFull(Stream s, byte[] buffer)
@@ -231,12 +467,6 @@ public static class FileUploader
     {
         i.State = TransferState.Failed;
         i.StatusText = "Failed – " + why;
-    }
-
-    private static void TryCleanup(Runspace rs, string target)
-    {
-        try { if (rs.RunspaceStateInfo.State == RunspaceState.Opened) Invoke(rs, CleanupScript, ("Path", target)); }
-        catch { /* best effort */ }
     }
 
     /// <summary>Runs a script with parameters; remote errors become a <see cref="RemoteCommandException"/>.</summary>
@@ -367,12 +597,11 @@ public static class FileDownloader
                 got += data.Length;
                 var g = got;
                 var total = Math.Max(item.TotalBytes, g);
-                var rate = g / Math.Max(0.001, sw.Elapsed.TotalSeconds);
                 post(() =>
                 {
                     item.SentBytes = g;
                     item.Percent = total == 0 ? 100 : g * 100.0 / total;
-                    item.StatusText = $"{TransferItem.Size(g)} of {TransferItem.Size(total)} · {TransferItem.Size((long)rate)}/s";
+                    item.StatusText = $"{TransferItem.Size(g)} of {TransferItem.Size(total)}";
                 });
                 if (data.Length < FileUploader.ChunkSize) break;
             }

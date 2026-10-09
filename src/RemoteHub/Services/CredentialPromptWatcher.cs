@@ -54,7 +54,7 @@ public sealed class CredentialPromptWatcher : IDisposable
             await Task.Delay(400);
             var texts = ReadTexts(hwnd);
             DiagLog.Write($"Credential dialog: owner={owner}, texts read={texts.Count}");
-            dispatcher.BeginInvoke(() => PromptShown?.Invoke(hwnd, owner, texts));
+            _ = dispatcher.BeginInvoke(() => PromptShown?.Invoke(hwnd, owner, texts));
         });
     }
 

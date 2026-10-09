@@ -19,8 +19,11 @@ public sealed record AppSettingsHost(
     Action OpenFolder,
     Action OpenLog,
     Action ExportBackup,
+    Action ImportBackup,
     Action DefaultApp,
-    Action<string> CheckForUpdates);
+    Action<string> CheckForUpdates,
+    Action SettingsOverview,
+    Action About);
 
 /// <summary>
 /// Edits a connection or folder – or, without a node, the global settings: RemoteHub's own settings on this PC
@@ -28,7 +31,9 @@ public sealed record AppSettingsHost(
 /// </summary>
 public partial class EditorWindow : FluentWindow
 {
-    public const string PageAppSettings = "PageApp", PageUpdateSettings = "PageUpdates", PageDataSettings = "PageData", PageDefaults = "PageDisplay";
+    public const string PageAppSettings = "PageApp", PageUpdateSettings = "PageUpdates", PageDataSettings = "PageData", PageHelpSettings = "PageHelp",
+        PageRecordingSettings = "PageRecordings",
+        PageDefaults = "PageDisplay";
 
     private readonly EditorViewModel _vm;
     private readonly AppData _data;
@@ -63,7 +68,9 @@ public partial class EditorWindow : FluentWindow
             Group("RemoteHub", AppHeaderIcon());
             Page(PageAppSettings, "General", SymbolRegular.Settings24, "Appearance and keys of RemoteHub on this PC.");
             Page(PageUpdateSettings, "Updates & privacy", SymbolRegular.ArrowSync24, "Stored on this PC.");
-            Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials and where the settings are kept.");
+            Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials, where the settings are kept, backup.");
+            Page(PageRecordingSettings, "Recordings", SymbolRegular.Record24, "Frame rate, video size, graphics card and folder of tab recordings.");
+            Page(PageHelpSettings, "Help & about", SymbolRegular.QuestionCircle24, "Version, settings overview, diagnostic log and keyboard shortcuts.");
             Group("Connection defaults", new SymbolIcon(SymbolRegular.PlugConnected24) { FontSize = 18 });
             Page("PageCredentials", "Credentials", SymbolRegular.Key24, item);
             Page("PageDisplay", "Display", SymbolRegular.Desktop24, item);
@@ -212,7 +219,61 @@ public partial class EditorWindow : FluentWindow
         };
         FolderButton.Click += (_, _) => _host?.OpenFolder();
         ExportButton.Click += (_, _) => _host?.ExportBackup();
-        LogButton.Click += (_, _) => _host?.OpenLog();
+        ImportButton.Click += (_, _) =>
+        {
+            // Importing replaces the settings in memory, so this window (and its edits) closes first.
+            DialogResult = false;
+            Dispatcher.BeginInvoke(() => _host?.ImportBackup());
+        };
+        _recordingFolder = ui.RecordingFolder;
+        var recordingOptions = Recordings.Options(ui);
+        RecordingFpsBox.ItemsSource = Recordings.FrameRates.Select(f => f.Label).ToList();
+        RecordingFpsBox.SelectedIndex = Array.FindIndex(Recordings.FrameRates, f => f.Fps == recordingOptions.FramesPerSecond);
+        RecordingResolutionBox.ItemsSource = Recordings.Resolutions.Select(r => r.Label).ToList();
+        RecordingResolutionBox.SelectedIndex = Array.FindIndex(Recordings.Resolutions, r => r.Value == recordingOptions.Resolution);
+        RecordingGpuToggle.IsChecked = recordingOptions.UseGpu;
+        RecordingDetailsToggle.IsChecked = _data.Ui.RecordingShowDetails;
+        RefreshRecordingSection();
+        RecordingFolderButton.Click += (_, _) =>
+        {
+            var dlg = new Microsoft.Win32.OpenFolderDialog { Title = "Folder for session recordings", InitialDirectory = CurrentRecordingFolder };
+            if (dlg.ShowDialog(this) != true) return;
+            _recordingFolder = dlg.FolderName;
+            RefreshRecordingSection();
+        };
+        RecordingDefaultButton.Click += (_, _) => { _recordingFolder = null; RefreshRecordingSection(); };
+        RecordingOpenButton.Click += (_, _) =>
+        {
+            try
+            {
+                Directory.CreateDirectory(CurrentRecordingFolder);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{CurrentRecordingFolder}\"") { UseShellExecute = true });
+            }
+            catch (Exception ex) { RecordingInfoText.Text = $"The folder can't be opened: {ex.Message}"; }
+        };
+        HelpVersionText.Text = $"RemoteHub {Services.AppVersion.Current}";
+        AboutButton.Click += (_, _) => _host?.About();
+        OverviewButton.Click += (_, _) => _host?.SettingsOverview();
+        HelpLogButton.Click += (_, _) => _host?.OpenLog();
+    }
+
+    private string? _recordingFolder;
+
+    private string CurrentRecordingFolder => Recordings.Folder(new UiState { RecordingFolder = _recordingFolder });
+
+    private void RefreshRecordingSection()
+    {
+        var managed = AppPolicy.RecordingFolder is not null;
+        RecordingIntroText.Text = AppPolicy.RecordingDisabled
+            ? "Recording is turned off by your organisation."
+            : "Record any tab – remote desktop, PowerShell, file transfer, registry, services, processes – with the Record button in the " +
+              "toolbar or by right-clicking the tab. Videos are MP4 files without sound. They aren't encrypted and can contain personal " +
+              "data or passwords shown on screen.";
+        RecordingInfoText.Text = CurrentRecordingFolder + (managed ? " (set by your organisation)" : "");
+        RecordingFolderButton.IsEnabled = RecordingDefaultButton.IsEnabled = !managed && !AppPolicy.RecordingDisabled;
+        RecordingDefaultButton.Visibility = string.IsNullOrWhiteSpace(_recordingFolder) ? Visibility.Collapsed : Visibility.Visible;
+        RecordingOpenButton.IsEnabled = !AppPolicy.RecordingDisabled;
+        RecordingFpsBox.IsEnabled = RecordingResolutionBox.IsEnabled = RecordingGpuToggle.IsEnabled = RecordingDetailsToggle.IsEnabled = !AppPolicy.RecordingDisabled;
     }
 
     private string SelectedChannel => ChannelBeta.IsChecked == true ? UpdateService.Beta : UpdateService.Stable;
@@ -242,6 +303,11 @@ public partial class EditorWindow : FluentWindow
         if (!AppPolicy.UpdateCheckDisabled) ui.UpdateCheckEnabled = UpdateCheckToggle.IsChecked == true;
         // Only store the channel when it differs from what was in effect, so the default can still follow the version.
         if (AppPolicy.UpdateChannel is null && SelectedChannel != UpdateService.EffectiveChannel(ui)) ui.UpdateChannel = SelectedChannel;
+        if (AppPolicy.RecordingFolder is null) ui.RecordingFolder = string.IsNullOrWhiteSpace(_recordingFolder) ? null : _recordingFolder;
+        if (RecordingFpsBox.SelectedIndex >= 0) ui.RecordingFps = Recordings.FrameRates[RecordingFpsBox.SelectedIndex].Fps;
+        ui.RecordingUseGpu = RecordingGpuToggle.IsChecked == true;
+        ui.RecordingShowDetails = RecordingDetailsToggle.IsChecked == true;
+        if (RecordingResolutionBox.SelectedIndex >= 0) ui.RecordingResolution = Recordings.Resolutions[RecordingResolutionBox.SelectedIndex].Value.ToString();
         if (!AppPolicy.TelemetryDisabled)
         {
             var on = TelemetryToggle.IsChecked == true;

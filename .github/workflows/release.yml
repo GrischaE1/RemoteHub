@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.9.1 (or v0.9.1-beta.1): build, test, build the MSI and publish a GitHub Release.
+# Push a tag like v0.9.1 (or v0.9.1-beta.1): build, test, build both MSIs (RemoteHub, RemoteHub Agent) and publish a GitHub Release.
 # The tag is the version; tags below 1.0.0 or with a suffix become pre-releases.
 on:
   push:
@@ -63,15 +63,19 @@ jobs:
         shell: pwsh
         run: ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts
 
-      - name: Locate MSI
+      - name: Locate MSIs
         id: msi
         shell: pwsh
         run: |
           $msi = "artifacts/RemoteHub-${{ steps.version.outputs.version }}-x64.msi"
-          if (-not (Test-Path $msi)) { throw "$msi was not produced - check build-installer.ps1." }
-          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
-          "$hash  $(Split-Path $msi -Leaf)" | Out-File -Encoding ascii "$msi.sha256"
+          $agent = "artifacts/RemoteHub-Agent-${{ steps.version.outputs.version }}-x64.msi"
+          foreach ($file in $msi, $agent) {
+            if (-not (Test-Path $file)) { throw "$file was not produced - check build-installer.ps1." }
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            "$hash  $(Split-Path $file -Leaf)" | Out-File -Encoding ascii "$file.sha256"
+          }
           "path=$msi" >> $env:GITHUB_OUTPUT
+          "agent=$agent" >> $env:GITHUB_OUTPUT
 
       # Code signing goes here once a certificate is available (see the runbook, section 07).
 
@@ -82,6 +86,8 @@ jobs:
           files: |
             ${{ steps.msi.outputs.path }}
             ${{ steps.msi.outputs.path }}.sha256
+            ${{ steps.msi.outputs.agent }}
+            ${{ steps.msi.outputs.agent }}.sha256
           prerelease: ${{ steps.version.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true

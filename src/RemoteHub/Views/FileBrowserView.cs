@@ -27,8 +27,10 @@ public sealed record RemoteDrag(FileBrowserSession Source, string[] Paths)
 /// Tab content of a file transfer session: this PC on the left, the remote computer on the right.
 /// Drag files between the sides (or from Explorer onto the remote side), or use the arrow buttons.
 /// </summary>
-public sealed class FileBrowserView : Border
+public sealed class FileBrowserView : Border, IRecordableView
 {
+    public FrameworkElement RecordingArea { get; }
+
     public const string RemoteDragFormat = "RemoteHub.RemoteDrag";
     private readonly FileBrowserSession _session;
     private readonly Border _headerStripe = new() { Width = 4, Height = 18, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
@@ -65,6 +67,7 @@ public sealed class FileBrowserView : Border
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         Grid.SetRow(body, 1);
         root.Children.Add(body);
+        RecordingArea = body;
 
         Local = new FilePane("This PC", "Desktop24", p => Task.Run(() => RemoteFs.ListLocal(p)),
             p => Task.Run(() => Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(p)).FullName));

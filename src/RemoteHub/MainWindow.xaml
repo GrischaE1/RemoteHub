@@ -61,12 +61,12 @@
                 </StackPanel.Resources>
                 <ui:Button Icon="{ui:SymbolIcon PanelLeftExpand24}" Click="ToggleSidebar_Click" Margin="0,0,0,8"
                            AutomationProperties.Name="Show navigation" ToolTip="Show navigation (Ctrl+B)" />
-                <ui:Button Icon="{ui:SymbolIcon Add24}" Appearance="Primary" Click="NewConnection_Click" Margin="0,0,0,8"
-                           AutomationProperties.Name="New connection" ToolTip="New connection (Ctrl+N)" />
-                <ui:Button Icon="{ui:SymbolIcon FolderAdd24}" Click="NewFolder_Click" Margin="0,0,0,8"
-                           AutomationProperties.Name="New folder" ToolTip="New folder (Ctrl+Shift+N)" />
+                <ui:Button Icon="{ui:SymbolIcon Add24}" Appearance="Primary" Click="NewMenu_Click" Margin="0,0,0,8"
+                           AutomationProperties.Name="New" ToolTip="New connection, folder or import .rdp files" />
                 <ui:Button Icon="{ui:SymbolIcon Search24}" Click="RailSearch_Click"
                            AutomationProperties.Name="Search" ToolTip="Search folders &amp; connections (Ctrl+F)" Margin="0,0,0,8" />
+                <ui:Button Icon="{ui:SymbolIcon Settings24}" Click="Settings_Click" Margin="0,0,0,8"
+                           AutomationProperties.Name="Settings" ToolTip="Settings (Ctrl+,)" />
             </StackPanel>
             <Grid x:Name="SidebarFull">
                 <Grid.RowDefinitions>
@@ -78,41 +78,53 @@
                 </Grid.RowDefinitions>
 
                 <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
-                    <ui:Button x:Name="NewConnectionButton" DockPanel.Dock="Left" Appearance="Primary" Content="New"
-                               Icon="{ui:SymbolIcon Add24}" Click="NewConnection_Click" AutomationProperties.Name="New connection" ToolTip="New connection (Ctrl+N)" />
-                    <ui:Button DockPanel.Dock="Left" Margin="6,0,0,0" Icon="{ui:SymbolIcon FolderAdd24}"
-                               Click="NewFolder_Click" AutomationProperties.Name="New folder" ToolTip="New folder (Ctrl+Shift+N)" />
-                    <ui:Button DockPanel.Dock="Right" Margin="6,0,0,0" Icon="{ui:SymbolIcon PanelLeftContract24}" Click="ToggleSidebar_Click"
-                               AutomationProperties.Name="Hide navigation" ToolTip="Hide navigation (Ctrl+B)" />
-                    <ui:Button x:Name="MenuButton" DockPanel.Dock="Right" Icon="{ui:SymbolIcon MoreHorizontal24}"
-                               Click="Menu_Click" AutomationProperties.Name="More" ToolTip="More">
+                    <!-- Option C: New (menu), Settings, collapse – app items live in Settings -->
+                    <ui:Button x:Name="NewButton" DockPanel.Dock="Left" Appearance="Primary" Click="NewMenu_Click"
+                               AutomationProperties.Name="New" ToolTip="New connection (Ctrl+N), new folder (Ctrl+Shift+N) or import .rdp files">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Add24" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center" />
+                            <TextBlock Text="New" VerticalAlignment="Center" />
+                            <ui:SymbolIcon Symbol="ChevronDown24" FontSize="12" Margin="8,1,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
                         <ui:Button.ContextMenu>
                             <ContextMenu>
+                                <MenuItem Header="New connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Desktop24}" InputGestureText="Ctrl+N" />
+                                <MenuItem Header="New folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" InputGestureText="Ctrl+Shift+N" />
+                                <Separator />
                                 <MenuItem Header="Import .rdp files…" Click="ImportRdp_Click" Icon="{ui:SymbolIcon DocumentAdd24}" />
-                                <Separator />
-                                <MenuItem Header="Export backup…" Click="ExportBackup_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
-                                <MenuItem Header="Import backup…" Click="ImportBackup_Click" Icon="{ui:SymbolIcon ArrowImport24}" />
-                                <Separator />
-                                <MenuItem Header="Settings…" Click="Settings_Click" Icon="{ui:SymbolIcon Settings24}" InputGestureText="Ctrl+,"
-                                          ToolTip="Theme, keys, updates &amp; privacy, startup protection, storage and the connection defaults" />
-                                <MenuItem Header="Settings overview…" Click="SettingsOverview_Click" Icon="{ui:SymbolIcon TextBulletListSquare24}"
-                                          ToolTip="Review all settings in one place: storage, global defaults, remote tools, credentials, appearance" />
-                                <MenuItem Header="Saved credentials…" Click="Credentials_Click" Icon="{ui:SymbolIcon Key24}" />
-                                <MenuItem Header="Check for updates…" Click="CheckUpdates_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
-                                <MenuItem Header="Open diagnostic log" Click="OpenLog_Click" Icon="{ui:SymbolIcon Bug24}"
-                                          ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
-                                <Separator />
-                                <MenuItem x:Name="AboutMenu" Header="About RemoteHub…" Click="About_Click" Icon="{ui:SymbolIcon Info24}" />
                             </ContextMenu>
                         </ui:Button.ContextMenu>
                     </ui:Button>
+                    <ui:Button DockPanel.Dock="Right" Margin="6,0,0,0" Icon="{ui:SymbolIcon PanelLeftContract24}" Click="ToggleSidebar_Click"
+                               AutomationProperties.Name="Hide navigation" ToolTip="Hide navigation (Ctrl+B)" />
+                    <ui:Button DockPanel.Dock="Right" Icon="{ui:SymbolIcon Settings24}" Click="Settings_Click"
+                               AutomationProperties.Name="Settings" ToolTip="Settings (Ctrl+,) – also backup, saved credentials, updates, help and about" />
                 </DockPanel>
 
-                <ui:TextBox x:Name="SearchBox" Grid.Row="1" Margin="0,0,0,8"
-                            PlaceholderText="Search folders &amp; connections" ToolTip="Search folders &amp; connections, or type a computer name to quick-connect (Ctrl+F)"
-                            Icon="{ui:SymbolIcon Search24}" ClearButtonEnabled="True"
-                            Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                            PreviewKeyDown="SearchBox_PreviewKeyDown" />
+                <DockPanel Grid.Row="1" Margin="0,0,0,8">
+                    <!-- "Not used for …" filter: lists connections nobody opened for a while, to clean them up -->
+                    <ui:Button x:Name="UnusedFilterButton" DockPanel.Dock="Right" Margin="6,0,0,0" Icon="{ui:SymbolIcon Filter24}"
+                               Click="UnusedFilter_Click" AutomationProperties.Name="Filter: not used for"
+                               ToolTip="Show connections that haven't been used for a while (to clean them up)">
+                        <ui:Button.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="All connections" Tag="0" Click="UnusedFilterItem_Click" />
+                                <Separator />
+                                <MenuItem Header="Not used for 30 days" Tag="30" Click="UnusedFilterItem_Click" />
+                                <MenuItem Header="Not used for 90 days" Tag="90" Click="UnusedFilterItem_Click" />
+                                <MenuItem Header="Not used for 6 months" Tag="180" Click="UnusedFilterItem_Click" />
+                                <MenuItem Header="Not used for a year" Tag="365" Click="UnusedFilterItem_Click" />
+                                <Separator />
+                                <MenuItem Header="Never connected" Tag="-1" Click="UnusedFilterItem_Click" />
+                            </ContextMenu>
+                        </ui:Button.ContextMenu>
+                    </ui:Button>
+                    <ui:TextBox x:Name="SearchBox"
+                                PlaceholderText="Search folders &amp; connections" ToolTip="Search folders &amp; connections, or type a computer name to quick-connect (Ctrl+F)"
+                                Icon="{ui:SymbolIcon Search24}" ClearButtonEnabled="True"
+                                Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                PreviewKeyDown="SearchBox_PreviewKeyDown" />
+                </DockPanel>
 
                 <Grid Grid.Row="2">
                     <TreeView x:Name="Tree" ItemsSource="{Binding Items}" AllowDrop="True"
@@ -253,11 +265,35 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
+                                        <!-- the agent shield: a fixed slot, so names line up with and without an agent -->
+                                        <ColumnDefinition Width="20" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
+                                    <!-- RemoteHub Agent: active (installed and used) or available (installed, connection uses WinRM) -->
+                                    <ui:SymbolIcon Grid.Column="2" Symbol="Shield24" FontSize="14" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                        <ui:SymbolIcon.Style>
+                                            <Style TargetType="ui:SymbolIcon">
+                                                <!-- No agent: a red outline (every connection has a shield, so the names line up) -->
+                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                <Setter Property="Opacity" Value="0.75" />
+                                                <Setter Property="ToolTip" Value="{Binding AgentToolTip}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding AgentMode}" Value="Active">
+                                                        <Setter Property="Filled" Value="True" />
+                                                        <Setter Property="Opacity" Value="1" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding AgentMode}" Value="Available">
+                                                        <Setter Property="Opacity" Value="0.55" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ui:SymbolIcon.Style>
+                                    </ui:SymbolIcon>
                                     <Border Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}"
                                             Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
-                                    <Grid Grid.Column="1" Margin="0,0,8,0" VerticalAlignment="Center">
+                                    <Grid Grid.Column="1" Margin="0,0,5,0" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="16"
                                                        Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorPrimaryBrush}}"
                                                        Visibility="{Binding IconImage, Converter={StaticResource InvBoolToVis}}" />
@@ -267,8 +303,25 @@
                                                  VerticalAlignment="Bottom" Margin="0,0,-2,-1"
                                                  Visibility="{Binding OpenSessions, Converter={StaticResource BoolToVis}}" />
                                     </Grid>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="{Binding Name}" />
+                                    <StackPanel Grid.Column="3">
+                                        <DockPanel>
+                                            <!-- When it was last used (any tab), or that it never was -->
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding LastUsedText}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                        <Setter Property="ToolTip" Value="Last connected" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding NeverConnected}" Value="True">
+                                                                <Setter Property="FontStyle" Value="Italic" />
+                                                                <Setter Property="Opacity" Value="0.7" />
+                                                                <Setter Property="ToolTip" Value="No connection recorded yet" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
                                         <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" />
                                         <TextBlock Text="Checking PowerShell remoting…" Style="{StaticResource Caption}" FontSize="11"
                                                    Foreground="{DynamicResource SystemAccentColorPrimaryBrush}"
@@ -292,6 +345,7 @@
                             <ContextMenu x:Name="TreeMenu" Opened="TreeMenu_Opened">
                                 <MenuItem x:Name="CmConnect" Header="Connect" FontWeight="SemiBold" Click="CmConnect_Click" Icon="{ui:SymbolIcon PlugConnected24}" />
                                 <MenuItem x:Name="CmConnectNew" Header="Open additional session" Click="CmConnectNew_Click" Icon="{ui:SymbolIcon WindowNew24}" />
+                                <MenuItem x:Name="CmDesktopOther" Click="CmDesktopOther_Click" />
                                 <MenuItem x:Name="CmConnectAll" Header="Connect all in folder" Click="CmConnectAll_Click" Icon="{ui:SymbolIcon PlugConnected24}" />
                                 <Separator x:Name="CmPsSep" />
                                 <MenuItem x:Name="CmPs" Header="PowerShell" Click="CmPs_Click" Icon="{ui:SymbolIcon WindowConsole20}" />
@@ -301,6 +355,7 @@
                                 <MenuItem x:Name="CmProcesses" Header="Processes" Click="CmProcesses_Click" Icon="{ui:SymbolIcon Pulse24}" />
                                 <MenuItem x:Name="CmPsTest" Header="Test PowerShell remoting" Click="CmPsTest_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
                                 <MenuItem x:Name="CmPsSetup" Header="Set up PowerShell remoting on the target…" Click="CmPsSetup_Click" Icon="{ui:SymbolIcon Code24}" />
+                                <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
@@ -314,7 +369,23 @@
                     </TreeView>
 
                     <Grid Visibility="{Binding IsSearching, Converter={StaticResource BoolToVis}}">
-                    <ListBox x:Name="SearchList" ItemsSource="{Binding SearchResults}" Background="Transparent" BorderThickness="0"
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <!-- The "not used for" filter: what is shown, and deleting all of it at once -->
+                    <Border Padding="8,6" Margin="0,0,0,6" CornerRadius="6" Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                            Visibility="{Binding IsFiltering, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding UnusedSummary}" TextWrapping="Wrap" FontSize="12" />
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <ui:Button Content="Delete these…" Icon="{ui:SymbolIcon Delete24}" Appearance="Danger" Click="DeleteUnused_Click"
+                                           Visibility="{Binding SearchResults.Count, Converter={StaticResource BoolToVis}}" Margin="0,0,6,0" />
+                                <ui:Button Content="Show all" Click="ClearUnusedFilter_Click" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <ListBox x:Name="SearchList" Grid.Row="1" ItemsSource="{Binding SearchResults}" Background="Transparent" BorderThickness="0"
                              MouseDoubleClick="SearchList_MouseDoubleClick" KeyDown="SearchList_KeyDown"
                              PreviewMouseRightButtonDown="SearchList_PreviewMouseRightButtonDown">
                         <ListBox.ContextMenu>
@@ -348,9 +419,8 @@
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="6,8" VerticalAlignment="Top"
-                               Visibility="{Binding SearchResults.Count, Converter={StaticResource InvBoolToVis}}"
-                               Text="Nothing found. Press Enter to quick-connect to this computer name or IP address." />
+                    <TextBlock Grid.Row="1" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="6,8" VerticalAlignment="Top"
+                               Visibility="{Binding SearchResults.Count, Converter={StaticResource InvBoolToVis}}" Text="{Binding EmptySearchText}" />
                     </Grid>
 
                     <!-- Empty state -->
@@ -421,6 +491,10 @@
                                             <ui:SymbolIcon Symbol="{Binding SingleSymbol}" FontSize="14" Margin="0,0,6,0"
                                                            Visibility="{Binding ShowSingleSymbol, Converter={StaticResource BoolToVis}}" />
                                             <TextBlock Text="{Binding Connection.Name}" MaxWidth="200" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                            <Border Margin="6,0,0,0" Padding="5,0,5,1" CornerRadius="4" Background="#E5484D" VerticalAlignment="Center"
+                                                    Visibility="{Binding IsRecording, Converter={StaticResource BoolToVis}}" ToolTip="Being recorded">
+                                                <TextBlock Text="REC" FontSize="10" FontWeight="Bold" Foreground="White" />
+                                            </Border>
                                             <Border Margin="8,0,0,0" Padding="6,0" CornerRadius="8" VerticalAlignment="Center" Background="{DynamicResource SubtleFillColorSecondaryBrush}"
                                                     Visibility="{Binding HasMultiple, Converter={StaticResource BoolToVis}}">
                                                 <TextBlock Text="{Binding Sessions.Count}" FontSize="11" />
@@ -446,6 +520,8 @@
                                            Visibility="{Binding SelectedIsRdp, Converter={StaticResource BoolToVis}}" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon FolderSwap24}" Content="File transfer" Click="ToolbarSendFiles_Click" AutomationProperties.Name="Open file transfer" ToolTip="Open a file transfer tab at the current folder of this PowerShell session"
                                            Visibility="{Binding SelectedIsPowerShell, Converter={StaticResource BoolToVis}}" />
+                                <ui:Button x:Name="RecordButton" Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Record24}" Click="Record_Click"
+                                           AutomationProperties.Name="Record this tab to a video file" ToolTip="Record this tab to a video file" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon WindowNew24}" Click="Detach_Click" AutomationProperties.Name="Detach into its own window / dock back" ToolTip="Detach into its own window / dock back" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Edit24}" Click="EditSessionConnection_Click" AutomationProperties.Name="Edit connection" ToolTip="Edit connection" />
                             </StackPanel>
@@ -480,6 +556,10 @@
                                                      Fill="{Binding State, Converter={StaticResource StateBrush}}" />
                                             <ui:SymbolIcon Symbol="{Binding KindSymbol}" FontSize="14" Margin="0,0,6,0" />
                                             <TextBlock Text="{Binding KindLabel}" FontSize="13" VerticalAlignment="Center" />
+                                            <Border Margin="6,0,0,0" Padding="5,0,5,1" CornerRadius="4" Background="#E5484D" VerticalAlignment="Center"
+                                                    Visibility="{Binding IsRecording, Converter={StaticResource BoolToVis}}" ToolTip="Being recorded">
+                                                <TextBlock Text="REC" FontSize="10" FontWeight="Bold" Foreground="White" />
+                                            </Border>
                                             <ui:SymbolIcon Symbol="WindowNew24" FontSize="13" Margin="6,0,0,0" ToolTip="Detached window"
                                                            Visibility="{Binding IsDetached, Converter={StaticResource BoolToVis}}" />
                                             <Button Margin="6,0,0,0" Padding="3" MinWidth="0" Background="Transparent" BorderThickness="0"
@@ -533,6 +613,9 @@
                         <ui:SymbolIcon Symbol="ArrowSwap24" FontSize="18" HorizontalAlignment="Center" ToolTip="{Binding TransferSummary}" />
                         <TextBlock Text="{Binding ActiveTransfers}" HorizontalAlignment="Center" Margin="0,4,0,0" Style="{StaticResource Caption}"
                                    ToolTip="Transfers running" Visibility="{Binding ActiveTransfers, Converter={StaticResource BoolToVis}}" />
+                        <ui:Button Icon="{ui:SymbolIcon DismissCircle24}" Click="CancelAllTransfers_Click" Width="40" Height="32" Padding="0" Margin="0,8,0,0"
+                                   AutomationProperties.Name="Cancel all transfers" ToolTip="Cancel all running and waiting transfers"
+                                   Visibility="{Binding ActiveTransfers, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
                     <!-- Expanded -->
                     <DockPanel x:Name="TransfersFull">
@@ -541,12 +624,18 @@
                                        AutomationProperties.Name="Hide file transfers" ToolTip="Hide file transfers" />
                             <ui:Button DockPanel.Dock="Right" Icon="{ui:SymbolIcon Broom24}" Click="ClearTransfers_Click"
                                        AutomationProperties.Name="Clear finished transfers" ToolTip="Remove finished transfers from the list" />
+                            <ui:Button DockPanel.Dock="Right" Icon="{ui:SymbolIcon DismissCircle24}" Click="CancelAllTransfers_Click" Margin="0,0,6,0"
+                                       AutomationProperties.Name="Cancel all transfers" ToolTip="Cancel all running and waiting transfers"
+                                       Visibility="{Binding ActiveTransfers, Converter={StaticResource BoolToVis}}" />
                             <StackPanel VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
                                     <ui:SymbolIcon Symbol="ArrowSwap24" FontSize="16" Margin="0,0,8,0" />
                                     <TextBlock Text="File transfers" FontWeight="SemiBold" FontSize="14" />
                                 </StackPanel>
                                 <TextBlock Text="{Binding TransferSummary}" Style="{StaticResource Caption}" FontSize="11" Margin="0,2,0,0" />
+                                <TextBlock Text="{Binding TransferSpeed}" Style="{StaticResource Caption}" FontSize="11" Margin="0,1,0,0"
+                                           ToolTip="Current speed, and the average over the time files were actually moving (uploads count the original size, also when sent compressed)"
+                                           Visibility="{Binding TransferSpeed, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
                         </DockPanel>
                         <ListBox ItemsSource="{Binding Transfers}" Margin="0,8,0,0" Background="Transparent" BorderThickness="0"
@@ -588,7 +677,11 @@
                                         <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,3,0,0">
                                             <ProgressBar Height="3" Minimum="0" Maximum="100" Value="{Binding Percent}"
                                                          Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" Margin="0,0,0,3" />
-                                            <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" FontSize="11" TextWrapping="Wrap" TextTrimming="None" />
+                                            <DockPanel>
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding SpeedText}" Style="{StaticResource Caption}" FontSize="11" Margin="8,0,0,0"
+                                                           VerticalAlignment="Top" Visibility="{Binding SpeedText, Converter={StaticResource BoolToVis}}" />
+                                                <TextBlock Text="{Binding StatusText}" Style="{StaticResource Caption}" FontSize="11" TextWrapping="Wrap" TextTrimming="None" />
+                                            </DockPanel>
                                         </StackPanel>
                                     </Grid>
                                 </DataTemplate>

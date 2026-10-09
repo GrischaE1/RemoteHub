@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Rdp;
 using RemoteHub.Remoting;
@@ -63,6 +64,7 @@ public partial class MainWindow : FluentWindow
         Drop += Window_Drop;
         Loaded += (_, _) => ApplyTheme(vm.Data.Ui.Theme);
         Loaded += (_, _) => StartupChecks();
+        Loaded += (_, _) => UpdateRecordButton();
         Closing += Window_Closing;
     }
 
@@ -217,7 +219,7 @@ public partial class MainWindow : FluentWindow
 
     private void Vm_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) UpdateSessionVisibility();
+        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) { UpdateSessionVisibility(); UpdateRecordButton(); }
         if (e.PropertyName == nameof(MainViewModel.Items)) HookItems();
         if (e.PropertyName is nameof(MainViewModel.HasTransfers) or nameof(MainViewModel.ShowTransfers)) ApplyTransfersPane();
     }
@@ -237,6 +239,7 @@ public partial class MainWindow : FluentWindow
         if (e.OldItems is not null)
             foreach (SessionBase s in e.OldItems)
             {
+                if (_recorders.TryGetValue(s, out var recorder)) recorder.Stop();
                 if (_detached.Remove(s, out var w)) { w.ReleaseContent(); w.ForceClose(); }
                 if (_views.Remove(s, out var v))
                 {
@@ -269,8 +272,26 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    /// <summary>Opens a connection, or switches to its existing session.</summary>
+    /// <summary>
+    /// "Remote desktop" for a connection: through the RemoteHub Agent when one is installed (or the connection says so),
+    /// otherwise RDP. Switches to an existing tab unless <paramref name="forceNew"/>.
+    /// </summary>
     public void OpenConnection(Connection c, bool forceNew = false)
+    {
+        if (AgentDesktopFor(c)) OpenAgentDesktop(c, forceNew);
+        else OpenRdp(c, forceNew);
+    }
+
+    /// <summary>Remote desktop through the agent unless the connection is set to RDP (Automatic: when an agent is installed).</summary>
+    private bool AgentDesktopFor(Connection c) => (Inheritance.ResolveOptions(c, _vm.Data).RemoteDesktopVia ?? DesktopVia.Automatic) switch
+    {
+        DesktopVia.Rdp => false,
+        DesktopVia.Agent => true,
+        _ => c.Agent is { Status: AgentStatus.Installed, Fingerprint.Length: > 0 },
+    };
+
+    /// <summary>Opens an RDP session, or switches to the existing one.</summary>
+    public void OpenRdp(Connection c, bool forceNew = false)
     {
         if (!forceNew && _vm.FindSession(c) is { } existing)
         {
@@ -358,7 +379,9 @@ public partial class MainWindow : FluentWindow
                 tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", r.SendCtrlAltDel));
                 tools.Add((SymbolRegular.FullScreenMaximize24, null, "Full screen", r.EnterFullScreen));
             }
-            else if (s is PsSession p)
+            if (s is AgentDesktopSession d) tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", d.SendCtrlAltDel));
+            if (RecordingAllowed) tools.Add((SymbolRegular.Record24, null, "Start / stop recording this tab (the header shows REC while recording)", () => ToggleRecording(s)));
+            if (s is PsSession p)
             {
                 tools.Add((SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder", () => OpenFileTransfer(p.Connection, p.Location, p.Target)));
                 tools.Add((SymbolRegular.CubeTree24, "Registry", "Open the remote registry in a new tab", () => OpenRegistry(p.Connection, p.Target)));
@@ -387,6 +410,7 @@ public partial class MainWindow : FluentWindow
     private void Restart(SessionBase s)
     {
         if (s is RdpSession r) _vm.StartSession(r);
+        else if (s is AgentDesktopSession d) ConnectAgentDesktop(d);
         else if (s is PsSession p) ConnectPs(p);
         else if (s is FileBrowserSession f) ConnectFileBrowser(f);
         else if (s is RemoteToolSession t) ConnectTool(t);
@@ -394,7 +418,11 @@ public partial class MainWindow : FluentWindow
 
     private void Reconnect_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedSession is { } s) Restart(s); }
     private void Disconnect_Click(object sender, RoutedEventArgs e) => _vm.SelectedSession?.Disconnect();
-    private void CtrlAltDel_Click(object sender, RoutedEventArgs e) => (_vm.SelectedSession as RdpSession)?.SendCtrlAltDel();
+    private void CtrlAltDel_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedSession is RdpSession r) r.SendCtrlAltDel();
+        else if (_vm.SelectedSession is AgentDesktopSession d) d.SendCtrlAltDel();
+    }
     private void FullScreen_Click(object sender, RoutedEventArgs e) => (_vm.SelectedSession as RdpSession)?.EnterFullScreen();
     private void ToolbarSendFiles_Click(object sender, RoutedEventArgs e)
     {
@@ -592,6 +620,12 @@ public partial class MainWindow : FluentWindow
         Visibility V(bool b) => b ? Visibility.Visible : Visibility.Collapsed;
         CmConnect.Visibility = V(n is Connection);
         CmConnectNew.Visibility = V(n is Connection);
+        CmConnectNew.Header = n is Connection k && AgentDesktopFor(k) ? "Open an RDP session" : "Open additional session";
+        // The other way to the screen: RDP when the agent is the default, the agent when it is installed but RDP is the default.
+        var agentDefault = n is Connection dc && AgentDesktopFor(dc);
+        CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault || oc.Agent is { Status: AgentStatus.Installed }));
+        CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
+        CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
         CmConnectAll.Visibility = V(n is Folder);
         CmSep1.Visibility = V(n is not null);
         CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(n is not null);
@@ -600,16 +634,21 @@ public partial class MainWindow : FluentWindow
 
         var c = n as Connection;
         var psOn = c is not null; // manual test always offered; the setting only controls the automatic check
-        var st = c?.PsRemoting?.State ?? PsRemotingState.Unknown;
+        var st = c is null ? PsRemotingState.Unknown : PsState(c);
+        var name = c is not null && UsesAgent(c) ? "RemoteHub Agent" : "PowerShell remoting";
         CmPsSep.Visibility = V(psOn);
         CmPs.Visibility = CmSendFiles.Visibility = CmRegistry.Visibility = CmServices.Visibility = CmProcesses.Visibility = V(psOn && st == PsRemotingState.Available);
         CmPsTest.Visibility = V(psOn && st != PsRemotingState.Available);
-        CmPsTest.Header = c?.PsChecking == true ? "Testing PowerShell remoting…"
-                        : st == PsRemotingState.Unavailable ? "Test PowerShell remoting again" : "Test PowerShell remoting";
+        CmPsTest.Header = c?.PsChecking == true ? $"Testing {name}…"
+                        : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}";
         CmPsTest.IsEnabled = c?.PsChecking != true;
         CmPsTest.ToolTip = st == PsRemotingState.Unavailable ? $"Last result: {c!.PsRemoting!.Message}" : null;
-        CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable);
+        CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !UsesAgent(c!));
+        CmAgent.Visibility = V(c is not null);
+        CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
     }
+
+    private void CmAgent_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = InstallAgent(c); }
 
     private void CmPsSetup_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ShowRemotingSetup(c); }
 
@@ -629,15 +668,31 @@ public partial class MainWindow : FluentWindow
 
     /// <summary>Credentials already in use by a remoting tab of this connection (no second password prompt).</summary>
     private PsTarget? KnownTarget(Connection c) => _vm.Sessions.Where(x => x.Connection == c)
-        .Select(x => x switch { RemoteToolSession r => r.Target, PsSession p => p.Target, _ => null }).FirstOrDefault(t => t is not null);
+        .Select(x => x switch { RemoteToolSession r => r.Target, PsSession p => p.Target, _ => null })
+        .FirstOrDefault(t => t is not null && (t.Agent is not null) == UsesAgent(c)); // same way (agent / WinRM) as the connection uses now
 
     /// <summary>Tabs that can be opened for a connection: remote desktop, and PowerShell / file transfer / registry (or the remoting test).</summary>
     private void AddConnectionTools(ItemsControl cm, Connection c, SessionBase? from)
     {
         var rdp = _vm.FindSession(c);
-        cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.Desktop24, () => OpenConnection(c)));
-        if (rdp is not null) cm.Items.Add(MenuEntry("Additional remote desktop session", SymbolRegular.WindowNew24, () => OpenConnection(c, forceNew: true)));
-        var st = c.PsRemoting?.State ?? PsRemotingState.Unknown;
+        var agentDesktop = _vm.FindAgentDesktop(c);
+        var viaAgent = AgentDesktopFor(c);
+        if (viaAgent)
+        {
+            cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
+                tip: "The device's screen through the RemoteHub Agent (no RDP needed)"));
+            cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop via RDP" : "Show RDP session", SymbolRegular.Desktop24, () => OpenRdp(c)));
+        }
+        else
+        {
+            cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.Desktop24, () => OpenRdp(c)));
+            if (rdp is not null) cm.Items.Add(MenuEntry("Additional remote desktop session", SymbolRegular.WindowNew24, () => OpenRdp(c, forceNew: true)));
+            if (c.Agent is { Status: AgentStatus.Installed })
+                cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop via RemoteHub Agent" : "Show agent desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
+                    tip: "The device's screen through the RemoteHub Agent – for devices where RDP is off"));
+        }
+        var st = PsState(c);
+        var name = UsesAgent(c) ? "RemoteHub Agent" : "PowerShell remoting";
         var ps = from as PsSession;
         if (st == PsRemotingState.Available)
         {
@@ -648,11 +703,13 @@ public partial class MainWindow : FluentWindow
             cm.Items.Add(MenuEntry("Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c))));
         }
         else
-            cm.Items.Add(MenuEntry(c.PsChecking ? "Testing PowerShell remoting…" : st == PsRemotingState.Unavailable ? "Test PowerShell remoting again" : "Test PowerShell remoting",
+            cm.Items.Add(MenuEntry(c.PsChecking ? $"Testing {name}…" : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}",
                 SymbolRegular.ArrowSync24, () => _ = TestPsRemoting(c, interactive: true), !c.PsChecking,
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
-        if (st == PsRemotingState.Unavailable)
+        if (st == PsRemotingState.Unavailable && !UsesAgent(c))
             cm.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
+        cm.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
+            SymbolRegular.Shield24, () => _ = InstallAgent(c)));
     }
 
     private static void ShowMenu(ContextMenu cm, UIElement target, PlacementMode placement)
@@ -721,6 +778,9 @@ public partial class MainWindow : FluentWindow
             Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, r.SendCtrlAltDel, r.IsConnected);
             Add("Full screen", SymbolRegular.FullScreenMaximize24, r.EnterFullScreen, r.IsConnected);
         }
+        if (s is AgentDesktopSession d) Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, d.SendCtrlAltDel, d.IsConnected && !d.ViewOnly);
+        if (RecordingAllowed)
+            Add(s.IsRecording ? "Stop recording" : "Record to a video file…", s.IsRecording ? SymbolRegular.RecordStop24 : SymbolRegular.Record24, () => ToggleRecording(s));
         Add(s.IsDetached ? "Dock back" : "Detach into its own window", SymbolRegular.WindowNew24, () => ToggleDetach(s));
         Add("Edit connection…", SymbolRegular.Edit24, () => EditNode(c));
         cm.Items.Add(new Separator());
@@ -737,6 +797,13 @@ public partial class MainWindow : FluentWindow
 
     private bool PsEnabled(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).PsRemoting == true;
 
+    /// <summary>The connection goes through the RemoteHub Agent instead of WinRM.</summary>
+    private bool UsesAgent(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).UseAgent == true;
+
+    /// <summary>Last check result – only if it was made the way the connection works now (agent or WinRM).</summary>
+    private PsRemotingState PsState(Connection c) =>
+        c.PsRemoting is { } st && st.ViaAgent == UsesAgent(c) ? st.State : PsRemotingState.Unknown;
+
     private Brush AccentFor(Connection c) =>
         ColorTags.Brush(Inheritance.ResolveOptions(c, _vm.Data).ColorTag) ?? ColorTags.Frozen(AppChrome.Accent);
 
@@ -744,11 +811,18 @@ public partial class MainWindow : FluentWindow
     /// Host, protocol and the connection's (inherited) credentials. Without a stored password the user is asked;
     /// that password stays in memory only. Returns null when the user cancels.
     /// </summary>
-    private (PsTarget Target, string Source)? BuildTarget(Connection c, PsTarget? previous)
+    private (PsTarget Target, string Source)? BuildTarget(Connection c, PsTarget? previous, bool? viaAgent = null)
     {
-        var opt = Inheritance.ResolveOptions(c, _vm.Data);
+        var agent = viaAgent ?? UsesAgent(c);
         var (resolved, source) = Inheritance.ResolveCredentials(c, _vm.Data);
         var cred = resolved.Clone();
+        if (agent && AgentEndpointFor(c) is null) return null;
+        if (agent && cred.IsEmpty)
+        {
+            _ = Dialogs.Info(this, "RemoteHub Agent", $"No credentials are set for {c.Name}. The RemoteHub Agent signs in with a Windows account " +
+                                                     "of the device (an administrator there) – set credentials on the connection or its folder.");
+            return null;
+        }
         if (cred.IsEmpty) source = "your Windows account (no credentials set)";
         if (PsRemoting.NeedsPassword(cred))
         {
@@ -756,7 +830,7 @@ public partial class MainWindow : FluentWindow
                 cred.Password = p.Password;
             else
             {
-                var dlg = new PasswordDialog(confirm: false, title: "PowerShell remoting",
+                var dlg = new PasswordDialog(confirm: false, title: agent ? "RemoteHub Agent" : "PowerShell remoting",
                     message: $"No password is stored for {PsRemoting.UserName(cred, c.Host)}. Enter it to connect to {c.Name} – it is kept in memory only.",
                     okText: "Connect") { Owner = this };
                 if (dlg.ShowDialog() != true) return null;
@@ -764,14 +838,40 @@ public partial class MainWindow : FluentWindow
                 source += ", password entered";
             }
         }
-        return (new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred), source);
+        if (previous?.Credentials is { } same && same.Username == cred.Username && same.Domain == cred.Domain && same.Password == cred.Password) cred = same;
+        return (MakeTarget(c, cred, agent)!, source);
+    }
+
+    /// <summary>The target for given credentials: WinRM, or the agent with its pinned certificate.</summary>
+    private PsTarget? MakeTarget(Connection c, CredentialSet cred, bool? viaAgent = null)
+    {
+        var agent = viaAgent ?? UsesAgent(c);
+        var opt = Inheritance.ResolveOptions(c, _vm.Data);
+        if (!agent) return new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred);
+        return AgentEndpointFor(c, quiet: true) is { } ep ? new PsTarget(c.Host.Trim(), false, cred, ep) : null;
+    }
+
+    private AgentEndpoint? AgentEndpointFor(Connection c, bool quiet = false)
+    {
+        if (c.Agent is { Fingerprint.Length: > 0 } d) return new AgentEndpoint(d.Port, d.Fingerprint);
+        if (!quiet)
+            _ = Dialogs.Info(this, "RemoteHub Agent", $"{c.Name} is set to connect through the RemoteHub Agent, but no agent is installed for it yet. " +
+                                                     "Right-click the connection → Install RemoteHub Agent (or switch it back to PowerShell remoting in its settings).");
+        return null;
     }
 
     private void SetPsStatus(Connection c, PsRemotingState state, string? message)
     {
         var old = c.PsRemoting;
         if (old is not null && old.State == state && old.Message == message && DateTime.UtcNow - old.CheckedUtc < TimeSpan.FromMinutes(1)) return;
-        c.PsRemoting = new PsRemotingStatus { State = state, Message = message, CheckedUtc = DateTime.UtcNow, UploadFolder = old?.UploadFolder, RegistryPath = old?.RegistryPath };
+        var viaAgent = UsesAgent(c);
+        c.PsRemoting = new PsRemotingStatus { State = state, Message = message, CheckedUtc = DateTime.UtcNow, UploadFolder = old?.UploadFolder, RegistryPath = old?.RegistryPath, ViaAgent = viaAgent };
+        if (viaAgent && state == PsRemotingState.Available && c.Agent is { Status: AgentStatus.NotInstalled } a)
+        {
+            a.Status = AgentStatus.Installed; // first successful connection confirms an install done by hand
+            a.InstalledUtc = DateTime.UtcNow;
+            DiagLog.Write("RemoteHub Agent: first connection succeeded – marked as installed");
+        }
         _vm.RequestSave();
     }
 
@@ -779,7 +879,8 @@ public partial class MainWindow : FluentWindow
     private void AutoCheckPsRemoting(RdpSession s)
     {
         var c = s.Connection;
-        if (!PsEnabled(c) || c.PsChecking || (c.PsRemoting?.State ?? PsRemotingState.Unknown) != PsRemotingState.Unknown) return;
+        if (!(PsEnabled(c) || UsesAgent(c)) || c.PsChecking || PsState(c) != PsRemotingState.Unknown) return;
+        if (UsesAgent(c) && c.Agent is null) return;
         var cred = s.UsedCredentials.Clone();
         if (PsRemoting.NeedsPassword(cred)) return; // would have to ask – the user can start the test from the menu
         _ = TestPsRemoting(c, interactive: false, cred);
@@ -790,18 +891,29 @@ public partial class MainWindow : FluentWindow
         if (c.PsChecking) return;
         PsTarget target;
         if (credentials is not null)
-            target = new PsTarget(c.Host.Trim(), Inheritance.ResolveOptions(c, _vm.Data).PsUseSsl == true, credentials);
+        {
+            if (MakeTarget(c, credentials) is not { } made) return;
+            target = made;
+        }
         else if (BuildTarget(c, null) is { } t) target = t.Target;
         else return;
 
         c.PsChecking = true;
-        DiagLog.Write($"PowerShell remoting check started ({(target.UseSsl ? "HTTPS" : "HTTP")}, interactive={interactive})");
+        DiagLog.Write($"PowerShell remoting check started ({(target.Agent is not null ? "agent" : target.UseSsl ? "HTTPS" : "HTTP")}, interactive={interactive})");
         PsRemotingStatus st;
         try { st = await PsRemoting.TestAsync(target); }
         finally { c.PsChecking = false; }
         DiagLog.Write($"PowerShell remoting check: {st.State}");
         SetPsStatus(c, st.State, st.Message);
         if (!interactive) return;
+        if (target.Agent is not null)
+        {
+            if (st.State == PsRemotingState.Available)
+                await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell, File transfer, Registry, Services or Processes.");
+            else if (await Dialogs.Confirm(this, "RemoteHub Agent", $"The RemoteHub Agent on {c.Name} could not be used.\n\n{st.Message}", "Install / update the agent…"))
+                await InstallAgent(c);
+            return;
+        }
         if (st.State == PsRemotingState.Available)
             await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell or File transfer.");
         else if (await Dialogs.Confirm(this, "PowerShell remoting",
@@ -824,6 +936,238 @@ public partial class MainWindow : FluentWindow
             _vm.RequestSave();
         }
         if (testAgain) await TestPsRemoting(c, interactive: true);
+    }
+
+    // =====================================================================
+    // RemoteHub Agent: install / update
+    // =====================================================================
+
+    /// <summary>Right-click → Install / Update RemoteHub Agent.</summary>
+    private async Task InstallAgent(Connection c)
+    {
+        var package = AgentInstaller.FindPackage();
+        if (package is null)
+        {
+            var pick = new Microsoft.Win32.OpenFileDialog { Title = "RemoteHub Agent installer", Filter = "RemoteHub Agent installer (RemoteHub-Agent*.msi)|RemoteHub-Agent*.msi" };
+            if (pick.ShowDialog(this) != true) return;
+            package = pick.FileName;
+        }
+
+        // Silent install needs WinRM: offered when the connection's remoting check is on or WinRM worked before.
+        var remoting = PsEnabled(c) || c.PsRemoting is { ViaAgent: false, State: PsRemotingState.Available };
+        var agentReachable = false;
+        if (c.Agent is { Status: AgentStatus.Installed } a)
+            try { await AgentInstaller.HealthAsync(c.Host, a.Port, a.Fingerprint, new System.Threading.CancellationTokenSource(4000).Token); agentReachable = true; }
+            catch { /* offer the other ways */ }
+        var local = await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()));
+
+        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, (o, report) => RunAgentInstall(c, package, o, report)) { Owner = this };
+        dlg.ShowDialog();
+    }
+
+    private async Task<bool> RunAgentInstall(Connection c, string package, AgentInstallOptions o, Action<string> report)
+    {
+        AgentEnrollment? enrollment = null;
+        AgentDevice device;
+        if (o.NewIdentity || c.Agent is null)
+        {
+            var (e, fingerprint) = await Task.Run(() => AgentEnrollment.Create(o.Label, o.Port, o.AllowedGroups, o.FirewallScope));
+            enrollment = e;
+            device = new AgentDevice { DeviceId = e.DeviceId, Label = e.DeviceLabel, Port = e.ListenPort, Fingerprint = fingerprint, Status = AgentStatus.NotInstalled, CreatedUtc = DateTime.UtcNow };
+            report($"New device certificate: SHA-256 …{fingerprint[^16..]}");
+        }
+        else device = c.Agent.Clone();
+
+        var (folder, msi, enrollmentFile) = AgentInstaller.Prepare(package, enrollment);
+        DiagLog.Write($"RemoteHub Agent {(enrollment is null ? "update" : "install")} started ({o.Method})");
+        void Finish(AgentDevice d)
+        {
+            c.Agent = d;
+            c.RefreshLabels();
+            if (o.UseAgentAfterwards && !UsesAgent(c)) c.Options.UseAgent = true;
+            c.PsRemoting = null; // test again the new way
+            _vm.RequestSave();
+        }
+
+        try
+        {
+            switch (o.Method)
+            {
+                case AgentInstallMethod.Clipboard:
+                {
+                    var files = new StringCollection { msi };
+                    if (enrollmentFile is not null) files.Add(enrollmentFile);
+                    Clipboard.SetFileDropList(files);
+                    folder = null; // the files must stay until they are pasted – deleted when RemoteHub closes
+                    if (enrollment is not null) Finish(device);
+                    report(enrollmentFile is null
+                        ? $"Copied {AgentInstaller.PackageName} to the clipboard. In the RDP session of {c.Name}: paste it and run it as administrator."
+                        : $"Copied {AgentInstaller.PackageName} and {Path.GetFileName(enrollmentFile)} to the clipboard.\n\n" +
+                          $"In the RDP session of {c.Name}:\n  1. Paste both files into the same folder.\n  2. Run {AgentInstaller.PackageName} as administrator.\n" +
+                          "  3. The agent imports and deletes the .rhagent file – if it's still there, delete it (it contains the device key).\n\n" +
+                          "This needs clipboard redirection for the RDP session. The files on this PC are deleted when RemoteHub closes. " +
+                          "The first successful connection confirms the install.");
+                    return true;
+                }
+
+                case AgentInstallMethod.Remoting:
+                {
+                    var previous = KnownTarget(c) is { Agent: null } known ? known : null;
+                    if (BuildTarget(c, previous, viaAgent: false) is not { } t) { report("Cancelled."); return false; }
+                    report($"Connecting to {t.Target.Display}…");
+                    AgentInstaller.Installed installed;
+                    try
+                    {
+                        installed = await Task.Run(() =>
+                        {
+                            using var rs = PsRemoting.Open(t.Target);
+                            return AgentInstaller.InstallOverRemoting(rs, msi, enrollmentFile, report);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        report("Failed: " + (ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target)));
+                        return false;
+                    }
+                    if (!string.Equals(installed.Fingerprint, device.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    {
+                        report($"The device's agent uses a certificate RemoteHub didn't create for it (…{installed.Fingerprint[^16..]}). " +
+                               "Install again with \"Create a new device certificate\".");
+                        return false;
+                    }
+                    device.Port = installed.Port;
+                    report($"Installed – service {installed.ServiceStatus}.");
+                    await ConfirmReachable(c, device, report);
+                    device.Status = AgentStatus.Installed;
+                    device.InstalledUtc = DateTime.UtcNow;
+                    Finish(device);
+                    if (UsesAgent(c)) _ = TestPsRemoting(c, interactive: false, t.Target.Credentials);
+                    return true;
+                }
+
+                case AgentInstallMethod.ThroughAgent:
+                {
+                    var previous = KnownTarget(c) is { Agent: not null } known ? known : null;
+                    if (BuildTarget(c, previous, viaAgent: true) is not { } t) { report("Cancelled."); return false; }
+                    report($"Connecting to {t.Target.Display}…");
+                    try
+                    {
+                        await Task.Run(() =>
+                        {
+                            using var rs = PsRemoting.Open(t.Target);
+                            AgentInstaller.StartUpdateThroughAgent(rs, msi, enrollmentFile, report);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        report("Failed: " + (ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target)));
+                        return false;
+                    }
+                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, device.Port, device.Fingerprint, report, System.Threading.CancellationToken.None);
+                    if (health is null)
+                    {
+                        report("The agent didn't answer again within a few minutes. On the device, see %TEMP%\\RemoteHub-Agent-update.log of the " +
+                               "signing-in account and the agent's log in %ProgramData%\\RemoteHub\\Agent\\logs.");
+                        return false;
+                    }
+                    device.Version = health.Version;
+                    device.Status = AgentStatus.Installed;
+                    device.InstalledUtc = DateTime.UtcNow;
+                    Finish(device);
+                    report($"Updated – RemoteHub Agent {health.Version} is running.");
+                    if (UsesAgent(c)) _ = TestPsRemoting(c, interactive: false, t.Target.Credentials);
+                    return true;
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            if (folder is not null) try { Directory.Delete(folder, true); } catch { /* cleaned up later */ }
+            DiagLog.Write("RemoteHub Agent install/update finished");
+        }
+    }
+
+    /// <summary>Checks from this PC that the agent answers with the expected certificate (network path, firewalls).</summary>
+    private static async Task ConfirmReachable(Connection c, AgentDevice device, Action<string> report)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                var h = await AgentInstaller.HealthAsync(c.Host, device.Port, device.Fingerprint, new System.Threading.CancellationTokenSource(10_000).Token);
+                device.Version = h.Version;
+                report($"RemoteHub Agent {h.Version} answers on port {device.Port} with the expected certificate.");
+                return;
+            }
+            catch (Exception ex) when (attempt < 4) { _ = ex; await Task.Delay(2000); }
+            catch (Exception ex)
+            {
+                report($"Installed, but this PC can't reach the agent on {c.Host}:{device.Port} ({ex.GetBaseException().Message}). " +
+                       "Check firewalls between this PC and the device, and the agent's \"Allow connections from\" scope.");
+                return;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The device's screen through the RemoteHub Agent in a new tab (or the existing one). Signs in with the
+    /// connection's credentials – or those of an open agent tab – then the tab asks which Windows session to show.
+    /// </summary>
+    private void OpenAgentDesktop(Connection c, bool forceNew = false)
+    {
+        if (!forceNew && _vm.FindAgentDesktop(c) is { } existing)
+        {
+            _vm.SelectedSession = existing;
+            if (existing.Phase is DesktopPhase.Ended or DesktopPhase.Idle) ConnectAgentDesktop(existing);
+            return;
+        }
+        if (AgentDesktopTarget(c, null) is not { } t) return;
+        var s = _vm.OpenAgentDesktop(c);
+        var ui = _vm.Data.Ui;
+        var view = new AgentDesktopView(s, () => ConnectAgentDesktop(s), s.Close, () => { s.Close(); OpenRdp(c); },
+            () => DesktopQualityPreset.Find(ui.AgentDesktopQuality),
+            (quality, consent) =>
+            {
+                ui.AgentDesktopQuality = quality.Id;
+                ui.AgentDesktopConsent = consent;
+                _vm.RequestSave();
+            },
+            () => ui.AgentDesktopFitToWindow,
+            fit =>
+            {
+                if (ui.AgentDesktopFitToWindow == fit) return;
+                ui.AgentDesktopFitToWindow = fit;
+                _vm.RequestSave();
+            });
+        view.RememberedConsent(ui.AgentDesktopConsent);
+        view.UsePreferences(ui.AgentDesktopShowInfo, ui.AgentDesktopKeyCombinations, (info, keys) =>
+        {
+            ui.AgentDesktopShowInfo = info;
+            ui.AgentDesktopKeyCombinations = keys;
+            _vm.RequestSave();
+        });
+        _views[s] = view;
+        SessionPanel.Children.Add(view);
+        UpdateSessionVisibility();
+        s.Connect(t.Target, t.Source, AccentFor(c));
+    }
+
+    private void ConnectAgentDesktop(AgentDesktopSession s)
+    {
+        if (AgentDesktopTarget(s.Connection, s.Target) is not { } t) return;
+        s.Connect(t.Target, t.Source, AccentFor(s.Connection));
+    }
+
+    /// <summary>Agent credentials: those of an open agent tab of the connection, else the connection's own (asks for a missing password).</summary>
+    private (PsTarget Target, string Source)? AgentDesktopTarget(Connection c, PsTarget? previous)
+    {
+        var known = previous ?? _vm.Sessions.Where(x => x.Connection == c)
+            .Select(x => x switch { RemoteToolSession r => r.Target, PsSession p => p.Target, _ => null })
+            .FirstOrDefault(t => t?.Agent is not null);
+        if (known?.Agent is not null && AgentEndpointFor(c, quiet: true) is { } ep && known.Agent == ep && !PsRemoting.NeedsPassword(known.Credentials))
+            return (known, "the open agent tab");
+        return BuildTarget(c, previous, viaAgent: true);
     }
 
     /// <summary>Opens a PowerShell remoting session to the connection's host in a new tab.</summary>
@@ -856,7 +1200,7 @@ public partial class MainWindow : FluentWindow
     {
         PsTarget target;
         string source;
-        if (known is not null) { target = known; source = "the PowerShell tab"; }
+        if (known is not null && (known.Agent is not null) == UsesAgent(c)) { target = known; source = "the PowerShell tab"; }
         else if (BuildTarget(c, null) is { } t) { target = t.Target; source = t.Source; }
         else return;
 
@@ -893,7 +1237,7 @@ public partial class MainWindow : FluentWindow
 
     /// <summary>Credentials for a new remote tool tab: those of an open remoting tab of the connection, else the connection's own.</summary>
     private (PsTarget Target, string Source)? ToolTarget(Connection c, PsTarget? known) =>
-        known is not null ? (known, "the open tab") : BuildTarget(c, null);
+        known is not null && (known.Agent is not null) == UsesAgent(c) ? (known, "the open tab") : BuildTarget(c, null);
 
     /// <summary>Shows a new remote tool tab (registry, services, processes) and connects it.</summary>
     private void ShowTool(RemoteToolSession s, FrameworkElement view, (PsTarget Target, string Source) t)
@@ -1057,10 +1401,25 @@ public partial class MainWindow : FluentWindow
         _vm.RequestSave();
     }
     private void ClearTransfers_Click(object sender, RoutedEventArgs e) => _vm.ClearFinishedTransfers();
+
+    private async void CancelAllTransfers_Click(object sender, RoutedEventArgs e)
+    {
+        var active = _vm.ActiveTransfers;
+        if (active == 0) return;
+        if (active > 1 && !await Dialogs.Confirm(this, "Cancel transfers", $"Cancel all {active} running and waiting transfers? " +
+                "Files that are already complete stay; partial files are removed.", "Cancel all")) return;
+        _vm.CancelAllTransfers();
+        DiagLog.Write($"File transfers: cancel all ({active})");
+    }
     private void CancelTransfer_Click(object sender, RoutedEventArgs e) => ((sender as FrameworkElement)?.DataContext as TransferItem)?.Cancel();
 
     private void CmConnect_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenConnection(c); }
-    private void CmConnectNew_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenConnection(c, forceNew: true); }
+    private void CmConnectNew_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenRdp(c, forceNew: !AgentDesktopFor(c)); }
+    private void CmDesktopOther_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedNode is not Connection c) return;
+        if (AgentDesktopFor(c)) OpenRdp(c); else OpenAgentDesktop(c);
+    }
     private void CmEdit_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) EditNode(n); }
     private void CmDuplicate_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _vm.Duplicate(n).IsSelected = true; }
     private void CmDelete_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _ = DeleteNode(n); }
@@ -1188,6 +1547,57 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // ---- "not used for" filter
+
+    private void UnusedFilter_Click(object sender, RoutedEventArgs e)
+    {
+        if (UnusedFilterButton.ContextMenu is not { } menu) return;
+        foreach (var item in menu.Items.OfType<MenuItem>()) item.IsChecked = Equals(item.Tag, _vm.UnusedDays.ToString());
+        menu.PlacementTarget = UnusedFilterButton;
+        menu.IsOpen = true;
+    }
+
+    private void UnusedFilterItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string tag } && int.TryParse(tag, out var days)) SetUnusedFilter(days);
+    }
+
+    private void ClearUnusedFilter_Click(object sender, RoutedEventArgs e) => SetUnusedFilter(0);
+
+    private void SetUnusedFilter(int days)
+    {
+        _vm.UnusedDays = days;
+        UnusedFilterButton.Appearance = days != 0 ? ControlAppearance.Primary : ControlAppearance.Secondary;
+        UnusedFilterButton.ToolTip = days != 0
+            ? $"Showing connections {MainViewModel.FilterText(days)} – click to change"
+            : "Show connections that haven't been used for a while (to clean them up)";
+    }
+
+    /// <summary>Deletes every connection the filter shows, after one question (open tabs of them are closed).</summary>
+    private async void DeleteUnused_Click(object sender, RoutedEventArgs e)
+    {
+        var list = _vm.SearchResults.Select(h => h.Node).OfType<Connection>().ToList();
+        if (list.Count == 0) return;
+        var names = string.Join("\n", list.Take(12).Select(c => "• " + c.Name)) + (list.Count > 12 ? $"\n… and {list.Count - 12} more" : "");
+        if (!await Dialogs.Confirm(this, "Delete unused connections",
+                $"Delete these {list.Count} connection(s), {MainViewModel.FilterText(_vm.UnusedDays)}?\n\n{names}\n\n" +
+                "Their saved credentials and agent pairing go with them. A backup (Settings → Backup) can bring them back.", "Delete")) return;
+        foreach (var c in list)
+        {
+            foreach (var s in _vm.Sessions.Where(s => s.Connection == c).ToList()) s.Close();
+            _vm.Remove(c);
+        }
+        DiagLog.Write($"Deleted {list.Count} connection(s) {MainViewModel.FilterText(_vm.UnusedDays)}");
+        RefreshUnused();
+    }
+
+    private void RefreshUnused()
+    {
+        var days = _vm.UnusedDays;
+        _vm.UnusedDays = 0;
+        _vm.UnusedDays = days;
+    }
+
     private async Task DeleteNode(NodeBase n)
     {
         var what = n is Folder f
@@ -1216,8 +1626,11 @@ public partial class MainWindow : FluentWindow
             OpenFolder: () => OpenSettingsFolder_Click(this, e),
             OpenLog: () => OpenLog_Click(this, e),
             ExportBackup: () => ExportBackup_Click(this, e),
+            ImportBackup: () => ImportBackup_Click(this, e),
             DefaultApp: () => DefaultApp_Click(this, e),
-            CheckForUpdates: channel => ShowUpdateWindow(null, channel));
+            CheckForUpdates: channel => ShowUpdateWindow(null, channel),
+            SettingsOverview: () => SettingsOverview_Click(this, e),
+            About: () => new AboutWindow { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.ShowDialog());
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
     }
 
@@ -1282,11 +1695,12 @@ public partial class MainWindow : FluentWindow
         Close();
     }
 
-    private void Menu_Click(object sender, RoutedEventArgs e)
+    /// <summary>"New" (and + on the collapsed rail): new connection, new folder, import .rdp files.</summary>
+    private void NewMenu_Click(object sender, RoutedEventArgs e)
     {
-        var cm = MenuButton.ContextMenu!;
-        cm.PlacementTarget = MenuButton;
-        cm.Placement = PlacementMode.Bottom;
+        var cm = NewButton.ContextMenu!;
+        cm.PlacementTarget = sender as UIElement ?? NewButton;
+        cm.Placement = ReferenceEquals(sender, NewButton) ? PlacementMode.Bottom : PlacementMode.Right;
         cm.IsOpen = true;
     }
 
@@ -1453,6 +1867,8 @@ public partial class MainWindow : FluentWindow
         var (_, source) = Inheritance.ResolveCredentials(n, _vm.Data);
         var lines = new List<string> { Inheritance.Location(n), $"Credentials: {source}" };
         if (n is Folder f) lines.Add(f.Children.Count == 0 ? "Empty folder" : $"{f.Descendants().OfType<Connection>().Count()} connection(s) inside");
+        if (n is Connection { AgentMode: not AgentMode.None } c)
+            lines.Add(c.AgentMode == AgentMode.Active ? "RemoteHub Agent: active" : "RemoteHub Agent: installed, not used (connection uses PowerShell remoting)");
         fe.ToolTip = string.Join("\n", lines);
     }
 
@@ -1613,7 +2029,8 @@ public partial class MainWindow : FluentWindow
         if (_forceClose) return;
         var active = _vm.Sessions.Count(s => s.State is SessionState.Connected or SessionState.Connecting);
         var transfers = _vm.ActiveTransfers;
-        if (active > 0 || transfers > 0)
+        var recordings = _recorders.Count;
+        if (active > 0 || transfers > 0 || recordings > 0)
         {
             // WPF forbids showing windows (the confirmation) or calling Close() while the window is closing,
             // so cancel this close and ask once the Closing event has finished.
@@ -1628,8 +2045,10 @@ public partial class MainWindow : FluentWindow
                     {
                         active > 0 ? $"{active} session(s) are still connected" : null,
                         transfers > 0 ? $"{transfers} file transfer(s) are not finished" : null,
+                        recordings > 0 ? $"{recordings} tab(s) are being recorded" : null,
                     }.Where(x => x is not null));
-                    if (!await Dialogs.Confirm(this, "Exit", $"{what}. Disconnect and exit?", "Exit")) return;
+                    var saved = recordings > 0 ? " Recordings are saved." : "";
+                    if (!await Dialogs.Confirm(this, "Exit", $"{what}. Disconnect and exit?{saved}", "Exit")) return;
                     _forceClose = true;
                     Shutdown();
                     Close();
@@ -1649,6 +2068,7 @@ public partial class MainWindow : FluentWindow
         if (!ui.SidebarCollapsed) ui.SidebarWidth = SidebarColumn.ActualWidth;
         _vm.SaveNow();
 
+        StopAllRecordings();
         SecureClipboard.ClearIfOurs();
         _toast?.Close();
         _promptWatcher.Dispose();

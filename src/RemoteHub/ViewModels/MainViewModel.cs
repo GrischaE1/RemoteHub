@@ -19,6 +19,18 @@ public sealed partial class MainViewModel : ObservableObject
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
         _saveTimer.Tick += (_, _) => SaveNow();
         Sessions.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasSessions));
+        // "today 15:42" becomes "yesterday 15:42": the navigation's last-connection labels are refreshed now and then.
+        var labels = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
+        labels.Tick += (_, _) =>
+        {
+            foreach (var c in Items.SelectMany(n => n is Folder f ? f.Descendants() : [n]).OfType<Connection>()) c.RefreshLabels();
+        };
+        labels.Start();
+        if (data.Ui.UsageTrackedSinceUtc is null)
+        {
+            data.Ui.UsageTrackedSinceUtc = DateTime.UtcNow;
+            _saveTimer.Start();
+        }
         Transfers.CollectionChanged += (_, e) =>
         {
             if (e.NewItems is not null)
@@ -52,14 +64,51 @@ public sealed partial class MainViewModel : ObservableObject
     public bool HasPendingSave => _saveTimer.IsEnabled;
 
     public bool HasSessions => Sessions.Count > 0;
-    public bool IsSearching => !string.IsNullOrWhiteSpace(SearchText);
+    public bool IsSearching => !string.IsNullOrWhiteSpace(SearchText) || IsFiltering;
+    public bool IsFiltering => UnusedDays != 0;
+
+    /// <summary>The "not used for" filter: days, 0 = off (all connections), <see cref="NeverConnected"/> = never connected.</summary>
+    public const int NeverConnected = -1;
+    [ObservableProperty] private int _unusedDays;
+    /// <summary>"12 connections not used for 90 days", shown above the filtered list.</summary>
+    [ObservableProperty] private string _unusedSummary = "";
+    public string EmptySearchText => IsFiltering ? "No connection fits the filter." : "Nothing found. Press Enter to quick-connect to this computer name or IP address.";
+
+    partial void OnUnusedDaysChanged(int value)
+    {
+        OnPropertyChanged(nameof(EmptySearchText));
+        OnPropertyChanged(nameof(IsFiltering));
+        OnSearchTextChanged(SearchText);
+    }
+
+    public static string DaysText(int days) => days switch { 30 => "30 days", 90 => "90 days", 180 => "6 months", 365 => "a year", _ => $"{days} days" };
+
+    /// <summary>"not used for 90 days" / "never connected" – for the filter's texts.</summary>
+    public static string FilterText(int days) => days == NeverConnected ? "never connected" : "not used for " + DaysText(days);
     public int ConnectionCount => AllNodes().OfType<Connection>().Count();
 
     partial void OnSearchTextChanged(string value)
     {
         OnPropertyChanged(nameof(IsSearching));
         SearchResults.Clear();
+        UnusedSummary = "";
         if (!IsSearching) return;
+        if (UnusedDays == NeverConnected)
+        {
+            var since = Data.Ui.UsageTrackedSinceUtc ?? DateTime.UtcNow;
+            foreach (var hit in NodeSearch.NeverConnected(AllNodes(), since, value)) SearchResults.Add(hit);
+            UnusedSummary = (SearchResults.Count == 1 ? "1 connection" : $"{SearchResults.Count} connections") +
+                $" never connected since use is recorded ({since.ToLocalTime():d MMM yyyy})";
+            return;
+        }
+        if (UnusedDays > 0)
+        {
+            var since = Data.Ui.UsageTrackedSinceUtc ?? DateTime.UtcNow;
+            foreach (var hit in NodeSearch.Unused(AllNodes(), UnusedDays, since, DateTime.UtcNow, value)) SearchResults.Add(hit);
+            UnusedSummary = (SearchResults.Count == 1 ? "1 connection" : $"{SearchResults.Count} connections") + $" not used for {DaysText(UnusedDays)}" +
+                (since > DateTime.UtcNow.AddDays(-UnusedDays) ? $" – use is recorded since {since.ToLocalTime():d MMM yyyy}, so connections without a recorded use show up from {since.AddDays(UnusedDays).ToLocalTime():d MMM yyyy}" : "");
+            return;
+        }
         foreach (var hit in NodeSearch.Find(AllNodes(), value)) SearchResults.Add(hit);
     }
 
@@ -99,6 +148,14 @@ public sealed partial class MainViewModel : ObservableObject
     public bool HasTransfers => Transfers.Count > 0;
     public int ActiveTransfers => Transfers.Count(t => t.IsActive);
 
+    /// <summary>Overall speed: "11.2 MB/s now · avg 9.8 MB/s" while running, "Average 9.8 MB/s" afterwards.</summary>
+    [ObservableProperty] private string _transferSpeed = "";
+
+    private System.Windows.Threading.DispatcherTimer? _speedTimer;
+    private long _speedBytes;
+    private DateTime _speedAt;
+    private double _speedNow;
+
     private void RefreshTransferSummary()
     {
         var active = Transfers.Where(t => t.IsActive).ToList();
@@ -106,8 +163,65 @@ public sealed partial class MainViewModel : ObservableObject
         TransferSummary = active.Count > 0
             ? $"{active.Count} running · {TransferItem.Size(active.Sum(t => t.SentBytes))} of {TransferItem.Size(active.Sum(t => t.TotalBytes))}"
             : $"{Transfers.Count(t => t.IsDone)} done" + (failed > 0 ? $" · {failed} failed" : "");
+        RefreshTransferSpeed(active.Count > 0);
         OnPropertyChanged(nameof(HasTransfers));
         OnPropertyChanged(nameof(ActiveTransfers));
+    }
+
+    /// <summary>
+    /// Current speed from the total bytes moved per second (smoothed, so batched small files count too) and the average
+    /// over the time something was actually moving – idle gaps between transfers don't lower it.
+    /// </summary>
+    private void RefreshTransferSpeed(bool running)
+    {
+        var now = DateTime.UtcNow;
+        var total = Transfers.Sum(t => t.SentBytes);
+        if (total < _speedBytes || _speedAt == default) { _speedBytes = total; _speedAt = now; }
+        else if ((now - _speedAt).TotalSeconds >= 0.5)
+        {
+            var current = (total - _speedBytes) / (now - _speedAt).TotalSeconds;
+            _speedNow = _speedNow == 0 ? current : _speedNow * 0.6 + current * 0.4;
+            _speedBytes = total;
+            _speedAt = now;
+        }
+        if (!running) _speedNow = 0;
+
+        var average = AverageTransferRate(Transfers, now);
+        TransferSpeed = running
+            ? (_speedNow > 0 ? $"{TransferItem.Size((long)_speedNow)}/s now" : "Starting…") + (average > 0 ? $" · avg {TransferItem.Size((long)average)}/s" : "")
+            : average > 0 ? $"Average {TransferItem.Size((long)average)}/s" : "";
+
+        // While running, refresh once a second so "now" also drops when the transfer stalls.
+        if (running && _speedTimer is null)
+        {
+            _speedTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _speedTimer.Tick += (_, _) => RefreshTransferSummary();
+            _speedTimer.Start();
+        }
+        else if (!running && _speedTimer is not null) { _speedTimer.Stop(); _speedTimer = null; }
+    }
+
+    /// <summary>Bytes moved divided by the union of the items' active time spans.</summary>
+    internal static double AverageTransferRate(IEnumerable<TransferItem> items, DateTime now)
+    {
+        var spans = items.Where(t => t.StartedUtc is not null && t.SentBytes > 0)
+            .Select(t => (Start: t.StartedUtc!.Value, End: t.FinishedUtc ?? now, Bytes: t.SentBytes)).OrderBy(s => s.Start).ToList();
+        if (spans.Count == 0) return 0;
+        double busy = 0;
+        DateTime from = spans[0].Start, to = spans[0].End;
+        foreach (var s in spans.Skip(1))
+        {
+            if (s.Start > to) { busy += (to - from).TotalSeconds; from = s.Start; to = s.End; }
+            else if (s.End > to) to = s.End;
+        }
+        busy += (to - from).TotalSeconds;
+        return busy > 0.05 ? spans.Sum(s => s.Bytes) / busy : 0;
+    }
+
+    /// <summary>Cancels every running and waiting transfer (finished ones stay; partial files are removed by the transfer).</summary>
+    public void CancelAllTransfers()
+    {
+        foreach (var t in Transfers.Where(t => t.IsActive).ToList()) t.Cancel();
     }
 
     public void ClearFinishedTransfers()
@@ -127,11 +241,17 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---------- persistence ----------
 
-    /// <summary>Recomputes the inherited colour tag of every tree item.</summary>
+    /// <summary>Recomputes the inherited colour tag and the agent icon of every tree item.</summary>
     public void RefreshTags()
     {
         foreach (var n in AllNodes())
-            n.TagBrush = Views.ColorTags.Brush(Inheritance.ResolveOptions(n, Data).ColorTag);
+        {
+            var options = Inheritance.ResolveOptions(n, Data);
+            n.TagBrush = Views.ColorTags.Brush(options.ColorTag);
+            if (n is Connection c)
+                c.AgentMode = c.Agent is not { Status: AgentStatus.Installed } ? AgentMode.None
+                            : options.UseAgent == true ? AgentMode.Active : AgentMode.Available;
+        }
     }
 
     public void RequestSave()
@@ -245,7 +365,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes<NodeBase>(node, SettingsStore.Json);
         var copy = System.Text.Json.JsonSerializer.Deserialize<NodeBase>(json, SettingsStore.Json)!;
-        void NewIds(NodeBase n) { n.Id = Guid.NewGuid(); if (n is Folder f) foreach (var c in f.Children) NewIds(c); }
+        // A copy gets new IDs and no agent identity (a pinned agent certificate belongs to exactly one device).
+        void NewIds(NodeBase n) { n.Id = Guid.NewGuid(); if (n is Connection k) k.Agent = null; if (n is Folder f) foreach (var c in f.Children) NewIds(c); }
         NewIds(copy);
         copy.Name += " (copy)";
         SettingsStore.RelinkParents([copy], node.Parent);
@@ -258,6 +379,15 @@ public sealed partial class MainViewModel : ObservableObject
     // ---------- sessions ----------
 
     public RdpSession? FindSession(Connection c) => Sessions.OfType<RdpSession>().FirstOrDefault(s => s.Connection == c);
+
+    public AgentDesktopSession? FindAgentDesktop(Connection c) => Sessions.OfType<AgentDesktopSession>().FirstOrDefault(s => s.Connection == c);
+
+    public AgentDesktopSession OpenAgentDesktop(Connection c)
+    {
+        var s = new AgentDesktopSession(c);
+        Register(s);
+        return s;
+    }
 
     public RdpSession OpenSession(Connection c)
     {
@@ -304,7 +434,16 @@ public sealed partial class MainViewModel : ObservableObject
     private void Register(SessionBase s)
     {
         var c = s.Connection;
-        s.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SessionBase.State)) UpdateLiveState(c); };
+        s.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(SessionBase.State)) return;
+            UpdateLiveState(c);
+            if (s.State == SessionState.Connected)
+            {
+                c.LastConnectedUtc = DateTime.UtcNow;
+                RequestSave();
+            }
+        };
         s.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SessionBase.AccentBrush)) GroupOf(s)?.RefreshAccent(); };
         s.Closed += () =>
         {

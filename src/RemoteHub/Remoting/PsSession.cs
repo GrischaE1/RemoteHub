@@ -98,6 +98,7 @@ public sealed partial class PsSession : SessionBase, IConsoleSink
     {
         if (_closed) return;
         Target = target;
+        Transport = target.Transport;
         AccentBrush = accent;
         Title = Connection.Name;
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";

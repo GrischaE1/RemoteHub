@@ -1,0 +1,15 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Build via build\build-installer.ps1 (publishes the agent first). -->
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">0.0.0</Version>
+    <ReleaseVersion Condition="'$(ReleaseVersion)' == ''">$(Version)</ReleaseVersion>
+    <AgentPublishDir Condition="'$(AgentPublishDir)' == ''">$(MSBuildThisFileDirectory)..\..\artifacts\publish-agent</AgentPublishDir>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputName>RemoteHub-Agent-$(ReleaseVersion)-x64</OutputName>
+    <DefineConstants>Version=$(Version);AgentPublishDir=$(AgentPublishDir);IconPath=$(MSBuildThisFileDirectory)..\..\src\RemoteHub\Assets\app.ico</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

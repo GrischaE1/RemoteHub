@@ -162,16 +162,16 @@ public sealed partial class EditorViewModel : ObservableObject
         ColourChoices.Add(new ColourChoice("Custom colour (#RRGGBB)", ColourChoice.Custom, null));
 
         if (Views.ColorTags.All.Any(t => t.Id == ownColour) || ownColour == Views.ColorTags.None || ownColour is null)
-            _selectedColour = ColourChoices.FirstOrDefault(c => c.Value == ownColour) ?? ColourChoices[0];
+            SelectedColour = ColourChoices.FirstOrDefault(c => c.Value == ownColour) ?? ColourChoices[0];
         else if (Views.ColorTags.TryParseHex(ownColour, out _))
         {
-            _customColour = ownColour;
-            _selectedColour = ColourChoices.First(c => c.IsCustom);
+            CustomColour = ownColour;
+            SelectedColour = ColourChoices.First(c => c.IsCustom);
         }
-        else _selectedColour = ColourChoices[0];
+        else SelectedColour = ColourChoices[0];
 
-        _selectedIcon = Views.IconCatalog.All.FirstOrDefault(i => i.Symbol == _node?.Icon) ?? Views.IconCatalog.All[0];
-        _iconImage = _node?.IconImage;
+        SelectedIcon = Views.IconCatalog.All.FirstOrDefault(i => i.Symbol == _node?.Icon) ?? Views.IconCatalog.All[0];
+        IconImage = _node?.IconImage;
     }
 
     /// <summary>The colour value to store, or an error message.</summary>
@@ -187,10 +187,17 @@ public sealed partial class EditorViewModel : ObservableObject
     /// <summary>Refresh intervals of the processes and services tabs (global defaults only).</summary>
     public List<OptionRow> ToolRows { get; } = new();
 
-    /// <summary>Result of the last PowerShell remoting check (connections only).</summary>
-    public string? PsStatusText => _node is Connection { PsRemoting: { } st }
-        ? $"Last check {st.CheckedUtc.ToLocalTime():g}: {(st.State == PsRemotingState.Available ? "available" : "not available")} – {st.Message}"
-        : _node is Connection ? "Not checked yet. It is checked after the first RDP login, or right-click → Test PowerShell remoting." : null;
+    /// <summary>Result of the last PowerShell remoting check, and the RemoteHub Agent of the device (connections only).</summary>
+    public string? PsStatusText => _node is not Connection c ? null : string.Join("\n", new[]
+    {
+        c.PsRemoting is { } st
+            ? $"Last check ({(st.ViaAgent ? "RemoteHub Agent" : "WinRM")}) {st.CheckedUtc.ToLocalTime():g}: {(st.State == PsRemotingState.Available ? "available" : "not available")} – {st.Message}"
+            : "Not checked yet. It is checked after the first RDP login, or right-click → Test PowerShell remoting.",
+        c.Agent is { } a
+            ? $"RemoteHub Agent: {(a.Status == AgentStatus.Installed ? "installed" : "prepared, not confirmed yet")} – port {a.Port}, " +
+              $"certificate SHA-256 {a.Fingerprint}{(a.Version is { } v ? $", version {v}" : "")}"
+            : "RemoteHub Agent: not installed (right-click the connection → Install RemoteHub Agent).",
+    });
 
     private static readonly string[] Resolutions =
         ["1280x720", "1366x768", "1440x900", "1600x900", "1680x1050", "1920x1080", "1920x1200", "2560x1440", "2560x1600", "3440x1440", "3840x2160"];
@@ -256,6 +263,16 @@ public sealed partial class EditorViewModel : ObservableObject
         PsRows.Add(Row("Check automatically after RDP login", own.PsRemoting, parent.PsRemoting, YesNo,
             (o, v) => o.PsRemoting = (bool?)v,
             "Tests WinRM after the first RDP login. You can always test by hand: right-click → Test PowerShell remoting. If it works, right-click offers a PowerShell tab and \"File transfer\" with the same credentials."));
+        PsRows.Add(Row("Connect through", own.UseAgent, parent.UseAgent,
+            [(false, "PowerShell remoting (WinRM)"), (true, "RemoteHub Agent")],
+            (o, v) => o.UseAgent = (bool?)v,
+            "RemoteHub Agent: for devices where WinRM isn't allowed. PowerShell, files, registry, services and processes then go through the agent " +
+            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent."));
+        PsRows.Add(Row("Remote desktop through", own.RemoteDesktopVia, parent.RemoteDesktopVia,
+            [(DesktopVia.Automatic, "Automatic – the agent if installed, otherwise RDP"), (DesktopVia.Rdp, "RDP"), (DesktopVia.Agent, "RemoteHub Agent")],
+            (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
+            "RemoteHub Agent: the device's screen without RDP – for desktops where RDP is turned off. The device decides who may see or control " +
+            "the screen and whether the signed-in user is asked first. RDP stays available: right-click → Remote desktop via RDP."));
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,

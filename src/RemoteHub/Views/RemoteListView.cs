@@ -21,8 +21,10 @@ namespace RemoteHub.Views;
 /// Tab content for a list of remote items (processes, services): filter box, sortable columns, a status line and an
 /// automatic refresh while the tab is visible. Rows are updated in place so selection, sorting and scroll position stay.
 /// </summary>
-public abstract class RemoteListView<TRow> : Border where TRow : class
+public abstract class RemoteListView<TRow> : Border, IRecordableView where TRow : class
 {
+    public FrameworkElement RecordingArea { get; }
+
     private readonly Border _headerStripe = new() { Width = 4, Height = 18, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
     private readonly TextBox _filter = new() { PlaceholderText = "Filter", ClearButtonEnabled = true, Icon = new SymbolIcon(SymbolRegular.Search24) };
     private readonly StackPanel _tools = new() { Orientation = Orientation.Horizontal };
@@ -64,6 +66,7 @@ public abstract class RemoteListView<TRow> : Border where TRow : class
         var cell = new Grid();
         Grid.SetRow(cell, 1);
         root.Children.Add(cell);
+        RecordingArea = cell;
         var body = new DockPanel { Margin = new Thickness(10, 10, 10, 8) };
         cell.Children.Add(body);
         cell.Children.Add(RemoteToolChrome.Overlay(reconnect, close));

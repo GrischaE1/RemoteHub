@@ -73,13 +73,91 @@ public sealed partial class Connection : NodeBase
     /// <summary>A PowerShell remoting check is running (UI indicator only).</summary>
     [ObservableProperty] [property: JsonIgnore] private bool _psChecking;
 
+    /// <summary>The RemoteHub Agent enrolled for this connection's device (its pinned certificate), if any.</summary>
+    [ObservableProperty] private AgentDevice? _agent;
+    /// <summary>Agent icon in the navigation (computed from <see cref="Agent"/> and the inherited "Connect through" setting).</summary>
+    [ObservableProperty] [property: JsonIgnore] private AgentMode _agentMode;
+
+    /// <summary>When a tab of this connection last connected (any kind: RDP, agent desktop, PowerShell, tools).</summary>
+    [ObservableProperty] private DateTime? _lastConnectedUtc;
+
     [JsonIgnore] public string Address => Port == 3389 ? Host : $"{Host}:{Port}";
+
+    /// <summary>Beside the name in the navigation: when it was last used ("today 15:42"), or "never connected".</summary>
+    [JsonIgnore] public string LastUsedText => LastConnectedUtc is { } last ? When(last, DateTime.Now) : "never connected";
+    [JsonIgnore] public bool NeverConnected => LastConnectedUtc is null;
+
+    /// <summary>The agent shield's tooltip: how the agent is used, and its version.</summary>
+    [JsonIgnore] public string? AgentToolTip
+    {
+        get
+        {
+            var version = Agent is { Version: { Length: > 0 } v } ? $"RemoteHub Agent {ShortVersion(v)}" : "RemoteHub Agent";
+            return AgentMode switch
+            {
+                AgentMode.Active => $"{version}: active – PowerShell, files, registry, services and processes go through the agent",
+                AgentMode.Available => $"{version}: installed but not used – the connection is set to PowerShell remoting (WinRM)",
+                _ => "No RemoteHub Agent – remote desktop over RDP, tools over PowerShell remoting (WinRM). Right-click → Install RemoteHub Agent… to add it.",
+            };
+        }
+    }
+
+    /// <summary>For the tree after something changed inside <see cref="Agent"/>, and as time passes ("today" → "yesterday").</summary>
+    public void RefreshLabels()
+    {
+        OnPropertyChanged(nameof(LastUsedText));
+        OnPropertyChanged(nameof(NeverConnected));
+        OnPropertyChanged(nameof(AgentToolTip));
+    }
+
+    /// <summary>"just now", "today 15:42", "yesterday 09:10", "Mon 15:42" (this week), "12 Oct", "12 Oct 2025".</summary>
+    public static string When(DateTime utc, DateTime now)
+    {
+        var local = utc.ToLocalTime();
+        if (now - local < TimeSpan.FromMinutes(1) && now >= local) return "just now";
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        var time = local.ToString("t", culture);
+        if (local.Date == now.Date) return "today " + time;
+        if (local.Date == now.Date.AddDays(-1)) return "yesterday " + time;
+        if (local.Date > now.Date.AddDays(-7) && local.Date < now.Date) return local.ToString("ddd", culture) + " " + time;
+        return local.ToString(local.Year == now.Year ? "d MMM" : "d MMM yyyy", culture);
+    }
+
+    /// <summary>"0.13.0+4dd1aa1…" → "0.13.0".</summary>
+    public static string ShortVersion(string version) => version.Split('+')[0];
 
     partial void OnHostChanged(string value) => OnPropertyChanged(nameof(Address));
     partial void OnPortChanged(int value) => OnPropertyChanged(nameof(Address));
+    partial void OnLastConnectedUtcChanged(DateTime? value) => RefreshLabels();
+    partial void OnAgentChanged(AgentDevice? value) => RefreshLabels();
+    partial void OnAgentModeChanged(AgentMode value) => RefreshLabels();
 }
 
 public enum PsRemotingState { Unknown, Available, Unavailable }
+
+public enum AgentStatus { NotInstalled, Installed }
+
+/// <summary>Active: agent installed and the connection uses it. Available: installed, but the connection uses WinRM.</summary>
+public enum AgentMode { None, Available, Active }
+
+/// <summary>
+/// A device's RemoteHub Agent identity, stored with the connection: where it listens and the SHA-256 fingerprint of
+/// its certificate – the only certificate RemoteHub accepts for it. No secret is stored here.
+/// </summary>
+public sealed class AgentDevice
+{
+    public string DeviceId { get; set; } = "";
+    public string Label { get; set; } = "";
+    public int Port { get; set; } = RemoteHub.Agent.AgentProtocol.DefaultPort;
+    public string Fingerprint { get; set; } = "";
+    public AgentStatus Status { get; set; }
+    public DateTime CreatedUtc { get; set; }
+    public DateTime? InstalledUtc { get; set; }
+    /// <summary>Agent version seen at the last successful connection or install.</summary>
+    public string? Version { get; set; }
+
+    public AgentDevice Clone() => (AgentDevice)MemberwiseClone();
+}
 
 /// <summary>Whether PowerShell remoting worked the last time it was tested for a connection.</summary>
 public sealed class PsRemotingStatus
@@ -88,6 +166,8 @@ public sealed class PsRemotingStatus
     public DateTime CheckedUtc { get; set; }
     /// <summary>E.g. "PowerShell 5.1 on SRV01", or why it failed.</summary>
     public string? Message { get; set; }
+    /// <summary>The result is for the RemoteHub Agent (false: WinRM). A result for the other way counts as "not tested".</summary>
+    public bool ViaAgent { get; set; }
     /// <summary>Remote folder used for the last file transfer (suggested next time).</summary>
     public string? UploadFolder { get; set; }
     /// <summary>Registry key that was open last in the registry tab.</summary>
@@ -135,6 +215,8 @@ public sealed class RemoteToolSettings
 
 public sealed class UiState
 {
+    /// <summary>Since when connections' last use is recorded (set once; the "not used for" filter needs it).</summary>
+    public DateTime? UsageTrackedSinceUtc { get; set; }
     public double Width { get; set; } = 1400;
     public double Height { get; set; } = 860;
     public double SidebarWidth { get; set; } = 360;
@@ -153,6 +235,27 @@ public sealed class UiState
     public bool UpdateCheckEnabled { get; set; } = true;
     /// <summary>"stable" or "beta"; null = the default for the running version (see <see cref="Services.UpdateService.DefaultChannel"/>).</summary>
     public string? UpdateChannel { get; set; }
+    /// <summary>Folder for session recordings; null = Videos\RemoteHub (see <see cref="Services.Recordings.Folder"/>).</summary>
+    public string? RecordingFolder { get; set; }
+    /// <summary>Frames per second of recordings (5, 10, 15, 30, 60).</summary>
+    public int RecordingFps { get; set; } = 10;
+    /// <summary>"Tab", "FullHd" or "Uhd4K" (see <see cref="Services.RecordingResolution"/>).</summary>
+    public string RecordingResolution { get; set; } = "Tab";
+    /// <summary>Capture recordings through the graphics card (fast; off unless chosen).</summary>
+    public bool RecordingUseGpu { get; set; }
+    /// <summary>Recordings include the bar above the tab (connection name, address, how it connects); off = only the content.</summary>
+    public bool RecordingShowDetails { get; set; }
+    /// <summary>Remote desktop through the agent: picture preset (see <see cref="Remoting.DesktopQualityPreset"/>) and the last consent mode.</summary>
+    public string AgentDesktopQuality { get; set; } = "Admin";
+    public string? AgentDesktopConsent { get; set; }
+    /// <summary>The device's resolution follows the tab (restored when the session ends).</summary>
+    public bool AgentDesktopFitToWindow { get; set; } = true;
+    /// <summary>The connection info over the agent desktop's picture.</summary>
+    public bool AgentDesktopShowInfo { get; set; }
+    /// <summary>Alt+Tab, the Windows key and its combinations go to the device while its tab has the focus.</summary>
+    public bool AgentDesktopKeyCombinations { get; set; } = true;
+    /// <summary>The note shown before the first recording was confirmed.</summary>
+    public bool RecordingNoticeAccepted { get; set; }
     /// <summary>Version the user chose to skip; it isn't offered at start-up again (a newer one is).</summary>
     public string? SkippedUpdateVersion { get; set; }
     /// <summary>Obsolete (v1.5.0 menu toggle). Read once and migrated to <see cref="RdpOptions.CopyPasswordOnPrompt"/>.</summary>

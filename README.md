@@ -23,9 +23,11 @@ dotnet test
 powershell -ExecutionPolicy Bypass -File build/build-installer.ps1
 ```
 
-Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/RemoteHub.csproj`), `-Configuration Release`, `-OutputPath artifacts`. This builds `artifacts/RemoteHub-<version>-x64.msi`: a self-contained, per-machine install (no .NET runtime needed) that adds a Start menu shortcut.
+Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/RemoteHub.csproj`), `-Configuration Release`, `-OutputPath artifacts`. This builds:
+- `artifacts/RemoteHub-<version>-x64.msi`: a self-contained, per-machine install (no .NET runtime needed) that adds a Start menu shortcut.
+- `artifacts/RemoteHub-Agent-<version>-x64.msi`: the [RemoteHub Agent](#remotehub-agent-without-winrm) for devices. A copy ships inside RemoteHub (`Agent\RemoteHub-Agent-x64.msi`), so RemoteHub can install it. The build runs `RemoteHubAgent.exe selftest` on the published agent.
 
-- Silent install: `msiexec /i RemoteHub-0.10.0-x64.msi /qn`. Silent uninstall: `msiexec /x … /qn`.
+- Silent install: `msiexec /i RemoteHub-0.11.0-x64.msi /qn`. Silent uninstall: `msiexec /x … /qn`.
 - **`.rdp` files:** the installer registers RemoteHub under "Open with" and in *Settings → Default apps*. It doesn't take the default away from mstsc. To make RemoteHub the default, use *Settings → General → Use RemoteHub for .rdp files…*, or set it through IT policy (a default-associations XML).
 - Building uses the WiX Toolset v5 MSBuild SDK, which comes from NuGet at build time, so nothing extra has to be installed.
 
@@ -48,7 +50,7 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
 ## Features
 
 - **Folders with inheritance.** Credentials and every RDP setting can be set on a folder. Sub-folders and connections inherit them, or override them one value at a time ("Inherit · value" shows what the parent would give).
-- **Saved credentials** (Menu → Saved credentials): named credentials that any folder, connection or the global defaults can reference. Editing one updates every item that uses it.
+- **Saved credentials** (*Settings → Security & storage → Manage saved credentials…*): named credentials that any folder, connection or the global defaults can reference. Editing one updates every item that uses it.
 - **Local accounts on standalone servers:** tick *Local account on the target computer (.\user)* (or type `.\admin`). The credential then signs in with that local account on whichever server you connect to, so one folder credential covers many non-domain servers.
   - Windows' default policy refuses to send **saved** passwords to servers it can only verify via NTLM, which is typical for non-domain servers. You'll see "The server's authentication policy does not allow connection requests using saved credentials". That's a Windows policy (it affects mstsc too), not an app setting. Either allow saved credentials for those servers ("Allow delegating saved credentials with NTLM-only server authentication" → `TERMSRV/<server>`, via IT or Group Policy), or turn off NLA for those connections.
 - **How passwords reach the server:** RemoteHub uses the Microsoft RDP client API (`mstscax.dll`, not `mstsc.exe`) and hands the stored password to the session in memory right before connecting – no clipboard involved.
@@ -57,8 +59,10 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
   - **Do nothing**: type it yourself.
   - The dialog is matched to the session by the username it shows when that is readable; otherwise the dialog must belong to RemoteHub (or have no owner) and exactly one session must have started connecting within the last 60 s. Otherwise nothing is copied.
   - To avoid the prompt entirely, the server's owner can review the "Always prompt for password upon connection" policy for that host.
-  - Menu → *Open diagnostic log* shows what happened (no passwords, usernames or host names are logged).
+  - *Settings → Help & about → Open diagnostic log* shows what happened (no passwords, usernames or host names are logged).
 - **Search** (Ctrl+F) finds folders and connections by name, host, notes and folder path; several words narrow the results (`prod sql`). Enter or double-click opens a connection or jumps to a folder; right-click → *Show in list*. If nothing matches, Enter quick-connects to the typed computer name.
+- **Beside each connection's name:** when it was last used (*today 15:42*, *yesterday*, *Mon*, *12 Oct* – any tab: RDP, agent desktop, PowerShell, tools), or *never connected*. The agent shield's tooltip shows the agent's version.
+- **Clean up:** the filter button next to the search shows connections **not used for 30 days, 90 days, 6 months or a year** (oldest first), or **never connected** – combine it with a search. *Delete these…* removes all of them after one question. Use is recorded from RemoteHub 0.13.1 on – a connection without a recorded use only counts once that is longer ago than the chosen time.
 - **Icons & colours** (editor → *Appearance*): choose one of ~35 built-in icons (server, database, cloud, firewall, laptop …) or your own image (PNG/ICO/JPG, scaled to 64 px and stored in the settings file). Colours: palette swatches or a custom `#RRGGBB`, inherited from the folder (e.g. a red *Production* folder). The colour is used for the icon in the list, the tab and the session frame.
 - **Clear separation from other windows:** solid, tinted window colours instead of see-through effects, an accent-coloured window border (Windows 11), and the app icon plus the session name in the title and taskbar. Each session sits in a frame with a header (name, address); the frame lights up in the session's colour while the keyboard goes to the remote session ("Keyboard → remote session").
 - **Connection defaults** (*Settings → Connection defaults*) sit at the root of the inheritance chain.
@@ -71,8 +75,9 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
   - **Changing the password, adding or removing Windows Hello, turning it off:** same menu; each needs the current password.
   - **Keep the password safe:** without it – and without Windows Hello on this PC – the settings on this PC can't be recovered. Export a backup first. Windows Hello is per PC and per Windows user.
   - It doesn't protect against malware that runs while RemoteHub is unlocked, and a shared settings file keeps its own password (other PCs aren't affected).
-- **Settings** (Menu → *Settings…* or **Ctrl+,**): one window with a page per group.
-  - *RemoteHub*: **General** (theme, session switch keys, .rdp files), **Updates & privacy**, **Security & storage** (startup protection, saved credentials, where the settings are stored, backup export, diagnostic log).
+- **Navigation toolbar:** **New** (new connection, new folder, import `.rdp` files), the **gear** for Settings, and hide navigation. Everything else lives in Settings.
+- **Settings** (the gear or **Ctrl+,**): one window with a page per group.
+  - *RemoteHub*: **General** (theme, session switch keys, .rdp files), **Updates & privacy**, **Security & storage** (startup protection, saved credentials, where the settings are stored, backup), **Recordings** (frame rate, video size, graphics card capture, folder).
   - *Connection defaults*: credentials, display, local resources & keyboard, security & session, PowerShell remoting, colour, and the refresh intervals of the remote tools.
   - Editing a connection or folder uses the same layout (General, Appearance, Credentials, Display, …).
 - **Updates** (*Settings → Updates & privacy*): RemoteHub checks `https://update.remotehub.dev/latest` in the background a few seconds after it starts – nothing waits for it. If a newer version exists, a bar at the top offers it; *Details…* shows the release notes and *Download and install*.
@@ -80,7 +85,7 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
   - **Channels:** *GA* (stable releases) or *Beta* (pre-releases, `?channel=beta`). Below 1.0 the default is Beta, because there is no GA release yet. Switching from Beta to GA doesn't go back to an older version.
   - **Verified download:** the MSI is downloaded over HTTPS from GitHub or remotehub.dev only, and must match the SHA-256 checksum and size the update server announces. Otherwise it's deleted and not installed.
   - **Install:** RemoteHub closes (asks first if sessions or transfers are open), Windows asks for administrator approval, the MSI installs, and RemoteHub starts again.
-  - *Skip this version* hides that version at start-up; Menu → *Check for updates…* checks any time. A release the server marks as mandatory (or a version below its `minSupportedVersion`) is shown right away and can't be skipped.
+  - *Skip this version* hides that version at start-up; *Settings → Updates & privacy → Check for updates now* checks any time. A release the server marks as mandatory (or a version below its `minSupportedVersion`) is shown right away and can't be skipped.
   - While the GitHub repository is private, the download only works for accounts with access to it; the window then offers the releases page.
 - **Anonymous usage data** (*Settings → Updates & privacy*, on by default): one small POST to `https://update.remotehub.dev/telemetry` per start, in the background with a 5-second limit, errors ignored. It contains exactly `event` (`app_start`), `version`, `channel`, `os` (Windows 10 / 11 / Server), `arch` (x64 / arm64) and `installId`.
   - The install ID is a random GUID created once and stored in `%LOCALAPPDATA%\RemoteHub\install-id`. It's not derived from the computer name, MAC address or machine SID, so it only counts installs. Turning telemetry off deletes it.
@@ -96,14 +101,23 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
   - `DisableUpdateCheck` (DWORD 1): never contacts the update server (e.g. when updates come through software deployment).
   - `UpdateChannel` (string `stable` or `beta`): fixes the channel.
   - `SettingsFolder` (string): shared settings folder, as before.
-- **Menu → Settings overview…** shows every setting in one place – where the settings are stored, global defaults, refresh intervals of the remote tools, credentials (counts only, never passwords or user names), theme and keys, and how many folders and connections there are – with buttons to change each part. *Copy as text* puts it on the clipboard for support.
-- **Menu → About RemoteHub…** shows the version, developer and copyright, build date, .NET, Windows, remote desktop client (`mstscax.dll`), PowerShell SDK and WPF-UI versions, and where the program, settings and log are. *Copy version info* copies it.
+  - `DisableRecording` (DWORD 1): tabs can't be recorded (the Record button is hidden).
+  - `RecordingFolder` (string, environment variables allowed): where recordings are saved; users can't change it.
+- **Settings → Help & about → Settings overview…** shows every setting in one place – where the settings are stored, global defaults, refresh intervals of the remote tools, credentials (counts only, never passwords or user names), theme and keys, and how many folders and connections there are – with buttons to change each part. *Copy as text* puts it on the clipboard for support.
+- **Settings → Help & about → About RemoteHub…** shows the version, developer and copyright, build date, .NET, Windows, remote desktop client (`mstscax.dll`), PowerShell SDK and WPF-UI versions, and where the program, settings and log are. *Copy version info* copies it.
 - **What's in which folder:** every folder is framed together with everything in it – in the folder's colour with a light tint of it (a neutral frame for folders without a colour; sub-folders get their own frame inside). Each folder also shows how many items it holds (*empty* when none). Hover over a folder or connection (also in search results) to see where it is (e.g. `LAB › NUC13` or `Top level › NUC13`) and where its credentials come from. Dragging an item into or out of a folder so that its **credentials change** (e.g. dropped just below a folder, which puts it at the top level) asks first and shows the old and the new source.
 - **Navigation sidebar:** collapse it to a slim rail with the button in its header or **Ctrl+B** (expand / new connection / new folder / search stay available). The state and width are remembered per PC. The status dot next to a connection uses the same colours as its tab: green = connected, amber = connecting, red = failed, grey = open but disconnected.
 - **Tabs grouped by connection:** one tab per connection (name, status dot; for a single PowerShell / file transfer / registry / services / processes tab also its icon). Only when a connection has **more than one tab** (e.g. remote desktop + registry) does a second row appear below with that connection's tabs – *Remote desktop*, *PowerShell*, *File transfer*, *Registry*, *Services*, *Processes* – each with its own status dot; the connection tab then shows how many are open. **+** next to the connection tabs (or right-click a tab) opens another tab for the selected connection; tools that need PowerShell remoting reuse the credentials of an open remoting tab. Selecting a connection shows the tab you used last there. Middle-click closes a tab; on a connection tab it closes all tabs of that connection (also *Close all* in its right-click menu). Closing a tab moves to the next tab of the same connection first.
   - **Ctrl+Alt+<** (the `< > |` key left of Y on German keyboards) goes to the next session, and **Ctrl+Alt+Shift+<** to the previous one. It also works while a session has keyboard focus and in full screen; switching from full screen keeps the next session in full screen. Use the **left** Alt key: AltGr+< still types `|` (in the app and in sessions), because AltGr = Ctrl+Alt on German layouts. Other choices are under *Settings → General → Session switch keys*: Ctrl+Alt+^, F1/F2, PageUp/PageDown, Left/Right.
   - Ctrl+Tab also switches (when the app has focus), Ctrl+W closes a session, and Ctrl+F searches or quick-connects (type a host and press Enter).
-- **Session actions:** reconnect, disconnect, Ctrl+Alt+Del, full screen (native RDP connection bar), detach into a separate resizable window, and dock back.
+- **Session actions:** reconnect, disconnect, Ctrl+Alt+Del, full screen (native RDP connection bar), record, detach into a separate resizable window, and dock back.
+- **Recording** (every tab type: remote desktop, PowerShell, file transfer, registry, services, processes): the **Record** button in the tab toolbar (also in the tab's right-click menu and in detached windows) starts and stops it.
+  - **While recording:** the button turns into a red *REC 01:23* that stops it; the tab, its connection tab and the tab header show a red *REC* badge.
+  - **What's recorded:** the tab's content – the remote screen, the console, the lists. With *Include the connection details* (Settings → Recordings) also the bar above it (which connection, its address, how it connects); plus the mouse pointer and a date/time stamp in the corner. Other windows on top aren't recorded. By default the picture is taken with GDI (about 10 fps). *Capture with the graphics card* (Windows.Graphics.Capture, off by default) is needed for 30/60 fps; on Windows 10 Windows may show a yellow frame around RemoteHub while it records. Turn it off again if the PC becomes unstable while recording. While the tab isn't visible (another tab selected, window minimized), the video shows a placeholder. A remote desktop in full screen records its monitor. No sound.
+  - **Frame rate and size** (*Settings → Recordings*, for the next recording): 5, **10** (default), 15, 30 or 60 fps; video size **same as the tab** (default, up to 4K), **Full HD** (1920 × 1080) or **4K** (3840 × 2160) – the tab is scaled into the fixed sizes, with black bars when the shape differs. For presentations: 30 fps and Full HD or 4K. Higher values need more CPU and make larger files; if capturing can't keep up, single frames are skipped and the video stays in sync. Measured with graphics card capture on a 22-thread PC: Full HD reaches 30 / 55 of 60 fps, 4K reaches 29 of 30 fps; 4K at 60 fps reaches about 32 fps (limited by Windows' software H.264 encoder).
+  - **File:** MP4 (H.264, Windows' own encoder – nothing to install; quality-based, so a still screen costs almost nothing – roughly 0.5 MB per 10 s of typical console work at 1920 × 1080 and 10 fps) in `Videos\RemoteHub`, named `<connection> - <tab> - <date time>.mp4`. Change the folder in *Settings → Recordings*. The file is written as fragmented MP4, so what was recorded stays playable if RemoteHub or Windows stops unexpectedly. The size is fixed when recording starts; later size changes of the tab are scaled to fit.
+  - **Stop:** with the button, by closing the tab, or by exiting RemoteHub (exit asks first and saves the recordings). Afterwards *Play*, *Show in folder* or *Delete recording…* (asks first; the file goes to the Recycle Bin).
+  - Recordings aren't encrypted and can contain personal data and passwords shown on screen. The first recording asks for confirmation once.
 - **Clipboard redirection** is on by default. It works host ↔ session, and therefore across sessions.
 - **Windows key forwarding** (per connection or inherited): Win, Alt+Tab and similar keys go to the session while it has focus.
 - **Dynamic resolution:** the remote desktop follows the window size. Smart sizing and fixed resolution are also available.
@@ -124,7 +138,18 @@ Right-click any connection → **Test PowerShell remoting** to check it by hand.
   - **Right-click** (or keys) on the remote side: *Download* to the local folder, *Rename…* (F2), *Delete…* (Del; asks first – folders are deleted with their contents, and there is no recycle bin for remote deletes; drive roots are refused), *New folder…*, *Copy path*, *Refresh* (F5). On the local side: *Upload*, *Show in Explorer*, *New folder…*, *Copy path*, *Refresh*.
   - Dragging remote files directly into Explorer isn't supported; drop them on the local side (or use *Download*).
   - Files dropped on a **PowerShell tab** are uploaded into its current folder.
-  - **Transfers** run over their own remoting session in 1 MB chunks into `<name>.remotehub-part`. The SHA-256 checksum is compared with the source before the file gets its final name, and cancelled or failed transfers remove the partial file. Progress, speed and result appear in the **File transfers** pane on the right (styled like the navigation: resizable, collapses to a slim rail with the number of running transfers, width remembered per PC; it appears when a transfer starts), and the destination side refreshes when a transfer is done.
+  - **Transfers** run over their own session.
+    - **Uploads** are streamed in 1 MB chunks without waiting for an answer per chunk, and many small files share one call, so folders with thousands of files don't pay a round trip per file. At most 8 MB are in flight.
+    - **Compression:** every file, also inside folders, is gzip-compressed on the way where that saves at least 10 %. Already-compressed formats (zip, msi, images, video …) and incompressible data are sent as they are. The target **always writes the original, decompressed file**: no archive or `.gz` file is left behind, and nothing is installed on the target (decompression uses .NET's GZipStream, which is part of Windows).
+    - **On the target**, every file's SHA-256 is compared with the source before it gets its final name:
+      - Files larger than 1 MB are written to `<name>.remotehub-part` and renamed once verified.
+      - Smaller files arrive in one piece, are verified in memory and then written directly. This avoids a rename per file, which costs about 10 ms each where a virus scanner checks renamed files.
+      - Cancelled or failed transfers leave nothing behind.
+      - Without "overwrite", existing files are found first and not sent at all.
+    - **Measured** through the RemoteHub Agent on a simulated VPN (30 ms, 100 Mbit/s): 300 small files went from 95 s to 2 s, a 32 MB log from 11.5 s to 2.9 s, and a 32 MB incompressible file from 11.4 s to 8.5 s.
+    - **Downloads** still use the previous method: 1 MB per request, then a checksum.
+    - **Speed:** each file of 1 MB or more shows its current speed while running and its average when done. The pane header shows the overall current speed and the average over the time files were actually moving (idle gaps between transfers don't count). Uploads count the original size, also when sent compressed.
+    - **Cancel:** each transfer has its own cancel button; *Cancel all* (in the File transfers pane, also on its collapsed rail) cancels every running and waiting transfer. Finished files stay, partial files are removed. Progress, speed and result appear in the **File transfers** pane on the right (styled like the navigation: resizable, collapses to a slim rail with the number of running transfers, width remembered per PC; it appears when a transfer starts), and the destination side refreshes when a transfer is done.
 - **Registry tab** (right-click → *Registry*): the remote computer's registry like regedit – keys on the left, values (name, type, data) of the selected key on the right.
   - **Address bar:** type or paste a key and press Enter. `HKLM\…`, `HKLM:\…`, `HKEY_LOCAL_MACHINE\…`, `Registry::…` and regedit's `Computer\…` all work. The tree expands down to the key. It starts at the last key used for that connection (first time: `HKEY_LOCAL_MACHINE\SOFTWARE`).
   - Only the key that is opened is read (one remote call per key, sub keys load when you expand them). The 64-bit registry view is used. `HKEY_CURRENT_USER` is the profile of the account used for remoting, not of the user logged on via RDP.
@@ -147,9 +172,76 @@ Right-click any connection → **Test PowerShell remoting** to check it by hand.
   - **HTTP:** only for domain computers reached by name (Kerberos).
 - Local accounts (`.\user`) are sent as `COMPUTER\user`, using the first part of the host name (`.\user` for IP addresses).
 
+## RemoteHub Agent (without WinRM)
+
+For devices where WinRM / PowerShell remoting isn't allowed. A small Windows service on the device gives RemoteHub the same PowerShell session over its own TLS connection, so **PowerShell, file transfer, registry, services and processes all work as with remoting**. WinRM can stay off. Design and protocol: [docs/agent-spec.md](docs/agent-spec.md).
+
+- **Use it:** a connection's (or folder's) *Settings → PowerShell remoting → Connect through → RemoteHub Agent*. Right-click → *Test RemoteHub Agent* checks it.
+- **Install:** right-click the connection → **Install RemoteHub Agent…**. RemoteHub creates a new identity for the device: a certificate (RSA 3072, 2 years, the device ID as its name). It stores only that certificate's SHA-256 fingerprint with the connection. Then it delivers the agent MSI and the device's enrollment file (`<label>.rhagent`, which contains the device key):
+  - **Silently over PowerShell remoting**, when remoting works for the connection. Both files are copied to a temp folder on the device, checked with a checksum, and installed with `msiexec /qn`. RemoteHub then checks that the installed certificate is the one it created, and deletes the folder.
+  - **Through the clipboard** otherwise. Both files go to the clipboard: paste them into the RDP session (same folder) and run the MSI as administrator. This needs clipboard redirection. The first successful connection confirms the install. The copies on this PC are deleted when RemoteHub closes.
+  - **Update** (when it's installed): through the running agent, over remoting, or with the clipboard. The device keeps its certificate unless you choose *Create a new device certificate*.
+- **On the device:**
+  - Service *RemoteHub Agent* (`RemoteHubAgent`), running as LocalSystem, set to *Automatic (Delayed Start)* and restarted on failure.
+  - Default port **58732**.
+  - Firewall rule *RemoteHub Agent*, limited to the agent program, its port and the *Allow connections from* addresses.
+  - Certificate in `LocalMachine\My` (key not exportable); configuration in `%ProgramData%\RemoteHub\Agent\agent.json`; daily logs in `…\logs`, kept 30 days.
+  - Uninstalling removes the rule, the certificate and the configuration.
+- **Security:**
+  - RemoteHub only accepts the device's own certificate. On a mismatch it stops before sending any credentials.
+  - You sign in with a **Windows account of the device**, either a local account (LAPS works) or one of the device's domain, so no domain trust to your PC is needed. By default only administrators are allowed.
+  - The agent checks the password on the device as a network logon, so policies such as "Deny access to this computer from the network", account lockout and the Security log apply. PowerShell then runs **as that user** (an administrator's full token under UAC).
+  - After 5 failed sign-ins within 5 minutes, the source address is refused for 5 minutes.
+  - The agent sends nothing anywhere: no telemetry, no logs.
+- **Requirements:** Windows 10 1809 / Server 2019 or later, with Windows PowerShell 5.1 (built in). If AppLocker or WDAC blocks PowerShell or forces Constrained Language Mode, the agent is limited the same way remoting would be.
+- **Troubleshooting on the device:**
+  - `"C:\Program Files\RemoteHub Agent\RemoteHubAgent.exe" selftest` checks TLS, the endpoints and the sign-in check without changing anything.
+  - The agent's log is in `%ProgramData%\RemoteHub\Agent\logs`.
+  - For a failed silent install, RemoteHub shows the relevant lines from the msiexec log.
+
+### Remote desktop through the agent (without RDP)
+
+For desktops where RDP is turned off: with the agent installed, RemoteHub shows the device's screen and sends mouse and keyboard over the agent's own connection (same port, same pinned TLS, same Windows sign-in). Design: [docs/agent-desktop-draft.md](docs/agent-desktop-draft.md).
+
+- **Use it:** *Remote desktop* opens through the agent when one is installed (setting *Remote desktop through: Automatic / RDP / RemoteHub Agent* under PowerShell remoting). RDP is always one click away: right-click → *Remote desktop via RDP*, or *Use RDP instead* in the tab.
+- **In the tab:** choose the Windows session (console or any signed-in session), how the signed-in user is involved, view-only, and the picture (*Slow connection 15 fps*, *Admin work 30 fps* (default), *Sharp*, *Smooth 60 fps*). While connected:
+  - **Monitor** switch, or **All monitors** in one picture (scaled down when it is larger than 4096 × 2304).
+  - **Fit to window** (on by default): the device's resolution follows the tab like RDP's dynamic resolution – the exact size when the display takes it, else the same shape a little smaller, else the listed mode that fills the tab best – and goes back when you disconnect.
+  - **Key combinations** (on by default): while the tab has the focus, Alt+Tab, the Windows key and its combinations go to the device, not to this PC (like the RDP client). Ctrl+Alt+Del and Windows+L always stay with this PC – use the Ctrl+Alt+Del button.
+  - **Connection info**: frames per second, data rate, round trip, the device's current quality and how it captures, and what the last resolution change did.
+  - **Clipboard** both ways, sent as soon as you copy: text, images, and files and folders (up to 100 MB and 1000 files per copy; more → use the file transfer). Files copied to the device land in the signed-in user's temp folder (`RemoteHub Clipboard`) and are read and written with that user's rights, never the agent's.
+  - **Reconnect:** if the network drops (Wi-Fi, VPN), RemoteHub reconnects for up to 30 s. The user isn't asked again as long as the user who allowed it is still the one signed in (a single-use token from the agent, valid for a minute, for the same account).
+  - Recording works like any tab.
+- **Disconnected sessions:** when the Windows session's RDP connection is closed, it has no screen – RemoteHub says so over the still picture and continues when someone connects to it again.
+- **Your own account:** signing in on the device with the account you connected with (or connecting to your own session) asks nobody – there is nobody else to ask.
+- **Your own RDP session:** when the session you pick is connected by RDP from this PC, RemoteHub warns you – the RDP window moves your mouse to follow the remote pointer. Minimize it while you control the session here, or connect from another PC.
+- **The user at the device:**
+  - *Ask them*: a RemoteHub window asks to allow it (denied when nobody answers in time).
+  - *Show them a code*: the device shows a 6-digit code that they read out to you (3 attempts).
+  - *Connect without asking*: needs the *ConsentBypass* right.
+  - Nobody is asked when nobody is signed in (the sign-in screen is shown) or the session is locked (the lock screen is shown). The mode you choose then applies to whoever unlocks or signs in: the picture stops at their desktop and continues only after they allow it (or read out the code). If they refuse, the session ends. Anyone other than the user who allowed it is asked again, also when RemoteHub follows the console into another session.
+  - While connected, a banner at the top of their screen always says who is viewing (or controlling), with **Disconnect**; after a few seconds it shrinks to a small pill (it opens again under the mouse). From Windows 10 2004 / Server 2022 it isn't part of the picture you see; on older Windows (e.g. Server 2016/2019) it is, because Windows would paint it black otherwise.
+  - Signing in, locking and switching users don't end the connection: the agent follows the console into the new session (the banner shows again at once; anyone other than the user who allowed it is asked first). It ends when the user clicks *Disconnect*, or after repeated failures.
+- **How it works:** the service starts a helper in the chosen session as LocalSystem, so the sign-in screen, the lock screen and UAC prompts can be shown and used. Picture: Desktop Duplication (only what changes; GDI on VMs without a GPU), H.264 in low-latency mode, at most 2 frames ahead of what RemoteHub has shown, quality lowered automatically on slow connections.
+- **Policy on the device** (`HKLM\SOFTWARE\Policies\RemoteHub\Agent`, read for every connection; wins over `agent.json`):
+  - `DesktopEnabled` (DWORD 0): remote desktop off.
+  - `AllowedConsentModes` (REG_MULTI_SZ): any of `Ask`, `Pin`, `None`.
+  - `ConsentTimeoutSeconds` (DWORD, 5–600, default 30).
+  - `MaxFramesPerSecond` (1–60), `MaxQuality` (1–100).
+  - `DesktopClipboard` (DWORD): 0 off, 1 text, 2 text and images, 3 text, images and files (default).
+  - `DesktopIdleTimeoutMinutes` (DWORD, 0–1440, default 0 = never): a session without mouse or keyboard input for this long ends, after a warning shortly before. View-only sessions count too (they have no input).
+  - `AuditToEventLog` (DWORD 0): audit entries only in the log file, not in the Windows Application log.
+  - Subkey `Rights`, values `PowerShell`, `Desktop`, `DesktopViewOnly`, `SecureDesktop`, `ConsentBypass` (REG_MULTI_SZ, group SIDs or names). Default: the agent's allowed groups (Administrators) for everything except view-only.
+- **Ctrl+Alt+Del** works when the policy *Disable or enable software Secure Attention Sequence* allows services. When that policy isn't configured, the agent allows it only for the moment of the call and removes the value again.
+- **Audit:** the agent's log records who connected from where, to which session, how (consent, view-only) and for how long – never screen content or keystrokes. The same entries go to the Windows **Application log**, source *RemoteHub Agent* (for event forwarding, Intune or a SIEM):
+  - Information: 1000/1001 PowerShell session started/ended, 1100/1101 remote desktop started/ended, 1102 the user who signed in or unlocked allowed it, 1103 continued after a dropped connection.
+  - Warning: 2000 sign-in refused, 2100 remote desktop refused, 2101 the user who signed in or unlocked refused it, 2102 ended for no input.
+  - Error: 3100 remote desktop error.
+- **Not yet:** signing in automatically with stored credentials (on the backlog), audio, file drag and drop into the picture, a relay for devices outside the network.
+
 ## Storage & security
 
-Choose the location under Menu → *Settings location (OneDrive / shared)…*. The current location is shown at the bottom of the connection list.
+Choose the location under *Settings → Security & storage → Change location…*. The current location is shown at the bottom of the connection list.
 
 | Mode | File | Encryption |
 |---|---|---|

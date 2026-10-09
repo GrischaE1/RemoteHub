@@ -55,8 +55,10 @@ public sealed partial class RegNode : ObservableObject
 /// Tab content of a registry session: key tree on the left, values of the selected key on the right, address bar on top.
 /// Only the key that is opened gets read. Every change is a single explicit action; deletes ask first.
 /// </summary>
-public sealed class RegistryView : Border
+public sealed class RegistryView : Border, IRecordableView
 {
+    public FrameworkElement RecordingArea { get; }
+
     private const string DefaultStart = @"HKEY_LOCAL_MACHINE\SOFTWARE";
     private readonly RegistrySession _session;
     private readonly Border _headerStripe = new() { Width = 4, Height = 18, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
@@ -92,6 +94,7 @@ public sealed class RegistryView : Border
         var cell = new Grid();
         Grid.SetRow(cell, 1);
         root.Children.Add(cell);
+        RecordingArea = cell;
         var body = new DockPanel { Margin = new Thickness(10, 10, 10, 8) };
         cell.Children.Add(body);
         cell.Children.Add(RemoteToolChrome.Overlay(reconnect, close));

@@ -9,4 +9,11 @@
     <OutputName>RemoteHub-$(ReleaseVersion)-x64</OutputName>
     <DefineConstants>Version=$(Version);PublishDir=$(PublishDir);IconPath=$(MSBuildThisFileDirectory)..\src\RemoteHub\Assets\app.ico</DefineConstants>
   </PropertyGroup>
+  <PropertyGroup>
+    <!-- Only this folder's Package.wxs: the agent installer is a separate project in a subfolder. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Package.wxs" />
+  </ItemGroup>
 </Project>

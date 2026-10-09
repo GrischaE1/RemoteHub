@@ -11,8 +11,11 @@ public sealed partial class SessionGroup : ObservableObject
     public SessionGroup(Connection connection)
     {
         Connection = connection;
-        Sessions.CollectionChanged += (_, _) =>
+        Sessions.CollectionChanged += (_, e) =>
         {
+            foreach (SessionBase s in e.OldItems ?? Array.Empty<SessionBase>()) s.PropertyChanged -= Session_PropertyChanged;
+            foreach (SessionBase s in e.NewItems ?? Array.Empty<SessionBase>()) s.PropertyChanged += Session_PropertyChanged;
+            OnPropertyChanged(nameof(IsRecording));
             OnPropertyChanged(nameof(AccentBrush));
             OnPropertyChanged(nameof(Summary));
             OnPropertyChanged(nameof(Tooltip));
@@ -39,6 +42,14 @@ public sealed partial class SessionGroup : ObservableObject
     public string SingleSymbol => Sessions.Count == 1 ? Sessions[0].KindSymbol : "Desktop24";
     public bool ShowSingleSymbol => Sessions.Count == 1 && Sessions[0] is not RdpSession;
     public string Tooltip => Summary;
+
+    /// <summary>One of the connection's tabs is being recorded (red dot on the connection tab).</summary>
+    public bool IsRecording => Sessions.Any(s => s.IsRecording);
+
+    private void Session_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SessionBase.IsRecording)) OnPropertyChanged(nameof(IsRecording));
+    }
 
     public void RefreshAccent() => OnPropertyChanged(nameof(AccentBrush));
 }

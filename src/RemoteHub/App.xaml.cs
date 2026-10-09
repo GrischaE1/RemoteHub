@@ -113,6 +113,7 @@ public partial class App : Application
     {
         _instance?.Dispose();
         if (_instance is not null) CrashReporter.Stop();
+        if (_instance is not null) Remoting.AgentInstaller.CleanTemp(TimeSpan.Zero); // staged agent files may hold a device key
         base.OnExit(e);
     }
 }

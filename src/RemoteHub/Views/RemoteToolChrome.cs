@@ -9,6 +9,12 @@ using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace RemoteHub.Views;
 
+/// <summary>A tab view whose content area (everything below the header) is what a recording shows.</summary>
+public interface IRecordableView
+{
+    FrameworkElement RecordingArea { get; }
+}
+
 /// <summary>Header and "not connected" overlay shared by the remote tool tabs (file transfer, registry).</summary>
 internal static class RemoteToolChrome
 {
@@ -26,8 +32,57 @@ internal static class RemoteToolChrome
         var sub = new TextBlock { Text = $"  ·  {kind}  ·  " + session.Connection.Host, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         left.Children.Add(sub);
+        left.Children.Add(TransportBadge());
+        left.Children.Add(RecordingBadge());
         header.Child = left;
         return header;
+    }
+
+    /// <summary>
+    /// Small badge after the host: how the tab reaches the device – "RemoteHub Agent" or "PowerShell remoting (HTTPS)".
+    /// Bound to the session's <see cref="SessionBase.Transport"/> (DataContext), so it follows a reconnect.
+    /// </summary>
+    public static Border TransportBadge()
+    {
+        var icon = new SymbolIcon(SymbolRegular.PlugConnected24) { FontSize = 12, Margin = new Thickness(0, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center };
+        var text = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        text.SetBinding(TextBlock.TextProperty, nameof(SessionBase.Transport));
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(icon);
+        row.Children.Add(text);
+        var badge = new Border
+        {
+            Child = row,
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(6, 1, 7, 2),
+            Margin = new Thickness(10, 0, 0, 0),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "How RemoteHub reaches this device",
+        };
+        badge.SetResourceReference(Border.BorderBrushProperty, "ControlStrokeColorDefaultBrush");
+        badge.SetResourceReference(Border.BackgroundProperty, "ControlFillColorSecondaryBrush");
+        badge.SetBinding(UIElement.VisibilityProperty, new Binding(nameof(SessionBase.Transport)) { Converter = new BoolToVisibility() });
+        return badge;
+    }
+
+    /// <summary>Red "REC 01:23" badge while the tab is recorded (bound to the session; it is part of the recording, too).</summary>
+    public static Border RecordingBadge()
+    {
+        var text = new TextBlock { FontSize = 11.5, FontWeight = FontWeights.Bold, Foreground = System.Windows.Media.Brushes.White, VerticalAlignment = VerticalAlignment.Center };
+        text.SetBinding(TextBlock.TextProperty, nameof(SessionBase.RecordingText));
+        var badge = new Border
+        {
+            Child = text,
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(7, 1, 7, 2),
+            Margin = new Thickness(10, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = ColorTags.Frozen(System.Windows.Media.Color.FromRgb(0xE5, 0x48, 0x4D)),
+            ToolTip = "This tab is being recorded to a video file",
+        };
+        badge.SetBinding(UIElement.VisibilityProperty, new Binding(nameof(SessionBase.IsRecording)) { Converter = new BoolToVisibility() });
+        return badge;
     }
 
     /// <summary>Covers the remote side while not connected: status text, Connect and Close tab.</summary>

@@ -17,8 +17,10 @@ namespace RemoteHub.Views;
 /// the hosted ActiveX control, and a WPF status overlay (shown instead of the control while idle/disconnected —
 /// WPF cannot draw on top of an HWND). The same instance is moved between the main window and detached windows.
 /// </summary>
-public sealed class SessionView : Border
+public sealed class SessionView : Border, IRecordableView
 {
+    public FrameworkElement RecordingArea { get; }
+
     private readonly RdpSession _session;
     private readonly Border _headerStripe = new() { Width = 4, Height = 18, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
     private readonly TextBlock _focusText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) };
@@ -56,6 +58,7 @@ public sealed class SessionView : Border
         left.Children.Add(_headerStripe);
         left.Children.Add(title);
         left.Children.Add(addr);
+        left.Children.Add(RemoteToolChrome.RecordingBadge());
         headerRow.Children.Add(left);
         header.Child = headerRow;
         root.Children.Add(header);
@@ -64,6 +67,7 @@ public sealed class SessionView : Border
         var content = new Grid { Margin = new Thickness(0, 0, 0, 0) };
         Grid.SetRow(content, 1);
         root.Children.Add(content);
+        RecordingArea = content;
 
         Host = new WindowsFormsHost { Child = session.Control, Background = Brushes.Black };
         Host.SetBinding(VisibilityProperty, new Binding(nameof(RdpSession.ShowsOverlay)) { Converter = new BoolToVisibility { Invert = true, UseHidden = true } });
