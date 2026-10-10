@@ -133,7 +133,8 @@ public class RecordingTests
             var recorded = wall.Elapsed.TotalSeconds; // ~1.3 s, more on a busy machine (the delays take longer)
             await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(10));
             var (duration, _, _) = await Decode(path, TimeSpan.Zero);
-            // The video ends where Stop was called: at most the time between Start and Stop plus one frame (10 fps).
+            // The video ends where Stop was called: its last frame covers the stop time, so at most one frame (0.1 s at
+            // 10 fps) longer than the time between Start and Stop – no frame added after it.
             // Shorter by the encoder's start-up, which can take a while on a busy machine (the clock starts after it).
             Assert.InRange(duration.TotalSeconds, Math.Max(0.2, recorded - 1.5), recorded + 0.15);
         }
