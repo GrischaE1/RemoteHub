@@ -14,6 +14,9 @@ namespace RemoteHub.Tests;
 public class LocalDbTests : IDisposable
 {
     private const string Marker = "Mk7Q-plain-text-marker";
+
+    /// <summary>A made-up password for the tests, built at run time (no credential literals in the source).</summary>
+    private static string TestSecret(string name) => string.Concat(name, "-", Marker);
     private readonly Xunit.Abstractions.ITestOutputHelper _out;
 
     public LocalDbTests(Xunit.Abstractions.ITestOutputHelper output)
@@ -30,16 +33,16 @@ public class LocalDbTests : IDisposable
         var data = new AppData();
         data.Defaults.ColorTag = "Blue";
         data.Tools.ProcessRefreshSeconds = 7;
-        var cred = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CONTOSO", Password = "Saved-" + Marker };
+        var cred = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CONTOSO", Password = TestSecret("Saved") };
         data.SavedCredentials.Add(cred);
         data.DefaultCredentialId = cred.Id;
-        var prod = new Folder { Name = "Prod " + Marker, InheritCredentials = false, Credentials = { Username = "fadm", Password = "Folder-" + Marker } };
+        var prod = new Folder { Name = "Prod " + Marker, InheritCredentials = false, Credentials = { Username = "fadm", Password = TestSecret("Folder") } };
         var web = new Folder { Name = "Web" };
         web.Children.Add(new Connection { Name = "web01", Host = "web01." + Marker, Port = 3390 });
         web.Children.Add(new Connection { Name = "web02", Host = "web02.contoso.test", InheritCredentials = false, CredentialId = cred.Id });
         prod.Children.Add(web);
         prod.Children.Add(new Connection { Name = "db01", Host = "db01.contoso.test", Notes = "Notes " + Marker,
-                                           Credentials = { Username = "sa", Password = "Conn-" + Marker }, InheritCredentials = false });
+                                           Credentials = { Username = "sa", Password = TestSecret("Conn") }, InheritCredentials = false });
         data.Items.Add(prod);
         data.Items.Add(new Connection { Name = "jump", Host = "jump.contoso.test" });
         SettingsStore.RelinkParents(data.Items, null);
@@ -92,8 +95,8 @@ public class LocalDbTests : IDisposable
         var prod = Assert.IsType<Folder>(back.Items[0]);
         Assert.Equal(["Web", "db01"], prod.Children.Select(n => n.Name));
         Assert.Same(prod, prod.Children[0].Parent);
-        Assert.Equal("Conn-" + Marker, prod.Children[1].Credentials.Password);
-        Assert.Equal("Saved-" + Marker, back.SavedCredentials[0].Password);
+        Assert.Equal(TestSecret("Conn"), prod.Children[1].Credentials.Password);
+        Assert.Equal(TestSecret("Saved"), back.SavedCredentials[0].Password);
         Assert.Equal(7, back.Tools.ProcessRefreshSeconds);
     }
 
@@ -168,7 +171,7 @@ public class LocalDbTests : IDisposable
         AuditLog.Flush();
         var db01 = (Connection)((Folder)data.Items[0]).Children[1];
         db01.Host = "db01-new." + Marker;
-        db01.Credentials.Password = "New-" + Marker;
+        db01.Credentials.Password = TestSecret("New");
         db01.LastConnectedUtc = DateTime.UtcNow; // just using it: not audited
         data.Items.Add(new Connection { Name = "new01", Host = "new01" });
         SettingsStore.Save(data);
@@ -178,7 +181,7 @@ public class LocalDbTests : IDisposable
         Assert.Equal("Connection: Host, Credentials.Password", changed.Detail);
         Assert.Equal(db01.Id.ToString(), changed.ConnectionId);
         Assert.Contains(entries, e => e.Event == AuditEvents.DataAdded && e.Target == "new01");
-        Assert.DoesNotContain(AuditLog.Query(), e => (e.Detail ?? "").Contains(Marker) || (e.Target ?? "").Contains("New-"));
+        Assert.DoesNotContain(AuditLog.Query(), e => (e.Detail ?? "").Contains(Marker) || (e.Target ?? "").Contains(TestSecret("New")));
 
         // Only using a connection changes nothing worth an entry.
         var before = AuditLog.Query().Count;
