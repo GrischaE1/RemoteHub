@@ -131,7 +131,9 @@ public class RecordingTests
             recorder.Stop();
             await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(10));
             var (duration, _, _) = await Decode(path, TimeSpan.Zero);
-            Assert.InRange(duration.TotalSeconds, 1.0, 2.5);
+            // 1.3 s recorded: the video ends where Stop was called. Lower bound loose – starting the encoder can take a
+            // while on a busy machine, and the clock starts after it.
+            Assert.InRange(duration.TotalSeconds, 0.5, 2.0);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }

@@ -41,10 +41,12 @@ public static class RemoteProcesses
     private const string StopScript = """
         param([int[]]$Ids, [bool]$Tree)
         $ErrorActionPreference = 'Stop'
-        # Still running = the same PID with the same start time: an ended process's PID can be reused at once.
+        # Still running = the same PID with the same start time (an ended process's PID can be reused at once), and not
+        # exited: an ended process stays listed while another program (e.g. antivirus) still holds a handle to it.
         function Alive($t) {
             $p = Get-Process -Id $t.ProcessId -ErrorAction SilentlyContinue
             if (-not $p) { return }
+            try { if ($p.HasExited) { return } } catch { }
             try { $s = $p.StartTime } catch { $s = $null }
             if ($null -eq $s -or $null -eq $t.CreationDate -or [Math]::Abs(($s - $t.CreationDate).TotalSeconds) -lt 2) { $p }
         }
