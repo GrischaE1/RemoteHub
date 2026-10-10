@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
+using RemoteHub.Data;
 using RemoteHub.Models;
 using RemoteHub.Rdp;
 using RemoteHub.Remoting;
@@ -378,6 +379,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---------- sessions ----------
 
+    /// <summary>"45 s", "12 min", "2 h 05 min".</summary>
+    public static string Duration(TimeSpan d) =>
+        d.TotalMinutes < 1 ? $"{Math.Max(0, (int)d.TotalSeconds)} s"
+        : d.TotalHours < 1 ? $"{(int)d.TotalMinutes} min"
+        : $"{(int)d.TotalHours} h {d.Minutes:00} min";
+
     public RdpSession? FindSession(Connection c) => Sessions.OfType<RdpSession>().FirstOrDefault(s => s.Connection == c);
 
     public AgentDesktopSession? FindAgentDesktop(Connection c) => Sessions.OfType<AgentDesktopSession>().FirstOrDefault(s => s.Connection == c);
@@ -434,6 +441,17 @@ public sealed partial class MainViewModel : ObservableObject
     private void Register(SessionBase s)
     {
         var c = s.Connection;
+        // Connection history and audit log: one entry per time the session is connected, ended when it disconnects or closes.
+        long history = 0;
+        DateTime? connectedSince = null;
+        void Ended(string result)
+        {
+            if (connectedSince is not { } since) return;
+            ConnectionHistory.End(history, result);
+            AuditLog.Write(AuditEvents.SessionEnded, c, $"{s.KindLabel} – {Duration(DateTime.UtcNow - since)}");
+            history = 0;
+            connectedSince = null;
+        }
         s.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != nameof(SessionBase.State)) return;
@@ -442,8 +460,20 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 c.LastConnectedUtc = DateTime.UtcNow;
                 RequestSave();
+                if (connectedSince is null)
+                {
+                    connectedSince = DateTime.UtcNow;
+                    history = ConnectionHistory.Start(c.Id, s.KindLabel);
+                    AuditLog.Write(AuditEvents.SessionConnected, c, s.KindLabel);
+                }
+            }
+            else if (s.State is SessionState.Disconnected or SessionState.Failed)
+            {
+                if (connectedSince is not null) Ended(s.State == SessionState.Failed ? "failed" : "disconnected");
+                else if (s.State == SessionState.Failed) AuditLog.Write(AuditEvents.SessionFailed, c, s.KindLabel);
             }
         };
+        s.Closed += () => Ended("closed");
         s.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(SessionBase.AccentBrush)) GroupOf(s)?.RefreshAccent(); };
         s.Closed += () =>
         {

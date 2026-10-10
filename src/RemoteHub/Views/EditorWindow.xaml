@@ -335,6 +335,11 @@
                                    ToolTip="Closes this window first (unsaved changes here are discarded)" />
                     </StackPanel>
 
+                    <TextBlock Text="Audit log" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                               Text="What happened in RemoteHub on this PC: sessions, changes to connections and settings, copied passwords, file transfers, recordings, backups. Never passwords or file contents. Kept in the encrypted database; a hash chain shows if an entry was changed or removed." />
+                    <ui:Button x:Name="AuditButton" Content="Open audit log…" Icon="{ui:SymbolIcon DocumentBulletList24}" />
+
                 </StackPanel>
 
                 <StackPanel x:Name="PageRecordings" Visibility="Collapsed">

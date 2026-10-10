@@ -141,14 +141,21 @@ public class RemoteRegistryTests : IDisposable
         // keys: create, rename (RegRenameKey), export, delete
         Assert.Equal(Root + @"\Made", RemoteRegistry.CreateKey(rs, Root, "Made"));
         Assert.Throws<RemoteCommandException>(() => RemoteRegistry.CreateKey(rs, Root, "made"));
-        Assert.Equal(Root + @"\Renamed", RemoteRegistry.RenameKey(rs, Root + @"\Child", "Renamed"));
-        Assert.Throws<RemoteCommandException>(() => RemoteRegistry.RenameKey(rs, Root + @"\Renamed", "Leaf"));
-        Assert.NotNull(Registry.CurrentUser.OpenSubKey(_sub + @"\Renamed\Grand"));
+        // Opt-in: on Windows build 26300 a key rename (RegRenameKey) once crashed the PC – a bug in the Windows kernel
+        // (bugcheck 0x3B in nt!CmpKeySecurityIncrementReferenceCount under NtRenameKey). Set REMOTEHUB_TEST_REGRENAME=1 to run it.
+        var child = "Child";
+        if (Environment.GetEnvironmentVariable("REMOTEHUB_TEST_REGRENAME") == "1")
+        {
+            Assert.Equal(Root + @"\Renamed", RemoteRegistry.RenameKey(rs, Root + @"\Child", "Renamed"));
+            Assert.Throws<RemoteCommandException>(() => RemoteRegistry.RenameKey(rs, Root + @"\Renamed", "Leaf"));
+            child = "Renamed";
+        }
+        Assert.NotNull(Registry.CurrentUser.OpenSubKey(_sub + $@"\{child}\Grand"));
         var reg = System.Text.Encoding.Unicode.GetString(RemoteRegistry.Export(rs, Root));
         Assert.Contains("Windows Registry Editor Version 5.00", reg);
-        Assert.Contains(@"\Renamed\Grand]", reg);
-        RemoteRegistry.DeleteKey(rs, Root + @"\Renamed");
-        Assert.Null(Registry.CurrentUser.OpenSubKey(_sub + @"\Renamed"));
+        Assert.Contains($@"\{child}\Grand]", reg);
+        RemoteRegistry.DeleteKey(rs, Root + $@"\{child}");
+        Assert.Null(Registry.CurrentUser.OpenSubKey(_sub + $@"\{child}"));
         Assert.Throws<RemoteCommandException>(() => RemoteRegistry.DeleteKey(rs, @"HKEY_CURRENT_USER\Software"));
         Assert.NotNull(Registry.CurrentUser.OpenSubKey("Software"));
     }

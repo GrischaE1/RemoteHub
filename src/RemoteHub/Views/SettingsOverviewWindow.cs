@@ -73,8 +73,11 @@ public sealed class SettingsOverviewWindow : FluentWindow
 
         var storage = new List<(string, string)>
         {
-            ("Stored", SettingsStore.IsShared ? (SettingsStore.IsPolicyManaged ? "Shared folder (set by your IT policy)" : "Shared folder (e.g. OneDrive)") : "This PC only (encrypted for your Windows account)"),
-            ("Settings file", SettingsStore.FilePath),
+            ("Stored", SettingsStore.IsShared ? (SettingsStore.IsPolicyManaged ? "Shared folder (set by your IT policy)" : "Shared folder (e.g. OneDrive)") : "This PC only (encrypted database)"),
+            ("Settings", SettingsStore.FilePath),
+            ("Database", $"{Data.LocalDb.FilePath} – encrypted (ChaCha20-Poly1305), key protected for your Windows account"),
+            ("Database backups", Data.LocalDb.Backups() is [var newest, ..] ? $"{Data.LocalDb.Backups().Count}, newest {newest.TimeUtc.ToLocalTime():g}" : "None yet (made daily)"),
+            ("Audit log", $"Kept {Data.AuditLog.RetentionDays} days{(AppPolicy.AuditRetentionDays is null ? "" : " (set by your IT policy)")}"),
             ("Local data folder", SettingsStore.Directory),
             ("Startup protection", AppLock.Describe()),
         };

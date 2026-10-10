@@ -129,6 +129,7 @@ public partial class MainWindow : FluentWindow
     {
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (!SecureClipboard.CopySecret(hwnd, password, TimeSpan.FromSeconds(ClipboardSeconds))) return;
+        Data.AuditLog.Write(Data.AuditEvents.PasswordCopied, session.Connection, $"For the Windows password prompt (cleared after {ClipboardSeconds} s)");
         // Show it in the window that holds the session (main window, or its detached window).
         var host = _detached.TryGetValue(session, out var w) ? new System.Windows.Interop.WindowInteropHelper(w).Handle : hwnd;
         ShowPromptToast(ClipboardToast.Copied(connectionName, ClipboardSeconds, dialog, host));
@@ -156,6 +157,7 @@ public partial class MainWindow : FluentWindow
         {
             if (dlg.OpenedData is { } opened) _vm.ReplaceData(opened, save: false);
             _vm.RefreshStorageInfo();
+            Data.AuditLog.Write(Data.AuditEvents.StorageLocationChanged, null, null, SettingsStore.Describe());
         }
     }
 
@@ -629,6 +631,7 @@ public partial class MainWindow : FluentWindow
         CmConnectAll.Visibility = V(n is Folder);
         CmSep1.Visibility = V(n is not null);
         CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(n is not null);
+        CmHistory.Visibility = V(n is Connection);
         CmSaveRdp.Visibility = V(n is not null);
         CmSaveRdp.Header = n is Folder ? "Export folder as .rdp files…" : "Save as .rdp file…";
 
@@ -982,6 +985,7 @@ public partial class MainWindow : FluentWindow
         DiagLog.Write($"RemoteHub Agent {(enrollment is null ? "update" : "install")} started ({o.Method})");
         void Finish(AgentDevice d)
         {
+            Data.AuditLog.Write(Data.AuditEvents.AgentInstalled, c, $"{(enrollment is null ? "Updated" : "Installed")} – {o.Method}");
             c.Agent = d;
             c.RefreshLabels();
             if (o.UseAgentAfterwards && !UsesAgent(c)) c.Options.UseAgent = true;
@@ -1307,7 +1311,7 @@ public partial class MainWindow : FluentWindow
         if (overwrite is null) return;
 
         var items = list.Select(x => new TransferItem(x.Local, x.Relative, c.Name)).ToList();
-        await RunTransfers(items, "upload", () => FileUploader.UploadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
+        await RunTransfers(c, items, "upload", () => FileUploader.UploadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
             remoteFolder, overwrite.Value, items, a => Dispatcher.BeginInvoke(a)));
     }
 
@@ -1327,11 +1331,11 @@ public partial class MainWindow : FluentWindow
 
         var name = drag.Source.Connection.Name;
         var items = files.Select(f => TransferItem.Download(f.FullPath, Path.Combine(localFolder, f.Relative), f.Relative, name, f.Size)).ToList();
-        await RunTransfers(items, "download", () => FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
+        await RunTransfers(drag.Source.Connection, items, "download", () => FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
             overwrite.Value, items, a => Dispatcher.BeginInvoke(a)));
     }
 
-    private async Task RunTransfers(List<TransferItem> items, string kind, Func<Task> run)
+    private async Task RunTransfers(Connection c, List<TransferItem> items, string kind, Func<Task> run)
     {
         for (int i = items.Count - 1; i >= 0; i--) _vm.Transfers.Insert(0, items[i]);
         _vm.ShowTransfers = true;
@@ -1341,6 +1345,11 @@ public partial class MainWindow : FluentWindow
         await Dispatcher.InvokeAsync(() => DiagLog.Write(
             $"File {kind} finished: {items.Count(i => i.IsDone)} done, {items.Count(i => i.State == TransferState.Failed)} failed, " +
             $"{items.Count(i => i.State is TransferState.Cancelled or TransferState.Skipped)} cancelled/skipped"),
+            System.Windows.Threading.DispatcherPriority.Background);
+        await Dispatcher.InvokeAsync(() => Data.AuditLog.Write(Data.AuditEvents.FilesTransferred, c,
+            $"{(kind == "upload" ? "Upload to the device" : "Download from the device")}: {items.Count(i => i.IsDone)} done, " +
+            $"{items.Count(i => i.State == TransferState.Failed)} failed, {items.Count(i => i.State is TransferState.Cancelled or TransferState.Skipped)} cancelled or skipped, " +
+            $"{TransferItem.Size(items.Where(i => i.IsDone).Sum(i => i.TotalBytes))}"),
             System.Windows.Threading.DispatcherPriority.Background);
     }
 
@@ -1422,6 +1431,13 @@ public partial class MainWindow : FluentWindow
     }
     private void CmEdit_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) EditNode(n); }
     private void CmDuplicate_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _vm.Duplicate(n).IsSelected = true; }
+    private void CmHistory_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenAuditLog(c); }
+
+    private void OpenAuditLog(Connection? c)
+    {
+        _vm.SaveNow(); // pending changes are in the log too
+        new AuditLogWindow(c) { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.Show();
+    }
     private void CmDelete_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _ = DeleteNode(n); }
 
     private async void CmConnectAll_Click(object sender, RoutedEventArgs e)
@@ -1627,6 +1643,7 @@ public partial class MainWindow : FluentWindow
             OpenLog: () => OpenLog_Click(this, e),
             ExportBackup: () => ExportBackup_Click(this, e),
             ImportBackup: () => ImportBackup_Click(this, e),
+            AuditLog: () => OpenAuditLog(null),
             DefaultApp: () => DefaultApp_Click(this, e),
             CheckForUpdates: channel => ShowUpdateWindow(null, channel),
             SettingsOverview: () => SettingsOverview_Click(this, e),
@@ -1964,6 +1981,8 @@ public partial class MainWindow : FluentWindow
         try
         {
             Backup.Export(_vm.Data, dlg.FileName, pw.Password);
+            Data.AuditLog.Write(Data.AuditEvents.BackupExported, null, Path.GetFileName(dlg.FileName),
+                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials");
             _ = Dialogs.Info(this, "Export backup", $"Backup saved to\n{dlg.FileName}\n\nKeep the password safe – it cannot be recovered.");
         }
         catch (Exception ex) { _ = Dialogs.Info(this, "Export failed", ex.Message); }
@@ -1983,6 +2002,9 @@ public partial class MainWindow : FluentWindow
         var choice = await Dialogs.Ask(this, "Import backup",
             "Add the backup as a new folder next to your current connections, or replace everything?",
             "Add as folder", "Replace everything");
+        if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary)
+            Data.AuditLog.Write(Data.AuditEvents.BackupImported, null, Path.GetFileName(dlg.FileName),
+                choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? "Added as a folder" : "Replaced all settings");
         if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {
             foreach (var sc in imported.SavedCredentials)

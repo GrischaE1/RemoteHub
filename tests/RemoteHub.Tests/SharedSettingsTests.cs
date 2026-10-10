@@ -20,6 +20,7 @@ public class SharedSettingsTests
     public void Shared_folder_create_reopen_prompt_conflict_and_switch_back()
     {
         Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
         var shared = Path.Combine(Path.GetTempPath(), "rdpm-shared-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -62,6 +63,8 @@ public class SharedSettingsTests
 
             // 4. another device changed the file -> conflict on save, force overwrites
             File.AppendAllText(SettingsStore.FilePath, " ");
+            SettingsStore.Save(loaded); // nothing changed here: nothing is written, so no conflict
+            loaded.Tools.ProcessRefreshSeconds = 33;
             Assert.Throws<SettingsConflictException>(() => SettingsStore.Save(loaded));
             SettingsStore.Save(loaded, force: true);
             SettingsStore.Save(loaded); // no conflict any more
@@ -75,14 +78,15 @@ public class SharedSettingsTests
             // 6. back to this PC only
             SettingsStore.SwitchToLocal(opened);
             Assert.False(SettingsStore.IsShared);
-            Assert.True(File.Exists(SettingsStore.LocalFilePath));
+            Assert.True(File.Exists(Data.LocalDb.FilePath));
+            Assert.False(File.Exists(SettingsStore.LocalFilePath)); // no settings.dat any more: this PC uses the database
             Assert.Equal("Prod", SettingsStore.Load().Items[0].Name);
         }
         finally
         {
             SettingsStore.PasswordPrompt = null;
             try { Directory.Delete(shared, true); } catch { }
-            try { Directory.Delete(SettingsStore.Directory, true); } catch { }
+            StoreReset.Clean();
         }
     }
 
@@ -90,7 +94,7 @@ public class SharedSettingsTests
     public void Old_narrow_sidebar_and_system_theme_are_upgraded_once()
     {
         Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
-        Directory.CreateDirectory(SettingsStore.Directory);
+        StoreReset.Clean();
         var local = Path.Combine(SettingsStore.Directory, "local.json");
         try
         {
@@ -110,7 +114,7 @@ public class SharedSettingsTests
         }
         finally
         {
-            try { Directory.Delete(SettingsStore.Directory, true); } catch { }
+            StoreReset.Clean();
         }
     }
 }
