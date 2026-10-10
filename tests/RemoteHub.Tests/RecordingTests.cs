@@ -124,14 +124,18 @@ public class RecordingTests
         try
         {
             var recorder = new SessionRecorder(path, new RecordingSource(IntPtr.Zero, 0, 0, 640, 360, Screen: true));
+            var wall = System.Diagnostics.Stopwatch.StartNew();
             recorder.Start();
             await Task.Delay(800);
             recorder.Update(RecordingSource.Hidden);
             await Task.Delay(500);
             recorder.Stop();
+            var recorded = wall.Elapsed.TotalSeconds; // ~1.3 s, more on a busy machine (the delays take longer)
             await recorder.Completion.WaitAsync(TimeSpan.FromSeconds(10));
             var (duration, _, _) = await Decode(path, TimeSpan.Zero);
-            Assert.InRange(duration.TotalSeconds, 1.0, 2.5);
+            // The video ends where Stop was called: at most the time between Start and Stop plus one frame (10 fps).
+            // Shorter by the encoder's start-up, which can take a while on a busy machine (the clock starts after it).
+            Assert.InRange(duration.TotalSeconds, Math.Max(0.2, recorded - 1.5), recorded + 0.15);
         }
         finally { try { Directory.Delete(dir, true); } catch { } }
     }

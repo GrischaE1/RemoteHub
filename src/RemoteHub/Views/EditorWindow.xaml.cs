@@ -20,6 +20,7 @@ public sealed record AppSettingsHost(
     Action OpenLog,
     Action ExportBackup,
     Action ImportBackup,
+    Action AuditLog,
     Action DefaultApp,
     Action<string> CheckForUpdates,
     Action SettingsOverview,
@@ -219,6 +220,7 @@ public partial class EditorWindow : FluentWindow
         };
         FolderButton.Click += (_, _) => _host?.OpenFolder();
         ExportButton.Click += (_, _) => _host?.ExportBackup();
+        AuditButton.Click += (_, _) => _host?.AuditLog();
         ImportButton.Click += (_, _) =>
         {
             // Importing replaces the settings in memory, so this window (and its edits) closes first.

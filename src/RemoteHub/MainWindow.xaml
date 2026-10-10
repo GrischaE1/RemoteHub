@@ -359,6 +359,8 @@
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
+                                <MenuItem x:Name="CmHistory" Header="History…" Click="CmHistory_Click" Icon="{ui:SymbolIcon History24}"
+                                          ToolTip="Sessions and changes of this connection (audit log)" />
                                 <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
                                 <MenuItem x:Name="CmDelete" Header="Delete" InputGestureText="Del" Click="CmDelete_Click" Icon="{ui:SymbolIcon Delete24}" />
                                 <Separator />

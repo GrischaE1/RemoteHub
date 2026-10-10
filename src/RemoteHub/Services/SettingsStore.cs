@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using RemoteHub.Data;
 using RemoteHub.Models;
 
 namespace RemoteHub.Services;
@@ -21,10 +22,12 @@ public sealed class LocalConfig
 public sealed class SettingsConflictException() : Exception("The settings file was changed on another device.");
 
 /// <summary>
-/// Persists all settings to a single file, in one of two modes:
+/// Persists all settings, in one of two modes:
 /// <list type="bullet">
-/// <item><b>This PC</b> (default): <c>%APPDATA%\RemoteHub\settings.dat</c>, encrypted with Windows DPAPI for the
-/// current user – no password needed, but only readable by this user on this PC.</item>
+/// <item><b>This PC</b> (default): the encrypted local database (<see cref="LocalDb"/>,
+/// <c>%LOCALAPPDATA%\RemoteHub\remotehub.db</c>) – its key protected with Windows DPAPI for the current user (plus the
+/// startup protection, if on). Only changed records are written. Before 0.14 this was <c>settings.dat</c>; it is moved
+/// into the database on the first start.</item>
 /// <item><b>Shared folder</b> (OneDrive, network share): <c>RemoteHub.settings</c> encrypted with AES-256-GCM using a
 /// password-derived key (PBKDF2-SHA256). The password is asked once per PC; the derived key is then cached locally,
 /// protected with DPAPI, so there is no prompt on every start.</item>
@@ -154,7 +157,8 @@ public static class SettingsStore
 
     public static bool IsShared => SharedFolder is not null;
 
-    public static string FilePath => SharedFolder is { } f ? SharedFilePathFor(f) : LocalFilePath;
+    /// <summary>Where the settings are: the shared file, else the local database (settings.dat only if moving it failed).</summary>
+    public static string FilePath => SharedFolder is { } f ? SharedFilePathFor(f) : _legacyFile ? LocalFilePath : LocalDb.FilePath;
 
     /// <summary>The shared file in a folder: RemoteHub.settings, or RdpManager.settings when only that one exists there.</summary>
     public static string SharedFilePathFor(string folder)
@@ -178,9 +182,31 @@ public static class SettingsStore
 
     // ------------------------------------------------------------------ load / save
 
+    /// <summary>
+    /// Loads the settings. Opens the local database first (it also holds the audit log), moving an existing
+    /// settings.dat into it on the first start of this version. Throws <see cref="AppLockedException"/> while locked and
+    /// <see cref="DatabaseUnreadableException"/> if the database can't be opened.
+    /// </summary>
     public static AppData Load()
     {
+        try { return LoadUnchecked(); }
+        catch (Microsoft.Data.Sqlite.SqliteException ex) when (ex.SqliteErrorCode is 11 or 26)
+        {
+            // A damaged page is found when it's read – here, not when opening.
+            LocalDb.Close();
+            throw new DatabaseUnreadableException("The database is damaged.", ex);
+        }
+        catch (InvalidDataException ex) when (LocalDb.IsOpen && !IsShared && !_legacyFile && UnreadableFile is null)
+        {
+            LocalDb.Close(); // e.g. a stored password that doesn't match its place
+            throw new DatabaseUnreadableException(ex.Message, ex);
+        }
+    }
+
+    private static AppData LoadUnchecked()
+    {
         _local = LoadLocalConfig();
+        OpenDatabase();
         AppData data;
         if (IsShared)
         {
@@ -192,23 +218,130 @@ public static class SettingsStore
         }
         else
         {
-            data = LoadLocalProtected();
+            data = LoadLocal();
         }
         if (_local.Ui is not null) data.Ui = _local.Ui;
+        SetBaseline(data);
         return data;
     }
 
-    /// <summary>Saves the data. Throws <see cref="SettingsConflictException"/> if the file changed elsewhere (unless <paramref name="force"/>).</summary>
+    /// <summary>
+    /// Saves the data. This PC: only the records that changed are written to the database. Shared file: the whole
+    /// file, as before; throws <see cref="SettingsConflictException"/> if it changed elsewhere (unless <paramref name="force"/>).
+    /// Either way, what changed goes to the audit log (field names only, never values).
+    /// </summary>
     public static void Save(AppData data, bool force = false)
     {
         SaveLocalConfig(data.Ui);
+        if (!LocalDb.IsOpen) OpenDatabase();
         var path = FilePath;
-        if (!force && File.Exists(path) && _lastHash is not null && !Hash(File.ReadAllBytes(path)).SequenceEqual(_lastHash))
-            throw new SettingsConflictException();
+        if (_baselineOf != Location)
+        {
+            // First save for this location without a load (switching location, tests): compare with what is stored.
+            _tracker.Reset(IsShared || _legacyFile ? AppDataRecords.From(data) : LocalDb.Use((c, k) => AppDataRecords.From(AppDataRecords.Load(c, k))));
+            _baselineOf = Location;
+        }
+        var changes = _tracker.Diff(AppDataRecords.From(data));
+        if (IsShared || _legacyFile)
+        {
+            if (changes.IsEmpty && !force) return;
+            if (!force && File.Exists(path) && _lastHash is not null && !Hash(File.ReadAllBytes(path)).SequenceEqual(_lastHash))
+                throw new SettingsConflictException();
+            var bytes = IsShared ? EncryptShared(data) : EncryptLocal(data);
+            WriteAtomic(path, bytes);
+            _lastHash = Hash(bytes);
+        }
+        else LocalDb.Use((c, k) => AppDataRecords.Write(c, k, changes));
+        _tracker.Accept(changes);
+        AppDataRecords.Audit(changes);
+    }
 
-        var bytes = IsShared ? EncryptShared(data) : EncryptLocal(data);
-        WriteAtomic(path, bytes);
-        _lastHash = Hash(bytes);
+    // ------------------------------------------------------------------ local database
+
+    private static readonly ChangeTracker _tracker = new();
+    private static string? _baselineOf;          // the location (see Location) the tracker's records belong to
+
+    /// <summary>Where the records are: the file, and for the database which open of it (a restored database is new).</summary>
+    private static string Location => IsShared || _legacyFile ? FilePath : $"{FilePath}|{LocalDb.Generation}";
+    /// <summary>Moving settings.dat into the database failed: this PC's settings stay in settings.dat for now.</summary>
+    private static bool _legacyFile;
+
+    /// <summary>The file that couldn't be read when loading failed (settings.dat during the move, else <see cref="FilePath"/>).</summary>
+    public static string? UnreadableFile { get; private set; }
+
+    private static void SetBaseline(AppData data)
+    {
+        _tracker.Reset(AppDataRecords.From(data));
+        _baselineOf = Location;
+    }
+
+    private static AppData LoadLocal() => _legacyFile ? LoadLocalProtected() : LocalDb.Use((c, k) => AppDataRecords.Load(c, k));
+
+    /// <summary>Opens the database; on the first start with it, moves settings.dat in (see <see cref="MoveLegacyFile"/>).</summary>
+    private static void OpenDatabase()
+    {
+        UnreadableFile = null;
+        LocalDb.Open();
+        _legacyFile = false;
+        if (!File.Exists(LocalFilePath))
+        {
+            CleanUpMovedFile();
+            return;
+        }
+        if (!LocalDb.Use((c, _) => AppDataRecords.IsEmpty(c)))
+        {
+            // The database has data and settings.dat appeared again (an older version ran in between): the database wins.
+            DiagLog.Write("settings.dat found next to a database with data – the database is used, the file is left as it is.");
+            return;
+        }
+        MoveLegacyFile();
+    }
+
+    /// <summary>
+    /// Moves settings.dat into the database: writes everything in one transaction, reads it back and compares it with
+    /// the file, field by field. Only then is settings.dat renamed to settings.dat.migrated (still encrypted as before;
+    /// deleted after 30 days). If anything differs, the database is emptied and settings.dat stays in use.
+    /// </summary>
+    private static void MoveLegacyFile()
+    {
+        AppData legacy;
+        try { legacy = LoadLocalProtected(); }
+        catch (AppLockedException) { throw; }
+        catch { UnreadableFile = LocalFilePath; throw; }
+        try
+        {
+            var records = AppDataRecords.From(legacy);
+            LocalDb.Use((c, k) => AppDataRecords.Write(c, k, new Changes([.. records.Select(r => (r, (Record?)null))], [])));
+            var back = LocalDb.Use((c, k) => AppDataRecords.Load(c, k));
+            if (!ToJson(legacy).AsSpan().SequenceEqual(ToJson(back)))
+                throw new InvalidDataException("The data read back from the database differs from settings.dat.");
+            File.Move(LocalFilePath, LocalFilePath + ".migrated", overwrite: true);
+            LocalDb.SetMeta("legacy_moved_utc", DateTime.UtcNow.ToString("O"));
+            var nodes = records.Count(r => r.Table == AppDataRecords.Nodes);
+            DiagLog.Write($"settings.dat moved into the database: {nodes} folders/connections, {legacy.SavedCredentials.Count} saved credentials.");
+            AuditLog.Write(AuditEvents.StorageMigrated, null, null,
+                $"{nodes} folders and connections, {legacy.SavedCredentials.Count} saved credentials moved from settings.dat to the encrypted database.");
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("Moving settings.dat into the database failed – it stays in use: " + ex.Message);
+            LocalDb.DeleteAll();
+            LocalDb.Open();
+            _legacyFile = true;
+        }
+    }
+
+    /// <summary>30 days after the move, the old settings.dat (and its .bak) are deleted.</summary>
+    private static void CleanUpMovedFile()
+    {
+        try
+        {
+            if (LocalDb.Meta("legacy_moved_utc") is not { } moved || !DateTime.TryParse(moved, null, System.Globalization.DateTimeStyles.RoundtripKind, out var when)) return;
+            if (DateTime.UtcNow - when < TimeSpan.FromDays(30)) return;
+            foreach (var f in new[] { LocalFilePath + ".migrated", LocalFilePath + ".bak" })
+                if (File.Exists(f)) File.Delete(f);
+        }
+        catch { /* best effort */ }
     }
 
     private static AppData LoadLocalProtected()
@@ -258,24 +391,26 @@ public static class SettingsStore
     public static string PeekTheme() => LoadLocalConfig().Ui?.Theme ?? "Dark";
 
     /// <summary>
-    /// Turns the startup protection on or off (<paramref name="change"/>) and rewrites what is stored on this PC with
-    /// the new protection: the settings file, a local copy kept while a shared file is used, and the remembered
-    /// shared-file key. Earlier copies (.bak) are removed so no unprotected copy stays behind.
+    /// Turns the startup protection on or off (<paramref name="change"/>) and re-protects what is stored on this PC:
+    /// the database is encrypted with a new key stored with the new protection (so a key copy from before can't open
+    /// it), and the remembered shared-file key is rewritten. Earlier copies (.bak, the moved settings.dat, old
+    /// database backups) are removed so no copy with the old protection stays behind.
     /// </summary>
     public static async Task Reprotect(AppData current, Func<Task> change)
     {
         var cache = KeyCacheRead();
-        byte[]? localPlain = IsShared && File.Exists(LocalFilePath) ? DecryptLocalBytes(File.ReadAllBytes(LocalFilePath)) : null;
+        byte[]? legacyPlain = _legacyFile && File.Exists(LocalFilePath) ? DecryptLocalBytes(File.ReadAllBytes(LocalFilePath)) : null;
         try
         {
             await change();
             if (cache.Count > 0 || File.Exists(KeyCachePath)) KeyCacheWrite(cache);
-            if (localPlain is not null) WriteAtomic(LocalFilePath, EncryptLocalBytes(localPlain));
-            if (!IsShared) Save(current, force: true);
-            foreach (var bak in new[] { LocalFilePath + ".bak", KeyCachePath + ".bak" })
+            if (LocalDb.IsOpen) LocalDb.Rekey();
+            if (legacyPlain is not null) WriteAtomic(LocalFilePath, EncryptLocalBytes(legacyPlain));
+            foreach (var bak in new[] { LocalFilePath + ".bak", KeyCachePath + ".bak", LocalFilePath + ".migrated" })
                 try { if (File.Exists(bak)) File.Delete(bak); } catch { /* best effort */ }
+            AuditLog.Write(AuditEvents.ProtectionChanged, null, null, AppLock.Describe());
         }
-        finally { if (localPlain is not null) CryptographicOperations.ZeroMemory(localPlain); }
+        finally { if (legacyPlain is not null) CryptographicOperations.ZeroMemory(legacyPlain); }
     }
 
     // ------------------------------------------------------------------ shared (password) mode
@@ -444,8 +579,9 @@ public static class SettingsStore
     /// <summary>Reloads the current file (e.g. after it changed on another device), keeping this PC's UI state.</summary>
     public static AppData Reload(UiState keepUi)
     {
-        var data = IsShared ? LoadShared(FilePath, null) : LoadLocalProtected();
+        var data = IsShared ? LoadShared(FilePath, null) : LoadLocal();
         data.Ui = keepUi;
+        SetBaseline(data);
         return data;
     }
 
@@ -551,9 +687,11 @@ public static class SettingsStore
         Ui = null!,
     }, Json);
 
-    public static AppData FromJson(byte[] json)
+    public static AppData FromJson(byte[] json) => Normalize(JsonSerializer.Deserialize<AppData>(json, Json) ?? new AppData());
+
+    /// <summary>Fills missing parts with defaults, links each node to its folder and applies the settings migrations.</summary>
+    public static AppData Normalize(AppData data)
     {
-        var data = JsonSerializer.Deserialize<AppData>(json, Json) ?? new AppData();
         data.Defaults ??= RdpOptions.BuiltInDefaults();
         data.Ui ??= new UiState();
         if (data.Ui.Theme == "System") data.Ui.Theme = "Dark"; // pre-1.8 default (only used if no local.json yet)

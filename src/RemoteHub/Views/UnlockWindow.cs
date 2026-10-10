@@ -82,9 +82,17 @@ public sealed class UnlockWindow : FluentWindow
         Busy(true);
         var ok = await Task.Run(() => AppLock.TryUnlock(pw)); // PBKDF2 takes a moment
         Busy(false);
-        if (ok) { DiagLog.Write("Startup protection: unlocked with the password"); DialogResult = true; return; }
+        if (ok)
+        {
+            DiagLog.Write("Startup protection: unlocked with the password");
+            Data.AuditLog.Write(Data.AuditEvents.AppUnlocked, null, null, "With the startup password");
+            DialogResult = true;
+            return;
+        }
         _failures++;
         DiagLog.Write($"Startup protection: wrong password (attempt {_failures})");
+        // Written to the database once it's unlocked (a failed attempt before a successful one is kept).
+        Data.AuditLog.Write(Data.AuditEvents.AppUnlockFailed, null, null, $"Wrong startup password (attempt {_failures})");
         _error.Text = "Wrong password.";
         _password.Password = "";
         _password.Focus();
@@ -97,7 +105,13 @@ public sealed class UnlockWindow : FluentWindow
         Activate();
         var error = await AppLock.TryUnlockWithHello();
         Busy(false);
-        if (error is null) { DiagLog.Write("Startup protection: unlocked with Windows Hello"); DialogResult = true; return; }
+        if (error is null)
+        {
+            DiagLog.Write("Startup protection: unlocked with Windows Hello");
+            Data.AuditLog.Write(Data.AuditEvents.AppUnlocked, null, null, "With Windows Hello");
+            DialogResult = true;
+            return;
+        }
         DiagLog.Write("Startup protection: Windows Hello not used – " + error);
         _error.Text = error;
         Activate();

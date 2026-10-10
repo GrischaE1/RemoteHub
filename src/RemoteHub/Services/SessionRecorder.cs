@@ -65,7 +65,14 @@ public sealed class SessionRecorder
     }
 
     /// <summary>Asks the recorder to finish the file; await <see cref="Completion"/> for the result.</summary>
-    public void Stop() => _stop = true;
+    public void Stop()
+    {
+        Interlocked.CompareExchange(ref _stopTimestamp, System.Diagnostics.Stopwatch.GetTimestamp(), 0);
+        _stop = true;
+    }
+
+    /// <summary>When <see cref="Stop"/> was called (Stopwatch timestamp): the video ends there, even if a slow frame delays the stop.</summary>
+    private long _stopTimestamp;
 
     /// <summary>
     /// Video size: Full HD / 4K as chosen (the tab is scaled to fit), or the tab's own size – even dimensions (H.264),
@@ -101,11 +108,15 @@ public sealed class SessionRecorder
             using var writer = Mp4Writer.Create(Path, Width, Height, FramesPerSecond, BitRate(Width, Height, FramesPerSecond));
             var interval = TimeSpan.FromSeconds(1.0 / FramesPerSecond);
             var clock = System.Diagnostics.Stopwatch.StartNew();
+            var clockStart = System.Diagnostics.Stopwatch.GetTimestamp();
             long last = -1;
             while (true)
             {
                 var stopping = _stop;
                 var index = (long)(clock.Elapsed / interval);
+                // The last frame goes where Stop was pressed, not where this loop noticed it.
+                if (stopping && Interlocked.Read(ref _stopTimestamp) is var stopAt and > 0)
+                    index = Math.Min(index, (long)(System.Diagnostics.Stopwatch.GetElapsedTime(clockStart, Math.Max(clockStart, stopAt)) / interval));
                 if (index > last || stopping)
                 {
                     if (index <= last) index = last + 1;

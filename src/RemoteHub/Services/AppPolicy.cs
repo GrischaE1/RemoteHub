@@ -25,6 +25,9 @@ public static class AppPolicy
     /// <summary>String RecordingFolder (environment variables allowed): where recordings are saved; users can't change it.</summary>
     public static string? RecordingFolder => String("RecordingFolder") is { } f ? Environment.ExpandEnvironmentVariables(f) : null;
 
+    /// <summary>DWORD AuditRetentionDays (1–36500): how long the audit log keeps entries; default 365.</summary>
+    public static int? AuditRetentionDays => Dword("AuditRetentionDays") is { } d and > 0 ? Math.Min(d, 36_500) : null;
+
     private static int? Dword(string name)
     {
         foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })

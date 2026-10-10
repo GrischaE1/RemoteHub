@@ -360,13 +360,13 @@ public sealed partial class AgentDesktopSession : SessionBase
                     }
                     client.Send(chunk);
                 }
-                if (o.Transfer.Total > 1024 * 1024) _ui.BeginInvoke(() => ShowNotice($"Copied {what} to the device – paste it there."));
+                if (o.Transfer.Total > 1024 * 1024) _ = _ui.BeginInvoke(() => ShowNotice($"Copied {what} to the device – paste it there."));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 client.Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(o.Transfer.Id, false, ex.Message), DesktopJson.Default.DesktopTransferEnd));
                 var why = ex.Message;
-                _ui.BeginInvoke(() => ShowNotice("The copied files can't be read: " + why));
+                _ = _ui.BeginInvoke(() => ShowNotice("The copied files can't be read: " + why));
             }
         });
     }

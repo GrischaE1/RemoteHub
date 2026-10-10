@@ -64,6 +64,7 @@ public partial class MainWindow
         s.IsRecording = true;
         s.RecordingText = "REC " + Recordings.Elapsed(TimeSpan.Zero);
         recorder.Start();
+        Data.AuditLog.Write(Data.AuditEvents.RecordingStarted, s.Connection, s.KindLabel);
         DiagLog.Write($"Recording started ({recorder.Width}x{recorder.Height}, {recorder.FramesPerSecond} fps)");
         EnsureRecordTimer();
         UpdateRecordButton();
@@ -76,6 +77,8 @@ public partial class MainWindow
         s.IsRecording = false;
         s.RecordingText = "";
         UpdateRecordButton();
+        Data.AuditLog.Write(Data.AuditEvents.RecordingStopped, s.Connection,
+            error is null ? $"{s.KindLabel} – {Recordings.Elapsed(recorder.Elapsed)}, {System.IO.Path.GetFileName(path)}" : $"{s.KindLabel} – stopped with an error");
         DiagLog.Write(error is null
             ? $"Recording saved ({(int)recorder.Elapsed.TotalSeconds} s, {recorder.FramesWritten} of {(long)(recorder.Elapsed.TotalSeconds * recorder.FramesPerSecond)} frames)"
             : "Recording stopped with an error");
