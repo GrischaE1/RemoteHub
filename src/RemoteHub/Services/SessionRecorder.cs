@@ -117,7 +117,9 @@ public sealed class SessionRecorder
                 // The last frame goes where Stop was pressed, not where this loop noticed it.
                 if (stopping && Interlocked.Read(ref _stopTimestamp) is var stopAt and > 0)
                     index = Math.Min(index, (long)(System.Diagnostics.Stopwatch.GetElapsedTime(clockStart, Math.Max(clockStart, stopAt)) / interval));
-                if (index > last || stopping)
+                // Stopping: one last frame only if the stop time isn't covered yet (else the video gets a frame too many);
+                // a recording without any frame gets one.
+                if (index > last || (stopping && last < 0))
                 {
                     if (index <= last) index = last + 1;
                     frame.Capture(Current, DateTime.Now);
