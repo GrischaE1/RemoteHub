@@ -41,6 +41,13 @@ public static class RemoteProcesses
     private const string StopScript = """
         param([int[]]$Ids, [bool]$Tree)
         $ErrorActionPreference = 'Stop'
+        # Still running = the same PID with the same start time: an ended process's PID can be reused at once.
+        function Alive($t) {
+            $p = Get-Process -Id $t.ProcessId -ErrorAction SilentlyContinue
+            if (-not $p) { return }
+            try { $s = $p.StartTime } catch { $s = $null }
+            if ($null -eq $s -or $null -eq $t.CreationDate -or [Math]::Abs(($s - $t.CreationDate).TotalSeconds) -lt 2) { $p }
+        }
         foreach ($id in $Ids) {
             if ($id -eq $PID) { throw 'This is the PowerShell remoting process of this tab.' }
             if (-not $Tree) { Stop-Process -Id $id -Force; continue }
@@ -64,12 +71,12 @@ public static class RemoteProcesses
             # End the top first (so it can't start new ones), then the rest. Processes that exit on their own meanwhile are fine.
             $failed = @{}
             foreach ($t in $targets) {
+                if (-not (Alive $t)) { continue } # gone meanwhile – and never end a newer process that got its PID
                 try { Stop-Process -Id $t.ProcessId -Force -ErrorAction Stop }
-                catch { if (Get-Process -Id $t.ProcessId -ErrorAction SilentlyContinue) { $failed[[int]$t.ProcessId] = $_.Exception.Message } }
+                catch { if (Alive $t) { $failed[[int]$t.ProcessId] = $_.Exception.Message } }
             }
-            $ids = @($targets | ForEach-Object { [int]$_.ProcessId })
-            Get-Process -Id $ids -ErrorAction SilentlyContinue | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
-            $left = @(Get-Process -Id $ids -ErrorAction SilentlyContinue)
+            @($targets | ForEach-Object { Alive $_ }) | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue
+            $left = @($targets | ForEach-Object { Alive $_ })
             if ($left.Count) {
                 throw ('Could not end: ' + (($left | ForEach-Object {
                     "$($_.ProcessName) (PID $($_.Id))" + $(if ($failed[$_.Id]) { " – $($failed[$_.Id])" })
