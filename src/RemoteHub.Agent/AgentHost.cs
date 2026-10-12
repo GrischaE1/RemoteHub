@@ -52,7 +52,9 @@ public static class AgentHost
         var gate = new SignInGate();
         var sessions = 0;
 
-        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+        // A ping every 30 s; no answer within 30 s ends the connection, so a silently dropped client doesn't keep its
+        // session (and its PowerShell) until TCP gives up.
+        app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30), KeepAliveTimeout = TimeSpan.FromSeconds(30) });
 
         // RequestDelegates only (no reflection-based parameter binding): the agent is published trimmed.
         app.MapGet(AgentProtocol.HealthPath, (RequestDelegate)(ctx =>
@@ -62,45 +64,65 @@ public static class AgentHost
             return ctx.Response.WriteAsJsonAsync(health, AgentJson.Default.AgentHealth);
         }));
 
+        // The policy for this connection; one that can't be read allows nothing (and says so in the log).
+        AgentPolicy Policy()
+        {
+            var policy = o.CurrentPolicy();
+            if (policy.LoadError is { } error) o.Log.Write($"The policy ({AgentPolicy.RegistryPath}) can't be read – access refused: {error}");
+            return policy;
+        }
+
         // Checks the request, the sign-in and the right (TLS to the pinned certificate is done). Null = refused, status code set.
         async Task<ShellIdentity?> SignIn(HttpContext ctx, IReadOnlyList<string> groups, string source)
         {
             if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = StatusCodes.Status400BadRequest; return null; }
-            if (gate.IsBlocked(source))
+            // Attempts still running count against the limit, so parallel requests can't try more passwords than one after another.
+            if (!gate.TryBegin(source))
             {
                 o.Log.Audit(AuditEvent.SignInRefused, $"Refused {source}: too many failed sign-ins");
                 ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 return null;
             }
-            if (!TryBasic(ctx.Request.Headers.Authorization, out var user, out var password))
+            try
             {
-                ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"RemoteHub Agent\"";
-                ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return null;
-            }
-
-            var auth = await Task.Run(() => o.Authenticator.Authenticate(user, password, groups));
-            password = "";
-            if (auth.Outcome != AuthOutcome.Ok)
-            {
-                if (auth.Outcome != AuthOutcome.Error) gate.Failed(source);
-                o.Log.Audit(AuditEvent.SignInRefused, $"Refused {user} from {source}: {auth.Reason}");
-                ctx.Response.StatusCode = auth.Outcome switch
+                if (!TryBasic(ctx.Request.Headers.Authorization, out var user, out var password))
                 {
-                    AuthOutcome.BadCredentials => StatusCodes.Status401Unauthorized,
-                    AuthOutcome.NotAllowed => StatusCodes.Status403Forbidden,
-                    _ => StatusCodes.Status500InternalServerError,
-                };
-                return null;
+                    ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"RemoteHub Agent\"";
+                    ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                    return null;
+                }
+                // Only a few Windows sign-ins at a time, from all addresses together (they cost the device and its domain controller).
+                if (!await gate.WaitForTurnAsync(ctx.RequestAborted))
+                {
+                    ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                    return null;
+                }
+                AuthResult auth;
+                try { auth = await Task.Run(() => o.Authenticator.Authenticate(user, password, groups)); }
+                finally { gate.EndTurn(); }
+                password = "";
+                if (auth.Outcome != AuthOutcome.Ok)
+                {
+                    if (auth.Outcome != AuthOutcome.Error) gate.Failed(source);
+                    o.Log.Audit(AuditEvent.SignInRefused, $"Refused {user} from {source}: {auth.Reason}");
+                    ctx.Response.StatusCode = auth.Outcome switch
+                    {
+                        AuthOutcome.BadCredentials => StatusCodes.Status401Unauthorized,
+                        AuthOutcome.NotAllowed => StatusCodes.Status403Forbidden,
+                        _ => StatusCodes.Status500InternalServerError,
+                    };
+                    return null;
+                }
+                gate.Succeeded(source);
+                return auth.Identity!;
             }
-            gate.Succeeded(source);
-            return auth.Identity!;
+            finally { gate.End(source); }
         }
 
         app.Map(AgentProtocol.PowerShellPath, (RequestDelegate)(async ctx =>
         {
             var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            using var identity = await SignIn(ctx, o.CurrentPolicy().Groups(AgentRight.PowerShell), source);
+            using var identity = await SignIn(ctx, Policy().Groups(AgentRight.PowerShell), source);
             if (identity is null) return;
             if (Interlocked.Increment(ref sessions) > o.Config.MaxSessions)
             {
@@ -134,7 +156,7 @@ public static class AgentHost
         app.Map(DesktopProtocol.Path, (RequestDelegate)(async ctx =>
         {
             var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            var policy = o.CurrentPolicy();
+            var policy = Policy();
             if (o.Desktop is null || !policy.DesktopEnabled)
             {
                 ctx.Response.StatusCode = StatusCodes.Status404NotFound; // RemoteHub explains: turned off on this device
@@ -180,28 +202,85 @@ public static class AgentHost
 
 /// <summary>
 /// Slows down password guessing per source address: after 5 failures within 5 minutes the address is refused for
-/// 5 minutes. (Windows' own account lockout policy applies on top, since every attempt is a real sign-in.)
+/// 5 minutes. Attempts still running count as failures until they end, so parallel requests get no more tries than
+/// sequential ones; and only a few Windows sign-ins run at once overall. (Windows' own account lockout policy applies on
+/// top, since every attempt is a real sign-in.)
 /// </summary>
-internal sealed class SignInGate(int maxFailures = 5, TimeSpan? window = null, Func<DateTime>? clock = null)
+internal sealed class SignInGate(int maxFailures = 5, TimeSpan? window = null, Func<DateTime>? clock = null, int maxParallel = 8)
 {
+    private const int PruneAbove = 1000;
     private readonly TimeSpan _window = window ?? TimeSpan.FromMinutes(5);
     private readonly Func<DateTime> _now = clock ?? (() => DateTime.UtcNow);
     private readonly ConcurrentDictionary<string, (int Count, DateTime First, DateTime? BlockedUntil)> _failures = new();
+    private readonly Dictionary<string, int> _running = [];
+    private readonly SemaphoreSlim _turns = new(maxParallel, maxParallel);
 
     public bool IsBlocked(string source) =>
         _failures.TryGetValue(source, out var f) && f.BlockedUntil is { } until && until > _now();
 
-    public void Failed(string source) => _failures.AddOrUpdate(source,
-        _ => (1, _now(), maxFailures <= 1 ? _now() + _window : null),
-        (_, f) =>
+    /// <summary>Starts an attempt from <paramref name="source"/>; false = refuse it (blocked, or the limit would be reached). End with <see cref="End"/>.</summary>
+    public bool TryBegin(string source)
+    {
+        lock (_running)
         {
-            var now = _now();
-            if (now - f.First > _window || f.BlockedUntil < now) f = (0, now, null);
-            var count = f.Count + 1;
-            return (count, f.First, count >= maxFailures ? now + _window : null);
-        });
+            if (IsBlocked(source)) return false;
+            var running = _running.GetValueOrDefault(source);
+            if (CurrentFailures(source) + running >= maxFailures) return false;
+            _running[source] = running + 1;
+            return true;
+        }
+    }
+
+    public void End(string source)
+    {
+        lock (_running)
+        {
+            if (!_running.TryGetValue(source, out var n)) return;
+            if (n <= 1) _running.Remove(source); else _running[source] = n - 1;
+        }
+    }
+
+    /// <summary>Waits for one of the sign-in slots (false: the request was aborted or none became free in time).</summary>
+    public async Task<bool> WaitForTurnAsync(CancellationToken ct)
+    {
+        try { return await _turns.WaitAsync(TimeSpan.FromSeconds(30), ct); }
+        catch (OperationCanceledException) { return false; }
+    }
+
+    public void EndTurn() => _turns.Release();
+
+    private int CurrentFailures(string source)
+    {
+        if (!_failures.TryGetValue(source, out var f)) return 0;
+        var now = _now();
+        return now - f.First > _window || f.BlockedUntil < now ? 0 : f.Count;
+    }
+
+    public void Failed(string source)
+    {
+        _failures.AddOrUpdate(source,
+            _ => (1, _now(), maxFailures <= 1 ? _now() + _window : null),
+            (_, f) =>
+            {
+                var now = _now();
+                if (now - f.First > _window || f.BlockedUntil < now) f = (0, now, null);
+                var count = f.Count + 1;
+                return (count, f.First, count >= maxFailures ? now + _window : null);
+            });
+        if (_failures.Count > PruneAbove) Prune();
+    }
 
     public void Succeeded(string source) => _failures.TryRemove(source, out _);
+
+    /// <summary>Forgets addresses whose window and block are over (many source addresses, e.g. IPv6, must not pile up).</summary>
+    private void Prune()
+    {
+        var now = _now();
+        foreach (var (source, f) in _failures)
+            if (now - f.First > _window && !(f.BlockedUntil > now)) _failures.TryRemove(source, out _);
+    }
+
+    internal int Tracked => _failures.Count;
 }
 
 /// <summary>Moves protocol lines between the WebSocket and PowerShell's standard input / output.</summary>

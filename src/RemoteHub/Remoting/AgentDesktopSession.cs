@@ -13,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Rdp;
+using RemoteHub.Services;
 using SessionState = RemoteHub.Rdp.SessionState;
 
 namespace RemoteHub.Remoting;
@@ -61,6 +62,8 @@ public sealed partial class AgentDesktopSession : SessionBase
     [ObservableProperty] private DesktopHello? _hello;
     [ObservableProperty] private DesktopLayout? _layout;
     [ObservableProperty] private int _pinAttemptsLeft;
+    /// <summary>While reconnecting: why the connection dropped and which attempt this is (shown under the headline).</summary>
+    [ObservableProperty] private string _reconnectDetail = "";
     [ObservableProperty] private bool _viewOnly;
     /// <summary>The device shows the sign-in screen or a UAC prompt and this account may not see it.</summary>
     [ObservableProperty] private bool _secureDesktopHidden;
@@ -153,6 +156,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         Phase = DesktopPhase.Reconnecting;
         State = SessionState.Connecting;
         StatusText = $"The connection dropped ({why}). Reconnecting…";
+        ReconnectDetail = Sentence(why);
         Services.DiagLog.Write("Agent desktop: connection lost – reconnecting");
         var until = DateTime.UtcNow + ReconnectFor;
         for (var attempt = 1; !cancel.IsCancellationRequested && !_closed; attempt++)
@@ -170,7 +174,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                 _chosen = session;
                 StatusText = "Reconnected – continuing on the device…";
                 client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, _chosenConsent, ViewOnly, Quality.FramesPerSecond, Quality.Quality,
-                    Layout?.Monitor ?? 0, _resumeToken), DesktopJson.Default.DesktopStart));
+                    Layout?.Monitor ?? 0, _resumeToken, ViewerFeatures), DesktopJson.Default.DesktopStart));
                 _resumeToken = null; // single-use; the next Connected brings a new one
                 return;
             }
@@ -183,9 +187,18 @@ public sealed partial class AgentDesktopSession : SessionBase
                     return;
                 }
                 StatusText = $"The connection dropped ({why}). Reconnecting… (attempt {attempt + 1})";
+                ReconnectDetail = $"{Sentence(why)}\nAttempt {attempt + 1} – trying for up to {ReconnectFor.TotalSeconds:0} s.";
                 try { await Task.Delay(TimeSpan.FromSeconds(2), cancel.Token); } catch (OperationCanceledException) { return; }
             }
         }
+    }
+
+    /// <summary>"Connection lost: the remote party …" → "The remote party …."</summary>
+    private static string Sentence(string why)
+    {
+        var s = why.StartsWith("Connection lost: ", StringComparison.OrdinalIgnoreCase) ? why["Connection lost: ".Length..] : why;
+        s = s.Trim().TrimEnd('.');
+        return s.Length == 0 ? "" : char.ToUpperInvariant(s[0]) + s[1..] + ".";
     }
 
     private static SecureString Secure(string s)
@@ -206,7 +219,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         _chosenConsent = consent;
         Phase = DesktopPhase.Waiting;
         StatusText = "Starting on the device…";
-        _client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, consent, ViewOnly, quality.FramesPerSecond, quality.Quality, 0),
+        _client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, consent, ViewOnly, quality.FramesPerSecond, quality.Quality, 0, null, ViewerFeatures),
             DesktopJson.Default.DesktopStart));
     }
 
@@ -255,6 +268,9 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     private System.Windows.Interop.HwndSource? _clipboardWatch;
 
+    /// <summary>Whatever is copied on this PC goes to the device now.</summary>
+    public bool SendsClipboard => _clipboardWatch is not null;
+
     private void WatchClipboard(bool on)
     {
         if (!on)
@@ -294,6 +310,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         var sequence = GetClipboardSequenceNumber();
         if (sequence == _clipboardHandled) return; // unchanged, or what came from the device
         _clipboardHandled = sequence;
+        if (ClipboardOffer.Instance.OwnsClipboard) return; // what the device offered (or a paste of it fetched): not sent back
         try
         {
             if (Clipboard.ContainsText())
@@ -312,7 +329,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                 using var png = new MemoryStream();
                 encoder.Save(png);
                 if (png.Length > DesktopProtocol.MaxTransferBytes) { ShowNotice("The copied image is too large for the remote desktop."); return; }
-                SendTransfer(ClipboardTransfer.Image(++_transferIds, png.ToArray(), png: true));
+                OfferOrSend(ClipboardTransfer.Image(++_transferIds, png.ToArray(), png: true));
             }
             else if (Clipboard.ContainsFileDropList() && ClipboardLevel >= DesktopClipboardLevel.Files)
             {
@@ -324,7 +341,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                         if (!t.IsCompletedSuccessfully) return;
                         var (o, error) = t.Result;
                         if (o is null) ShowNotice(error ?? "The copied files can't be sent.");
-                        else SendTransfer(o);
+                        else OfferOrSend(o);
                     }, TaskScheduler.FromCurrentSynchronizationContext());
             }
             else if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList())
@@ -337,67 +354,234 @@ public sealed partial class AgentDesktopSession : SessionBase
     private int _transferIds;
     private CancellationTokenSource? _sending;
 
-    /// <summary>To the device in the background, without crowding out mouse and keys (at most a few chunks queued).</summary>
+    // ---- progress of a copy (either way), shown on the picture
+
+    /// <summary>A copy is shown with progress (from 1 MB; smaller ones only get the "copied" notice).</summary>
+    [ObservableProperty] private bool _transferActive;
+    [ObservableProperty] private double _transferProgress;
+    [ObservableProperty] private string _transferTitle = "";
+    /// <summary>"12.3 MB of 40 MB · 5.2 MB/s · about 6 s left", or what happens now.</summary>
+    [ObservableProperty] private string _transferDetail = "";
+    /// <summary>Only a copy to the device can be cancelled from here.</summary>
+    [ObservableProperty] private bool _transferCancellable;
+
+    private const long ProgressMinimum = 1024 * 1024;
+    private int _outgoingId;
+    private string _outgoingWhat = "";
+    private DispatcherTimer? _receiptTimer;
+
+    public void CancelTransfer() => _sending?.Cancel();
+
+    private void ShowTransfer(string title, double progress, string detail, bool cancellable)
+    {
+        (TransferTitle, TransferProgress, TransferDetail, TransferCancellable) = (title, progress, detail, cancellable);
+        TransferActive = true;
+    }
+
+    private void EndTransfer(string? notice)
+    {
+        _receiptTimer?.Stop();
+        TransferActive = false;
+        if (notice is not null) ShowNotice(notice);
+    }
+
+    /// <summary>Speed (smoothed like the file transfer list) and time left for one copy.</summary>
+    internal sealed class TransferMeter(long total)
+    {
+        private readonly DateTime _started = DateTime.UtcNow;
+        private DateTime _sampleAt;
+        private long _sampleBytes;
+        private double _rate;
+
+        public string Detail(long done, DateTime? now = null)
+        {
+            var at = now ?? DateTime.UtcNow;
+            if (_sampleAt == default) (_sampleAt, _sampleBytes) = (at, done);
+            else if ((at - _sampleAt).TotalSeconds >= 0.25)
+            {
+                var current = (done - _sampleBytes) / (at - _sampleAt).TotalSeconds;
+                _rate = _rate == 0 ? current : _rate * 0.6 + current * 0.4;
+                (_sampleAt, _sampleBytes) = (at, done);
+            }
+            var parts = new List<string> { $"{TransferItem.Size(done)} of {TransferItem.Size(total)}" };
+            if (_rate > 0)
+            {
+                parts.Add($"{TransferItem.Size((long)_rate)}/s");
+                parts.Add(Left((total - done) / _rate));
+            }
+            return string.Join(" · ", parts);
+        }
+
+        public string Done(DateTime? now = null) => $"Done · {TransferItem.Size(total)} in {((now ?? DateTime.UtcNow) - _started).TotalSeconds:0.#} s";
+
+        internal static string Left(double seconds) => seconds switch
+        {
+            < 1 => "almost done",
+            < 60 => $"about {Math.Ceiling(seconds):0} s left",
+            _ => $"about {Math.Ceiling(seconds / 60):0} min left",
+        };
+    }
+
+    /// <summary>
+    /// To the device in the background, without crowding out mouse and keys (at most a few chunks queued). "Copied" is
+    /// said when the device confirms it has the files on its clipboard (newer agents), not when the last byte left here.
+    /// </summary>
     private void SendTransfer(ClipboardTransfer.Outgoing o)
     {
         if (_client is not { } client) return;
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         var what = o.Transfer.Kind == DesktopTransferKind.Image ? "the image" : o.Transfer.Items.Count(i => !i.Folder) is var n && n == 1 ? "1 file" : $"{n} files";
-        if (o.Transfer.Total > 1024 * 1024) ShowNotice($"Copying {what} to the device ({TransferItem.Size(o.Transfer.Total)})…");
+        var total = o.Transfer.Total;
+        var meter = new TransferMeter(total);
+        var receipt = Supports(DesktopFeatures.TransferReceipt);
+        (_outgoingId, _outgoingWhat) = (o.Transfer.Id, what);
+        if (total >= ProgressMinimum) ShowTransfer($"Copying {what} to the device", 0, "Starting…", cancellable: true);
+        else EndTransfer(null);
         Task.Run(async () =>
         {
             try
             {
                 client.Send(DesktopWire.Json(DesktopMessage.TransferStart, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                long sent = 0;
+                var shown = DateTime.UtcNow;
                 foreach (var chunk in ClipboardTransfer.Chunks(o))
                 {
                     while (client.Queued > 8 && !cancel.IsCancellationRequested) await Task.Delay(10);
                     if (cancel.IsCancellationRequested)
                     {
                         client.Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(o.Transfer.Id, false, "replaced"), DesktopJson.Default.DesktopTransferEnd));
+                        _ = _ui.BeginInvoke(() => { if (_outgoingId == o.Transfer.Id) EndTransfer("Cancelled – nothing was copied to the device."); });
                         return;
                     }
                     client.Send(chunk);
+                    sent += chunk.Length - DesktopWire.TransferHeaderSize;
+                    if (total >= ProgressMinimum && (DateTime.UtcNow - shown).TotalMilliseconds >= 250)
+                    {
+                        shown = DateTime.UtcNow;
+                        var (progress, detail) = (sent / (double)total, meter.Detail(sent));
+                        _ = _ui.BeginInvoke(() => { if (_outgoingId == o.Transfer.Id && TransferActive) (TransferProgress, TransferDetail) = (progress, detail); });
+                    }
                 }
-                if (o.Transfer.Total > 1024 * 1024) _ = _ui.BeginInvoke(() => ShowNotice($"Copied {what} to the device – paste it there."));
+                while (client.Queued > 0 && !cancel.IsCancellationRequested) await Task.Delay(20);
+                var done = meter.Done();
+                _ = _ui.BeginInvoke(() =>
+                {
+                    if (_outgoingId != o.Transfer.Id) return;
+                    if (!receipt) { EndTransfer($"Copied {what} to the device – paste it there."); return; }
+                    if (TransferActive) (TransferProgress, TransferDetail, TransferCancellable) = (1, done + " · waiting for the device…", false);
+                    // The device answers when the files are on its clipboard; no answer means they didn't get there.
+                    _receiptTimer?.Stop();
+                    _receiptTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
+                    _receiptTimer.Tick += (_, _) => { if (_outgoingId == o.Transfer.Id) EndTransfer($"Failed – the device didn't confirm the copy of {what}; it may not have arrived."); };
+                    _receiptTimer.Start();
+                });
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex)
             {
                 client.Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(o.Transfer.Id, false, ex.Message), DesktopJson.Default.DesktopTransferEnd));
                 var why = ex.Message;
-                _ = _ui.BeginInvoke(() => ShowNotice("The copied files can't be read: " + why));
+                _ = _ui.BeginInvoke(() => { if (_outgoingId == o.Transfer.Id) EndTransfer("Failed – the copied files can't be sent: " + why); });
             }
         });
     }
 
+    private ClipboardTransfer.Outgoing? _offered;
+
+    /// <summary>
+    /// Copied on this PC: newer agents get names and sizes only and offer them on the device's clipboard – the data is
+    /// sent when someone pastes there (<see cref="DesktopMessage.TransferRequest"/>). Older agents get it right away.
+    /// </summary>
+    private void OfferOrSend(ClipboardTransfer.Outgoing o)
+    {
+        if (!Supports(DesktopFeatures.TransferOnPaste)) { SendTransfer(o); return; }
+        if (_client is not { } client) return;
+        _offered = o;
+        client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+    }
+
+    /// <summary>Pasted on the device: the offered copy goes now.</summary>
+    private void OnTransferRequest(int id)
+    {
+        if (_offered is { } o && o.Transfer.Id == id) SendTransfer(o);
+    }
+
+    /// <summary>The device's answer about a copy to it: on its clipboard, or why not.</summary>
+    private void OnTransferReceipt(DesktopTransferEnd end)
+    {
+        if (end.Id != _outgoingId)
+        {
+            if (!end.Ok && _offered?.Transfer.Id == end.Id) ShowNotice("Failed – " + end.Reason); // the offer was refused
+            return;
+        }
+        EndTransfer(end.Ok ? $"Copied {_outgoingWhat} to the device – paste it there." : "Failed – " + end.Reason);
+    }
+
     // ---- from the device: an image or files, put together here, then on this PC's clipboard
 
+    /// <summary>Files copied on a device land here (one folder per copy) until they're pasted.</summary>
+    public static string ReceivedRoot => Path.Combine(Path.GetTempPath(), "RemoteHub", "Clipboard");
+
+    /// <summary>
+    /// Removes copies older than <paramref name="age"/> – long enough to have been pasted; newer ones may still be on the
+    /// clipboard. Called when RemoteHub starts and closes.
+    /// </summary>
+    public static void CleanReceived(TimeSpan age)
+    {
+        try
+        {
+            if (!Directory.Exists(ReceivedRoot)) return;
+            foreach (var dir in new DirectoryInfo(ReceivedRoot).GetDirectories())
+                if (DateTime.UtcNow - dir.CreationTimeUtc >= age)
+                    try { dir.Delete(true); } catch { /* in use */ }
+        }
+        catch { /* best effort */ }
+    }
+
     private TransferReceiver? _receiving;
+    private TransferMeter? _receiveMeter;
+    private DateTime _receiveShown;
+    /// <summary>The receive thread fills <see cref="_receiving"/>; closing the tab (UI thread) disposes it.</summary>
+    private readonly object _receiveGate = new();
 
     private void OnTransferStart(DesktopTransfer t)
+    {
+        lock (_receiveGate) StartReceiving(t);
+    }
+
+    private void StartReceiving(DesktopTransfer t)
     {
         _receiving?.Dispose();
         _receiving = null;
         if (ClipboardLevel < (t.Kind == DesktopTransferKind.Image ? DesktopClipboardLevel.Images : DesktopClipboardLevel.Files)) return;
         try
         {
-            var folder = t.Kind == DesktopTransferKind.Files
-                ? Path.Combine(Path.GetTempPath(), "RemoteHub", "Clipboard", DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"))
-                : null;
+            var folder = t.Kind == DesktopTransferKind.Files ? Path.Combine(ReceivedRoot, DateTime.Now.ToString("yyyyMMdd-HHmmss-fff")) : null;
             _receiving = new TransferReceiver(t, folder);
-            if (t.Total > 1024 * 1024) _ui.BeginInvoke(() => ShowNotice($"Copying from the device ({TransferItem.Size(t.Total)})…"));
+            _receiveMeter = new TransferMeter(t.Total);
+            _receiveShown = DateTime.UtcNow;
+            if (t.Total >= ProgressMinimum)
+            {
+                var what = t.Kind == DesktopTransferKind.Image ? "the image" : t.Items.Count(i => !i.Folder) is var n && n == 1 ? "1 file" : $"{n} files";
+                _ui.BeginInvoke(() => ShowTransfer($"Copying {what} from the device", 0, "Starting…", cancellable: false));
+            }
             if (_receiving.Complete) FinishReceiving();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             _receiving = null;
             var why = ex.Message;
-            _ui.BeginInvoke(() => ShowNotice("What was copied on the device can't be taken: " + why));
+            PasteFromDeviceFailed();
+            _ui.BeginInvoke(() => { if (!TransferCancellable) TransferActive = false; ShowNotice("Failed – what was copied on the device can't be taken: " + why); });
         }
     }
 
     private void OnTransferData(byte[] m)
+    {
+        lock (_receiveGate) ReceiveData(m);
+    }
+
+    private void ReceiveData(byte[] m)
     {
         if (_receiving is not { } r) return;
         var (id, offset) = DesktopWire.ReadTransferData(m);
@@ -406,13 +590,21 @@ public sealed partial class AgentDesktopSession : SessionBase
         {
             r.Add(offset, m.AsSpan(DesktopWire.TransferHeaderSize));
             if (r.Complete) FinishReceiving();
+            else if (r.Transfer.Total >= ProgressMinimum && _receiveMeter is { } meter && (DateTime.UtcNow - _receiveShown).TotalMilliseconds >= 250)
+            {
+                _receiveShown = DateTime.UtcNow;
+                var received = (long)(r.Progress * r.Transfer.Total);
+                var (progress, detail) = (r.Progress, meter.Detail(received));
+                _ui.BeginInvoke(() => { if (TransferActive && !TransferCancellable) (TransferProgress, TransferDetail) = (progress, detail); });
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             r.Dispose();
             _receiving = null;
             var why = ex.Message;
-            _ui.BeginInvoke(() => ShowNotice("What was copied on the device can't be taken: " + why));
+            PasteFromDeviceFailed();
+            _ui.BeginInvoke(() => { if (!TransferCancellable) TransferActive = false; ShowNotice("Failed – what was copied on the device can't be taken: " + why); });
         }
     }
 
@@ -423,9 +615,23 @@ public sealed partial class AgentDesktopSession : SessionBase
         var image = r.Transfer.Kind == DesktopTransferKind.Image ? r.Image : null;
         var files = r.Transfer.Kind == DesktopTransferKind.Files ? r.TopLevel : null;
         var count = r.Transfer.Items.Count(i => !i.Folder);
+        var png = r.IsPng;
+        var items = r.Transfer.Kind == DesktopTransferKind.Files ? r.Targets : null;
         r.Dispose();
+        // Asked for by a paste on this PC: the waiting paste gets it (it's on the clipboard through that paste).
+        if (_pastingFromDevice is { } p && p.Id == r.Transfer.Id)
+        {
+            p.Done.TrySetResult(new OfferedContent(files, image, png, items));
+            _ui.BeginInvoke(() =>
+            {
+                if (!TransferCancellable) TransferActive = false;
+                ShowNotice(image is not null ? "Pasted the image from the device." : count == 1 ? "Pasted 1 file from the device." : $"Pasted {count} files from the device.");
+            });
+            return;
+        }
         _ui.BeginInvoke(() =>
         {
+            if (!TransferCancellable) TransferActive = false; // the progress of this copy, not of one to the device
             try
             {
                 if (image is not null)
@@ -452,6 +658,43 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint GetClipboardSequenceNumber();
+
+    // ---- copied on the device: offered on this PC's clipboard, fetched when pasted here
+
+    /// <summary>What this RemoteHub supports, told to the agent at the start (it then offers instead of sending at once).</summary>
+    private static readonly string[] ViewerFeatures = [DesktopFeatures.TransferOnPaste];
+
+    private sealed record PastingFromDevice(int Id, TaskCompletionSource<OfferedContent?> Done);
+    private volatile PastingFromDevice? _pastingFromDevice;
+
+    /// <summary>Copied on the device: names and sizes only. This PC's clipboard offers it; a paste here fetches it.</summary>
+    private void OnDeviceOffer(DesktopTransfer t)
+    {
+        if (ClipboardLevel < (t.Kind == DesktopTransferKind.Image ? DesktopClipboardLevel.Images : DesktopClipboardLevel.Files)) return;
+        ClipboardOffer.Instance.Offer(t, paster => FetchFromDevice(t, paster));
+        _ui.BeginInvoke(() => _clipboardHandled = GetClipboardSequenceNumber()); // our own offer: not sent back
+    }
+
+    /// <summary>A paste on this PC (on the offer's own thread): the device sends now; the paste waits until it's here.</summary>
+    private OfferedContent? FetchFromDevice(DesktopTransfer t, string paster)
+    {
+        if (ClipboardOffer.BackgroundReader(paster) || _client is not { } client || _closed) return null;
+        var pasting = _pastingFromDevice = new PastingFromDevice(t.Id, new TaskCompletionSource<OfferedContent?>(TaskCreationOptions.RunContinuationsAsynchronously));
+        try
+        {
+            Services.DiagLog.Write($"Agent desktop: {paster} pastes what was copied on the device – fetching it");
+            client.Send(DesktopWire.Text(DesktopMessage.TransferRequest, t.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            var limit = TimeSpan.FromSeconds(Math.Min(3600, 60 + t.Total / (256 * 1024.0)));
+            return pasting.Done.Task.Wait(limit) ? pasting.Done.Task.Result : null;
+        }
+        finally { if (_pastingFromDevice == pasting) _pastingFromDevice = null; }
+    }
+
+    /// <summary>The fetch for a paste failed (or the connection ended): the paste gets nothing.</summary>
+    private void PasteFromDeviceFailed(int? id = null)
+    {
+        if (_pastingFromDevice is { } p && (id is null || p.Id == id)) p.Done.TrySetResult(null);
+    }
 
     // ---- connection info: own count of frames and data, the round trip through the agent, the device's stats
 
@@ -510,9 +753,23 @@ public sealed partial class AgentDesktopSession : SessionBase
             case DesktopMessage.TransferData:
                 OnTransferData(m);
                 break;
+            case DesktopMessage.TransferOffer:
+                OnDeviceOffer(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer));
+                break;
+            case DesktopMessage.TransferRequest:
+                if (int.TryParse(DesktopWire.ReadText(m), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var requested))
+                    _ui.BeginInvoke(() => { if (gen == _generation) OnTransferRequest(requested); });
+                break;
             case DesktopMessage.TransferEnd:
                 var end = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd);
-                if (_receiving?.Transfer.Id == end.Id) { _receiving.Dispose(); _receiving = null; }
+                if (end.ToDevice)
+                {
+                    _ui.BeginInvoke(() => { if (gen == _generation) OnTransferReceipt(end); });
+                    break;
+                }
+                lock (_receiveGate)
+                    if (_receiving?.Transfer.Id == end.Id) { _receiving.Dispose(); _receiving = null; }
+                if (!end.Ok) PasteFromDeviceFailed(end.Id);
                 if (!end.Ok && end.Reason.Length > 0 && end.Reason != "replaced")
                     _ui.BeginInvoke(() => { if (gen == _generation) ShowNotice(end.Reason); });
                 break;
@@ -530,7 +787,10 @@ public sealed partial class AgentDesktopSession : SessionBase
                 });
                 break;
             case DesktopMessage.CursorShape:
+                if (m.Length < DesktopWire.CursorShapeHeaderSize) break;
                 var (w, h, hx, hy) = DesktopWire.ReadCursorShape(m);
+                // A shape that doesn't fit the message is ignored – it must not end the session.
+                if (w is <= 0 or > 1024 || h is <= 0 or > 1024 || m.Length < DesktopWire.CursorShapeHeaderSize + w * h * 4) break;
                 var bgra = m.AsSpan(DesktopWire.CursorShapeHeaderSize, w * h * 4).ToArray();
                 _ui.BeginInvoke(() =>
                 {
@@ -670,6 +930,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         ConnectionInfo = "";
         _stats = null;
         _roundTripMs = -1;
+        PasteFromDeviceFailed(); // a paste waiting for the device gets nothing
         return DropClient();
     }
 
@@ -678,8 +939,11 @@ public sealed partial class AgentDesktopSession : SessionBase
     {
         WatchClipboard(false);
         _sending?.Cancel();
-        _receiving?.Dispose();
-        _receiving = null;
+        lock (_receiveGate)
+        {
+            _receiving?.Dispose();
+            _receiving = null;
+        }
         var c = _client;
         _client = null;
         if (c is null) return false;
@@ -864,17 +1128,28 @@ public sealed class AgentDesktopClient : IDisposable
         _ = Task.Run(SendLoop);
     }
 
-    public void Send(byte[] message) => _out.Writer.TryWrite(message);
+    public void Send(byte[] message)
+    {
+        if (_out.Writer.TryWrite(message)) Interlocked.Increment(ref _queued);
+    }
 
-    /// <summary>Messages waiting to go out (clipboard transfers wait for it to be small).</summary>
-    public int Queued => _out.Reader.Count;
+    private int _queued;
+
+    /// <summary>
+    /// Messages waiting to go out (clipboard transfers wait for it to be small). Counted here: the channel (single reader)
+    /// can't count – asking it threw, which silently stopped every copy to the device.
+    /// </summary>
+    public int Queued => Volatile.Read(ref _queued);
 
     private async Task SendLoop()
     {
         try
         {
             await foreach (var m in _out.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
+            {
                 await _ws.SendAsync(m, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false);
+                Interlocked.Decrement(ref _queued);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { Close("Connection lost: " + ex.GetBaseException().Message); }
         catch (OperationCanceledException) { }

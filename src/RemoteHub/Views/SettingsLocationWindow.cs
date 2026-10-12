@@ -141,7 +141,11 @@ public sealed class SettingsLocationWindow : FluentWindow
                         "The connections currently on this PC are replaced by the shared ones – export a backup first if you still need them.",
                         "Open") { Owner = this };
                     if (pw.ShowDialog() != true) return;
-                    OpenedData = SettingsStore.OpenShared(folder, pw.Password, _current.Ui);
+                    // PBKDF2 and the network folder take a moment: not on the UI thread (this window is modal meanwhile).
+                    var (password, ui) = (pw.Password, _current.Ui);
+                    IsEnabled = false;
+                    try { OpenedData = await Task.Run(() => SettingsStore.OpenShared(folder, password, ui)); }
+                    finally { IsEnabled = true; }
                 }
                 else
                 {
@@ -150,7 +154,10 @@ public sealed class SettingsLocationWindow : FluentWindow
                         "Everyone who should use the file needs this password; it is asked once per PC. Use at least 8 characters.",
                         "Create") { Owner = this };
                     if (pw.ShowDialog() != true) return;
-                    SettingsStore.CreateShared(folder, pw.Password, _current);
+                    var password = pw.Password;
+                    IsEnabled = false;
+                    try { await Task.Run(() => SettingsStore.CreateShared(folder, password, _current)); }
+                    finally { IsEnabled = true; }
                 }
                 DialogResult = true;
             }

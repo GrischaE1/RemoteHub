@@ -21,13 +21,20 @@ internal static class SessionUser
         return WindowsIdentity.RunImpersonated(token, work);
     }
 
-    /// <summary>A new folder for copied files in the user's temp folder (old ones, from before today, are removed). Call inside <see cref="Run"/>.</summary>
-    public static string NewClipboardFolder()
+    /// <summary>
+    /// Where copied files go: "RemoteHub Clipboard" in the signed-in user's temp folder. Call it as LocalSystem, before
+    /// <see cref="Run"/> – while impersonating, the user's token can't be looked up and Windows' own temp folder was used.
+    /// </summary>
+    public static string ClipboardRoot()
     {
-        string temp;
-        using (var token = Token())
-            temp = token is not null && Profile(token) is { } profile ? Path.Combine(profile, "AppData", "Local", "Temp") : Path.GetTempPath();
-        var root = Path.Combine(temp, "RemoteHub Clipboard");
+        using var token = Token();
+        var temp = token is not null && Profile(token) is { } profile ? Path.Combine(profile, "AppData", "Local", "Temp") : Path.GetTempPath();
+        return Path.Combine(temp, "RemoteHub Clipboard");
+    }
+
+    /// <summary>A new folder for copied files below <paramref name="root"/> (old ones, from before today, are removed). Call inside <see cref="Run"/>.</summary>
+    public static string NewClipboardFolder(string root)
+    {
         try
         {
             if (Directory.Exists(root))

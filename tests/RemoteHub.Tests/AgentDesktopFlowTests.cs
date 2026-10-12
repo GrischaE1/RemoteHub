@@ -116,9 +116,16 @@ public class AgentDesktopFlowTests
         public volatile byte[]? Image;
         public volatile IReadOnlyList<string>? Files;
         public event Action<A.HelperClipboard>? ClipboardContent;
-        public void SetClipboardImage(byte[] png) => Image = png;
+        public volatile bool ImageIsPng;
+        public void SetClipboardImage(byte[] image, bool png) { ImageIsPng = png; Image = image; }
         public void SetClipboardFiles(IReadOnlyList<string> paths) => Files = paths;
         public void RaiseContent(A.HelperClipboard c) => ClipboardContent?.Invoke(c);
+        /// <summary>The last offer of RemoteHub's clipboard; <see cref="Paste"/> plays someone pasting it.</summary>
+        public volatile Func<string, A.HelperClipboard?>? Offered;
+        public volatile bool OfferedImage;
+        public int Offers;
+        public void OfferClipboard(A.DesktopTransfer offer, Func<string, A.HelperClipboard?> fetch) { (OfferedImage, Offered) = (offer.Kind == A.DesktopTransferKind.Image, fetch); Interlocked.Increment(ref Offers); }
+        public Task<A.HelperClipboard?> Paste() => Task.Run(() => Offered!("test (1)"));
         public void Dispose() { }
     }
 
@@ -158,10 +165,12 @@ public class AgentDesktopFlowTests
     {
         public readonly ConcurrentQueue<A.RemoteMouse> Mouse = new();
         public readonly ConcurrentQueue<A.RemoteKey> Keys = new();
-        public int Releases;
+        public int Releases, SecureAttentions;
+        public volatile string? SecureAttentionError;
         void A.IInputSink.Mouse(A.DesktopMonitor monitor, A.RemoteMouse input) => Mouse.Enqueue(input);
         void A.IInputSink.Key(A.RemoteKey input) => Keys.Enqueue(input);
         public void ReleaseAll() => Interlocked.Increment(ref Releases);
+        string? A.IInputSink.SecureAttention() { Interlocked.Increment(ref SecureAttentions); return SecureAttentionError; }
     }
 
     private sealed class Device : IAsyncDisposable
@@ -188,7 +197,7 @@ public class AgentDesktopFlowTests
     private static readonly A.DesktopSessionInfo LoginScreen = new(2, "", A.DesktopSessionState.SignIn, false, "Console");
 
     private static async Task<Device> StartDevice(bool allow = true, bool secureScreen = false, A.AgentPolicy? policy = null, Func<int, Screen>? screens = null,
-        Func<int, bool>? allowAt = null)
+        Func<int, bool>? allowAt = null, Func<string?>? secureAttention = null)
     {
         var cert = SelfSigned();
         var input = new Input();
@@ -211,7 +220,7 @@ public class AgentDesktopFlowTests
         var audits = new ConcurrentQueue<A.AuditEvent>();
         log.Audited += (id, _) => audits.Enqueue(id);
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new Auth(), null!, log, IPAddress.Loopback,
-            new A.DesktopServices(sessions, helpers, () => null), () => policy));
+            new A.DesktopServices(sessions, helpers, secureAttention ?? (() => null)), () => policy));
         await app.StartAsync();
         return new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Sessions = sessions, Audits = audits };
     }
@@ -275,8 +284,8 @@ public class AgentDesktopFlowTests
             }
         }
 
-        public void Start(int session, string consent, bool viewOnly = false, string? resume = null) =>
-            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume), DesktopJson.Default.DesktopStart));
+        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null) =>
+            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features), DesktopJson.Default.DesktopStart));
 
         public void Dispose() => Client.Dispose();
     }
@@ -329,6 +338,38 @@ public class AgentDesktopFlowTests
         // Another monitor: a new layout and a new key frame in its size.
         v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(1, 30, 60), DesktopJson.Default.DesktopSettings));
         WaitFor(() => v.Frames.Any(f => f.Width == 200 && f.Height == 100 && f.KeyFrame), "frames of the second monitor");
+    }
+
+    [Fact]
+    public async Task Ctrl_alt_del_on_the_console_is_sent_by_the_service()
+    {
+        var sent = 0;
+        await using var d = await StartDevice(allow: true, secureAttention: () => { Interlocked.Increment(ref sent); return null; });
+        using var v = await Connect(d);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        Assert.Equal(DesktopStatusState.Connected, v.Next(DesktopStatusState.Connected).State);
+        v.Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
+        WaitFor(() => sent == 1, "Ctrl+Alt+Del sent by the service");
+        Assert.Equal(0, d.Input.SecureAttentions);
+    }
+
+    [Fact]
+    public async Task Ctrl_alt_del_in_an_rdp_session_is_sent_by_the_helper_there()
+    {
+        await using var d = await StartDevice(allow: true);
+        d.Sessions.Console = 7; // session 1 isn't the console: an RDP session
+        using var v = await Connect(d);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        Assert.Equal(DesktopStatusState.Connected, v.Next(DesktopStatusState.Connected).State);
+        WaitFor(() => v.Frames.Count >= 1, "video frames");
+
+        v.Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
+        WaitFor(() => d.Input.SecureAttentions == 1, "Ctrl+Alt+Del sent by the helper");
+
+        // Couldn't be sent there (e.g. a policy): RemoteHub is told why.
+        d.Input.SecureAttentionError = "Ctrl+Alt+Del from software is turned off by a policy on this device.";
+        v.Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
+        Assert.Contains("turned off by a policy", v.Next(DesktopStatusState.Connected).Message);
     }
 
     [Fact]
@@ -483,14 +524,26 @@ public class AgentDesktopFlowTests
     }
 
     [Fact]
-    public async Task Connecting_to_your_own_session_asks_nobody()
+    public async Task Your_own_session_may_be_connected_without_asking()
+    {
+        await using var d = await StartDevice();
+        d.Sessions.Current = [ActiveUser with { User = @"TEST\viewer" }];
+        using var v = await Connect(d, "viewer"); // no ConsentBypass right: None isn't allowed for anyone else's session
+        v.Start(ActiveUser.Id, DesktopConsent.None, viewOnly: true);
+        v.Next(DesktopStatusState.Connected);
+        Assert.Equal(0, d.Helpers.Uis[0].Asked);
+    }
+
+    [Fact]
+    public async Task Your_own_session_asks_when_you_choose_to()
     {
         await using var d = await StartDevice();
         d.Sessions.Current = [ActiveUser with { User = @"TEST\admin" }];
         using var v = await Connect(d);
         v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.WaitingForUser);
         v.Next(DesktopStatusState.Connected);
-        Assert.Equal(0, d.Helpers.Uis[0].Asked);
+        Assert.Equal(1, d.Helpers.Uis[0].Asked);
     }
 
     [Fact]
@@ -623,8 +676,10 @@ public class AgentDesktopFlowTests
         var png = Enumerable.Range(0, DesktopProtocol.TransferChunkBytes + 10).Select(i => (byte)i).ToArray();
         var image = ClipboardTransfer.Image(1, png, png: true);
         v.Client.Send(DesktopWire.Json(DesktopMessage.TransferStart, image.Transfer, DesktopJson.Default.DesktopTransfer));
-        foreach (var chunk in ClipboardTransfer.Chunks(image)) v.Client.Send(chunk);
+        foreach (var chunk in ClipboardTransfer.Chunks(image)) { while (v.Client.Queued > 8) await Task.Delay(10); v.Client.Send(chunk); } // throttled like RemoteHub
         WaitFor(() => d.Helpers.Uis[0].Image is { } i && i.SequenceEqual(png), "image on the device's clipboard");
+        WaitFor(() => v.TransferEnds.Any(e => e is { Id: 1, Ok: true, ToDevice: true }), "receipt for the image");
+        WaitFor(() => v.Client.Queued == 0, "send queue empty");
 
         // RemoteHub → device: a folder with a file.
         var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
@@ -637,6 +692,7 @@ public class AgentDesktopFlowTests
             v.Client.Send(DesktopWire.Json(DesktopMessage.TransferStart, files.Transfer, DesktopJson.Default.DesktopTransfer));
             foreach (var chunk in ClipboardTransfer.Chunks(files)) v.Client.Send(chunk);
             WaitFor(() => d.Helpers.Uis[0].Files is { Count: 1 }, "files on the device's clipboard");
+            WaitFor(() => v.TransferEnds.Any(e => e is { Id: 2, Ok: true, ToDevice: true }), "receipt for the files");
             var copied = d.Helpers.Uis[0].Files![0];
             Assert.Equal("hello", File.ReadAllText(Path.Combine(copied, "sub", "a.txt")));
             Directory.Delete(Path.GetDirectoryName(copied)!, true);
@@ -647,6 +703,106 @@ public class AgentDesktopFlowTests
             WaitFor(() => { lock (v.TransferBytes) return v.TransferBytes.Length == 5; }, "file data");
         }
         finally { Directory.Delete(source, true); }
+    }
+
+    [Fact]
+    public async Task Files_copied_in_RemoteHub_are_only_sent_when_pasted_on_the_device()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        Assert.Contains(DesktopFeatures.TransferOnPaste, v.Client.Hello.Features!);
+        v.Start(ActiveUser.Id, DesktopConsent.None);
+        v.Next(DesktopStatusState.Connected);
+        var requests = new System.Collections.Concurrent.ConcurrentQueue<int>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferRequest) requests.Enqueue(int.Parse(DesktopWire.ReadText(m))); };
+
+        var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(source);
+        File.WriteAllText(Path.Combine(source, "b.txt"), "pasted");
+        try
+        {
+            // Copied: only names and sizes go; the device offers them – no data, no request yet.
+            var files = ClipboardTransfer.Files(7, [Path.Combine(source, "b.txt")], out _)!;
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, files.Transfer, DesktopJson.Default.DesktopTransfer));
+            WaitFor(() => d.Helpers.Uis[0].Offered is not null, "offer on the device's clipboard");
+            Assert.False(d.Helpers.Uis[0].OfferedImage);
+            await Task.Delay(300);
+            Assert.Empty(requests);
+            Assert.Null(d.Helpers.Uis[0].Files);
+
+            // RDP's clipboard sync and Windows' clipboard history read every new entry: they get nothing, nothing is asked for.
+            Assert.Null(await Task.Run(() => d.Helpers.Uis[0].Offered!("rdpclip (812)")).WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Null(await Task.Run(() => d.Helpers.Uis[0].Offered!("svchost (1312)")).WaitAsync(TimeSpan.FromSeconds(5)));
+            await Task.Delay(300);
+            Assert.Empty(requests);
+
+            // Pasted: the device asks, RemoteHub sends, the waiting paste gets the files (not the clipboard directly).
+            var paste = d.Helpers.Uis[0].Paste();
+            WaitFor(() => requests.Contains(7), "request from the paste");
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferStart, files.Transfer, DesktopJson.Default.DesktopTransfer));
+            foreach (var chunk in ClipboardTransfer.Chunks(files)) v.Client.Send(chunk);
+            var pasted = await paste.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal("pasted", File.ReadAllText(pasted!.Files![0]));
+            Assert.Null(d.Helpers.Uis[0].Files);
+            WaitFor(() => v.TransferEnds.Any(e => e is { Id: 7, Ok: true, ToDevice: true }), "receipt");
+            Directory.Delete(Path.GetDirectoryName(pasted.Files[0])!, true);
+
+            // A paste whose copy is cancelled in RemoteHub gets nothing.
+            var again = ClipboardTransfer.Files(8, [Path.Combine(source, "b.txt")], out _)!;
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, again.Transfer, DesktopJson.Default.DesktopTransfer));
+            WaitFor(() => Volatile.Read(ref d.Helpers.Uis[0].Offers) == 2, "second offer");
+            var cancelled = d.Helpers.Uis[0].Paste();
+            WaitFor(() => requests.Contains(8), "request for the second offer");
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferStart, again.Transfer, DesktopJson.Default.DesktopTransfer));
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(8, false, "replaced"), DesktopJson.Default.DesktopTransferEnd));
+            Assert.Null(await cancelled.WaitAsync(TimeSpan.FromSeconds(15)));
+        }
+        finally { Directory.Delete(source, true); }
+    }
+
+    [Fact]
+    public async Task Files_copied_on_the_device_are_only_sent_when_pasted_in_RemoteHub()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        var offers = new System.Collections.Concurrent.ConcurrentQueue<DesktopTransfer>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferOffer) offers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); };
+        v.Start(ActiveUser.Id, DesktopConsent.None, features: [DesktopFeatures.TransferOnPaste]);
+        v.Next(DesktopStatusState.Connected);
+        var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(source, "from the device");
+        try
+        {
+            // Copied on the device: RemoteHub gets the offer (name, size) – no transfer, no data.
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard(Files: [source]));
+            WaitFor(() => offers.Count == 1, "offer from the device");
+            await Task.Delay(300);
+            Assert.Empty(v.Transfers);
+            lock (v.TransferBytes) Assert.Equal(0, v.TransferBytes.Length);
+
+            // Pasted in RemoteHub: it asks, the device sends.
+            v.Client.Send(DesktopWire.Text(DesktopMessage.TransferRequest, offers.Single().Id.ToString()));
+            WaitFor(() => v.Transfers.Any(t => t.Id == offers.Single().Id), "transfer after the request");
+            WaitFor(() => { lock (v.TransferBytes) return v.TransferBytes.Length == "from the device".Length; }, "file data");
+        }
+        finally { File.Delete(source); }
+    }
+
+    [Fact]
+    public async Task An_older_RemoteHub_still_gets_copies_from_the_device_right_away()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        v.Start(ActiveUser.Id, DesktopConsent.None); // no features: an older RemoteHub
+        v.Next(DesktopStatusState.Connected);
+        var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(source, "abc");
+        try
+        {
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard(Files: [source]));
+            WaitFor(() => { lock (v.TransferBytes) return v.TransferBytes.Length == 3; }, "file data without a request");
+        }
+        finally { File.Delete(source); }
     }
 
     [Fact]
@@ -679,11 +835,52 @@ public class AgentDesktopFlowTests
     }
 
     [Fact]
+    public void A_receiver_checks_the_limits_itself_and_removes_unfinished_files()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // Limits, whatever the sender claims: too many items, sizes that don't add up.
+            var many = Enumerable.Range(0, DesktopProtocol.MaxTransferItems + 1).Select(i => new DesktopTransferItem($"f{i}.txt", 0)).ToArray();
+            Assert.Throws<InvalidDataException>(() => new TransferReceiver(new DesktopTransfer(1, DesktopTransferKind.Files, many, 0), folder));
+            Assert.Throws<InvalidDataException>(() => new TransferReceiver(
+                new DesktopTransfer(2, DesktopTransferKind.Files, [new DesktopTransferItem("a.txt", 5)], 1), folder));
+
+            // A transfer that stops halfway leaves nothing behind.
+            var r = new TransferReceiver(new DesktopTransfer(3, DesktopTransferKind.Files,
+                [new DesktopTransferItem("a.txt", 4), new DesktopTransferItem("b.txt", 4)], 8), folder);
+            r.Add(0, [1, 2, 3, 4, 5]);
+            Assert.True(File.Exists(Path.Combine(folder, "a.txt")));
+            r.Dispose();
+            Assert.False(Directory.Exists(folder));
+
+            // A finished one stays.
+            using (var done = new TransferReceiver(new DesktopTransfer(4, DesktopTransferKind.Files, [new DesktopTransferItem("c.txt", 2)], 2), folder))
+            {
+                done.Add(0, [1, 2]);
+                Assert.True(done.Complete);
+            }
+            Assert.True(File.Exists(Path.Combine(folder, "c.txt")));
+        }
+        finally { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
+    }
+
+    [Fact]
     public void Transfer_paths_cannot_leave_their_folder()
     {
         Assert.Null(DesktopWire.SafeRelativePath(".."));
         Assert.Null(DesktopWire.SafeRelativePath("a/../.."));
         Assert.Equal(Path.Combine("C", "Windows", "x.txt"), DesktopWire.SafeRelativePath(@"C:\Windows\x.txt"));
+        Assert.Null(DesktopWire.SafeRelativePath(@"logs\CON"));
+        Assert.Null(DesktopWire.SafeRelativePath("nul.txt"));
+        Assert.Null(DesktopWire.SafeRelativePath("COM1"));
+        Assert.Equal("console.txt", DesktopWire.SafeRelativePath("console.txt"));
+        // Downloads: every path from the device must stay below the chosen folder.
+        var below = Path.Combine(Path.GetTempPath(), "rh-target");
+        Assert.Equal(Path.Combine(below, "a", "b.txt"), DesktopWire.PathBelow(below, @"a\b.txt"));
+        Assert.Null(DesktopWire.PathBelow(below, @"..\..\Startup\evil.cmd"));
+        Assert.Null(DesktopWire.PathBelow(below, @"a\..\..\evil.cmd"));
+        Assert.Equal(Path.Combine(below, "Windows", "evil.cmd"), DesktopWire.PathBelow(below, @"\Windows\evil.cmd"));
         var folder = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -825,7 +1022,9 @@ public class AgentDesktopFlowTests
         Assert.True(d.DesktopEnabled);
         Assert.Equal([Admins], d.Groups(A.AgentRight.Desktop));
         Assert.Empty(d.Groups(A.AgentRight.DesktopViewOnly));
-        Assert.Equal(3, d.ConsentModes.Count);
+        // Consent by default: no "None" and nobody with ConsentBypass until a policy says so.
+        Assert.Equal([A.DesktopConsent.Ask, A.DesktopConsent.Pin], d.ConsentModes);
+        Assert.Empty(d.Groups(A.AgentRight.ConsentBypass));
 
         var p = A.AgentPolicy.From(config, new Values(new()
         {
@@ -843,5 +1042,15 @@ public class AgentDesktopFlowTests
         Assert.Equal(["S-1-5-32-555"], p.Groups(A.AgentRight.Desktop));
         Assert.Empty(p.Groups(A.AgentRight.ConsentBypass));
         Assert.Equal([Admins], p.Groups(A.AgentRight.PowerShell));
+    }
+
+    [Fact]
+    public void An_unreadable_policy_allows_nothing()
+    {
+        var p = A.AgentPolicy.Refused("access denied");
+        Assert.False(p.DesktopEnabled);
+        Assert.Empty(p.ConsentModes);
+        foreach (var right in Enum.GetValues<A.AgentRight>()) Assert.Empty(p.Groups(right));
+        Assert.Equal("access denied", p.LoadError);
     }
 }

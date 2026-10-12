@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace RemoteHub.Agent;
@@ -112,46 +113,14 @@ internal sealed class WindowsShellProcess : IShellProcess
         if (Native.LoadUserProfile(_token, ref profile)) _profile = profile.hProfile; // without a profile it still works, just without HKCU
         if (!Native.CreateEnvironmentBlock(out _environment, _token, false)) _environment = IntPtr.Zero;
 
-        var inherit = new Native.SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<Native.SECURITY_ATTRIBUTES>(), bInheritHandle = true };
-        if (!Native.CreatePipe(out var stdinRead, out var stdinWrite, ref inherit, 0)) throw new Win32Exception();
-        if (!Native.CreatePipe(out var stdoutRead, out var stdoutWrite, ref inherit, 0)) throw new Win32Exception();
-        Native.SetHandleInformation(stdinWrite, Native.HANDLE_FLAG_INHERIT, 0);
-        Native.SetHandleInformation(stdoutRead, Native.HANDLE_FLAG_INHERIT, 0);
-
-        try
-        {
-            var si = new Native.STARTUPINFO
-            {
-                cb = Marshal.SizeOf<Native.STARTUPINFO>(),
-                dwFlags = Native.STARTF_USESTDHANDLES,
-                hStdInput = stdinRead.DangerousGetHandle(),
-                hStdOutput = stdoutWrite.DangerousGetHandle(),
-                hStdError = stdoutWrite.DangerousGetHandle(),
-                lpDesktop = "", // the logon session's own (non-interactive) window station
-            };
-            var cmd = $"\"{ShellCommand.PowerShellExe}\" {ShellCommand.Arguments}";
-            if (!Native.CreateProcessAsUser(_token, null, cmd, IntPtr.Zero, IntPtr.Zero, true,
-                    Native.CREATE_UNICODE_ENVIRONMENT | Native.CREATE_NO_WINDOW | Native.CREATE_SUSPENDED, _environment,
-                    Environment.SystemDirectory, ref si, out var pi))
-                throw new Win32Exception();
-
-            _process = pi.hProcess;
-            ProcessId = pi.dwProcessId;
-            _job = Native.CreateJobObject(IntPtr.Zero, null);
-            var limits = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-            limits.BasicLimitInformation.LimitFlags = Native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            Native.SetInformationJobObject(_job, Native.JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(limits));
-            Native.AssignProcessToJobObject(_job, _process);
-            Native.ResumeThread(pi.hThread);
-            Native.CloseHandle(pi.hThread);
-        }
-        finally
-        {
-            stdinRead.Dispose();
-            stdoutWrite.Dispose();
-        }
+        // "": the logon session's own (non-interactive) window station.
+        var (pi, stdinWrite, stdoutRead) = ChildProcess.Start(_token, $"\"{ShellCommand.PowerShellExe}\" {ShellCommand.Arguments}",
+            Native.CREATE_UNICODE_ENVIRONMENT | Native.CREATE_NO_WINDOW, _environment, Environment.SystemDirectory, "", stdoutBuffer: 0, stderrToNul: false);
+        _process = pi.hProcess;
+        ProcessId = pi.dwProcessId;
         _input = new FileStream(stdinWrite, FileAccess.Write, 1);
         _output = new FileStream(stdoutRead, FileAccess.Read, 4096);
+        _job = ChildProcess.RunInJob(pi);
     }
 
     public void Dispose()
@@ -166,6 +135,116 @@ internal sealed class WindowsShellProcess : IShellProcess
     }
 }
 
+/// <summary>
+/// Starts a child process with its standard input/output on new pipes. The child inherits only its own pipe ends (an
+/// explicit handle list), and starts are serialised, so a process started at the same moment for another session can't
+/// pick up this one's pipes – which would let it read another operator's input or write fake helper messages.
+/// </summary>
+internal static class ChildProcess
+{
+    private static readonly object Gate = new();
+
+    /// <summary>Starts the process suspended; the caller owns the returned handles and resumes it with <see cref="RunInJob"/>.</summary>
+    public static (Native.PROCESS_INFORMATION Pi, SafeFileHandle StdinWrite, SafeFileHandle StdoutRead) Start(
+        IntPtr token, string commandLine, uint flags, IntPtr environment, string? directory, string desktop, int stdoutBuffer, bool stderrToNul)
+    {
+        lock (Gate)
+        {
+            var sa = new Native.SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<Native.SECURITY_ATTRIBUTES>(), bInheritHandle = true };
+            SafeFileHandle? stdinRead = null, stdinWrite = null, stdoutRead = null, stdoutWrite = null, nul = null;
+            IntPtr list = IntPtr.Zero, handles = IntPtr.Zero;
+            var listReady = false;
+            try
+            {
+                if (!Native.CreatePipe(out stdinRead, out stdinWrite, ref sa, 0)) throw new Win32Exception();
+                if (!Native.CreatePipe(out stdoutRead, out stdoutWrite, ref sa, stdoutBuffer)) throw new Win32Exception();
+                Native.SetHandleInformation(stdinWrite, Native.HANDLE_FLAG_INHERIT, 0);
+                Native.SetHandleInformation(stdoutRead, Native.HANDLE_FLAG_INHERIT, 0);
+                var stderr = stdoutWrite;
+                if (stderrToNul)
+                {
+                    nul = WtsNative.CreateFileW("NUL", 0x40000000, 3, ref sa, 3, 0, IntPtr.Zero);
+                    if (nul.IsInvalid) throw new Win32Exception();
+                    stderr = nul;
+                }
+                IntPtr[] inherited = stderrToNul
+                    ? [stdinRead.DangerousGetHandle(), stdoutWrite.DangerousGetHandle(), nul!.DangerousGetHandle()]
+                    : [stdinRead.DangerousGetHandle(), stdoutWrite.DangerousGetHandle()];
+
+                var size = IntPtr.Zero;
+                Native.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref size);
+                list = Marshal.AllocHGlobal(size);
+                if (!Native.InitializeProcThreadAttributeList(list, 1, 0, ref size)) throw new Win32Exception();
+                listReady = true;
+                handles = Marshal.AllocHGlobal(IntPtr.Size * inherited.Length);
+                Marshal.Copy(inherited, 0, handles, inherited.Length);
+                if (!Native.UpdateProcThreadAttribute(list, 0, Native.PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+                        IntPtr.Size * inherited.Length, IntPtr.Zero, IntPtr.Zero))
+                    throw new Win32Exception();
+
+                var si = new Native.STARTUPINFOEX
+                {
+                    StartupInfo = new Native.STARTUPINFO
+                    {
+                        cb = Marshal.SizeOf<Native.STARTUPINFOEX>(),
+                        dwFlags = Native.STARTF_USESTDHANDLES,
+                        hStdInput = stdinRead.DangerousGetHandle(),
+                        hStdOutput = stdoutWrite.DangerousGetHandle(),
+                        hStdError = stderr.DangerousGetHandle(),
+                        lpDesktop = desktop,
+                    },
+                    lpAttributeList = list,
+                };
+                // CreateProcessW may write to the command line: pass a buffer, not a string.
+                if (!Native.CreateProcessAsUser(token, null, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, true,
+                        flags | Native.CREATE_SUSPENDED | Native.EXTENDED_STARTUPINFO_PRESENT, environment, directory, ref si, out var pi))
+                    throw new Win32Exception();
+                var result = (pi, stdinWrite, stdoutRead);
+                stdinWrite = stdoutRead = null; // now the caller's
+                return result;
+            }
+            finally
+            {
+                if (listReady) Native.DeleteProcThreadAttributeList(list);
+                if (list != IntPtr.Zero) Marshal.FreeHGlobal(list);
+                if (handles != IntPtr.Zero) Marshal.FreeHGlobal(handles);
+                stdinRead?.Dispose();
+                stdoutWrite?.Dispose();
+                nul?.Dispose();
+                stdinWrite?.Dispose();
+                stdoutRead?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Puts the suspended process into a job that kills it and everything it starts when the job handle closes, then
+    /// resumes it. If the job can't be set up the process is ended instead – it never runs outside the job.
+    /// </summary>
+    public static IntPtr RunInJob(Native.PROCESS_INFORMATION pi)
+    {
+        var job = Native.CreateJobObject(IntPtr.Zero, null);
+        try
+        {
+            if (job == IntPtr.Zero) throw new Win32Exception();
+            var limits = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            limits.BasicLimitInformation.LimitFlags = Native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!Native.SetInformationJobObject(job, Native.JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(limits))
+                || !Native.AssignProcessToJobObject(job, pi.hProcess))
+                throw new Win32Exception();
+            if (Native.ResumeThread(pi.hThread) == -1) throw new Win32Exception();
+            return job;
+        }
+        catch
+        {
+            Native.TerminateProcess(pi.hProcess, 1);
+            if (job != IntPtr.Zero) Native.CloseHandle(job);
+            throw;
+        }
+        finally { Native.CloseHandle(pi.hThread); }
+    }
+}
+
 internal static class Native
 {
     public const int LOGON32_LOGON_NETWORK = 3, LOGON32_PROVIDER_DEFAULT = 0;
@@ -175,7 +254,8 @@ internal static class Native
     public const int SecurityImpersonation = 2, TokenPrimary = 1;
     public const int TokenElevationType = 18, TokenLinkedToken = 19, TokenElevationTypeLimited = 3;
     public const int PI_NOUI = 1, STARTF_USESTDHANDLES = 0x100, HANDLE_FLAG_INHERIT = 1;
-    public const uint CREATE_UNICODE_ENVIRONMENT = 0x400, CREATE_NO_WINDOW = 0x08000000, CREATE_SUSPENDED = 0x4;
+    public const uint CREATE_UNICODE_ENVIRONMENT = 0x400, CREATE_NO_WINDOW = 0x08000000, CREATE_SUSPENDED = 0x4, EXTENDED_STARTUPINFO_PRESENT = 0x80000;
+    public static readonly IntPtr PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x20002;
     public const int JobObjectExtendedLimitInformation = 9;
     public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
 
@@ -199,6 +279,9 @@ internal static class Native
         public short wShowWindow, cbReserved2;
         public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
     }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct STARTUPINFOEX { public STARTUPINFO StartupInfo; public IntPtr lpAttributeList; }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
@@ -238,8 +321,17 @@ internal static class Native
     public static extern bool GetTokenInformation(IntPtr token, int infoClass, out IntPtr info, int length, out int returned);
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool CreateProcessAsUser(IntPtr token, string? app, string cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags,
-        IntPtr env, string? dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+    public static extern bool CreateProcessAsUser(IntPtr token, string? app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags,
+        IntPtr env, string? dir, ref STARTUPINFOEX si, out PROCESS_INFORMATION pi);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool InitializeProcThreadAttributeList(IntPtr list, int count, int flags, ref IntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, IntPtr attribute, IntPtr value, IntPtr size, IntPtr previous, IntPtr returnSize);
+
+    [DllImport("kernel32.dll")]
+    public static extern void DeleteProcThreadAttributeList(IntPtr list);
 
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern bool LoadUserProfile(IntPtr token, ref PROFILEINFO profile);

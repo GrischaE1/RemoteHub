@@ -4,40 +4,80 @@ using System.Threading;
 namespace RemoteHub.Agent;
 
 /// <summary>
-/// H.264 encoder for the remote desktop (Windows' own Media Foundation encoder, low-latency mode, no B-frames). Takes
-/// BGRA frames, returns Annex B access units. Software encoding, so it works the same on servers and VMs without a GPU.
-/// Quality-based rate control spends bits only where the screen changes; key frames only on request.
+/// H.264 encoder for the remote desktop (Media Foundation, low-latency mode, no B-frames). Takes BGRA frames, returns
+/// Annex B access units. Quality-based rate control spends bits only where the screen changes; key frames only on request.
+/// <para>Software (Windows' own encoder) by default, so it works the same on servers and VMs without a GPU. With
+/// <c>preferHardware</c> (the 60 fps setting) the GPU's encoder is used when there is one; if it can't be set up, fails
+/// or stops delivering, the encoder switches to software by itself – the picture goes on with a key frame.</para>
 /// Compiled into RemoteHub and the agent (tests encode and decode in one process).
 /// </summary>
 public sealed unsafe class H264Encoder : IDisposable
 {
     private IntPtr _mft, _codec;
-    private readonly int _width, _height;
+    private readonly int _width, _height, _fps;
     private readonly long _frameDuration;
     private long _time;
     private int _outputSize;
     private bool _providesSamples;
-    private readonly bool _started;
+    private bool _started;
+
+    // Hardware encoders work asynchronously: they ask for input and announce output through events.
+    private IntPtr _activate, _events;
+    private int _inputCredits, _framesWithoutOutput;
 
     public int Width => _width;
     public int Height => _height;
     public int Quality { get; private set; }
+    /// <summary>"hardware" (the GPU's encoder) or "software".</summary>
+    public string Kind => _events != IntPtr.Zero ? "hardware" : "software";
 
     /// <param name="width">Even number of pixels (the caller crops odd sizes).</param>
-    public H264Encoder(int width, int height, int fps, int quality)
+    public H264Encoder(int width, int height, int fps, int quality, bool preferHardware = false)
     {
         if (width < 16 || height < 16 || width % 2 != 0 || height % 2 != 0 || width > 8192 || height > 8192)
             throw new ArgumentException($"Unsupported frame size {width} × {height}.");
         (_width, _height) = (width, height);
-        fps = Math.Clamp(fps, 1, 60);
-        _frameDuration = 10_000_000 / fps;
+        _fps = Math.Clamp(fps, 1, 60);
+        _frameDuration = 10_000_000 / _fps;
         Quality = Math.Clamp(quality, 1, 100);
         MediaFoundation.Startup();
         _started = true;
+        if (preferHardware)
+        {
+            try { Setup(hardware: true); return; }
+            catch (Exception) { Teardown(); } // no GPU encoder, or it doesn't take these settings: software
+        }
+        try { Setup(hardware: false); }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    private void Setup(bool hardware)
+    {
+        var fps = _fps;
+        int width = _width, height = _height;
         IntPtr output = IntPtr.Zero, input = IntPtr.Zero;
         try
         {
-            _mft = MediaFoundation.Create(MediaFoundation.CLSID_MSH264EncoderMFT, "The H.264 video encoder is not available on this device (Windows N editions need the Media Feature Pack)");
+            if (hardware)
+            {
+                (_activate, _mft) = MediaFoundation.CreateHardwareEncoder();
+                // Asynchronous MFTs must be unlocked before use; their events say when they want input and have output.
+                if (MediaFoundation.GetAttributes(_mft, out var attributes) >= 0)
+                {
+                    try
+                    {
+                        if (MediaFoundation.GetUInt32(attributes, MediaFoundation.MF_TRANSFORM_ASYNC) == 1)
+                            MediaFoundation.SetUInt32(attributes, MediaFoundation.MF_TRANSFORM_ASYNC_UNLOCK, 1);
+                    }
+                    finally { MediaFoundation.Release(attributes); }
+                }
+                MediaFoundation.Check(Marshal.QueryInterface(_mft, in MediaFoundation.IID_IMFMediaEventGenerator, out _events), "The GPU encoder has no events");
+            }
+            else _mft = MediaFoundation.Create(MediaFoundation.CLSID_MSH264EncoderMFT, "The H.264 video encoder is not available on this device (Windows N editions need the Media Feature Pack)");
             if (Marshal.QueryInterface(_mft, in MediaFoundation.IID_ICodecAPI, out _codec) < 0) _codec = IntPtr.Zero;
             // Before the media types: some values are fixed once the types are set.
             SetCodec(MediaFoundation.CODECAPI_AVLowLatencyMode, MediaFoundation.Variant.Bool(true));
@@ -59,16 +99,33 @@ public sealed unsafe class H264Encoder : IDisposable
             MediaFoundation.ProcessMessage(_mft, 0x10000000); // MFT_MESSAGE_NOTIFY_BEGIN_STREAMING
             MediaFoundation.ProcessMessage(_mft, 0x10000003); // MFT_MESSAGE_NOTIFY_START_OF_STREAM
         }
-        catch
-        {
-            Dispose();
-            throw;
-        }
         finally
         {
             MediaFoundation.Release(output);
             MediaFoundation.Release(input);
         }
+    }
+
+    /// <summary>Releases the encoder (not Media Foundation itself).</summary>
+    private void Teardown()
+    {
+        MediaFoundation.Release(_events);
+        MediaFoundation.Release(_codec);
+        MediaFoundation.Release(_mft);
+        if (_activate != IntPtr.Zero)
+        {
+            MediaFoundation.ShutdownObject(_activate); // a hardware encoder is shut down by its activation object
+            MediaFoundation.Release(_activate);
+        }
+        _events = _codec = _mft = _activate = IntPtr.Zero;
+        _inputCredits = _framesWithoutOutput = 0;
+    }
+
+    /// <summary>The GPU encoder failed or stopped delivering: the rest of the session uses the software encoder.</summary>
+    private void SwitchToSoftware()
+    {
+        Teardown();
+        Setup(hardware: false);
     }
 
     /// <summary>Changes the quality without a new encoder, if the encoder allows it.</summary>
@@ -84,25 +141,74 @@ public sealed unsafe class H264Encoder : IDisposable
     /// <summary>Encodes one BGRA frame (rows of <paramref name="pitch"/> bytes). Returns the access unit, or null if the encoder holds it back.</summary>
     public byte[]? Encode(byte* bgra, int pitch, bool keyFrame, out bool isKeyFrame)
     {
-        isKeyFrame = false;
-        if (keyFrame) SetCodec(MediaFoundation.CODECAPI_AVEncVideoForceKeyFrame, MediaFoundation.Variant.UInt(1));
-        var length = _width * _height * 3 / 2;
-        var sample = MediaFoundation.CreateSample(length, out var buffer);
+        if (_events == IntPtr.Zero) return EncodeSync(bgra, pitch, keyFrame, out isKeyFrame);
         try
         {
-            var target = MediaFoundation.Lock(buffer, out _);
-            try { ColorConversion.BgraToNv12(bgra, pitch, _width, _height, target); }
-            finally { MediaFoundation.Unlock(buffer); }
-            MediaFoundation.SetLength(buffer, length);
-            MediaFoundation.SetTimes(sample, _time, _frameDuration);
-            _time += _frameDuration;
-            MediaFoundation.Check(MediaFoundation.ProcessInput(_mft, sample), "Encoding failed");
+            var result = EncodeAsync(bgra, pitch, keyFrame, out isKeyFrame);
+            // Some GPU encoders hold frames back for a while; one that never delivers is replaced.
+            _framesWithoutOutput = result is null ? _framesWithoutOutput + 1 : 0;
+            if (_framesWithoutOutput < 30) return result;
         }
-        finally
+        catch (Exception) { }
+        SwitchToSoftware();
+        return EncodeSync(bgra, pitch, keyFrame: true, out isKeyFrame); // the decoder needs a key frame from the new encoder
+    }
+
+    /// <summary>
+    /// The GPU encoder: input only when it asked for it (an event), then its output as it announces it. Never waits
+    /// long – a frame it isn't ready for is dropped (the next one shows the same screen).
+    /// </summary>
+    private byte[]? EncodeAsync(byte* bgra, int pitch, bool keyFrame, out bool isKeyFrame)
+    {
+        isKeyFrame = false;
+        byte[]? result = null;
+        Pump(ref result, waitForInputMs: 50);
+        if (_inputCredits > 0)
         {
-            MediaFoundation.Release(buffer);
-            MediaFoundation.Release(sample);
+            _inputCredits--;
+            if (keyFrame) SetCodec(MediaFoundation.CODECAPI_AVEncVideoForceKeyFrame, MediaFoundation.Variant.UInt(1));
+            Feed(bgra, pitch);
+            Pump(ref result, waitForOutputMs: 30);
         }
+        if (result is not null) isKeyFrame = H264.ContainsIdr(result);
+        return result;
+    }
+
+    /// <summary>Handles the encoder's events: input requests are counted, announced output is collected.</summary>
+    private void Pump(ref byte[]? result, int waitForInputMs = 0, int waitForOutputMs = 0)
+    {
+        var start = Environment.TickCount64;
+        var gotOutput = false;
+        while (true)
+        {
+            var type = MediaFoundation.NextEvent(_events);
+            if (type == MediaFoundation.METransformNeedInput) { _inputCredits++; continue; }
+            if (type == MediaFoundation.METransformHaveOutput)
+            {
+                MediaFoundation.Check(MediaFoundation.ProcessOutput(_mft, _providesSamples, _outputSize, out var output), "Encoding failed");
+                try
+                {
+                    var bytes = MediaFoundation.ReadSample(output);
+                    result = result is null ? bytes : [.. result, .. bytes];
+                    gotOutput = true;
+                }
+                finally { MediaFoundation.Release(output); }
+                continue;
+            }
+            if (type is not null) continue; // drain complete, markers: nothing to do
+            var waited = Environment.TickCount64 - start;
+            var waiting = (waitForInputMs > 0 && _inputCredits == 0 && waited < waitForInputMs)
+                          || (waitForOutputMs > 0 && !gotOutput && waited < waitForOutputMs);
+            if (!waiting) return;
+            Thread.Sleep(1);
+        }
+    }
+
+    private byte[]? EncodeSync(byte* bgra, int pitch, bool keyFrame, out bool isKeyFrame)
+    {
+        isKeyFrame = false;
+        if (keyFrame) SetCodec(MediaFoundation.CODECAPI_AVEncVideoForceKeyFrame, MediaFoundation.Variant.UInt(1));
+        Feed(bgra, pitch);
 
         byte[]? result = null;
         while (true)
@@ -121,15 +227,36 @@ public sealed unsafe class H264Encoder : IDisposable
         return result;
     }
 
+    /// <summary>The frame as NV12 into the encoder.</summary>
+    private void Feed(byte* bgra, int pitch)
+    {
+        var length = _width * _height * 3 / 2;
+        var sample = MediaFoundation.CreateSample(length, out var buffer);
+        try
+        {
+            var target = MediaFoundation.Lock(buffer, out _);
+            try { ColorConversion.BgraToNv12(bgra, pitch, _width, _height, target); }
+            finally { MediaFoundation.Unlock(buffer); }
+            MediaFoundation.SetLength(buffer, length);
+            MediaFoundation.SetTimes(sample, _time, _frameDuration);
+            _time += _frameDuration;
+            MediaFoundation.Check(MediaFoundation.ProcessInput(_mft, sample), "Encoding failed");
+        }
+        finally
+        {
+            MediaFoundation.Release(buffer);
+            MediaFoundation.Release(sample);
+        }
+    }
+
     private bool SetCodec(Guid key, MediaFoundation.Variant value) =>
         _codec != IntPtr.Zero && MediaFoundation.SetCodecValue(_codec, key, value) >= 0;
 
     public void Dispose()
     {
-        MediaFoundation.Release(_codec);
-        MediaFoundation.Release(_mft);
-        _codec = _mft = IntPtr.Zero;
+        Teardown();
         if (_started) MediaFoundation.Shutdown();
+        _started = false;
     }
 }
 
@@ -377,6 +504,13 @@ internal static unsafe class MediaFoundation
     public static readonly Guid CODECAPI_AVEncMPVDefaultBPictureCount = new("8d390aac-dc5c-4200-b57f-814d04babab2");
     public static readonly Guid CODECAPI_AVEncVideoForceKeyFrame = new("398c1b98-8353-475a-9ef2-8f265d260345");
 
+    public static readonly Guid IID_IMFMediaEventGenerator = new("2cd0bd52-bcd5-4b89-b62c-eadc0c031e7d");
+    public static readonly Guid MFT_CATEGORY_VIDEO_ENCODER = new("f79eac7d-e545-4387-bdee-d647d7bde42a");
+    public static readonly Guid MF_TRANSFORM_ASYNC = new("f81a699a-649a-497d-8c73-29f8fed6ad7a");
+    public static readonly Guid MF_TRANSFORM_ASYNC_UNLOCK = new("e5666d6b-3422-4eb6-a421-da7db1f8e207");
+    public const int METransformNeedInput = 601, METransformHaveOutput = 602;
+    public const int MF_E_NO_EVENTS_AVAILABLE = unchecked((int)0xC00D3E80);
+
     public const int MF_E_TRANSFORM_NEED_MORE_INPUT = unchecked((int)0xC00D6D72);
     public const int MF_E_TRANSFORM_STREAM_CHANGE = unchecked((int)0xC00D6D61);
     public const int MF_E_TRANSFORM_TYPE_NOT_SET = unchecked((int)0xC00D6D60);
@@ -424,6 +558,57 @@ internal static unsafe class MediaFoundation
         var iid = IID_IMFTransform;
         Check(CoCreateInstance(ref clsid, IntPtr.Zero, 1 /* CLSCTX_INPROC_SERVER */, ref iid, out var mft), error);
         return mft;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RegisterTypeInfo { public Guid Major, Sub; }
+
+    /// <summary>
+    /// The best GPU H.264 encoder for NV12 input (Windows' own ranking): its activation object (keep it – it shuts the
+    /// encoder down) and the transform. Throws when there is none (VMs, servers without a GPU).
+    /// </summary>
+    public static (IntPtr Activate, IntPtr Transform) CreateHardwareEncoder()
+    {
+        var input = new RegisterTypeInfo { Major = MFMediaType_Video, Sub = MFVideoFormat_NV12 };
+        var output = new RegisterTypeInfo { Major = MFMediaType_Video, Sub = MFVideoFormat_H264 };
+        var category = MFT_CATEGORY_VIDEO_ENCODER;
+        Check(MFTEnumEx(&category, 0x4 | 0x40 /* HARDWARE | SORTANDFILTER */, &input, &output, out var list, out var count), "No GPU encoder list");
+        try
+        {
+            if (count == 0) throw new InvalidOperationException("No GPU H.264 encoder on this device.");
+            var first = ((IntPtr*)list)[0];
+            var iid = IID_IMFTransform;
+            IntPtr transform;
+            // IMFActivate::ActivateObject = 33 (after IUnknown and the 30 IMFAttributes methods)
+            Check(((delegate* unmanaged[Stdcall]<IntPtr, Guid*, IntPtr*, int>)Slot(first, 33))(first, &iid, &transform), "The GPU encoder could not be started");
+            Marshal.AddRef(first);
+            return (first, transform);
+        }
+        finally
+        {
+            for (var i = 0; i < count; i++) Release(((IntPtr*)list)[i]);
+            Marshal.FreeCoTaskMem(list);
+        }
+    }
+
+    /// <summary>IMFActivate::ShutdownObject = 34.</summary>
+    public static void ShutdownObject(IntPtr activate) => ((delegate* unmanaged[Stdcall]<IntPtr, int>)Slot(activate, 34))(activate);
+
+    /// <summary>The next event of an asynchronous MFT without waiting (IMFMediaEventGenerator::GetEvent = 3): its type, or null if none.</summary>
+    public static int? NextEvent(IntPtr generator)
+    {
+        IntPtr e;
+        var hr = ((delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, int>)Slot(generator, 3))(generator, 1 /* MF_EVENT_FLAG_NO_WAIT */, &e);
+        if (hr == MF_E_NO_EVENTS_AVAILABLE) return null;
+        Check(hr, "The GPU encoder's events");
+        try
+        {
+            uint type;
+            // IMFMediaEvent::GetType = 33 (after IUnknown and the 30 IMFAttributes methods)
+            Check(((delegate* unmanaged[Stdcall]<IntPtr, uint*, int>)Slot(e, 33))(e, &type), "GetType");
+            return (int)type;
+        }
+        finally { Release(e); }
     }
 
     public static IntPtr VideoType(Guid subtype, int width, int height, int fps)
@@ -596,4 +781,5 @@ internal static unsafe class MediaFoundation
     [DllImport("mfplat.dll")] public static extern int MFCreateMediaType(out IntPtr mediaType);
     [DllImport("mfplat.dll")] private static extern int MFCreateSample(out IntPtr sample);
     [DllImport("mfplat.dll")] private static extern int MFCreateMemoryBuffer(uint maxLength, out IntPtr buffer);
+    [DllImport("mfplat.dll")] private static extern int MFTEnumEx(Guid* category, uint flags, RegisterTypeInfo* input, RegisterTypeInfo* output, out IntPtr activates, out int count);
 }

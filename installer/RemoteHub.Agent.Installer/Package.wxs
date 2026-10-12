@@ -3,7 +3,7 @@
   Per-machine MSI for the RemoteHub Agent (the same MSI for every device; the device identity comes from the
   per-device enrollment file).
 
-  Install:   msiexec /i RemoteHub-Agent-<ver>-x64.msi ENROLLMENT="C:\path\device.rhagent" /qn
+  Install:   msiexec /i RemoteHub-Agent-<ver>-x64.msi ENROLLMENT="C:\path\device.rhagent" [VIRTUALDISPLAY=0|1] /qn
              Without ENROLLMENT the .rhagent file next to the MSI is used. An already enrolled agent can be updated
              without any enrollment file.
   Uninstall: msiexec /x RemoteHub-Agent-<ver>-x64.msi /qn   (removes firewall rule, certificate and configuration)
@@ -25,6 +25,8 @@
     <Property Id="ARPPRODUCTICON" Value="AgentIcon.ico" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ENROLLMENT" Secure="yes" />
+    <!-- Virtual monitor for devices without one: 1 install, 0 don't (removes it), empty = the device keeps its setting (default on). -->
+    <Property Id="VIRTUALDISPLAY" Secure="yes" />
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RemoteHub Agent" />
@@ -32,15 +34,25 @@
 
     <Feature Id="Main" Title="RemoteHub Agent">
       <ComponentRef Id="AgentService" />
+      <!-- Native libraries the single-file exe doesn't contain (it never extracts them to a temp folder). -->
+      <Files Directory="INSTALLFOLDER" Include="$(var.AgentPublishDir)\**">
+        <Exclude Files="$(var.AgentPublishDir)\RemoteHubAgent.exe" />
+      </Files>
     </Feature>
 
     <!-- Enrollment: deferred, as LocalSystem, after the files are in place and before the service starts.
          It also sets "Automatic (Delayed Start)" – MSI's own ServiceConfig table is unreliable for that. -->
     <!-- No ENROLLMENT given: the agent looks for the .rhagent file in the MSI's folder. -->
     <SetProperty Id="ENROLLMENT" Value="[OriginalDatabase]" Before="SetAgentEnroll" Sequence="execute" Condition="NOT ENROLLMENT" />
-    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot;" Before="AgentEnroll" Sequence="execute" />
     <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
                   Execute="deferred" Impersonate="no" Return="check" />
+
+    <!-- A first install that fails after enrolling: remove the firewall rule, certificate and configuration again.
+         Only for a first install – a failed upgrade must keep the enrolled agent that was there before. -->
+    <SetProperty Id="AgentEnrollRollback" Value="&quot;[#AgentExe]&quot; cleanup" Before="AgentEnrollRollback" Sequence="execute" />
+    <CustomAction Id="AgentEnrollRollback" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
+                  Execute="rollback" Impersonate="no" Return="ignore" />
 
     <SetProperty Id="AgentCleanup" Value="&quot;[#AgentExe]&quot; cleanup"
                  Before="AgentCleanup" Sequence="execute" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
@@ -48,6 +60,7 @@
                   Execute="deferred" Impersonate="no" Return="ignore" />
 
     <InstallExecuteSequence>
+      <Custom Action="AgentEnrollRollback" Before="AgentEnroll" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
       <Custom Action="AgentCleanup" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>

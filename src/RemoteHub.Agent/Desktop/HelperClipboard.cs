@@ -3,7 +3,8 @@ using System.Runtime.InteropServices;
 namespace RemoteHub.Agent;
 
 /// <summary>A clipboard change on the device other than text: an image (PNG or BMP bytes) or copied files.</summary>
-internal sealed record HelperClipboard(byte[]? Image = null, bool Png = false, IReadOnlyList<string>? Files = null);
+/// <param name="Items">Received for a paste of virtual files: the local path of every item, in the transfer's order.</param>
+internal sealed record HelperClipboard(byte[]? Image = null, bool Png = false, IReadOnlyList<string>? Files = null, IReadOnlyList<string>? Items = null);
 
 /// <summary>Images and files on the device's clipboard (text is in the main part).</summary>
 internal sealed unsafe partial class Win32HelperUi
@@ -17,15 +18,20 @@ internal sealed unsafe partial class Win32HelperUi
 
     public event Action<HelperClipboard>? ClipboardContent;
 
-    /// <summary>A PNG from RemoteHub: as "PNG" (Office, browsers) and as a bitmap (Paint and most other programs).</summary>
-    public void SetClipboardImage(byte[] png) => Post(() =>
+    /// <summary>
+    /// An image from RemoteHub. A PNG goes on as "PNG" (Office, browsers) and as a bitmap (Paint and most other programs);
+    /// a BMP only as the bitmap it is – never labelled PNG.
+    /// </summary>
+    public void SetClipboardImage(byte[] image, bool png) => Post(() =>
     {
-        var dib = PngToDib(png);
+        // A .bmp file is a 14-byte file header ("BM…") followed by the packed DIB the clipboard wants.
+        var dib = png ? PngToDib(image) : image is [(byte)'B', (byte)'M', ..] && image.Length > 14 ? image[14..] : null;
+        if (!png && dib is null) return;
         if (!OpenClipboardRetry()) return;
         try
         {
             EmptyClipboard();
-            SetData(PngFormat, png);
+            if (png) SetData(PngFormat, image);
             if (dib is not null) SetData(CF_DIB, dib);
         }
         finally
@@ -38,19 +44,11 @@ internal sealed unsafe partial class Win32HelperUi
     /// <summary>Files copied from RemoteHub (already written on the device): pasted like files copied in Explorer.</summary>
     public void SetClipboardFiles(IReadOnlyList<string> paths) => Post(() =>
     {
-        var text = string.Concat(paths.Select(p => p + "\0")) + "\0";
-        var drop = new byte[20 + text.Length * 2];
-        fixed (byte* d = drop)
-        {
-            *(uint*)d = 20;          // DROPFILES.pFiles: the names follow the header
-            *(int*)(d + 16) = 1;     // fWide: UTF-16
-        }
-        System.Text.Encoding.Unicode.GetBytes(text).CopyTo(drop, 20);
         if (!OpenClipboardRetry()) return;
         try
         {
             EmptyClipboard();
-            SetData(CF_HDROP, drop);
+            SetData(CF_HDROP, DropFiles(paths));
             SetData(DropEffectFormat, BitConverter.GetBytes(1)); // DROPEFFECT_COPY
         }
         finally
@@ -59,6 +57,93 @@ internal sealed unsafe partial class Win32HelperUi
             _ownSequence = GetClipboardSequenceNumber();
         }
     });
+
+    /// <summary>CF_HDROP: a DROPFILES header, then the paths (UTF-16, each ending in \0, the list in another \0).</summary>
+    private static byte[] DropFiles(IReadOnlyList<string> paths)
+    {
+        var text = string.Concat(paths.Select(p => p + "\0")) + "\0";
+        var drop = new byte[20 + text.Length * 2];
+        fixed (byte* d = drop)
+        {
+            *(uint*)d = 20;          // DROPFILES.pFiles: the names follow the header
+            *(int*)(d + 16) = 1;     // fWide: UTF-16
+        }
+        System.Text.Encoding.Unicode.GetBytes(text).CopyTo(drop, 20);
+        return drop;
+    }
+
+    // ---- offered, sent when pasted (delayed rendering)
+
+    private Func<string, HelperClipboard?>? _offer;
+    private HelperClipboard? _rendered;
+
+    /// <summary>
+    /// Copied in RemoteHub: the clipboard offers files (or an image) without their data. Pasting asks Windows for it
+    /// (WM_RENDERFORMAT); then <paramref name="fetch"/> gets it from RemoteHub – the paste waits for it – and the
+    /// clipboard keeps it for further pastes. Nothing is copied if nobody pastes.
+    /// </summary>
+    public void OfferClipboard(DesktopTransfer offer, Func<string, HelperClipboard?> fetch) => Post(() =>
+    {
+        VirtualFiles.Release(_virtual);
+        _virtual = 0;
+        if (offer.Kind == DesktopTransferKind.Files)
+        {
+            // Virtual files: Explorer reads the list when the clipboard changes; the contents only when it pastes.
+            _offer = null;
+            _virtual = VirtualFiles.Set(offer, () => fetch("a program reading the files")?.Items);
+            _ownSequence = GetClipboardSequenceNumber();
+            return;
+        }
+        // An image: offered by format, rendered when asked for (WM_RENDERFORMAT).
+        if (!OpenClipboardRetry()) return;
+        try
+        {
+            EmptyClipboard(); // the previous offer (ours too) ends here – WM_DESTROYCLIPBOARD
+            (_offer, _rendered) = (fetch, null);
+            SetClipboardData(PngFormat, IntPtr.Zero);
+            SetClipboardData(CF_DIB, IntPtr.Zero);
+        }
+        finally
+        {
+            CloseClipboard();
+            _ownSequence = GetClipboardSequenceNumber();
+        }
+    });
+
+    /// <summary>The virtual files offered last (a reference to the data object), or 0.</summary>
+    private nint _virtual;
+
+    /// <summary>WM_RENDERFORMAT: someone pastes – the data now (the clipboard is already open for us).</summary>
+    private void Render(uint format)
+    {
+        if (_offer is not { } fetch) return;
+        _rendered ??= fetch(Paster());
+        if (_rendered is not { } r) return; // not arrived: the paste gets nothing
+        if (format == CF_HDROP && r.Files is { } files) SetData(CF_HDROP, DropFiles(files));
+        else if (format == PngFormat && r is { Image: { } png, Png: true }) SetData(PngFormat, png);
+        else if (format == CF_DIB && r.Image is { } image &&
+                 (r.Png ? PngToDib(image) : image is [(byte)'B', (byte)'M', ..] && image.Length > 14 ? image[14..] : null) is { } dib)
+            SetData(CF_DIB, dib);
+    }
+
+    /// <summary>The program whose paste asks for the data (the window that opened the clipboard), e.g. "explorer (4321)".</summary>
+    private static string Paster()
+    {
+        try
+        {
+            var window = GetOpenClipboardWindow();
+            if (window == IntPtr.Zero || GetWindowThreadProcessId(window, out var pid) == 0) return "unknown";
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            return $"{p.ProcessName} ({pid})";
+        }
+        catch { return "unknown"; }
+    }
+
+    [DllImport("user32.dll")] private static extern IntPtr GetOpenClipboardWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    /// <summary>Our offer left the clipboard (someone copied something else): nothing to fetch any more.</summary>
+    private void OfferEnded() => (_offer, _rendered) = (null, null);
 
     private static void SetData(uint format, byte[] bytes)
     {
@@ -178,6 +263,7 @@ internal sealed unsafe partial class Win32HelperUi
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
     [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
+    [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern uint DragQueryFileW(IntPtr drop, uint index, char* file, uint length);
     [DllImport("ole32.dll")] private static extern int CreateStreamOnHGlobal(IntPtr memory, bool deleteOnRelease, out IntPtr stream);
     [DllImport("gdiplus.dll")] private static extern int GdipCreateBitmapFromStream(IntPtr stream, out nint bitmap);

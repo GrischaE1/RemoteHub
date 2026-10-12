@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using RemoteHub.Services;
 using SQLitePCL;
@@ -14,8 +15,9 @@ public sealed class DatabaseUnreadableException(string message, Exception? inner
 /// a string, and the cipher's own password KDF is set to one round because the key is already random.
 /// <para>Local only – never in OneDrive or on a network share (SQLite corrupts there); %LOCALAPPDATA% rather than
 /// %APPDATA%, because Roaming can be redirected to a share.</para>
-/// <para>One connection, used under a lock: writes are small and fast (well under a millisecond), so callers never wait
-/// noticeably. See docs/local-db-design.md.</para>
+/// <para>One writer connection, used under a lock: writes are small and fast (well under a millisecond), so callers
+/// never wait noticeably. Long reads – the audit log viewer, checks, backups – get read connections of their own
+/// (<see cref="Read"/>): with the write-ahead log they neither wait for the writer nor block it. See docs/local-db-design.md.</para>
 /// </summary>
 public static class LocalDb
 {
@@ -23,6 +25,17 @@ public static class LocalDb
     private const int KeptBackups = 7;
 
     private static readonly object Gate = new();
+    /// <summary>
+    /// Readers hold it shared while their connection is open; opening, closing and re-encrypting hold it exclusively, so
+    /// the key never changes under a reader. Always taken before <see cref="Gate"/>.
+    /// </summary>
+    private static readonly ReaderWriterLockSlim Lifetime = new(LockRecursionPolicy.SupportsRecursion);
+
+    private readonly struct Exclusive : IDisposable
+    {
+        public Exclusive() => Lifetime.EnterWriteLock();
+        public void Dispose() => Lifetime.ExitWriteLock();
+    }
     private static SqliteConnection? _db;
     private static DbKeys.Keys? _keys;
 
@@ -41,6 +54,8 @@ public static class LocalDb
     private static string KeyPath => Path.Combine(Directory, "db.key");
     /// <summary>The next key while the database is being re-encrypted (see <see cref="Rekey"/>).</summary>
     private static string NextKeyPath => KeyPath + ".next";
+    /// <summary>The keys from before, while the startup protection changes (see <see cref="BeginReprotect"/>).</summary>
+    private static string ReprotectKeyPath => KeyPath + ".reprotect";
     public static string BackupFolder => Path.Combine(Directory, "backup");
 
     public static bool IsOpen { get { lock (Gate) return _db is not null; } }
@@ -60,6 +75,7 @@ public static class LocalDb
     /// </summary>
     public static void Open()
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             if (_db is not null) return;
@@ -99,12 +115,37 @@ public static class LocalDb
             try
             {
                 var next = DbKeys.Read(NextKeyPath);
-                if (dbExists && Opens(FilePath, next.Db)) { File.Move(NextKeyPath, KeyPath, overwrite: true); return next; }
+                if (dbExists && Opens(FilePath, next.Db))
+                {
+                    File.Move(NextKeyPath, KeyPath, overwrite: true);
+                    TryDelete(ReprotectKeyPath);
+                    return next;
+                }
                 next.Dispose();
             }
             catch (AppLockedException) { throw; }
             catch { /* fall back to db.key */ }
             File.Delete(NextKeyPath);
+        }
+        // Changing the startup protection was interrupted: db.key may be sealed with a lock that is gone (turning it
+        // off) – the copy from before opens the database and is stored again with the protection that is on now.
+        if (File.Exists(ReprotectKeyPath))
+        {
+            if (AppLock.IsEnabled && !AppLock.IsUnlocked) throw new AppLockedException();
+            try
+            {
+                var copy = DbKeys.Read(ReprotectKeyPath);
+                if (dbExists && Opens(FilePath, copy.Db))
+                {
+                    DbKeys.Write(KeyPath, copy);
+                    File.Delete(ReprotectKeyPath);
+                    return copy;
+                }
+                copy.Dispose();
+            }
+            catch (AppLockedException) { throw; }
+            catch { /* the re-encryption finished: db.key is current */ }
+            File.Delete(ReprotectKeyPath);
         }
         if (File.Exists(KeyPath))
         {
@@ -126,6 +167,7 @@ public static class LocalDb
 
     public static void Close()
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             _db?.Dispose();
@@ -139,22 +181,23 @@ public static class LocalDb
     /// <summary>Removes the database, its key and its backups (e.g. after a failed migration, or in tests).</summary>
     public static void DeleteAll()
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             Close();
-            foreach (var f in new[] { FilePath, FilePath + "-wal", FilePath + "-shm", KeyPath, NextKeyPath })
+            foreach (var f in new[] { FilePath, FilePath + "-wal", FilePath + "-shm", KeyPath, NextKeyPath, ReprotectKeyPath })
                 if (File.Exists(f)) File.Delete(f);
             if (System.IO.Directory.Exists(BackupFolder)) System.IO.Directory.Delete(BackupFolder, true);
         }
     }
 
-    internal static SqliteConnection Connect(string path, byte[] key, bool wal)
+    internal static SqliteConnection Connect(string path, byte[] key, bool wal, bool readOnly = false)
     {
         var c = new SqliteConnection(new SqliteConnectionStringBuilder
         {
             DataSource = path,
             Pooling = false, // no keyed connection outlives Close()
-            Mode = SqliteOpenMode.ReadWriteCreate,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWriteCreate,
         }.ToString());
         try
         {
@@ -250,6 +293,23 @@ public static class LocalDb
 
     internal static void Use(Action<SqliteConnection, byte[]> f) => Use<object?>((c, k) => { f(c, k); return null; });
 
+    /// <summary>
+    /// Runs <paramref name="f"/> on a read-only connection of its own, outside the writer's lock: for long reads (the audit
+    /// log viewer, checks, backups) that mustn't make saves wait. Sees what was committed when it started. Never call it
+    /// from inside <see cref="Use"/>.
+    /// </summary>
+    internal static T Read<T>(Func<SqliteConnection, T> f)
+    {
+        Lifetime.EnterReadLock();
+        try
+        {
+            if (_keys is null) throw new InvalidOperationException("The database isn't open.");
+            using var c = Connect(FilePath, _keys.Db, wal: false, readOnly: true);
+            return f(c);
+        }
+        finally { Lifetime.ExitReadLock(); }
+    }
+
     /// <summary>Like <see cref="Use"/>, but does nothing (returns false) while the database isn't open.</summary>
     internal static bool TryUse(Action<SqliteConnection> f)
     {
@@ -297,6 +357,34 @@ public static class LocalDb
     // ------------------------------------------------------------------ re-encryption
 
     /// <summary>
+    /// Before the startup protection is turned on or off: keeps a copy of the current keys with Windows (DPAPI)
+    /// protection only – no weaker than db.key before turning it on or after turning it off – so the database stays
+    /// readable if RemoteHub stops between switching the lock and <see cref="Rekey"/>. <see cref="ReadKeys"/> uses it.
+    /// </summary>
+    public static void BeginReprotect()
+    {
+        lock (Gate)
+        {
+            if (_keys is not null) DbKeys.Write(ReprotectKeyPath, _keys, dpapiOnly: true);
+        }
+    }
+
+    /// <summary>
+    /// Ends <see cref="BeginReprotect"/>. After a failure, db.key is stored again with the protection that is on now, so
+    /// it matches the lock file whether or not the switch happened.
+    /// </summary>
+    public static void EndReprotect(bool failed)
+    {
+        lock (Gate)
+        {
+            if (failed && _keys is not null)
+                try { DbKeys.Write(KeyPath, _keys); }
+                catch (Exception ex) { DiagLog.Write("Database key could not be stored again: " + ex.Message); return; } // keep the copy
+            TryDelete(ReprotectKeyPath);
+        }
+    }
+
+    /// <summary>
     /// Encrypts the database with a new random key and stores it with the protection that is on now – after the
     /// startup protection was turned on or off, so a key copy from before can't open the database any more. The secret
     /// key stays: passwords are only reachable through the newly encrypted pages. Old backups can't be opened with the
@@ -305,9 +393,14 @@ public static class LocalDb
     /// </summary>
     public static void Rekey()
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             if (_db is null || _keys is null) throw new InvalidOperationException("The database isn't open.");
+            // A damaged database isn't re-encrypted: the existing backups (old key) would become useless while it can't
+            // be copied into a new one. Restore a backup first.
+            if (Scalar(_db, "PRAGMA quick_check") as string is var check && check != "ok")
+                throw new DatabaseUnreadableException("The database check found a problem, so it wasn't re-encrypted: " + check);
             var next = DbKeys.Keys.New();
             _keys.Secret.CopyTo(next.Secret, 0);
             DbKeys.Write(NextKeyPath, next);
@@ -343,12 +436,17 @@ public static class LocalDb
     public static void BackupIfDue()
     {
         if (Backups() is [var newest, ..] && DateTime.UtcNow - newest.TimeUtc < TimeSpan.FromHours(24)) return;
-        lock (Gate) { if (_db is not null) BackupLocked(); }
+        // On a read connection: checking every page and copying the file takes a while, and saves go on meanwhile.
+        // (Read holds the lifetime lock, so the key can't change while it runs.)
+        if (_keys is null) return;
+        Read(c => { BackupFrom(c, _keys!.Db); return 0; });
     }
 
-    private static void BackupLocked()
+    private static void BackupLocked() => BackupFrom(_db!, _keys!.Db);
+
+    private static void BackupFrom(SqliteConnection source, byte[] key)
     {
-        var check = Scalar(_db!, "PRAGMA quick_check") as string;
+        var check = Scalar(source, "PRAGMA quick_check") as string;
         if (check != "ok")
         {
             CheckFailed = true;
@@ -361,7 +459,7 @@ public static class LocalDb
         var path = Path.Combine(BackupFolder, $"remotehub-{DateTime.UtcNow:yyyyMMdd-HHmmss}.db");
         try
         {
-            using (var dst = Connect(path, _keys!.Db, wal: false)) _db!.BackupDatabase(dst);
+            using (var dst = Connect(path, key, wal: false)) source.BackupDatabase(dst);
             File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
         }
         catch (Exception ex)
@@ -379,6 +477,7 @@ public static class LocalDb
     /// </summary>
     public static void RestoreBackup(string backupPath)
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             Close();
@@ -391,15 +490,20 @@ public static class LocalDb
         }
     }
 
-    /// <summary>Starts over with an empty database; the unreadable one is kept beside it (remotehub.db.damaged-…).</summary>
+    /// <summary>
+    /// Starts over with an empty database; the unreadable one is kept beside it (remotehub.db.damaged-…), with its key
+    /// and its backups (backup.damaged-…) – they belong to the old key and can't be opened with the new one.
+    /// </summary>
     public static void SetAsideAndCreateNew()
     {
+        using var exclusive = new Exclusive();
         lock (Gate)
         {
             Close();
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             foreach (var f in new[] { FilePath, FilePath + "-wal", FilePath + "-shm", KeyPath })
                 if (File.Exists(f)) File.Move(f, Path.Combine(Directory, Path.GetFileName(f) + $".damaged-{stamp}"), overwrite: true);
+            if (System.IO.Directory.Exists(BackupFolder)) System.IO.Directory.Move(BackupFolder, BackupFolder + $".damaged-{stamp}");
             Open();
         }
     }

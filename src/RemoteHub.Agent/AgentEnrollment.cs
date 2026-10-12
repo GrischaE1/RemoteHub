@@ -30,13 +30,16 @@ public sealed class AgentEnrollment
     /// <summary>Firewall rule scope, e.g. "10.0.0.0/8,192.168.1.20"; empty = any address.</summary>
     public string FirewallRemoteAddresses { get; set; } = "";
 
+    /// <summary>Install the virtual monitor for devices without one (null: not chosen – the device keeps its setting, else on).</summary>
+    public bool? VirtualDisplay { get; set; }
+
     public string Pfx { get; set; } = "";
     public string PfxPassword { get; set; } = "";
     public DateTime CreatedUtc { get; set; }
 
     /// <summary>A new device identity: GUID, RSA key, certificate (CN = device ID, server + client auth, 2 years).</summary>
     public static (AgentEnrollment Enrollment, string Fingerprint) Create(string label, int port, IEnumerable<string>? allowedGroups = null,
-        string? firewallRemoteAddresses = null, DateTime? now = null)
+        string? firewallRemoteAddresses = null, DateTime? now = null, bool? virtualDisplay = null)
     {
         var created = now ?? DateTime.UtcNow;
         var deviceId = Guid.NewGuid().ToString();
@@ -59,7 +62,8 @@ public sealed class AgentEnrollment
             ListenPort = port,
             AllowedGroups = (allowedGroups ?? ["S-1-5-32-544"]).Where(g => !string.IsNullOrWhiteSpace(g)).Select(g => g.Trim()).ToList(),
             FirewallRemoteAddresses = (firewallRemoteAddresses ?? "").Trim(),
-            Pfx = Convert.ToBase64String(cert.Export(X509ContentType.Pfx, password)),
+            VirtualDisplay = virtualDisplay,
+            Pfx =Convert.ToBase64String(cert.Export(X509ContentType.Pfx, password)),
             PfxPassword = password,
             CreatedUtc = created,
         };

@@ -9,7 +9,8 @@ namespace RemoteHub.Data;
 /// <summary>The events in the audit log, with how the viewer shows them.</summary>
 public static class AuditEvents
 {
-    public const string AppUnlocked = "app.unlocked", AppUnlockFailed = "app.unlock_failed", ProtectionChanged = "app.protection_changed";
+    public const string AppUnlocked = "app.unlocked", AppUnlockFailed = "app.unlock_failed", ProtectionChanged = "app.protection_changed",
+        AppLocked = "app.locked";
     public const string SessionConnected = "session.connected", SessionEnded = "session.ended", SessionFailed = "session.failed";
     public const string PasswordCopied = "password.copied";
     public const string DataAdded = "data.added", DataChanged = "data.changed", DataDeleted = "data.deleted";
@@ -24,6 +25,7 @@ public static class AuditEvents
     {
         AppUnlocked => "RemoteHub unlocked",
         AppUnlockFailed => "Unlock failed",
+        AppLocked => "RemoteHub locked",
         ProtectionChanged => "Startup protection changed",
         SessionConnected => "Connected",
         SessionEnded => "Disconnected",
@@ -50,7 +52,7 @@ public static class AuditEvents
     [
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
         ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted]),
-        ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, ProtectionChanged]),
+        ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged]),
         ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
     ];
@@ -81,8 +83,11 @@ public static class AuditLog
     private sealed record Pending(DateTime TimeUtc, string Event, string? ConnectionId, string? Target, string? Detail);
 
     private static readonly ConcurrentQueue<Pending> Queue = new();
-    private static readonly object FlushGate = new();
+    private static readonly object FlushGate = new(), TimerGate = new();
     private static System.Threading.Timer? _timer;
+    /// <summary>Entries of a batch that couldn't be written: tried again first with the next flush (under FlushGate).</summary>
+    private static readonly List<Pending> Retry = [];
+    private const int MaxRetry = 10_000;
 
     public const int DefaultRetentionDays = 365;
 
@@ -93,7 +98,7 @@ public static class AuditLog
     {
         Queue.Enqueue(new Pending(DateTime.UtcNow, evt, connectionId, target, detail));
         if (Queue.Count >= 100) System.Threading.ThreadPool.QueueUserWorkItem(_ => Flush());
-        _timer ??= new System.Threading.Timer(_ => Flush(), null, 1000, 1000);
+        if (_timer is null) lock (TimerGate) _timer ??= new System.Threading.Timer(_ => Flush(), null, 1000, 1000);
     }
 
     public static void Write(string evt, Models.Connection? c, string? detail = null) => Write(evt, c?.Id.ToString(), c?.Name, detail);
@@ -101,12 +106,18 @@ public static class AuditLog
     /// <summary>Writes what is waiting (also before closing). Does nothing while the database isn't open.</summary>
     public static void Flush()
     {
-        if (Queue.IsEmpty) return;
+        if (Queue.IsEmpty && Retry.Count == 0) return;
         lock (FlushGate)
         {
+            // Taken out of the queue before the transaction: if it fails, the batch is kept and tried again – not lost.
+            var batch = new List<Pending>(Retry);
+            Retry.Clear();
+            while (Queue.TryDequeue(out var queued)) batch.Add(queued);
+            if (batch.Count == 0) return;
+            var written = false;
             try
             {
-                LocalDb.TryUse(c =>
+                written = LocalDb.TryUse(c =>
                 {
                     var device = LocalDb.DeviceId;
                     var deviceName = Environment.MachineName;
@@ -128,9 +139,10 @@ public static class AuditLog
                     var pdt = cmd.Parameters.Add("$dt", SqliteType.Text);
                     var pp = cmd.Parameters.Add("$p", SqliteType.Blob);
                     var ph = cmd.Parameters.Add("$h", SqliteType.Blob);
-                    while (Queue.TryDequeue(out var e))
+                    long ms = 0;
+                    foreach (var e in batch)
                     {
-                        var ms = new DateTimeOffset(e.TimeUtc).ToUnixTimeMilliseconds();
+                        ms = new DateTimeOffset(e.TimeUtc).ToUnixTimeMilliseconds();
                         var hash = Hash(prev, ms, device, deviceName, account, e.Event, e.ConnectionId, e.Target, e.Detail);
                         pt.Value = ms; pe.Value = e.Event; pc.Value = (object?)e.ConnectionId ?? DBNull.Value;
                         ptg.Value = (object?)e.Target ?? DBNull.Value; pdt.Value = (object?)e.Detail ?? DBNull.Value;
@@ -138,12 +150,18 @@ public static class AuditLog
                         cmd.ExecuteNonQuery();
                         prev = hash;
                     }
+                    // The newest entry, so removing entries from the end is detected too (see Verify).
+                    var last = Convert.ToInt64(LocalDb.Scalar(c, "SELECT last_insert_rowid()", t));
+                    LocalDb.SetMeta(c, HeadKey(device), $"{last}:{ms}:{Convert.ToHexString(prev)}", t);
                     t.Commit();
                 });
             }
             catch (Exception ex) { DiagLog.Write("Audit log write failed: " + ex.Message); }
+            if (!written) Retry.AddRange(batch.TakeLast(MaxRetry)); // not open yet, or the write failed
         }
     }
+
+    private static string HeadKey(string device) => "audit_head_" + device;
 
     /// <summary>SHA-256 over the previous hash and the entry's fields (each length-prefixed, so fields can't run into each other).</summary>
     internal static byte[] Hash(byte[] prev, long timeMs, string device, string? deviceName, string? account, string evt,
@@ -169,7 +187,7 @@ public static class AuditLog
         string? connectionId = null, int limit = 10_000)
     {
         Flush();
-        return LocalDb.Use((c, _) =>
+        return LocalDb.Read(c =>
         {
             var where = new List<string>();
             var args = new List<(string, object?)>();
@@ -205,7 +223,7 @@ public static class AuditLog
     public static AuditVerifyResult Verify()
     {
         Flush();
-        return LocalDb.Use((c, _) =>
+        return LocalDb.Read(c =>
         {
             using var cmd = LocalDb.Command(c, """
                 SELECT id, time_utc, device_id, device_name, account, event, connection_id, target, detail, prev_hash, hash
@@ -215,11 +233,13 @@ public static class AuditLog
             var count = 0;
             string? device = null;
             byte[]? prev = null;
+            var newest = new Dictionary<string, (long Id, byte[] Hash)>();
             while (r.Read())
             {
                 count++;
                 var id = r.GetInt64(0);
                 var dev = r.GetString(2);
+                newest[dev] = (id, (byte[])r.GetValue(10));
                 var storedPrev = (byte[])r.GetValue(9);
                 var stored = (byte[])r.GetValue(10);
                 if (dev != device) { device = dev; prev = null; } // the oldest entry kept: its predecessor may be past the retention period
@@ -230,8 +250,37 @@ public static class AuditLog
                     return new AuditVerifyResult(count, $"Entry {id} ({DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(1)).LocalDateTime:g}) was changed after it was written.");
                 prev = stored;
             }
-            return new AuditVerifyResult(count, null);
+            r.Close();
+            return new AuditVerifyResult(count, VerifyHeads(c, newest));
         });
+    }
+
+    /// <summary>
+    /// Each device's newest entry must still be the one recorded when it was written – otherwise entries were removed from
+    /// the end, which the chain alone can't show. All of a device's entries may only be gone through the retention period.
+    /// </summary>
+    private static string? VerifyHeads(SqliteConnection c, Dictionary<string, (long Id, byte[] Hash)> newest)
+    {
+        var cutoff = long.TryParse(LocalDb.Meta(c, "audit_cutoff"), out var cut) ? cut : 0;
+        using var cmd = LocalDb.Command(c, "SELECT key, value FROM meta WHERE key LIKE 'audit\\_head\\_%' ESCAPE '\\'", null);
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            var device = r.GetString(0)["audit_head_".Length..];
+            var parts = (r.IsDBNull(1) ? "" : r.GetString(1)).Split(':');
+            if (parts.Length != 3 || !long.TryParse(parts[0], out var id) || !long.TryParse(parts[1], out var timeMs))
+                return "The record of the newest audit entry is damaged.";
+            if (newest.TryGetValue(device, out var last))
+            {
+                if (last.Id != id || !Convert.ToHexString(last.Hash).Equals(parts[2], StringComparison.OrdinalIgnoreCase))
+                    return last.Id < id
+                        ? $"The newest entries were removed: the log ends at entry {last.Id}, but entry {id} was written."
+                        : $"Entry {last.Id} isn't the newest entry that was written ({id}).";
+            }
+            else if (timeMs >= cutoff)
+                return "Entries were removed: none are left, although the newest one is still inside the retention period.";
+        }
+        return null;
     }
 
     /// <summary>Removes entries (and connection history) older than <paramref name="days"/>, in small steps.</summary>
@@ -263,7 +312,14 @@ public static class AuditLog
     }
 
     /// <summary>For tests: drops what is waiting without writing it.</summary>
-    internal static void DiscardPending() => Queue.Clear();
+    internal static void DiscardPending()
+    {
+        lock (FlushGate)
+        {
+            Queue.Clear();
+            Retry.Clear();
+        }
+    }
 }
 
 /// <summary>When each connection was used, and how: one row per session (kind, start, end, result).</summary>
@@ -300,7 +356,7 @@ public static class ConnectionHistory
     }
 
     /// <summary>Sessions of a connection since <paramref name="sinceUtc"/>: how many, how long in total, and the last one.</summary>
-    public static Summary For(Guid connectionId, DateTime sinceUtc) => LocalDb.Use((c, _) =>
+    public static Summary For(Guid connectionId, DateTime sinceUtc) => LocalDb.Read(c =>
     {
         using var cmd = LocalDb.Command(c, """
             SELECT count(*), COALESCE(sum(COALESCE(end_utc, start_utc) - start_utc), 0), max(start_utc)

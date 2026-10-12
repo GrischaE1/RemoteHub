@@ -438,6 +438,15 @@ public sealed partial class MainViewModel : ObservableObject
         return s;
     }
 
+    /// <summary>The history entries of sessions still connected: ended by <see cref="EndOpenSessions"/> when RemoteHub closes.</summary>
+    private readonly List<Action<string>> _openSessionRecords = [];
+
+    /// <summary>RemoteHub closes: records the end of every session still connected (otherwise its duration would be lost).</summary>
+    public void EndOpenSessions()
+    {
+        foreach (var end in _openSessionRecords.ToList()) end("RemoteHub closed");
+    }
+
     private void Register(SessionBase s)
     {
         var c = s.Connection;
@@ -446,12 +455,14 @@ public sealed partial class MainViewModel : ObservableObject
         DateTime? connectedSince = null;
         void Ended(string result)
         {
+            _openSessionRecords.Remove(Ended);
             if (connectedSince is not { } since) return;
             ConnectionHistory.End(history, result);
             AuditLog.Write(AuditEvents.SessionEnded, c, $"{s.KindLabel} – {Duration(DateTime.UtcNow - since)}");
             history = 0;
             connectedSince = null;
         }
+        _openSessionRecords.Add(Ended);
         s.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != nameof(SessionBase.State)) return;

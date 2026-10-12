@@ -1,3 +1,4 @@
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using RemoteHub.Remoting;
@@ -20,15 +21,15 @@ public sealed class RemotingSetupDialog : FluentWindow
     private readonly RadioButton _https = new() { Content = "HTTPS with a new certificate for this computer (recommended – works with IP addresses and computers outside the domain)", IsChecked = true, Margin = new Thickness(0, 0, 0, 6) };
     private readonly RadioButton _http = new() { Content = "HTTP (domain computers reached by name – Kerberos)", Margin = new Thickness(0, 0, 0, 4) };
     private readonly TextBox _allow;
+    private readonly CheckBox _localAdmins = new() { IsChecked = true, Margin = new Thickness(0, 12, 0, 0) };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0) };
     private readonly Button _test;
-    private ListenerCertificate? _cert;
-    private bool _trusted;
+    private bool _httpsScript;
 
     /// <summary>True when the HTTPS script was handed out and this PC trusts its certificate: the connection should use HTTPS.</summary>
     public bool SwitchToHttps { get; private set; }
     /// <summary>Thumbprint of the certificate this PC now trusts (for the connection's status).</summary>
-    public string? TrustedThumbprint => _trusted ? _cert?.Thumbprint : null;
+    public string? TrustedThumbprint { get; private set; }
 
     public RemotingSetupDialog(string connectionName, string host, string? lastError, string? detectedAddress)
     {
@@ -64,9 +65,19 @@ public sealed class RemotingSetupDialog : FluentWindow
             : $"All addresses of this PC (it uses {detectedAddress} to reach {host}). With NAT or VPN in between, add the address the target sees, or a subnet. Only these addresses get a firewall rule.",
             0, 4, 0, 0));
 
-        body.Children.Add(Muted("HTTPS: the certificate is made for this target only (not a CA, server authentication only, 2 years). " +
-                                "Its private key is only in the script – RemoteHub does not keep it. This PC trusts the certificate " +
-                                "for your Windows account (Windows asks you to confirm), and the connection switches to HTTPS. " +
+        _localAdmins.Content = new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Allow local administrators over the network (LocalAccountTokenFilterPolicy = 1). Needed for local accounts where " +
+                   "UAC remote restrictions are on (security baselines) – without it WinRM answers \"access denied\". It also gives any " +
+                   "other local admin account its full rights over the network; leave it off if you only use domain accounts.",
+        };
+        body.Children.Add(_localAdmins);
+
+        body.Children.Add(Muted("HTTPS: the script makes the certificate on the target itself (not a CA, server authentication only, 2 years); " +
+                                "its private key never leaves the target. It prints the certificate's thumbprint. \"Test again\" shows the " +
+                                "thumbprint the target presents – if both are the same, this PC trusts the certificate for your Windows account " +
+                                "(Windows asks you to confirm) and the connection switches to HTTPS. " +
                                 $"The script is copied without clipboard history and cleared after {ClipboardSeconds} s.", 0, 12, 0, 0));
 
         body.Children.Add(_status);
@@ -76,7 +87,11 @@ public sealed class RemotingSetupDialog : FluentWindow
         var save = new Button { Content = "Save as .ps1…", Icon = new SymbolIcon(SymbolRegular.Save24), Margin = new Thickness(0, 0, 8, 0) };
         save.Click += (_, _) => Produce(toClipboard: false);
         _test = new Button { Content = "Test again", Icon = new SymbolIcon(SymbolRegular.ArrowSync24), IsEnabled = false, Margin = new Thickness(0, 0, 8, 0) };
-        _test.Click += (_, _) => DialogResult = true;
+        _test.Click += async (_, _) =>
+        {
+            if (_httpsScript && TrustedThumbprint is null && !await TrustTargetCertificate()) return;
+            DialogResult = true;
+        };
         var close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
         buttons.Children.Add(copy);
@@ -106,43 +121,79 @@ public sealed class RemotingSetupDialog : FluentWindow
         var https = _https.IsChecked == true;
         try
         {
-            if (https)
-            {
-                _cert ??= RemotingSetup.CreateCertificate(_host, DateTimeOffset.Now);
-                if (!_trusted)
-                {
-                    try { RemotingSetup.TrustOnThisPc(_cert, _host); }
-                    catch (System.Security.Cryptography.CryptographicException)
-                    {
-                        Status("This PC does not trust the certificate (the Windows prompt was declined), so the HTTPS connection would fail. Nothing was copied.", true);
-                        return;
-                    }
-                    _trusted = true;
-                    DiagLog.Write("Remoting setup: certificate trusted for the current user");
-                }
-                SwitchToHttps = true;
-            }
-            var script = RemotingSetup.BuildScript(_connectionName, _host, sources, https ? _cert : null, DateTime.Now);
+            var script = RemotingSetup.BuildScript(_connectionName, _host, sources, https, DateTime.Now, allowLocalAdmins: _localAdmins.IsChecked == true);
+            var then = https ? "Then click \"Test again\" and compare the certificate's thumbprint." : "Then click \"Test again\".";
 
             if (toClipboard)
             {
                 var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
                 if (!SecureClipboard.CopySecret(hwnd, script, TimeSpan.FromSeconds(ClipboardSeconds))) { Status("The clipboard is in use by another program – try again.", true); return; }
-                Status($"Copied. Open an elevated PowerShell on {_host}, paste (right-click or Ctrl+V) and press Enter. Then click \"Test again\".", false);
+                Status($"Copied. Open an elevated PowerShell on {_host}, paste (right-click or Ctrl+V) and press Enter. {then}", false);
             }
             else
             {
                 var dlg = new Microsoft.Win32.SaveFileDialog { Filter = "PowerShell script (*.ps1)|*.ps1", FileName = $"Enable-Remoting-{RdpFileWriter.SafeFileName(_connectionName)}.ps1" };
                 if (dlg.ShowDialog(this) != true) return;
                 File.WriteAllText(dlg.FileName, script, new System.Text.UTF8Encoding(true));
-                Status(https
-                    ? $"Saved. The file contains the certificate's private key – delete it after running it on {_host}. Then click \"Test again\"."
-                    : $"Saved. Run it in an elevated PowerShell on {_host}, then click \"Test again\".", false);
+                Status($"Saved. Run it in an elevated PowerShell on {_host}. {then}", false);
             }
             DiagLog.Write($"Remoting setup script produced ({(https ? "HTTPS" : "HTTP")}, {(toClipboard ? "clipboard" : "file")})");
+            _httpsScript = https;
+            // The connection uses HTTPS from now on, however this window is closed – the certificate check comes with
+            // "Test again", or with the next test (it offers it when the certificate isn't trusted yet).
+            if (https) SwitchToHttps = true;
             _test.IsEnabled = true;
         }
         catch (Exception ex) { Status("Could not create the script: " + ex.Message, true); }
+    }
+
+    /// <summary>
+    /// After the HTTPS script ran: fetches the certificate the target presents and trusts it on this PC only if the user
+    /// confirms its thumbprint is the one the script printed (so nobody in between can slip in their own).
+    /// </summary>
+    private async Task<bool> TrustTargetCertificate()
+    {
+        _test.IsEnabled = false;
+        try
+        {
+            var (thumbprint, error) = await CheckAndTrustCertificate(this, _host);
+            if (error is not null) { Status(error, true); return false; }
+            TrustedThumbprint = thumbprint;
+            return true;
+        }
+        finally { _test.IsEnabled = true; }
+    }
+
+    /// <summary>
+    /// Fetches the certificate <paramref name="host"/> presents on 5986, shows its thumbprint to compare with the one
+    /// the setup script printed, and trusts it on this PC if the user confirms. Returns the trusted thumbprint, or why not.
+    /// Also used by the connection test when HTTPS fails because the certificate isn't trusted yet.
+    /// </summary>
+    public static async Task<(string? Thumbprint, string? Error)> CheckAndTrustCertificate(Window owner, string host)
+    {
+        System.Security.Cryptography.X509Certificates.X509Certificate2 cert;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            cert = await RemotingSetup.FetchCertificateAsync(host, 5986, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            DiagLog.Write("Remoting setup: certificate not fetched – " + ex.GetBaseException().Message);
+            return (null, $"{host} doesn't answer on port 5986 ({ex.GetBaseException().Message}). Did the script finish without errors, and is this PC's address in its list?");
+        }
+        using (cert)
+        {
+            if (!await Dialogs.Confirm(owner, "Trust this certificate?",
+                    $"{host} presents this certificate:\n\n{RemotingSetup.Grouped(cert.Thumbprint)}\n\n" +
+                    "Is it the same thumbprint the setup script printed on the target? Trust it only then – otherwise something between this PC " +
+                    "and the target answers in its place.", "Same – trust it"))
+                return (null, "Not trusted. Nothing was changed on this PC.");
+            try { RemotingSetup.TrustOnThisPc(cert, host); }
+            catch (System.Security.Cryptography.CryptographicException) { return (null, "The Windows prompt was declined – the certificate isn't trusted."); }
+            DiagLog.Write("Remoting setup: certificate trusted for the current user");
+            return (cert.Thumbprint, null);
+        }
     }
 
     private void Status(string text, bool error)

@@ -14,13 +14,17 @@
     <Authors>Grischa Ernst</Authors>
     <Company>Grischa Ernst</Company>
     <Copyright>© 2026 Grischa Ernst</Copyright>
-    <Version>0.14.2</Version>
+    <Version>0.16.5</Version>
     <PlatformTarget>x64</PlatformTarget>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- Publish: one self-contained file, no runtime needed on the device -->
+    <!-- Publish: one self-contained file, no runtime needed on the device (build-installer.ps1 publishes with
+         self-contained on; here it stays off so the tests can reference the project) -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Never extract native libraries: as LocalSystem they would land in SYSTEM's %TEMP% (C:\Windows\Temp on older
+         Windows, where users can create folders) and be loaded from there. Any native library not linked into the exe
+         stays next to it in Program Files; the MSI installs everything in the publish folder. -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>true</PublishTrimmed>
     <TrimMode>partial</TrimMode>
@@ -36,6 +40,14 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteHub.Tests" />
+  </ItemGroup>
+
+  <!-- Optional virtual monitor for devices without one (third-party, MIT, signed – see third-party\...\README.md).
+       Installed next to the exe in "VirtualDisplay"; the agent checks the files' hashes before it installs the driver. -->
+  <ItemGroup>
+    <None Include="..\..\third-party\VirtualDisplayDriver\24.12.24\*" Exclude="..\..\third-party\VirtualDisplayDriver\24.12.24\README.md"
+          Link="VirtualDisplay\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
+          ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>

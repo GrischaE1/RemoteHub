@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using RemoteHub.Data;
 using RemoteHub.Models;
@@ -58,6 +60,70 @@ public class LocalDbTests : IDisposable
         var b = new byte[fs.Length];
         fs.ReadExactly(b);
         return b;
+    }
+
+    [Fact]
+    public async Task A_long_read_doesnt_make_saves_wait()
+    {
+        var data = Sample();
+        SettingsStore.Save(data);
+        using var reading = new ManualResetEventSlim();
+        var read = Task.Run(() => LocalDb.Read(c =>
+        {
+            reading.Set();
+            Thread.Sleep(1500); // e.g. the audit log viewer or the daily check
+            return LocalDb.Scalar(c, "SELECT count(*) FROM nodes");
+        }));
+        Assert.True(reading.Wait(5000));
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        data.Tools.ProcessRefreshSeconds = 9;
+        SettingsStore.Save(data);
+        Assert.True(sw.ElapsedMilliseconds < 1000, $"the save waited {sw.ElapsedMilliseconds} ms for the read");
+        Assert.Equal(6L, await read); // 2 folders, 4 connections – the read isn't disturbed by the save
+        LocalDb.Close();
+        Assert.Equal(9, SettingsStore.Load().Tools.ProcessRefreshSeconds);
+    }
+
+    [Fact]
+    public void A_password_moved_to_another_place_is_refused()
+    {
+        SettingsStore.Save(Sample());
+        // Someone with the database key swaps two sealed passwords (e.g. to get a folder's password used for their server).
+        LocalDb.Use((c, _) =>
+        {
+            var rows = new List<(string Kind, string Id, string Path, byte[] Value)>();
+            using (var cmd = LocalDb.Command(c, "SELECT owner_kind, owner_id, path, value FROM secrets ORDER BY rowid LIMIT 2", null))
+            using (var r = cmd.ExecuteReader())
+                while (r.Read()) rows.Add((r.GetString(0), r.GetString(1), r.GetString(2), (byte[])r.GetValue(3)));
+            Assert.Equal(2, rows.Count);
+            for (var i = 0; i < 2; i++)
+                LocalDb.Exec(c, "UPDATE secrets SET value = $v WHERE owner_kind = $k AND owner_id = $o AND path = $p", null,
+                    ("$v", rows[1 - i].Value), ("$k", rows[i].Kind), ("$o", rows[i].Id), ("$p", rows[i].Path));
+        });
+        LocalDb.Close();
+        // The seal is bound to its table, row and field: neither password opens in the other's place.
+        var ex = Assert.Throws<DatabaseUnreadableException>(() => SettingsStore.Load());
+        Assert.Contains("moved", ex.Message);
+    }
+
+    [Fact]
+    public void A_write_that_stops_halfway_leaves_the_database_as_it_was()
+    {
+        var data = Sample();
+        SettingsStore.Save(data);
+        using var keys = DbKeys.Read(Path.Combine(LocalDb.Directory, "db.key"));
+        // A second connection – like another process – writes in a transaction and never commits (it dies).
+        var other = LocalDb.Connect(LocalDb.FilePath, keys.Db, wal: true);
+        var t = other.BeginTransaction();
+        LocalDb.Exec(other, "DELETE FROM nodes", t);
+        LocalDb.Exec(other, "UPDATE settings SET data = '{}'", t);
+        other.Dispose(); // no commit, no rollback: gone
+        LocalDb.Close();
+
+        var loaded = SettingsStore.Load();
+        Assert.Equal(["Prod " + Marker, "jump"], loaded.Items.Select(n => n.Name));
+        Assert.Equal(7, loaded.Tools.ProcessRefreshSeconds);
+        Assert.Equal("ok", LocalDb.Use((c, _) => LocalDb.Scalar(c, "PRAGMA quick_check")));
     }
 
     [Fact]
@@ -218,6 +284,23 @@ public class LocalDbTests : IDisposable
             LocalDb.Exec(c, "DELETE FROM audit WHERE target = 'other'"); // ... or removes it
         });
         Assert.Contains("doesn't follow", AuditLog.Verify().Problem);
+    }
+
+    [Fact]
+    public void Removing_the_newest_audit_entries_is_detected()
+    {
+        LocalDb.Open();
+        for (var i = 0; i < 5; i++) AuditLog.Write(AuditEvents.SessionConnected, null, $"srv{i}", null);
+        Assert.Null(AuditLog.Verify().Problem);
+        // The chain of what's left is intact – only the record of the newest entry shows that some are missing.
+        LocalDb.Use((c, _) =>
+        {
+            LocalDb.Exec(c, "DROP TRIGGER audit_no_delete");
+            LocalDb.Exec(c, "DELETE FROM audit WHERE target IN ('srv3', 'srv4')");
+        });
+        Assert.Contains("newest entries were removed", AuditLog.Verify().Problem);
+        LocalDb.Use((c, _) => LocalDb.Exec(c, "DELETE FROM audit"));
+        Assert.Contains("none are left", AuditLog.Verify().Problem);
     }
 
     [Fact]

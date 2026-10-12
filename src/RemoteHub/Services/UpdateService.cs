@@ -112,11 +112,35 @@ public static class UpdateService
 
     // ------------------------------------------------------------------ download & install
 
-    private static readonly string[] AllowedHosts = ["github.com", "githubusercontent.com", "remotehub.dev"];
+    /// <summary>RemoteHub's own GitHub repository (GrischaE1/RemoteHub) – its id never changes, even if it is renamed.</summary>
+    private const string RepositoryId = "1409080301";
 
-    /// <summary>Downloads only over HTTPS from GitHub or remotehub.dev.</summary>
-    internal static bool IsAllowedDownload(Uri uri) =>
-        uri.Scheme == Uri.UriSchemeHttps && AllowedHosts.Any(h => uri.Host.Equals(h, StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith("." + h, StringComparison.OrdinalIgnoreCase));
+    /// <summary>Where GitHub may redirect a release download to (its file storage).</summary>
+    private static readonly string[] RedirectHosts = ["github.com", "githubusercontent.com", "remotehub.dev"];
+
+    /// <summary>
+    /// The download must be one of RemoteHub's own release files over HTTPS: from remotehub.dev, or a release asset of
+    /// RemoteHub's GitHub repository – not just anything on GitHub, where anyone can publish files.
+    /// </summary>
+    internal static bool IsAllowedDownload(Uri uri)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps) return false;
+        var host = uri.Host;
+        var path = uri.AbsolutePath;
+        if (IsHost(host, "remotehub.dev")) return true;
+        if (host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase))
+            return path.StartsWith($"/repositories/{RepositoryId}/releases/assets/", StringComparison.Ordinal)
+                || path.StartsWith("/repos/GrischaE1/RemoteHub/releases/assets/", StringComparison.OrdinalIgnoreCase);
+        if (host.Equals("github.com", StringComparison.OrdinalIgnoreCase))
+            return path.StartsWith("/GrischaE1/RemoteHub/releases/download/", StringComparison.OrdinalIgnoreCase);
+        return false;
+    }
+
+    /// <summary>Where the download may end up after redirects (the checksum is what proves the file).</summary>
+    internal static bool IsAllowedRedirect(Uri uri) => uri.Scheme == Uri.UriSchemeHttps && RedirectHosts.Any(h => IsHost(uri.Host, h));
+
+    private static bool IsHost(string host, string domain) =>
+        host.Equals(domain, StringComparison.OrdinalIgnoreCase) || host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase);
 
     public static string DownloadFolder => Path.Combine(Path.GetTempPath(), "RemoteHub", "Updates");
 
@@ -130,7 +154,7 @@ public static class UpdateService
             throw new InvalidOperationException("Only a newer version than the running one can be installed.");
         var d = info.Download ?? throw new InvalidOperationException("The update has no download.");
         if (!Uri.TryCreate(d.Url, UriKind.Absolute, out var uri) || !IsAllowedDownload(uri))
-            throw new InvalidOperationException("The download address isn't trusted (only HTTPS from GitHub or remotehub.dev).");
+            throw new InvalidOperationException("The download address isn't trusted (only RemoteHub's own releases on GitHub or remotehub.dev, over HTTPS).");
         if (d.Sha256 is not { Length: 64 } expectedHex || !expectedHex.All(Uri.IsHexDigit))
             throw new InvalidOperationException("The update has no valid SHA-256 checksum, so it can't be verified.");
 
@@ -147,8 +171,8 @@ public static class UpdateService
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/octet-stream"));
             using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-            if (response.RequestMessage?.RequestUri is { } final && final.Scheme != Uri.UriSchemeHttps)
-                throw new InvalidOperationException("The download was redirected to an insecure address.");
+            if (response.RequestMessage?.RequestUri is { } final && !IsAllowedRedirect(final))
+                throw new InvalidOperationException("The download was redirected to an address that isn't trusted.");
             if (!response.IsSuccessStatusCode)
                 throw new HttpRequestException($"The download isn't available ({(int)response.StatusCode} {response.ReasonPhrase}).");
 

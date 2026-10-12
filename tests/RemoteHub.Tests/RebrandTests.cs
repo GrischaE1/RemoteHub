@@ -53,7 +53,7 @@ public class RebrandTests
     [Fact]
     public void Setup_script_replaces_the_firewall_rule_of_the_old_name()
     {
-        var script = RemotingSetup.BuildScript("Lab", "host1", ["10.0.0.1"], null, DateTime.Now);
+        var script = RemotingSetup.BuildScript("Lab", "host1", ["10.0.0.1"], false, DateTime.Now);
         Assert.Contains("'RemoteHub-WinRM-HTTP-In', 'RdpManager-WinRM-HTTP-In'", script);
         Assert.Contains("New-NetFirewallRule -Name 'RemoteHub-WinRM-HTTP-In'", script);
         Assert.DoesNotContain("RDP Manager", script);

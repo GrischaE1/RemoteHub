@@ -30,10 +30,10 @@ public class CompletionTests
     /// Windows PowerShell 5.1 as the "remote" side, over the same remoting protocol as WinRM (out-of-process transport).
     /// This is what a typical Windows Server target runs.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public void Completion_works_against_Windows_PowerShell_51()
     {
-        if (!File.Exists(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"))) return;
+        Skip.IfNot(File.Exists(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe")), "Windows PowerShell 5.1 isn't installed.");
         using var proc = new PowerShellProcessInstance(new Version(5, 1), null, null, false);
         using var rs = RunspaceFactory.CreateOutOfProcessRunspace(null, proc);
         rs.Open();

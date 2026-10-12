@@ -220,6 +220,61 @@ public class AgentTests
         Assert.False(gate.IsBlocked("1.2.3.4")); // a fresh window
     }
 
+    [SkippableFact]
+    public void The_agent_folder_belongs_to_administrators_only()
+    {
+        using var me = System.Security.Principal.WindowsIdentity.GetCurrent();
+        Skip.IfNot(new System.Security.Principal.WindowsPrincipal(me).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator),
+            "Needs an elevated test run (sets Administrators as owner).");
+        var folder = Path.Combine(Path.GetTempPath(), "rh-acl-" + Guid.NewGuid().ToString("N"));
+        var file = Path.Combine(folder, "logs", "agent.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "x");
+        // Prepared by a user before the install: an explicit entry for everyone.
+        var everyone = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null);
+        var pre = new FileInfo(file).GetAccessControl();
+        pre.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(everyone, System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+        new FileInfo(file).SetAccessControl(pre);
+        try
+        {
+            A.Enrollment.SecureFolder(folder);
+            var admins = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null);
+            var acl = new FileInfo(file).GetAccessControl();
+            Assert.Equal(admins, acl.GetOwner(typeof(System.Security.Principal.SecurityIdentifier)));
+            var rules = acl.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)).Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+            Assert.DoesNotContain(rules, r => !r.IsInherited);
+            Assert.All(rules, r => Assert.Contains(r.IdentityReference.Value, new[] { "S-1-5-18", "S-1-5-32-544" }));
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    [Fact]
+    public void Parallel_sign_ins_get_no_more_tries_than_sequential_ones()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var gate = new A.SignInGate(3, TimeSpan.FromMinutes(5), () => now);
+        gate.Failed("1.2.3.4");
+        // One failure so far: two more attempts may run at the same time, a third has to wait for them.
+        Assert.True(gate.TryBegin("1.2.3.4"));
+        Assert.True(gate.TryBegin("1.2.3.4"));
+        Assert.False(gate.TryBegin("1.2.3.4"));
+        Assert.True(gate.TryBegin("5.6.7.8")); // other addresses aren't affected
+        gate.Succeeded("1.2.3.4"); // one of them had the right password
+        gate.End("1.2.3.4");
+        Assert.True(gate.TryBegin("1.2.3.4"));
+    }
+
+    [Fact]
+    public void Old_addresses_are_forgotten()
+    {
+        var now = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
+        var gate = new A.SignInGate(5, TimeSpan.FromMinutes(5), () => now);
+        for (var i = 0; i < 1000; i++) gate.Failed($"10.0.{i / 256}.{i % 256}");
+        now = now.AddMinutes(10);
+        gate.Failed("1.2.3.4"); // over the limit: the expired ones are removed
+        Assert.Equal(1, gate.Tracked);
+    }
+
     [Fact]
     public void An_enrollment_carries_a_fresh_device_identity_that_matches_its_fingerprint()
     {

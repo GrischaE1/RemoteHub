@@ -21,6 +21,8 @@ try
         new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: DesktopServices.Windows()), []);
     log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");
+    if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
+    VirtualDisplay.Reset(); // the virtual monitor is off until a connection needs it (a crash may have left it on)
     await app.RunAsync();
     log.Write("RemoteHub Agent stopped");
     return 0;

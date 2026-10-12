@@ -77,6 +77,19 @@ public static class CrashReporter
         catch { /* nothing more can be done while crashing */ }
     }
 
+    private static int _handled;
+
+    /// <summary>
+    /// An unexpected error the app survived (the user saw a message): recorded like a crash, so it's reported at the next
+    /// start too – at most three per session, so one repeating error doesn't fill the folder.
+    /// </summary>
+    public static void RecordHandled(Exception ex)
+    {
+        if (Interlocked.Increment(ref _handled) > 3) return;
+        try { Write(FromException(ex, AppVersion.Current.ToString(), DateTime.UtcNow)); }
+        catch { /* best effort */ }
+    }
+
     private static void Write(CrashReport report)
     {
         Directory.CreateDirectory(Folder);
@@ -197,10 +210,20 @@ public static class CrashReporter
         (new(@"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", RegexOptions.Compiled), "[email]"),
         (new(@"\b\d{1,3}(?:\.\d{1,3}){3}\b", RegexOptions.Compiled), "[ip]"),
         (new(@"\b(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}\b", RegexOptions.Compiled), "[ip]"),
+        // Shortened IPv6 (fe80::1, ::1, 2001:db8::5%12): only hex digits and colons, with "::" somewhere.
+        (new(@"(?<![\w:])(?=[0-9A-Fa-f:]*::)[0-9A-Fa-f:]{2,39}(?:%\w+)?(?![\w:])", RegexOptions.Compiled), "[ip]"),
+        // DOMAIN\user and COMPUTER\user of anyone (after the paths, which also contain backslashes).
+        (new(@"\b[A-Za-z0-9][\w.-]{0,14}\\[\w.$-]+", RegexOptions.Compiled), "[account]"),
         (new(@"'[^']*'|""[^""]*""|“[^”]*”|‘[^’]*’", RegexOptions.Compiled), "'…'"),                        // quoted values
-        // Host names: lower-case dotted names with a typical suffix (.NET type names are PascalCase, so they stay).
-        (new(@"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|corp|internal|intra|intranet|home|domain|ad|com|net|org|de|eu|io|dev|cloud|biz|info|uk|us|ch|at|nl|fr)\b", RegexOptions.Compiled), "[host]"),
     ];
+
+    /// <summary>Host names: dotted names with a typical suffix, in any case (SRV01.CONTOSO.COM, Web01.Contoso.local).</summary>
+    private static readonly Regex HostName = new(
+        @"\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:local|lan|corp|internal|intra|intranet|home|domain|ad|com|net|org|de|eu|io|dev|cloud|biz|info|uk|us|ch|at|nl|fr)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>.NET namespaces look like host names (System.Net, Microsoft.Win32.dev…) and are what makes a report useful.</summary>
+    private static readonly string[] CodeNamespaces = ["System.", "Microsoft.", "Windows.", "RemoteHub.", "MS.", "Wpf.", "Interop.", "CommunityToolkit."];
 
     /// <summary>Removes anything that could identify a server, a machine or a person, and limits the length.</summary>
     internal static string Redact(string? text, int max)
@@ -208,8 +231,13 @@ public static class CrashReporter
         if (string.IsNullOrEmpty(text)) return "";
         var s = text;
         foreach (var (value, label) in new[] { (Environment.UserName, "[user]"), (Environment.MachineName, "[computer]"), (Environment.UserDomainName, "[domain]") })
+        {
+            // Short names only as whole words, so "jd" doesn't eat parts of other words.
             if (value is { Length: >= 3 }) s = Regex.Replace(s, Regex.Escape(value), label, RegexOptions.IgnoreCase);
+            else if (value is { Length: 2 }) s = Regex.Replace(s, $@"\b{Regex.Escape(value)}\b", label, RegexOptions.IgnoreCase);
+        }
         foreach (var (pattern, replacement) in Rules) s = pattern.Replace(s, replacement);
+        s = HostName.Replace(s, m => CodeNamespaces.Any(n => m.Value.StartsWith(n, StringComparison.OrdinalIgnoreCase)) ? m.Value : "[host]");
         return s.Length <= max ? s : s[..max] + "…";
     }
 }

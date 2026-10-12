@@ -120,6 +120,7 @@ public static class SettingsStore
 
     private static LocalConfig _local = new();
     private static byte[]? _key, _salt;          // shared mode: active key and the file's salt
+    private static int _iterations = Iterations; // shared mode: the file's PBKDF2 count (kept when saving)
     private static byte[]? _lastHash;            // hash of the file content we last read or wrote
     private static FileSystemWatcher? _watcher;
 
@@ -398,19 +399,34 @@ public static class SettingsStore
     /// </summary>
     public static async Task Reprotect(AppData current, Func<Task> change)
     {
-        var cache = KeyCacheRead();
+        // Read before anything changes: if it can't be read now, writing it back would quietly drop the remembered passwords.
+        Dictionary<string, string> cache;
+        try { cache = KeyCacheReadOrThrow(); }
+        catch (Exception ex) when (ex is not AppLockedException)
+        {
+            throw new InvalidOperationException("The remembered passwords of shared settings files can't be read (" + ex.Message +
+                                                "). Nothing was changed. Forget them under Settings location, then try again.", ex);
+        }
         byte[]? legacyPlain = _legacyFile && File.Exists(LocalFilePath) ? DecryptLocalBytes(File.ReadAllBytes(LocalFilePath)) : null;
+        // The lock switches before the database key is stored again: keep a copy so a stop in between loses nothing.
+        LocalDb.BeginReprotect();
+        var done = false;
         try
         {
             await change();
             if (cache.Count > 0 || File.Exists(KeyCachePath)) KeyCacheWrite(cache);
             if (LocalDb.IsOpen) LocalDb.Rekey();
+            done = true;
             if (legacyPlain is not null) WriteAtomic(LocalFilePath, EncryptLocalBytes(legacyPlain));
             foreach (var bak in new[] { LocalFilePath + ".bak", KeyCachePath + ".bak", LocalFilePath + ".migrated" })
                 try { if (File.Exists(bak)) File.Delete(bak); } catch { /* best effort */ }
             AuditLog.Write(AuditEvents.ProtectionChanged, null, null, AppLock.Describe());
         }
-        finally { if (legacyPlain is not null) CryptographicOperations.ZeroMemory(legacyPlain); }
+        finally
+        {
+            LocalDb.EndReprotect(failed: !done);
+            if (legacyPlain is not null) CryptographicOperations.ZeroMemory(legacyPlain);
+        }
     }
 
     // ------------------------------------------------------------------ shared (password) mode
@@ -434,6 +450,7 @@ public static class SettingsStore
         var bytes = File.ReadAllBytes(path);
         var env = JsonSerializer.Deserialize<Envelope>(bytes) ?? throw new InvalidDataException("Empty settings file.");
         if (env.Format != SharedFormat) throw new InvalidDataException("Not a RemoteHub shared settings file.");
+        CheckIterations(env.Iterations);
         var salt = Convert.FromBase64String(env.Salt);
 
         var key = password is null ? KeyCacheGet(salt) : Derive(password, salt, env.Iterations);
@@ -444,6 +461,7 @@ public static class SettingsStore
             {
                 _key = key;
                 _salt = salt;
+                _iterations = env.Iterations; // saved with the same count, so the password keeps opening it on other PCs
                 _lastHash = Hash(bytes);
                 KeyCacheSet(salt, key);
                 return data;
@@ -484,7 +502,7 @@ public static class SettingsStore
         finally { CryptographicOperations.ZeroMemory(plain); }
         var env = new Envelope
         {
-            Iterations = Iterations,
+            Iterations = _iterations,
             Salt = Convert.ToBase64String(_salt),
             Nonce = Convert.ToBase64String(nonce),
             Tag = Convert.ToBase64String(tag),
@@ -497,6 +515,16 @@ public static class SettingsStore
     private static byte[] Derive(string password, byte[] salt, int iterations) =>
         Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, 32);
 
+    /// <summary>
+    /// The PBKDF2 count read from a file must be sane: too low makes the password easy to guess, too high (or a crafted
+    /// file) would keep RemoteHub busy for hours.
+    /// </summary>
+    internal static void CheckIterations(int iterations)
+    {
+        if (iterations is < 10_000 or > 10_000_000)
+            throw new InvalidDataException($"The file's key derivation setting ({iterations:N0} iterations) is out of range – it is damaged or not from RemoteHub.");
+    }
+
     // ------------------------------------------------------------------ switching location
 
     /// <summary>Creates a new shared settings file in <paramref name="folder"/> from <paramref name="current"/> and switches to it.</summary>
@@ -507,6 +535,7 @@ public static class SettingsStore
         var path = SharedFilePathFor(folder);
         if (File.Exists(path)) throw new IOException("A shared settings file already exists in this folder.");
         _salt = RandomNumberGenerator.GetBytes(16);
+        _iterations = Iterations;
         _key = Derive(password, _salt, Iterations);
         KeyCacheSet(_salt, _key);
         _local.SharedFolder = folder;
@@ -615,17 +644,20 @@ public static class SettingsStore
 
     private static Dictionary<string, string> KeyCacheRead()
     {
-        try
-        {
-            if (!File.Exists(KeyCachePath)) return new();
-            var bytes = File.ReadAllBytes(KeyCachePath);
-            var locked = bytes.AsSpan().StartsWith(KeyCacheLocked);
-            var inner = ProtectedData.Unprotect(locked ? bytes[KeyCacheLocked.Length..] : bytes, KeyCacheEntropy, DataProtectionScope.CurrentUser);
-            var plain = locked ? AppLock.Open(inner) : inner;
-            try { return JsonSerializer.Deserialize<Dictionary<string, string>>(plain) ?? new(); }
-            finally { CryptographicOperations.ZeroMemory(plain); CryptographicOperations.ZeroMemory(inner); }
-        }
+        try { return KeyCacheReadOrThrow(); }
         catch { return new(); }
+    }
+
+    /// <summary>The remembered keys; throws if the file exists but can't be read (see <see cref="Reprotect"/>).</summary>
+    private static Dictionary<string, string> KeyCacheReadOrThrow()
+    {
+        if (!File.Exists(KeyCachePath)) return new();
+        var bytes = File.ReadAllBytes(KeyCachePath);
+        var locked = bytes.AsSpan().StartsWith(KeyCacheLocked);
+        var inner = ProtectedData.Unprotect(locked ? bytes[KeyCacheLocked.Length..] : bytes, KeyCacheEntropy, DataProtectionScope.CurrentUser);
+        var plain = locked ? AppLock.Open(inner) : inner;
+        try { return JsonSerializer.Deserialize<Dictionary<string, string>>(plain) ?? new(); }
+        finally { CryptographicOperations.ZeroMemory(plain); CryptographicOperations.ZeroMemory(inner); }
     }
 
     private static byte[]? KeyCacheGet(byte[] salt) =>
@@ -799,6 +831,7 @@ public static class Backup
                   ?? throw new InvalidDataException("Empty backup file.");
         if (env.Format is not ("remotehub-backup" or "rdpmanager-backup")) throw new InvalidDataException("Not a RemoteHub backup file.");
 
+        SettingsStore.CheckIterations(env.Iterations);
         var salt = Convert.FromBase64String(env.Salt);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, env.Iterations, HashAlgorithmName.SHA256, 32);
         var cipher = Convert.FromBase64String(env.Data);

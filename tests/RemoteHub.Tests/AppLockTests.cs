@@ -59,10 +59,24 @@ public class AppLockTests
 
             // Change the password: the old one stops working, the data stays readable.
             Assert.True(AppLock.VerifyPassword("correct horse battery"));
-            AppLock.ChangePassword("new startup password");
+            var oldLockFile = File.ReadAllBytes(AppLock.FilePath);
+            await SettingsStore.Reprotect(data, () => AppLock.ChangePassword("new startup password"));
             LocalDb.Close();
             AppLock.Forget();
             Assert.False(AppLock.TryUnlock("correct horse battery"));
+            Assert.True(AppLock.TryUnlock("new startup password"));
+            Assert.Equal("web01", Assert.Single(SettingsStore.Load().Items).Name);
+
+            // A copy of the old lock file with the old password opens nothing: the key itself was replaced.
+            LocalDb.Close();
+            AppLock.Forget();
+            var newLockFile = File.ReadAllBytes(AppLock.FilePath);
+            File.WriteAllBytes(AppLock.FilePath, oldLockFile);
+            Assert.True(AppLock.TryUnlock("correct horse battery"));
+            Assert.ThrowsAny<Exception>(() => SettingsStore.Load());
+            LocalDb.Close();
+            AppLock.Forget();
+            File.WriteAllBytes(AppLock.FilePath, newLockFile);
             Assert.True(AppLock.TryUnlock("new startup password"));
             Assert.Equal("web01", Assert.Single(SettingsStore.Load().Items).Name);
 
@@ -85,6 +99,69 @@ public class AppLockTests
     }
 
     private static DbKeys.Keys DbKeysFor(string path) => DbKeys.Read(path);
+
+    [Fact]
+    public async Task A_stop_while_turning_the_protection_off_loses_nothing()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        try
+        {
+            var data = new AppData();
+            data.Items.Add(new Connection { Name = "web01", Host = "web01.contoso.local" });
+            SettingsStore.Save(data, force: true);
+            await SettingsStore.Reprotect(data, () => { AppLock.Enable("correct horse battery"); return Task.CompletedTask; });
+            Assert.Equal("RHDK\u0002"u8.ToArray(), Head(DbKey));
+
+            // The lock is gone, but RemoteHub stops before the database key is stored again (db.key still sealed).
+            LocalDb.BeginReprotect();
+            await AppLock.Disable();
+            LocalDb.Close();
+            Assert.Equal("RHDK\u0002"u8.ToArray(), Head(DbKey));
+
+            // The next start opens the database with the copy and stores the key with DPAPI only.
+            Assert.Equal("web01", Assert.Single(SettingsStore.Load().Items).Name);
+            Assert.Equal("RHDK\u0001"u8.ToArray(), Head(DbKey));
+            Assert.False(File.Exists(DbKey + ".reprotect"));
+        }
+        finally
+        {
+            if (AppLock.IsEnabled) File.Delete(AppLock.FilePath);
+            AppLock.Forget();
+            StoreReset.Clean();
+        }
+    }
+
+    [Fact]
+    public async Task A_stop_while_turning_the_protection_on_asks_for_the_new_password()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        try
+        {
+            var data = new AppData();
+            data.Items.Add(new Connection { Name = "web01", Host = "web01.contoso.local" });
+            SettingsStore.Save(data, force: true);
+
+            // The lock is on, but RemoteHub stops before the database key is sealed with it.
+            LocalDb.BeginReprotect();
+            AppLock.Enable("correct horse battery");
+            LocalDb.Close();
+            AppLock.Forget();
+
+            Assert.Throws<AppLockedException>(() => SettingsStore.Load());
+            Assert.True(AppLock.TryUnlock("correct horse battery"));
+            Assert.Equal("web01", Assert.Single(SettingsStore.Load().Items).Name);
+            Assert.Equal("RHDK\u0002"u8.ToArray(), Head(DbKey));
+            Assert.False(File.Exists(DbKey + ".reprotect"));
+        }
+        finally
+        {
+            if (AppLock.IsEnabled) File.Delete(AppLock.FilePath);
+            AppLock.Forget();
+            StoreReset.Clean();
+        }
+    }
 
     [Fact]
     public void Nothing_can_be_sealed_while_locked()

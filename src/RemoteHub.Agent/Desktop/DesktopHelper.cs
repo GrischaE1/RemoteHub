@@ -21,6 +21,20 @@ internal enum HelperMessage : byte
     /// or signed in. Nothing is sent or typed from then on; the service asks that user first.
     /// </summary>
     UserDesktop = 104,
+    /// <summary>
+    /// Service → helper: send Ctrl+Alt+Del in the helper's own session. From the service (session 0) Windows decides
+    /// which session gets it – not always the one being viewed.
+    /// </summary>
+    SecureAttention = 105,
+    /// <summary>Helper → service: the result of <see cref="SecureAttention"/> (text: empty when sent, else why not).</summary>
+    SecureAttentionResult = 106,
+    /// <summary>Helper → service: a line for the agent's log (capture method, resolution change).</summary>
+    Log = 107,
+    /// <summary>
+    /// Helper → service: the session needs the virtual monitor (no usable resolution – no monitor connected) at this size
+    /// (text: "width height"), or the viewer's window changed size while it's on.
+    /// </summary>
+    DisplayRequest = 108,
 }
 
 /// <param name="HoldUserDesktop">
@@ -28,8 +42,11 @@ internal enum HelperMessage : byte
 /// shown; as soon as a user's desktop appears, the helper stops and reports <see cref="HelperMessage.UserDesktop"/>.
 /// </param>
 /// <param name="Clipboard">What may go through the clipboard (<see cref="DesktopClipboardLevel"/>; 0 when viewing).</param>
+/// <param name="VirtualDisplay">The virtual monitor (<see cref="VirtualDisplayModes"/>) if it's installed, else "".</param>
+/// <param name="OfferToViewer">RemoteHub takes offers: what is copied here goes only when pasted there (TransferOffer / TransferRequest).</param>
 internal sealed record HelperInit(string Account, string Device, string Consent, string Pin, int TimeoutSeconds, bool ViewOnly,
-    bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text);
+    bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text,
+    bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false);
 
 internal sealed record HelperConsent(bool Granted, string Reason);
 
@@ -81,6 +98,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private IReadOnlyList<DesktopMonitor> _monitors = [];
     private (int Width, int Height) _fit; // written with _settingsChanged (volatile) after it
     private volatile DesktopMonitor? _shown;
+    private string _loggedFit = "";
     private volatile bool _held; // a user's desktop appeared while HoldUserDesktop: no picture, no input
     private volatile int _scale = 1; // the picture of all monitors is scaled down by this when it is too large for H.264
     private int _sent;               // frames sent since the last stats
@@ -111,6 +129,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)HelperMessage.Init:
                         _init = DesktopWire.ReadJson(m, HelperJson.Default.HelperInit);
                         (_fps, _quality, _monitor) = (_init.FramesPerSecond, _init.Quality, _init.Monitor);
+                        // Decided for each event on the desktop it would go to – not on what the capture thread last
+                        // saw – so nothing reaches the secure desktop without the right, or a user's desktop while held.
+                        var init = _init;
+                        input.Allowed = secure => !_held && (secure ? init.SecureDesktop : !init.HoldUserDesktop);
+                        if (init.Gdi) screen.PreferGdi(); // the GPU picture stood still earlier in this connection
                         StartConsent(_init);
                         break;
                     case (byte)HelperMessage.Begin when _init is not null && !_begun:
@@ -134,6 +157,13 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)DesktopMessage.KeyFrameRequest when _begun:
                         _keyFrameRequested = true;
                         break;
+                    case (byte)HelperMessage.SecureAttention when _begun && _init?.ViewOnly == false && _init.SecureDesktop:
+                        // In this session, as LocalSystem (the service checked the right). Not on this loop's thread.
+                        _ = Task.Run(() =>
+                        {
+                            _ = Send(DesktopWire.Text((DesktopMessage)HelperMessage.SecureAttentionResult, input.SecureAttention() ?? ""));
+                        });
+                        break;
                     case (byte)DesktopMessage.Mouse when _begun && _init?.ViewOnly == false:
                         _input.TryAdd(new RemoteKeyOrMouse(DesktopWire.ReadMouse(m), null));
                         break;
@@ -142,6 +172,13 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         break;
                     case (byte)DesktopMessage.Clipboard when _begun && Level >= DesktopClipboardLevel.Text:
                         ui.SetClipboard(DesktopWire.ReadText(m));
+                        break;
+                    case (byte)DesktopMessage.TransferRequest when _begun:
+                        if (int.TryParse(DesktopWire.ReadText(m), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var requested))
+                            SendOffered(requested);
+                        break;
+                    case (byte)DesktopMessage.TransferOffer when _begun:
+                        Offer(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer));
                         break;
                     case (byte)DesktopMessage.TransferStart when _begun:
                         Receive(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer));
@@ -213,19 +250,22 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         DropReceiving();
         var need = t.Kind == DesktopTransferKind.Image ? DesktopClipboardLevel.Images : DesktopClipboardLevel.Files;
-        if (Level < need) { TransferFailed(t.Id, "Not allowed on this device."); return; }
+        if (Level < need) { TransferFailed(t.Id, "Not allowed on this device.", toDevice: true); return; }
         try
         {
             // Files are written as the signed-in user, into their own temp folder – never with the helper's LocalSystem rights.
-            _receiving = t.Kind == DesktopTransferKind.Image
-                ? new TransferReceiver(t, null)
-                : SessionUser.Run(() => new TransferReceiver(t, SessionUser.NewClipboardFolder()));
+            if (t.Kind == DesktopTransferKind.Image) _receiving = new TransferReceiver(t, null);
+            else
+            {
+                var root = SessionUser.ClipboardRoot(); // looked up as LocalSystem, then used as the user
+                _receiving = SessionUser.Run(() => new TransferReceiver(t, SessionUser.NewClipboardFolder(root)));
+            }
             if (_receiving.Complete) Finish(_receiving);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
             DropReceiving();
-            TransferFailed(t.Id, "The device can't take the copied files: " + ex.Message);
+            TransferFailed(t.Id, "The device can't take the copied files: " + ex.Message, toDevice: true);
         }
     }
 
@@ -241,27 +281,84 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
             DropReceiving();
-            TransferFailed(r.Transfer.Id, "The device can't take the copied files: " + ex.Message);
+            TransferFailed(r.Transfer.Id, "The device can't take the copied files: " + ex.Message, toDevice: true);
         }
     }
 
     private void Finish(TransferReceiver r)
     {
         _receiving = null;
-        if (r.Transfer.Kind == DesktopTransferKind.Image) ui.SetClipboardImage(r.Image);
-        else ui.SetClipboardFiles(r.TopLevel);
-        r.Dispose();
+        r.Dispose(); // the files are closed before they go on the clipboard
+        var content = r.Transfer.Kind == DesktopTransferKind.Image ? new HelperClipboard(r.Image, r.IsPng) : new HelperClipboard(Files: r.TopLevel, Items: r.Targets);
+        // Asked for by a paste: the waiting paste gets it. Else (an older RemoteHub sends right away): onto the clipboard.
+        if (_pasting is { } p && p.Id == r.Transfer.Id) p.Done.TrySetResult(content);
+        else if (content.Image is { } image) ui.SetClipboardImage(image, content.Png);
+        else ui.SetClipboardFiles(content.Files!);
+        // Receipt: RemoteHub says "copied" only now – not when it has sent the last byte.
+        _ = Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(r.Transfer.Id, true, "", ToDevice: true), DesktopJson.Default.DesktopTransferEnd));
     }
 
     private void DropReceiving()
     {
         var r = _receiving;
         _receiving = null;
+        if (r is not null) PasteFailed(r.Transfer.Id);
         try { if (r is not null) SessionUser.Run(() => { r.Dispose(); return 0; }); } catch { r?.Dispose(); }
     }
 
-    private void TransferFailed(int id, string reason) =>
-        _ = Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(id, false, reason), DesktopJson.Default.DesktopTransferEnd));
+    private void TransferFailed(int id, string reason, bool toDevice = false)
+    {
+        if (toDevice) PasteFailed(id);
+        _ = Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(id, false, reason, toDevice), DesktopJson.Default.DesktopTransferEnd));
+    }
+
+    // ---- copied in RemoteHub: offered on the device's clipboard, sent when pasted
+
+    /// <summary>The paste waiting for an offered transfer (it runs on the helper's UI thread).</summary>
+    private volatile Pasting? _pasting;
+
+    private sealed record Pasting(int Id, TaskCompletionSource<HelperClipboard?> Done);
+
+    private void Offer(DesktopTransfer t)
+    {
+        var need = t.Kind == DesktopTransferKind.Image ? DesktopClipboardLevel.Images : DesktopClipboardLevel.Files;
+        if (Level < need) { TransferFailed(t.Id, "Not allowed on this device.", toDevice: true); return; }
+        if (t.Kind == DesktopTransferKind.Files && VirtualFiles.SecurityResult != 0)
+            _ = Send(DesktopWire.Text((DesktopMessage)HelperMessage.Log, $"clipboard: pastes from the user's programs may be refused (COM security 0x{VirtualFiles.SecurityResult:X8})"));
+        ui.OfferClipboard(t, paster => Fetch(t, paster));
+    }
+
+    /// <summary>Someone pastes the offer: RemoteHub sends it now; the paste waits until it's here (or it failed).</summary>
+    private HelperClipboard? Fetch(DesktopTransfer t, string paster)
+    {
+        // Programs that read every new clipboard entry at once, not a paste: RDP's clipboard sync (it lists the files
+        // for an RDP client) and Windows' clipboard history. They get nothing – the next real paste asks again.
+        if (BackgroundReader(paster))
+        {
+            SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, $"clipboard: {paster} reads every clipboard change – not sent (only a paste gets it)"));
+            return null;
+        }
+        var pasting = _pasting = new Pasting(t.Id, new TaskCompletionSource<HelperClipboard?>(TaskCreationOptions.RunContinuationsAsynchronously));
+        try
+        {
+            SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, $"clipboard: pasted by {paster} – what was copied in RemoteHub ({t.Items.Length} item(s), {t.Total} bytes) comes now"));
+            SendSync(DesktopWire.Text(DesktopMessage.TransferRequest, t.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            // Generous: at least 256 KB/s, at most an hour. Cancelled when the connection ends.
+            var limit = TimeSpan.FromSeconds(Math.Min(3600, 60 + t.Total / (256 * 1024.0)));
+            return pasting.Done.Task.Wait(limit, _stop.Token) ? pasting.Done.Task.Result : null;
+        }
+        catch (OperationCanceledException) { return null; }
+        finally { if (_pasting == pasting) _pasting = null; }
+    }
+
+    /// <summary>"rdpclip (1234)", "svchost (5678)" – background clipboard readers (see <see cref="Fetch"/>).</summary>
+    internal static bool BackgroundReader(string paster) =>
+        paster.StartsWith("rdpclip ", StringComparison.OrdinalIgnoreCase) || paster.StartsWith("svchost ", StringComparison.OrdinalIgnoreCase);
+
+    private void PasteFailed(int id)
+    {
+        if (_pasting is { } p && p.Id == id) p.Done.TrySetResult(null);
+    }
 
     /// <summary>The device's clipboard got an image or files: sent to RemoteHub in chunks, in the background.</summary>
     private void SendClipboard(HelperClipboard content)
@@ -275,31 +372,112 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         {
             try
             {
-                void Run()
-                {
-                    ClipboardTransfer.Outgoing? o;
-                    if (content.Image is { } image) o = ClipboardTransfer.Image(id, image, content.Png);
-                    else if ((o = ClipboardTransfer.Files(id, content.Files!, out var error)) is null) { TransferFailed(id, error ?? "Nothing to copy."); return; }
-                    SendSync(DesktopWire.Json(DesktopMessage.TransferStart, o.Transfer, DesktopJson.Default.DesktopTransfer));
-                    foreach (var chunk in ClipboardTransfer.Chunks(o))
-                    {
-                        if (cancel.IsCancellationRequested || _stop.IsCancellationRequested)
-                        {
-                            TransferFailed(id, "A newer copy replaced it.");
-                            return;
-                        }
-                        SendSync(chunk);
-                    }
-                }
+                ClipboardTransfer.Outgoing? o = null;
+                string? error = null;
                 // Files are read as the signed-in user: only what they may read themselves.
-                if (content.Files is not null) SessionUser.Run(() => { Run(); return 0; });
-                else Run();
+                if (content.Image is { } image) o = ClipboardTransfer.Image(id, image, content.Png);
+                else SessionUser.Run(() => o = ClipboardTransfer.Files(id, content.Files!, out error));
+                if (o is null) { TransferFailed(id, error ?? "Nothing to copy."); return; }
+                if (_init?.OfferToViewer == true)
+                {
+                    // Names and sizes only: RemoteHub's clipboard offers them; the data goes when someone pastes there.
+                    _offered = new OfferedOut(o, content.Files is not null);
+                    SendSync(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                    return;
+                }
+                SendOutgoing(o, content.Files is not null, cancel);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
             }
         }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
+    }
+
+    /// <summary>What was copied here and offered to RemoteHub, until it's pasted there (or something else is copied).</summary>
+    private volatile OfferedOut? _offered;
+
+    private sealed record OfferedOut(ClipboardTransfer.Outgoing Outgoing, bool Files);
+
+    /// <summary>Pasted in RemoteHub: what was offered goes now (in the background, like a direct copy).</summary>
+    private void SendOffered(int id)
+    {
+        if (_offered is not { } offered || offered.Outgoing.Transfer.Id != id) return;
+        _sending?.Cancel();
+        var cancel = _sending = new CancellationTokenSource();
+        new Thread(() =>
+        {
+            try { SendOutgoing(offered.Outgoing, offered.Files, cancel); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
+            }
+        }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
+    }
+
+    /// <summary>The transfer's start, then its chunks; files read as the signed-in user.</summary>
+    private void SendOutgoing(ClipboardTransfer.Outgoing o, bool files, CancellationTokenSource cancel)
+    {
+        void Run()
+        {
+            SendSync(DesktopWire.Json(DesktopMessage.TransferStart, o.Transfer, DesktopJson.Default.DesktopTransfer));
+            foreach (var chunk in ClipboardTransfer.Chunks(o))
+            {
+                if (cancel.IsCancellationRequested || _stop.IsCancellationRequested)
+                {
+                    TransferFailed(o.Transfer.Id, "A newer copy replaced it.");
+                    return;
+                }
+                SendSync(chunk);
+            }
+        }
+        if (files) SessionUser.Run(() => { Run(); return 0; });
+        else Run();
+    }
+
+    // ---- virtual monitor (devices without a monitor)
+
+    private bool _virtualAsked;
+    private volatile bool _refit;
+    private int _primaryTries;
+    private (int W, int H) _virtualSize;
+    private readonly Stopwatch _virtualCheck = new();
+
+    /// <summary>
+    /// The viewer's window is <paramref name="width"/> × <paramref name="height"/>: with "auto" the virtual monitor is asked
+    /// for when the shown display offers far less (a GPU without a monitor: 640×480), with "always" in any case; while
+    /// it's on, a new window size goes to the service too (the driver gets that size as a mode).
+    /// </summary>
+    private void AskForVirtualDisplay(DesktopMonitor shown, int width, int height, bool dark = false)
+    {
+        var mode = _init!.VirtualDisplay;
+        if (mode is not (VirtualDisplayModes.Auto or VirtualDisplayModes.Always)) return;
+        if (!_virtualAsked && !dark && mode == VirtualDisplayModes.Auto && DisplayModes.VirtualMonitor() is null &&
+            DisplayModes.LargestArea(shown.Name) >= Math.Min((long)width * height, 1280L * 720)) return;
+        if (_virtualAsked && _virtualSize == VirtualDisplay.Normalize(width, height)) return;
+        _virtualAsked = true;
+        _virtualSize = VirtualDisplay.Normalize(width, height);
+        SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.DisplayRequest, $"{width} {height}"));
+    }
+
+    /// <summary>Once the virtual monitor is there (also after the driver reloaded it): it becomes the primary one and is fitted.</summary>
+    private void VirtualDisplayPrimary()
+    {
+        if (!_virtualAsked || _virtualCheck.IsRunning && _virtualCheck.ElapsedMilliseconds < 1000) return;
+        _virtualCheck.Restart();
+        if (DisplayModes.VirtualMonitor() is not { } virt) return;
+        var monitors = DisplayMonitors.List();
+        if (monitors.FirstOrDefault(m => m.Primary)?.Name.Equals(virt, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            // Primary already; after the driver reloaded with a new window size it still runs at the old one: fit again.
+            if (monitors.First(m => m.Primary) is var p && (p.Width, p.Height) != _virtualSize) _refit = true;
+            return;
+        }
+        if (_primaryTries >= 3) return; // logged; the monitor can still be chosen in RemoteHub
+        _primaryTries++;
+        var failed = DisplayModes.MakePrimary(virt);
+        SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, failed is null ? $"virtual monitor {virt} is the primary monitor now" : $"virtual monitor {virt} couldn't be made the primary monitor ({failed})"));
+        _refit = true; // fitted to the window at the next check (after the new layout)
     }
 
     // ---- input thread (follows the input desktop itself)
@@ -340,6 +518,15 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         RemoteCursor lastCursor = default;
         var secure = false;
         var haveImage = false;
+        // No picture for the viewer (black, held, nothing captured): after 3 s the display is woken (up to 3 tries) and
+        // the reason goes to the log once.
+        var dark = Stopwatch.StartNew();
+        var lastWake = Stopwatch.StartNew();
+        int wakes = 0;
+        var darkLogged = false;
+        var black = false;
+        var why = "nothing captured yet";
+        screen.KeepDisplayOn(true); // wakes a display that went dark (idle, lock screen) and keeps it on while connected
         try
         {
             screen.SyncDesktop();
@@ -349,6 +536,32 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 var interval = 1000 / Math.Max(1, _fps);
                 var loopStart = Stopwatch.GetTimestamp();
 
+                if (dark.ElapsedMilliseconds >= 3000 && wakes < 3 && (wakes == 0 || lastWake.ElapsedMilliseconds >= 2000))
+                {
+                    wakes++;
+                    lastWake.Restart();
+                    if (wakes == 2 && !_held && !_virtualAsked && why == "the captured picture is black" && _shown is { } s0 &&
+                        s0.Index != DesktopProtocol.AllMonitors && _init!.VirtualDisplay == VirtualDisplayModes.Auto)
+                    {
+                        // Still black after waking: the monitor's output is dead (seen on Intel GPUs without a monitor that
+                        // still list full display modes, while the lock screen is up). The virtual monitor takes over.
+                        var (vw, vh) = _fit is { Width: > 0, Height: > 0 } f ? f : (s0.Width, s0.Height);
+                        SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "the picture stays black – switching the virtual monitor on"));
+                        AskForVirtualDisplay(s0, vw, vh, dark: true);
+                        _refit = true;
+                    }
+                    // Not while the signed-in user is still asked: their desktop gets no input before they agree.
+                    var woke = _held ? "not woken (waiting for consent)" : screen.WakeDisplay();
+                    if (!darkLogged)
+                    {
+                        darkLogged = true;
+                        SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log,
+                            $"no picture for 3 s ({(_held ? "waiting for the signed-in user's consent" : why)}): {screen.DesktopDescription}, " +
+                            $"capture {(screen.CaptureMethod is { Length: > 0 } cm ? cm : "not started")}, lock screen {(screen.LockScreenUp ? "up" : "not up")}, " +
+                            $"{_monitors.Count} monitor(s) {string.Join(" ", _monitors.Select(m => $"{m.Width}×{m.Height}"))}; {WindowsInput.Stats}; {woke}"));
+                    }
+                }
+
                 // Desktop switch (sign-in screen, UAC prompt) and changed monitors. While holding, checked before every
                 // frame: the user's desktop must not be sent at all.
                 if (_held) { Thread.Sleep(200); continue; }
@@ -356,20 +569,36 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 {
                     lastSync.Restart();
                     var switched = screen.SyncDesktop();
-                    if (_settingsChanged && _shown is { } m0)
+                    if ((_settingsChanged || _refit) && _shown is { } m0)
                     {
+                        _refit = false;
                         // Resolution to the viewer's window (temporary; Windows' own setting comes back at the end).
                         // Not for the picture of all monitors.
                         var (fw, fh) = _fit;
-                        if (fw > 0 && fh > 0 && m0.Index != DesktopProtocol.AllMonitors && _monitor != DesktopProtocol.AllMonitors) screen.FitResolution(m0, fw, fh);
+                        if (fw > 0 && fh > 0 && m0.Index != DesktopProtocol.AllMonitors && _monitor != DesktopProtocol.AllMonitors)
+                        {
+                            AskForVirtualDisplay(m0, fw, fh);
+                            screen.FitResolution(m0, fw, fh);
+                            if (screen.FitInfo is { Length: > 0 } fit && fit != _loggedFit) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "resolution: " + (_loggedFit = fit)));
+                        }
                         else screen.RestoreResolution();
+                    }
+                    if (_init!.HoldUserDesktop && !screen.SecureDesktop && screen.LockScreenUp)
+                    {
+                        // Windows 11 / Server 2025: the "Press Ctrl+Alt+Delete" lock screen runs on the Default desktop.
+                        // Still locked – nobody unlocked: nothing is shown or sent there, but the session stays
+                        // connected, so Ctrl+Alt+Del can bring up the sign-in screen.
+                        why = "the lock screen is up – waiting for Ctrl+Alt+Del";
+                        Thread.Sleep(200);
+                        continue;
                     }
                     if (_init!.HoldUserDesktop && !screen.SecureDesktop)
                     {
                         _held = true;
-                        SendSync([(byte)HelperMessage.UserDesktop]);
+                        SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.UserDesktop, screen.DesktopDescription));
                         continue;
                     }
+                    VirtualDisplayPrimary();
                     if (switched || screen.SecureDesktop != secure || _settingsChanged || MonitorsChanged())
                     {
                         _settingsChanged = false;
@@ -382,11 +611,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 }
                 if (secure && _init!.SecureDesktop == false)
                 {
+                    why = "the secure desktop is up and this connection may not see it";
                     Thread.Sleep(200); // no right to see the secure desktop: nothing is sent until it's gone
                     continue;
                 }
                 var monitor = _shown;
-                if (monitor is null) { Thread.Sleep(200); continue; }
+                if (monitor is null) { why = "no monitor"; Thread.Sleep(200); continue; }
 
                 // Flow control: no more than a few frames ahead of the viewer.
                 if (Volatile.Read(ref _inFlight) >= DesktopProtocol.MaxFramesInFlight)
@@ -398,7 +628,14 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 loops++;
 
                 var result = screen.Capture(monitor, haveImage ? Math.Max(1, interval / 2) : 100, frame);
-                if (result == CaptureResult.Failed) { Thread.Sleep(50); continue; }
+                if (screen.TakeLogNote() is { Length: > 0 } note) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, note));
+                if (result == CaptureResult.Failed) { why = "capturing failed"; Thread.Sleep(50); continue; }
+                if (result == CaptureResult.Changed) black = IsBlack(frame);
+                if (result == CaptureResult.Changed || haveImage)
+                {
+                    if (!black) { dark.Restart(); wakes = 0; darkLogged = false; }
+                    else why = "the captured picture is black";
+                }
                 var cursor = screen.Cursor(monitor, out var shape);
                 if (_scale > 1) cursor = cursor with { X = cursor.X / _scale, Y = cursor.Y / _scale };
                 if (shape is not null) SendSync(DesktopWire.CursorShape(shape.Width, shape.Height, shape.HotX, shape.HotY, shape.Bgra));
@@ -435,7 +672,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     if (encoder is null || encoder.Width != w || encoder.Height != h || quality != _quality && !encoder.TrySetQuality(_quality))
                     {
                         encoder?.Dispose();
-                        encoder = new H264Encoder(w, h, Math.Max(1, _fps), _quality);
+                        // "Smooth" (above 30 fps): the GPU's encoder when there is one – it falls back to software by itself.
+                        encoder = new H264Encoder(w, h, Math.Max(1, _fps), _quality, preferHardware: _fps > 30);
                         _keyFrameRequested = true;
                         if ((w != (_layoutWidth & ~1) || h != (_layoutHeight & ~1)) && _scale == 1) SendLayout(out _);
                     }
@@ -458,7 +696,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     var seconds = lastStats.Elapsed.TotalSeconds;
                     lastStats.Restart();
                     SendSync(DesktopWire.Json(DesktopMessage.Stats, new DesktopStats((int)Math.Round(_sent / seconds), encoder?.Quality ?? _quality,
-                        screen.CaptureMethod, encoder?.Width ?? 0, encoder?.Height ?? 0, screen.FitInfo), DesktopJson.Default.DesktopStats));
+                        screen.CaptureMethod + (encoder?.Kind == "hardware" ? ", GPU encoder" : ""), encoder?.Width ?? 0, encoder?.Height ?? 0, screen.FitInfo),
+                        DesktopJson.Default.DesktopStats));
                     _sent = 0;
                 }
 
@@ -486,9 +725,25 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         {
             encoder?.Dispose();
             try { screen.RestoreResolution(); } catch { /* the process ends anyway – Windows restores it then */ }
+            screen.KeepDisplayOn(false);
         }
     }
 
+
+    /// <summary>All of a 16×16 grid of samples is (nearly) black: a display that went dark, a blank screen saver.</summary>
+    internal static bool IsBlack(FrameBuffer frame)
+    {
+        if (frame.Width <= 0 || frame.Height <= 0) return true;
+        for (var gy = 0; gy < 16; gy++)
+            for (var gx = 0; gx < 16; gx++)
+            {
+                var x = (int)((gx + 0.5) * frame.Width / 16);
+                var y = (int)((gy + 0.5) * frame.Height / 16);
+                var i = (y * frame.Width + x) * 4;
+                if (frame.Pixels[i] > 16 || frame.Pixels[i + 1] > 16 || frame.Pixels[i + 2] > 16) return false;
+            }
+        return true;
+    }
     private int _layoutWidth, _layoutHeight;
 
     private bool MonitorsChanged()

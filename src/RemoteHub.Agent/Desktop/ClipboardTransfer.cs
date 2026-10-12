@@ -119,6 +119,11 @@ public sealed class TransferReceiver : IDisposable
 
     public TransferReceiver(DesktopTransfer t, string? folder)
     {
+        // Checked on the receiving side too, whatever the sender (or the service in between) checked.
+        if (t.Items is null || t.Items.Length == 0 || t.Items.Length > DesktopProtocol.MaxTransferItems || t.Total < 0 || t.Total > DesktopProtocol.MaxTransferBytes ||
+            t.Items.Any(i => i is null || i.Size < 0 || i.Folder && i.Size != 0) || t.Items.Sum(i => i.Size) != t.Total ||
+            t.Kind == DesktopTransferKind.Image && (t.Items.Length != 1 || t.Items[0].Folder))
+            throw new InvalidDataException($"Too much at once or incomplete (at most {DesktopProtocol.MaxTransferBytes / (1024 * 1024)} MB and {DesktopProtocol.MaxTransferItems} files).");
         _t = t;
         _folder = folder;
         if (t.Kind == DesktopTransferKind.Image)
@@ -150,6 +155,9 @@ public sealed class TransferReceiver : IDisposable
     public byte[] Image => _image?.ToArray() ?? [];
 
     /// <summary>The copied files and folders at the top level (what goes on the clipboard).</summary>
+    /// <summary>The local path of every item, in the transfer's order (what a paste of virtual files reads).</summary>
+    public IReadOnlyList<string> Targets => _targets;
+
     public IReadOnlyList<string> TopLevel => _t.Items.Select((it, i) => (it, i)).Where(x => !x.it.Path.Replace('\\', '/').Trim('/').Contains('/'))
         .Select(x => _targets[x.i]).ToList();
 
@@ -195,9 +203,16 @@ public sealed class TransferReceiver : IDisposable
         }
     }
 
+    /// <summary>The image is a PNG (else BMP bytes), by the name the sender gave it.</summary>
+    public bool IsPng => _t.Items is [{ Path: var p }] && p.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Ends the transfer. Unfinished files are removed again – the folder is this transfer's own.</summary>
     public void Dispose()
     {
         _file?.Dispose();
+        _file = null;
         _image?.Dispose();
+        if (_folder is not null && !Complete)
+            try { if (Directory.Exists(_folder)) Directory.Delete(_folder, recursive: true); } catch { /* in use: the temp folder's own clean-up */ }
     }
 }

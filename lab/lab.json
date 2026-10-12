@@ -1,0 +1,13 @@
+{
+    "LabRoot":  "D:\\RemoteHubLab",
+    "HostAccount":  "labop",
+    "VmNamePattern":  "TestAutomation - * - * - *",
+    "Accounts":  {
+                     "AdminAccount":  "PSAdmin",
+                     "UserAccount":  "normaluser",
+                     "ConsoleAccount":  "Admin"
+                 },
+    "Vms":  [
+
+            ]
+}

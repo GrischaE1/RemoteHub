@@ -38,6 +38,25 @@ public class CoreTests
     }
 
     [Fact]
+    public void Opened_rdp_file_lists_what_it_would_do()
+    {
+        var path = TempFile(".rdp");
+        File.WriteAllText(path, string.Join("\r\n", "full address:s:evil.example.com", "authentication level:i:0",
+            "enablecredsspsupport:i:0", "drivestoredirect:s:*", "redirectsmartcards:i:1"), Encoding.Unicode);
+        try
+        {
+            var risks = RdpFileParser.Risks(RdpFileParser.Parse(path));
+            Assert.Contains(risks, r => r.Contains("default credentials"));
+            Assert.Contains(risks, r => r.Contains("identity"));
+            Assert.Contains(risks, r => r.Contains("Network Level Authentication"));
+            Assert.Contains(risks, r => r.Contains("drives"));
+            Assert.Contains(risks, r => r.Contains("smart cards"));
+            Assert.DoesNotContain(risks, r => r.Contains("printers"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void Parses_utf16_rdp_file()
     {
         var path = TempFile(".rdp");

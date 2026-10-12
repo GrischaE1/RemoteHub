@@ -17,13 +17,14 @@ namespace RemoteHub.Tests;
 /// <summary>The Windows pieces of the agent's remote desktop on this PC (as the current user, not LocalSystem).</summary>
 public class AgentDesktopWindowsTests
 {
-    [Fact]
+    [SkippableFact]
     public void The_screen_of_this_PC_can_be_captured()
     {
+        Skip.IfNot(TestScreen.Available, TestScreen.Reason);
         using var screen = new A.WindowsScreen();
         screen.SyncDesktop();
         var monitors = screen.Monitors();
-        if (monitors.Count == 0) return; // no display (service session)
+        Skip.If(monitors.Count == 0, "No display (service session).");
         Assert.Single(monitors, m => m.Primary);
         Assert.True(monitors[0].Primary);
         var frame = new A.FrameBuffer();
@@ -35,11 +36,12 @@ public class AgentDesktopWindowsTests
         Assert.Contains(frame.Pixels.Take(frame.Width * frame.Height * 4), b => b != 0);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Gdi_capture_reports_unchanged_frames()
     {
+        Skip.IfNot(TestScreen.Available, TestScreen.Reason);
         var monitors = A.DisplayMonitors.List();
-        if (monitors.Count == 0) return;
+        Skip.If(monitors.Count == 0, "No display (service session).");
         using var gdi = new A.GdiScreen();
         var frame = new A.FrameBuffer();
         Assert.Equal(A.CaptureResult.Changed, gdi.Capture(monitors[0], frame));
@@ -60,12 +62,12 @@ public class AgentDesktopWindowsTests
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr LoadCursor(IntPtr instance, int name);
 
-    [Fact]
+    [SkippableFact]
     public void Sessions_of_this_PC_include_the_current_user()
     {
         var list = new A.WtsSessions().List();
         var mine = Process.GetCurrentProcess().SessionId;
-        if (mine == 0) return; // service session (CI)
+        Skip.IfNot(TestScreen.Available, TestScreen.Reason); // a disconnected session is listed as such, not active or locked
         var s = Assert.Single(list, x => x.Id == mine);
         Assert.EndsWith("\\" + Environment.UserName, s.User, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(s.State, new[] { A.DesktopSessionState.Active, A.DesktopSessionState.Locked });
@@ -109,10 +111,10 @@ public class AgentDesktopWindowsTests
     /// The real helper process: real capture, real encoder, real banner window on this desktop (no input is sent).
     /// Shows a window for a moment, so it runs only with REMOTEHUB_DESKTOP_TESTS=1.
     /// </summary>
-    [Fact]
+    [SkippableFact]
     public async Task The_helper_process_streams_this_screen()
     {
-        if (Environment.GetEnvironmentVariable("REMOTEHUB_DESKTOP_TESTS") != "1") return;
+        Skip.If(Environment.GetEnvironmentVariable("REMOTEHUB_DESKTOP_TESTS") != "1", "Shows a window: runs only with REMOTEHUB_DESKTOP_TESTS=1.");
         using var key = RSA.Create(2048);
         using var tmp = new CertificateRequest("CN=test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1).CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
         using var cert = X509CertificateLoader.LoadPkcs12(tmp.Export(X509ContentType.Pfx), null);
