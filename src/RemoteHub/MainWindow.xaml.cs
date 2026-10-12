@@ -65,6 +65,7 @@ public partial class MainWindow : FluentWindow
         Loaded += (_, _) => ApplyTheme(vm.Data.Ui.Theme);
         Loaded += (_, _) => StartupChecks();
         Loaded += (_, _) => UpdateRecordButton();
+        Loaded += (_, _) => StartAutoLock();
         Closing += Window_Closing;
     }
 
@@ -917,6 +918,26 @@ public partial class MainWindow : FluentWindow
                 await InstallAgent(c);
             return;
         }
+        // HTTPS answers, but this PC doesn't trust the certificate the setup script made yet: compare and trust it here
+        // (also when the setup window was closed before its "Test again").
+        if (st.State != PsRemotingState.Available && target.UseSsl && st.Message == PsRemoting.UntrustedCertificate)
+        {
+            if (!await Dialogs.Confirm(this, "PowerShell remoting",
+                    $"{c.Name} answers over HTTPS, but this PC doesn't trust its certificate yet.\n\n" +
+                    "Compare its thumbprint with the one the setup script printed on the target, and trust it if they're the same?",
+                    "Check the certificate…"))
+                return;
+            var (_, error) = await RemotingSetupDialog.CheckAndTrustCertificate(this, c.Host.Trim());
+            if (error is null) await TestPsRemoting(c, interactive: true, credentials);
+            else await Dialogs.Info(this, "PowerShell remoting", error);
+            return;
+        }
+        // Signed in but refused (or a wrong password): the setup script wouldn't change anything – no offer to run it again.
+        if (st.State != PsRemotingState.Available && st.Message == PsRemoting.AccessDenied)
+        {
+            await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting answers on {c.Name}, but the account was refused.\n\n{st.Message}");
+            return;
+        }
         if (st.State == PsRemotingState.Available)
             await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell or File transfer.");
         else if (await Dialogs.Confirm(this, "PowerShell remoting",
@@ -964,8 +985,54 @@ public partial class MainWindow : FluentWindow
             catch { /* offer the other ways */ }
         var local = await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()));
 
-        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, (o, report) => RunAgentInstall(c, package, o, report)) { Owner = this };
-        dlg.ShowDialog();
+        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local) { Owner = this };
+        if (dlg.ShowDialog() != true || dlg.Options is not { } o) return;
+
+        // The progress in a window of its own: a row per step with a check mark when it's done.
+        var fresh = o.NewIdentity || c.Agent is null;
+        var expected = o.Method switch
+        {
+            AgentInstallMethod.Remoting => fresh ? 6 : 5,      // connect, copy MSI (+ enrollment), install, check, reachable
+            AgentInstallMethod.ThroughAgent => fresh ? 5 : 4,  // connect, copy MSI (+ enrollment), start installer, restart
+            _ => 1,
+        };
+        var progress = new AgentInstallProgressWindow(dlg.Title, $"{c.Name}  ·  {c.Host}", expected) { Owner = this };
+        progress.Show();
+        bool ok;
+        try { ok = await RunAgentInstall(c, package, o, progress.Report); }
+        catch (Exception ex) { progress.Report("Failed: " + ex.Message); ok = false; }
+        progress.Finish(ok);
+    }
+
+    /// <summary>
+    /// After an install by hand (clipboard): asks the agent every 10 s, for up to 30 minutes, whether it answers with the
+    /// device certificate. Then it's marked installed and – if chosen – the connection switches to it. Until then the
+    /// connection keeps working the way it did.
+    /// </summary>
+    private async Task WaitForManualInstall(Connection c, bool useAgent)
+    {
+        var until = DateTime.UtcNow.AddMinutes(30);
+        while (DateTime.UtcNow < until && c.Agent is { Status: AgentStatus.NotInstalled } d)
+        {
+            try
+            {
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var health = await AgentInstaller.HealthAsync(c.Host, d.Port, d.Fingerprint, cts.Token);
+                if (c.Agent != d) return; // replaced meanwhile
+                d.Status = AgentStatus.Installed;
+                d.Version = health.Version;
+                d.InstalledUtc = DateTime.UtcNow;
+                if (useAgent && !UsesAgent(c)) c.Options.UseAgent = true;
+                c.PsRemoting = null;
+                c.RefreshLabels();
+                _vm.RequestSave();
+                Data.AuditLog.Write(Data.AuditEvents.AgentInstalled, c, $"Installed – answered as RemoteHub Agent {health.Version}");
+                DiagLog.Write("RemoteHub Agent: installed by hand – it answers now");
+                return;
+            }
+            catch { /* not installed yet */ }
+            await Task.Delay(TimeSpan.FromSeconds(10));
+        }
     }
 
     private async Task<bool> RunAgentInstall(Connection c, string package, AgentInstallOptions o, Action<string> report)
@@ -974,21 +1041,22 @@ public partial class MainWindow : FluentWindow
         AgentDevice device;
         if (o.NewIdentity || c.Agent is null)
         {
-            var (e, fingerprint) = await Task.Run(() => AgentEnrollment.Create(o.Label, o.Port, o.AllowedGroups, o.FirewallScope));
+            var (e, fingerprint) = await Task.Run(() => AgentEnrollment.Create(o.Label, o.Port, o.AllowedGroups, o.FirewallScope, virtualDisplay: o.VirtualDisplay));
             enrollment = e;
             device = new AgentDevice { DeviceId = e.DeviceId, Label = e.DeviceLabel, Port = e.ListenPort, Fingerprint = fingerprint, Status = AgentStatus.NotInstalled, CreatedUtc = DateTime.UtcNow };
             report($"New device certificate: SHA-256 …{fingerprint[^16..]}");
         }
         else device = c.Agent.Clone();
+        device.VirtualDisplay = o.VirtualDisplay;
 
         var (folder, msi, enrollmentFile) = AgentInstaller.Prepare(package, enrollment);
         DiagLog.Write($"RemoteHub Agent {(enrollment is null ? "update" : "install")} started ({o.Method})");
-        void Finish(AgentDevice d)
+        void Finish(AgentDevice d, bool switchNow = true)
         {
-            Data.AuditLog.Write(Data.AuditEvents.AgentInstalled, c, $"{(enrollment is null ? "Updated" : "Installed")} – {o.Method}");
+            Data.AuditLog.Write(Data.AuditEvents.AgentInstalled, c, $"{(enrollment is null ? "Updated" : switchNow ? "Installed" : "Prepared")} – {o.Method}");
             c.Agent = d;
             c.RefreshLabels();
-            if (o.UseAgentAfterwards && !UsesAgent(c)) c.Options.UseAgent = true;
+            if (switchNow && o.UseAgentAfterwards && !UsesAgent(c)) c.Options.UseAgent = true;
             c.PsRemoting = null; // test again the new way
             _vm.RequestSave();
         }
@@ -999,18 +1067,34 @@ public partial class MainWindow : FluentWindow
             {
                 case AgentInstallMethod.Clipboard:
                 {
+                    // The .rhagent file holds this device's private key; a remote desktop tab would send it to another device.
+                    if (enrollmentFile is not null
+                        && _vm.Sessions.OfType<AgentDesktopSession>().Where(s => s.SendsClipboard && s.Connection != c).Select(s => s.Connection.Name).ToList() is [_, ..] others
+                        && !await Dialogs.Confirm(this, "Copy the device key?",
+                            $"The remote desktop tab of {string.Join(", ", others)} sends everything copied on this PC to that device – including " +
+                            $"{Path.GetFileName(enrollmentFile)}, which holds {c.Name}'s device key.\n\nClose that tab first, or copy anyway?", "Copy anyway"))
+                    {
+                        report("Cancelled – close the remote desktop tab, then try again.");
+                        return false;
+                    }
                     var files = new StringCollection { msi };
                     if (enrollmentFile is not null) files.Add(enrollmentFile);
                     Clipboard.SetFileDropList(files);
                     folder = null; // the files must stay until they are pasted – deleted when RemoteHub closes
-                    if (enrollment is not null) Finish(device);
+                    // Not installed yet: the connection keeps its current way until the agent answers (see WaitForManualInstall).
+                    if (enrollment is not null)
+                    {
+                        Finish(device, switchNow: false);
+                        _ = WaitForManualInstall(c, o.UseAgentAfterwards);
+                    }
                     report(enrollmentFile is null
                         ? $"Copied {AgentInstaller.PackageName} to the clipboard. In the RDP session of {c.Name}: paste it and run it as administrator."
                         : $"Copied {AgentInstaller.PackageName} and {Path.GetFileName(enrollmentFile)} to the clipboard.\n\n" +
                           $"In the RDP session of {c.Name}:\n  1. Paste both files into the same folder.\n  2. Run {AgentInstaller.PackageName} as administrator.\n" +
                           "  3. The agent imports and deletes the .rhagent file – if it's still there, delete it (it contains the device key).\n\n" +
                           "This needs clipboard redirection for the RDP session. The files on this PC are deleted when RemoteHub closes. " +
-                          "The first successful connection confirms the install.");
+                          "RemoteHub checks for the agent every few seconds and marks it installed as soon as it answers" +
+                          (o.UseAgentAfterwards ? " – then the connection switches to it." : "."));
                     return true;
                 }
 
@@ -1025,7 +1109,7 @@ public partial class MainWindow : FluentWindow
                         installed = await Task.Run(() =>
                         {
                             using var rs = PsRemoting.Open(t.Target);
-                            return AgentInstaller.InstallOverRemoting(rs, msi, enrollmentFile, report);
+                            return AgentInstaller.InstallOverRemoting(rs, msi, enrollmentFile, report, o.VirtualDisplay);
                         });
                     }
                     catch (Exception ex)
@@ -1059,7 +1143,7 @@ public partial class MainWindow : FluentWindow
                         await Task.Run(() =>
                         {
                             using var rs = PsRemoting.Open(t.Target);
-                            AgentInstaller.StartUpdateThroughAgent(rs, msi, enrollmentFile, report);
+                            AgentInstaller.StartUpdateThroughAgent(rs, msi, enrollmentFile, report, o.VirtualDisplay);
                         });
                     }
                     catch (Exception ex)
@@ -1067,11 +1151,17 @@ public partial class MainWindow : FluentWindow
                         report("Failed: " + (ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target)));
                         return false;
                     }
-                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, device.Port, device.Fingerprint, report, System.Threading.CancellationToken.None);
+                    var expected = AgentInstaller.PackageVersion(msi);
+                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, device.Port, device.Fingerprint, expected, report, System.Threading.CancellationToken.None);
+                    const string logs = "On the device, see %TEMP%\\RemoteHub-Agent-update.log of the signing-in account and the agent's log in %ProgramData%\\RemoteHub\\Agent\\logs.";
                     if (health is null)
                     {
-                        report("The agent didn't answer again within a few minutes. On the device, see %TEMP%\\RemoteHub-Agent-update.log of the " +
-                               "signing-in account and the agent's log in %ProgramData%\\RemoteHub\\Agent\\logs.");
+                        report("The agent didn't answer again within a few minutes. " + logs);
+                        return false;
+                    }
+                    if (expected is not null && health.Version != expected)
+                    {
+                        report($"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expected}). " + logs);
                         return false;
                     }
                     device.Version = health.Version;
@@ -1323,6 +1413,13 @@ public partial class MainWindow : FluentWindow
         try { files = await drag.Source.ExpandAsync(drag.Paths); }
         catch (Exception ex) { await Dialogs.Info(this, "Download", ex.Message); return; }
         if (files.Count == 0) return;
+        // The paths come from the device: each one must stay inside the chosen folder (no "..", no absolute path).
+        var targets = files.Select(f => DesktopWire.PathBelow(localFolder, f.Relative)).ToList();
+        if (targets.IndexOf(null) is var bad and >= 0)
+        {
+            await Dialogs.Info(this, "Download", $"The device sent a file path that would end up outside the chosen folder, so nothing was downloaded:\n{files[bad].Relative}");
+            return;
+        }
 
         var existing = drag.Paths.Select(p => Path.GetFileName(p.TrimEnd('\\')))
             .Where(n => File.Exists(Path.Combine(localFolder, n)) || Directory.Exists(Path.Combine(localFolder, n))).ToList();
@@ -1330,7 +1427,7 @@ public partial class MainWindow : FluentWindow
         if (overwrite is null) return;
 
         var name = drag.Source.Connection.Name;
-        var items = files.Select(f => TransferItem.Download(f.FullPath, Path.Combine(localFolder, f.Relative), f.Relative, name, f.Size)).ToList();
+        var items = files.Select((f, i) => TransferItem.Download(f.FullPath, targets[i]!, f.Relative, name, f.Size)).ToList();
         await RunTransfers(drag.Source.Connection, items, "download", () => FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
             overwrite.Value, items, a => Dispatcher.BeginInvoke(a)));
     }
@@ -1933,6 +2030,7 @@ public partial class MainWindow : FluentWindow
     {
         var errors = new List<string>();
         Connection? last = null;
+        var lastIsNew = false;
         foreach (var file in files)
         {
             try
@@ -1942,20 +2040,31 @@ public partial class MainWindow : FluentWindow
                 if (connectAfterImport && _vm.AllNodes().OfType<Connection>().FirstOrDefault(x =>
                         string.Equals(x.Host, c.Host, StringComparison.OrdinalIgnoreCase) && x.Port == c.Port) is { } existing)
                 {
-                    last = existing;
+                    (last, lastIsNew) = (existing, false);
                     continue;
                 }
                 _vm.Add(c, target);
-                last = c;
+                (last, lastIsNew) = (c, true);
             }
             catch (Exception ex) { errors.Add($"{Path.GetFileName(file)}: {ex.Message}"); }
         }
         if (last is not null)
         {
             last.IsSelected = true;
-            if (connectAfterImport) OpenConnection(last);
+            // An entry the user already has connects at once; one from the file only after they've seen where it goes.
+            if (connectAfterImport && lastIsNew) _ = ConfirmAndOpen(last);
+            else if (connectAfterImport) OpenConnection(last);
         }
         if (errors.Count > 0) _ = Dialogs.Info(this, "Import .rdp files", string.Join("\n", errors));
+    }
+
+    /// <summary>A connection imported from an opened .rdp file: shows the server and what the file sets, then connects.</summary>
+    private async Task ConfirmAndOpen(Connection c)
+    {
+        var port = c.Port is 3389 ? "" : $":{c.Port}";
+        var text = $"Connect to {c.Host}{port}?\n\nThe connection was added from a .rdp file. Only connect if you trust where the file came from.\n\n"
+            + string.Join("\n", RdpFileParser.Risks(c).Select(r => "• " + r));
+        if (await Dialogs.Confirm(this, "Open .rdp file", text, "Connect")) OpenConnection(c);
     }
 
     private void ImportRdp_Click(object sender, RoutedEventArgs e)
@@ -2082,13 +2191,18 @@ public partial class MainWindow : FluentWindow
         Shutdown();
     }
 
-    private void Shutdown()
+    /// <param name="locked">Exited from the auto-lock: the settings key is gone – they were saved when it locked.</param>
+    private void Shutdown(bool locked = false)
     {
-        var ui = _vm.Data.Ui;
-        ui.Maximized = WindowState == WindowState.Maximized;
-        if (WindowState == WindowState.Normal) { ui.Width = Width; ui.Height = Height; }
-        if (!ui.SidebarCollapsed) ui.SidebarWidth = SidebarColumn.ActualWidth;
-        _vm.SaveNow();
+        if (!locked)
+        {
+            var ui = _vm.Data.Ui;
+            ui.Maximized = WindowState == WindowState.Maximized;
+            if (WindowState == WindowState.Normal) { ui.Width = Width; ui.Height = Height; }
+            if (!ui.SidebarCollapsed) ui.SidebarWidth = SidebarColumn.ActualWidth;
+            _vm.SaveNow();
+        }
+        _vm.EndOpenSessions(); // before the sessions are disposed: their history entries get an end time
 
         StopAllRecordings();
         SecureClipboard.ClearIfOurs();

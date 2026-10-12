@@ -20,27 +20,18 @@ public class RemotingSetupTests
         Assert.Equal(ok, RemotingSetup.TryParseSources(text, out _, out _));
 
     [Theory]
-    [InlineData("192.168.1.20")]
-    [InlineData("srv01.corp.local")]
-    public void Certificate_is_a_server_only_leaf_for_the_host(string host)
-    {
-        var now = DateTimeOffset.Now;
-        var c = RemotingSetup.CreateCertificate(host, now);
-        var pub = c.PublicCertificate;
-        Assert.False(pub.HasPrivateKey);
-        Assert.Equal($"CN={host}", pub.Subject);
-        Assert.False(pub.Extensions.OfType<X509BasicConstraintsExtension>().Single().CertificateAuthority);
-        Assert.Equal("1.3.6.1.5.5.7.3.1", pub.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single().EnhancedKeyUsages.Cast<System.Security.Cryptography.Oid>().Single().Value);
-        Assert.True(pub.MatchesHostname(host));
-        Assert.InRange(pub.NotAfter, now.AddYears(2).AddDays(-2).DateTime, now.AddYears(2).AddDays(1).DateTime);
+    [InlineData("srv01'; Remove-Item C:\\x")]
+    [InlineData("a b")]
+    [InlineData("")]
+    public void Only_names_and_addresses_go_into_the_certificate_command(string host) =>
+        Assert.Throws<ArgumentException>(() => RemotingSetup.CertificateCommand(host, @"Cert:\CurrentUser\My"));
 
-        using var withKey = X509CertificateLoader.LoadPkcs12(c.Pfx, c.PfxPassword, X509KeyStorageFlags.EphemeralKeySet);
-        Assert.True(withKey.HasPrivateKey);
-        Assert.Equal(pub.Thumbprint, withKey.Thumbprint);
-    }
+    [Fact]
+    public void Thumbprints_are_shown_in_groups() =>
+        Assert.Equal("BF5A 729C 5A9C 1581 2990 7664 AEB8 E469 859F 620F", RemotingSetup.Grouped("BF5A729C5A9C158129907664AEB8E469859F620F"));
 
     private static string Script(bool https) => RemotingSetup.BuildScript("Lab \"NUC\"\r\nnext", "192.168.1.50", ["192.168.1.20", "10.0.0.0/24"],
-        https ? RemotingSetup.CreateCertificate("192.168.1.50", DateTimeOffset.Now) : null, new DateTime(2026, 10, 7, 12, 0, 0));
+        https, new DateTime(2026, 10, 7, 12, 0, 0));
 
     [Theory]
     [InlineData(true)]
@@ -57,32 +48,60 @@ public class RemotingSetupTests
         Assert.Equal(https, s.Contains("-Transport HTTPS"));
         Assert.Contains(https ? "-LocalPort 5986" : "-LocalPort 5985", s);
         Assert.DoesNotContain("\nnext", s); // the connection name cannot break out of the comment line
+        Assert.DoesNotContain("BEGIN", s);  // no key material: the certificate is made on the target
+        Assert.DoesNotContain("FromBase64String", s);
+        Assert.Contains("Disable-NetFirewallRule", s); // Windows' own rule for everyone doesn't stay on
+        Assert.Contains("-Name LocalAccountTokenFilterPolicy -Type DWord -Value 1", s);
     }
 
-    /// <summary>Targets usually run Windows PowerShell 5.1: run the script's own certificate lines there (key not persisted).</summary>
     [Fact]
-    public void Certificate_lines_load_in_Windows_PowerShell_51()
+    public void Without_local_admins_the_script_only_checks_and_warns()
+    {
+        var s = RemotingSetup.BuildScript("Lab", "192.168.1.50", ["192.168.1.20"], true, new DateTime(2026, 10, 7), allowLocalAdmins: false);
+        Parser.ParseInput(s, out _, out var errors);
+        Assert.Empty(errors);
+        Assert.DoesNotContain("Set-ItemProperty -Path $UacKey", s);
+        Assert.Contains("LocalAccountTokenFilterPolicy is not 1", s);
+    }
+
+    /// <summary>
+    /// Targets usually run Windows PowerShell 5.1: run the script's certificate command there (in the current user's store,
+    /// removed again) and check what it makes – the same rules RemoteHub used to apply itself.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("192.168.1.50")]
+    [InlineData("srv01.corp.local")]
+    public void Certificate_command_makes_a_server_only_leaf_in_Windows_PowerShell_51(string host)
     {
         var exe = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
-        if (!File.Exists(exe)) return;
-        var lines = Script(https: true).Split('\n').Select(l => l.Trim()).ToList();
+        Skip.IfNot(File.Exists(exe), "Windows PowerShell 5.1 isn't installed.");
         var test = Path.Combine(Path.GetTempPath(), $"rdpm-cert-{Guid.NewGuid():N}.ps1");
+        var cer = Path.ChangeExtension(test, ".cer");
         File.WriteAllText(test, string.Join("\n",
-            lines.First(l => l.StartsWith("$Thumbprint = ")),
-            lines.First(l => l.StartsWith("$pfx = ")),
-            lines.First(l => l.StartsWith("$c = New-Object")).Replace("'MachineKeySet,PersistKeySet'", "'UserKeySet'"),
-            "if ($c.Thumbprint -eq $Thumbprint -and $c.HasPrivateKey) { 'OK' } else { 'BAD' }",
-            "$c.Reset()"));
+            "$ErrorActionPreference = 'Stop'",
+            "$c = " + RemotingSetup.CertificateCommand(host, @"Cert:\CurrentUser\My"),
+            $"try {{ [IO.File]::WriteAllBytes('{cer}', $c.RawData) }}",
+            "finally { Remove-Item \"Cert:\\CurrentUser\\My\\$($c.Thumbprint)\" -DeleteKey }",
+            "'OK'"));
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo(exe, $"-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{test}\"")
                 { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+            // The PowerShell 7 SDK in this test process changes PSModulePath; Windows PowerShell 5.1 would then load PS 7's
+            // modules (no Cert: drive). On a target the script runs in a normal PowerShell, so give it its own path.
+            psi.Environment.Remove("PSModulePath");
             using var p = System.Diagnostics.Process.Start(psi)!;
             var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
             p.WaitForExit();
-            Assert.Equal("OK", output.Trim());
+            Assert.Contains("OK", output);
+            using var pub = X509CertificateLoader.LoadCertificateFromFile(cer);
+            Assert.Equal($"CN={host}", pub.Subject);
+            Assert.False(pub.Extensions.OfType<X509BasicConstraintsExtension>().Single().CertificateAuthority);
+            Assert.Equal("1.3.6.1.5.5.7.3.1", pub.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single().EnhancedKeyUsages.Cast<System.Security.Cryptography.Oid>().Single().Value);
+            Assert.True(pub.MatchesHostname(host));
+            Assert.InRange(pub.NotAfter, DateTime.Now.AddYears(2).AddDays(-2), DateTime.Now.AddYears(2).AddDays(1));
         }
-        finally { File.Delete(test); }
+        finally { File.Delete(test); File.Delete(cer); }
     }
 
     [Fact]
@@ -94,7 +113,8 @@ public class RemotingSetupTests
         ps.Invoke();
         Assert.False(ps.HadErrors, string.Join("\n", ps.Streams.Error));
         var lines = ps.Streams.Information.Select(i => i.MessageData.ToString()!).ToList();
-        Assert.Equal(4, lines.Count(l => l.StartsWith("WOULD:")));
+        Assert.Equal(6, lines.Count(l => l.StartsWith("WOULD:")));
+        Assert.Contains(lines, l => l.Contains("LocalAccountTokenFilterPolicy = 1"));
         Assert.Contains(lines, l => l.Contains("Firewall: allow TCP 5986 from 192.168.1.20, 10.0.0.0/24"));
     }
 }

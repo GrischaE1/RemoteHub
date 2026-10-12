@@ -11,24 +11,23 @@ using TextBox = Wpf.Ui.Controls.TextBox;
 namespace RemoteHub.Views;
 
 /// <summary>
-/// Install or update the RemoteHub Agent on a connection's device: device options, how to deliver it (silent over
-/// PowerShell remoting, through the running agent, or via the clipboard) and the progress. The work itself is done by
-/// the <c>run</c> callback.
+/// Install or update the RemoteHub Agent on a connection's device: device options and how to deliver it (silent over
+/// PowerShell remoting, through the running agent, or via the clipboard). "Install" closes it with <see cref="Options"/>;
+/// the progress is shown in <see cref="AgentInstallProgressWindow"/>.
 /// </summary>
 public sealed class AgentInstallDialog : FluentWindow
 {
-    private readonly Func<AgentInstallOptions, Action<string>, Task<bool>> _run;
+    /// <summary>What was chosen (set when the dialog closes with true).</summary>
+    public AgentInstallOptions? Options { get; private set; }
     private readonly TextBox _label, _port, _firewall, _groups;
     private readonly RadioButton _viaRemoting, _viaAgent, _viaClipboard;
-    private readonly CheckBox _newIdentity, _useAfter;
-    private readonly TextBlock _progress = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), FontFamily = new System.Windows.Media.FontFamily("Cascadia Mono, Consolas") };
+    private readonly CheckBox _newIdentity, _useAfter, _virtualDisplay;
+    private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
 
-    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress,
-        Func<AgentInstallOptions, Action<string>, Task<bool>> run)
+    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress)
     {
-        _run = run;
         var existing = c.Agent;
         var installed = existing is { Status: AgentStatus.Installed };
         Title = installed ? "Update RemoteHub Agent" : "Install RemoteHub Agent";
@@ -50,8 +49,8 @@ public sealed class AgentInstallDialog : FluentWindow
         body.Children.Add(_options);
 
         if (existing is not null)
-            _options.Children.Add(Muted($"{(installed ? "Installed" : "Prepared, not confirmed yet")}: device {existing.DeviceId[..8]}…, port {existing.Port}, " +
-                                        $"certificate …{existing.Fingerprint[^8..]}{(existing.Version is { } v ? $", version {v}" : "")}", 0, 0, 0, 6));
+            _options.Children.Add(Muted($"{(installed ? "Installed" : "Prepared, not confirmed yet")}: device {AgentInstaller.Head(existing.DeviceId, 8)}…, port {existing.Port}, " +
+                                        $"certificate …{AgentInstaller.Tail(existing.Fingerprint, 8)}{(existing.Version is { } v ? $", version {v}" : "")}", 0, 0, 0, 6));
         _newIdentity = new CheckBox
         {
             Content = "Create a new device certificate (the current one stops working)",
@@ -77,6 +76,16 @@ public sealed class AgentInstallDialog : FluentWindow
             _options.Children.Add(add);
         }
 
+        _virtualDisplay = new CheckBox
+        {
+            Content = "Virtual display for servers without a monitor",
+            IsChecked = existing?.VirtualDisplay ?? true,
+            Margin = new Thickness(0, 14, 0, 0),
+        };
+        _options.Children.Add(_virtualDisplay);
+        _options.Children.Add(Muted("Without a monitor, Windows often offers only 640×480. The agent then adds a virtual monitor at the size of " +
+                                    "the RemoteHub window while you're connected (open-source driver by VirtualDrivers, signed by SignPath " +
+                                    "Foundation, which the device then trusts as a driver publisher). Unchecked: not installed, or removed.", 26, 2, 0, 0));
         _options.Children.Add(new TextBlock { Text = "How", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 14, 0, 6) });
         _viaRemoting = Radio("Install silently over PowerShell remoting (WinRM) – copies both files to a temp folder, installs, deletes them",
             remotingAvailable, remotingAvailable && !(installed && agentReachable));
@@ -90,10 +99,10 @@ public sealed class AgentInstallDialog : FluentWindow
         _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = true, Margin = new Thickness(0, 12, 0, 0) };
         _options.Children.Add(_useAfter);
 
-        body.Children.Add(_progress);
+        body.Children.Add(_error);
 
         _install = new Button { Content = installed ? "Update" : "Install", Appearance = ControlAppearance.Primary, Icon = new SymbolIcon(SymbolRegular.ArrowDownload24), MinWidth = 120, Margin = new Thickness(0, 0, 8, 0) };
-        _install.Click += async (_, _) => await Start();
+        _install.Click += (_, _) => Start();
         _close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
         buttons.Children.Add(_install);
@@ -116,7 +125,7 @@ public sealed class AgentInstallDialog : FluentWindow
         _label.IsEnabled = _port.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
     }
 
-    private async Task Start()
+    private void Start()
     {
         if (!int.TryParse(_port.Text.Trim(), out var port) || port is < 1 or > 65535) { Fail("The port must be a number from 1 to 65535."); return; }
         if (!AgentEnrollment.IsValidAddressList(_firewall.Text)) { Fail("\"Allow connections from\" must be IP addresses or ranges, comma-separated (or empty for any)."); return; }
@@ -126,22 +135,13 @@ public sealed class AgentInstallDialog : FluentWindow
                    : _viaRemoting.IsChecked == true ? AgentInstallMethod.Remoting
                    : AgentInstallMethod.Clipboard;
         var options = new AgentInstallOptions(method, _newIdentity.IsChecked == true, _label.Text.Trim(), port, _firewall.Text.Trim(),
-            AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true);
+            AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true);
 
-        _options.IsEnabled = _install.IsEnabled = false;
-        _progress.Text = "";
-        bool ok;
-        try { ok = await _run(options, Report); }
-        catch (Exception ex) { Report("Failed: " + ex.Message); ok = false; }
-        _options.IsEnabled = true;
-        _install.IsEnabled = !ok;
-        _close.Content = ok ? "Done" : "Close";
-        if (ok) _close.Appearance = ControlAppearance.Primary;
+        Options = options;
+        DialogResult = true;
     }
 
-    private void Report(string line) => Dispatcher.Invoke(() => _progress.Text += (_progress.Text.Length > 0 ? "\n" : "") + line);
-
-    private void Fail(string message) => _progress.Text = message;
+    private void Fail(string message) => _error.Text = message;
 
     private TextBox Field(string label, string value, string hint)
     {

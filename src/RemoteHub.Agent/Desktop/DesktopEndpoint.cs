@@ -35,7 +35,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private readonly ConcurrentDictionary<int, long> _toDevice = new(), _fromDevice = new();
 
     private static readonly string[] Features =
-        [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer];
+        [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer, DesktopFeatures.TransferReceipt, DesktopFeatures.TransferOnPaste];
 
     public async Task RunAsync(WebSocket ws, CancellationToken aborted)
     {
@@ -65,10 +65,18 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             var first = await ReceiveWs(startTimeout.Token);
             if (first is null || DesktopWire.TypeOf(first) != DesktopMessage.Start) return;
             var start = DesktopWire.ReadJson(first, DesktopJson.Default.DesktopStart);
+
+            // Refused before anything is shown: audited like a refusal by the user.
+            async Task Refuse(string reason)
+            {
+                o.Log.Audit(AuditEvent.DesktopRefused, $"Desktop refused: {identity.Account} from {source} – session {start.SessionId}: {reason}");
+                await Status(DesktopStatusState.Failed, reason, ct);
+            }
+
             var session = sessions.FirstOrDefault(s => s.Id == start.SessionId);
             if (session is null || session.State == DesktopSessionState.Disconnected)
             {
-                await Status(DesktopStatusState.Failed, "This Windows session can't be shown (it ended or has no screen).", ct);
+                await Refuse("This Windows session can't be shown (it ended or has no screen).");
                 return;
             }
             _viewOnly = start.ViewOnly || !control;
@@ -81,24 +89,26 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             // The user is asked only when someone is signed in and using the session; the sign-in and lock screen show nothing
             // private. Started there, the chosen mode is used later: when someone unlocks or signs in, they are asked first.
             var active = session.State == DesktopSessionState.Active;
-            // Nobody to ask: the user who allowed it before (a resumed session), or the admin's own account.
-            var alreadyAllowed = active && (SameUser(session.User, _allowedBy) || IsSelf(session.User));
+            // Nobody to ask: the user who allowed it before (a resumed session).
+            var alreadyAllowed = active && SameUser(session.User, _allowedBy);
             if (modes.Length == 0)
             {
-                await Status(DesktopStatusState.Failed, "No way to connect is allowed on this device (policy).", ct);
+                await Refuse("No way to connect is allowed on this device (policy).");
                 return;
             }
             var followUp = modes.Contains(start.Consent) ? start.Consent
                 : modes.Contains(DesktopConsent.Ask) ? DesktopConsent.Ask : modes[0];
             var consent = active && !alreadyAllowed ? start.Consent : DesktopConsent.None;
-            if (active && !alreadyAllowed && !modes.Contains(consent))
+            // The admin's own signed-in session: they choose – connect right away, ask, or show a code.
+            var ownSession = active && IsSelf(session.User);
+            if (active && !alreadyAllowed && !modes.Contains(consent) && !(ownSession && consent == DesktopConsent.None))
             {
-                await Status(DesktopStatusState.Failed, $"Connecting with \"{start.Consent}\" isn't allowed on this device.", ct);
+                await Refuse($"Connecting with \"{start.Consent}\" isn't allowed on this device.");
                 return;
             }
             if (session.State is DesktopSessionState.SignIn or DesktopSessionState.Locked && !_secureRight)
             {
-                await Status(DesktopStatusState.Failed, "Nobody is signed in or the session is locked – and your account may not see the sign-in screen on this device.", ct);
+                await Refuse("Nobody is signed in or the session is locked – and your account may not see the sign-in screen on this device.");
                 return;
             }
             if (consent == DesktopConsent.Pin) _pin = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
@@ -119,7 +129,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             var monitor = start.Monitor == DesktopProtocol.AllMonitors ? DesktopProtocol.AllMonitors : Math.Max(0, start.Monitor);
             var init = new HelperInit(identity.Account, o.Config.DeviceLabel, consent, _pin, policy.ConsentTimeoutSeconds, _viewOnly, _secureRight,
                 Math.Clamp(start.FramesPerSecond, 1, policy.MaxFramesPerSecond), Math.Clamp(start.Quality, 1, policy.MaxQuality), monitor,
-                HoldUserDesktop: !active && !(session.State == DesktopSessionState.Locked && SameUser(session.User, _allowedBy)), Clipboard: _clipboard);
+                HoldUserDesktop: !active && !(session.State == DesktopSessionState.Locked && SameUser(session.User, _allowedBy)), Clipboard: _clipboard,
+                VirtualDisplay: o.Config.VirtualDisplay != VirtualDisplayModes.Off && VirtualDisplay.Installed ? o.Config.VirtualDisplay : "",
+                OfferToViewer: start.Features?.Contains(DesktopFeatures.TransferOnPaste) == true);
             _settings = new DesktopSettings(init.Monitor, init.FramesPerSecond, init.Quality);
             await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.Init, init, HelperJson.Default.HelperInit), ct);
 
@@ -157,8 +169,11 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 {
                     if (fromClient.IsFaulted)
                     {
-                        _lost = true;
-                        _endReason = "connection lost: " + fromClient.Exception!.GetBaseException().Message;
+                        // A broken connection may be continued with the resume token; a message that makes no sense may
+                        // not – that's no network problem, and the token mustn't outlive it.
+                        var error = fromClient.Exception!.GetBaseException();
+                        _lost = !IsProtocolError(error);
+                        _endReason = (_lost ? "connection lost: " : "invalid message from RemoteHub: ") + error.Message;
                     }
                     break;
                 }
@@ -236,7 +251,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 _helper = next;
                 fromHelper = Task.Run(() => HelperLoop(next, ct), ct);
                 await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.Init, init with { Consent = mode, Pin = mode == DesktopConsent.Pin ? _pin : "",
-                    Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold },
+                    Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold, Gdi = _gdi },
                     HelperJson.Default.HelperInit), ct);
                 if (ask)
                 {
@@ -297,6 +312,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             if (_connected && _resume?.TakenOver != true)
                 o.Log.Audit(AuditEvent.DesktopEnded, $"Desktop session ended: {identity.Account} from {source} after {(DateTime.UtcNow - started):hh\\:mm\\:ss} – {what} ({_endReason})");
             _helper?.Dispose();
+            if (_virtualShown) VirtualDisplay.Hide(); // switched off with the last connection that needed it
             // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not.
             if (_resume is { } r) { if (_lost) r.Release(); else r.Revoke(); }
         }
@@ -384,11 +400,23 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     Touch();
                     await SendPipe(m, ct);
                     break;
+                case DesktopMessage.TransferOffer when _live:
+                    // Names and sizes only; the device's clipboard offers them until someone pastes (then: TransferRequest).
+                    var offer = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer);
+                    if (TransferAllowed(offer) is { } notOffered)
+                        await SendWs(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(offer.Id, false, notOffered, ToDevice: true), DesktopJson.Default.DesktopTransferEnd), ct);
+                    else await SendPipe(m, ct);
+                    break;
+                case DesktopMessage.TransferRequest when _live:
+                    // Pasted on the PC: the device sends what it offered.
+                    Touch();
+                    await SendPipe(m, ct);
+                    break;
                 case DesktopMessage.TransferStart when _live:
                     var t = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer);
                     if (TransferAllowed(t) is { } refused)
                     {
-                        await SendWs(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(t.Id, false, refused), DesktopJson.Default.DesktopTransferEnd), ct);
+                        await SendWs(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(t.Id, false, refused, ToDevice: true), DesktopJson.Default.DesktopTransferEnd), ct);
                         break;
                     }
                     Touch();
@@ -404,12 +432,58 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
                 case DesktopMessage.SecureAttention when _live && !_viewOnly:
                     Touch();
-                    var error = _secureRight ? o.Desktop!.SecureAttention() : "Your account may not use the sign-in screen on this device.";
-                    if (error is not null) await Status(DesktopStatusState.Connected, error, ct);
+                    if (!_secureRight)
+                    {
+                        await Status(DesktopStatusState.Connected, "Your account may not use the sign-in screen on this device.", ct);
+                        break;
+                    }
+                    // The console: sent by the service itself – Windows accepts it from services, and from session 0 it
+                    // goes to the console. Another session (RDP): by the helper in that session.
+                    if (o.Desktop!.Sessions.ConsoleSessionId() == _helperSession)
+                    {
+                        var sas = o.Desktop.SecureAttention();
+                        LogSecureAttention("service", sas ?? "");
+                        if (sas is not null) await Status(DesktopStatusState.Connected, sas, ct);
+                    }
+                    else await SendPipe([(byte)HelperMessage.SecureAttention], ct);
                     break;
             }
         }
     }
+
+    private volatile bool _gdi;
+    private bool _virtualShown;
+    private bool? _secureShown;
+    private int _framesSinceSwitch;
+
+    /// <summary>
+    /// For the log: the picture switched between the user's desktop and the secure one (sign-in, lock, UAC) – and a few
+    /// seconds later, whether frames of the new screen arrived (a picture that stands still shows up here).
+    /// </summary>
+    private void LogDesktopSwitch(bool secure)
+    {
+        if (_secureShown == secure) return;
+        var first = _secureShown is null;
+        _secureShown = secure;
+        Interlocked.Exchange(ref _framesSinceSwitch, 0);
+        if (first) return;
+        var what = secure ? "the secure desktop (sign-in, lock or UAC screen)" : "the user's desktop";
+        o.Log.Write($"Desktop: session {_helperSession} switched to {what}");
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(3000);
+            if (_secureShown == secure) o.Log.Write($"Desktop: {Volatile.Read(ref _framesSinceSwitch)} frame(s) of {what} sent in 3 s");
+        });
+    }
+
+    private void LogSecureAttention(string by, string error) =>
+        o.Log.Write($"Desktop: Ctrl+Alt+Del for {identity.Account} in session {_helperSession} by the {by}: {(error.Length == 0 ? "sent" : error)} " +
+                    $"(SoftwareSASGeneration = {SecureAttention.Current()?.ToString() ?? "not set"}, console session {o.Desktop?.Sessions.ConsoleSessionId()?.ToString() ?? "none"}" +
+                    (by == "service" ? $", {SecureAttention.LastDetail})" : ")"));
+
+    /// <summary>Malformed or incomplete messages (bad JSON, missing fields, wrong sizes) – as opposed to a broken connection.</summary>
+    private static bool IsProtocolError(Exception e) =>
+        e is System.Text.Json.JsonException or InvalidDataException or NullReferenceException or ArgumentException or FormatException or IndexOutOfRangeException;
 
     /// <summary>Null if this clipboard transfer may go through, else why not.</summary>
     private string? TransferAllowed(DesktopTransfer t)
@@ -417,6 +491,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         var need = t.Kind switch { DesktopTransferKind.Image => DesktopClipboardLevel.Images, DesktopTransferKind.Files => DesktopClipboardLevel.Files, _ => int.MaxValue };
         if (_clipboard < need)
             return t.Kind == DesktopTransferKind.Files ? "Copying files isn't allowed on this device." : "Copying images isn't allowed on this device.";
+        if (t.Items is null || t.Items.Any(i => i is null || t.Kind == DesktopTransferKind.Files && string.IsNullOrEmpty(i.Path)))
+            return "The copied items are incomplete.";
         if (t.Items.Length == 0 || t.Items.Length > DesktopProtocol.MaxTransferItems || t.Total < 0 || t.Total > DesktopProtocol.MaxTransferBytes ||
             t.Items.Any(i => i.Size < 0 || i.Folder && i.Size != 0) || t.Items.Sum(i => i.Size) != t.Total ||
             t.Kind == DesktopTransferKind.Image && (t.Items.Length != 1 || t.Items[0].Folder))
@@ -500,8 +576,28 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var c = DesktopWire.ReadJson(m, HelperJson.Default.HelperConsent);
                         _consent.TrySetResult(c);
                         break;
+                    case (byte)HelperMessage.DisplayRequest when helper == _helper:
+                        var size = DesktopWire.ReadText(m).Split(' ');
+                        if (size.Length == 2 && int.TryParse(size[0], out var vw) && int.TryParse(size[1], out var vh))
+                        {
+                            var shown = await Task.Run(() => VirtualDisplay.Show(vw, vh, resizeOnly: _virtualShown), ct);
+                            if (shown is null && !_virtualShown) _virtualShown = true;
+                            o.Log.Write($"Desktop: session {_helperSession}: virtual monitor {(shown is null ? $"on at {VirtualDisplay.Normalize(vw, vh).W}×{VirtualDisplay.Normalize(vw, vh).H}" : "not switched on: " + shown)}");
+                        }
+                        break;
+                    case (byte)HelperMessage.Log when helper == _helper:
+                        var note = DesktopWire.ReadText(m);
+                        if (note.Contains("stood still")) _gdi = true; // the next helpers (after a sign-in) start with GDI
+                        o.Log.Write($"Desktop: session {_helperSession}: {note}");
+                        break;
                     case (byte)HelperMessage.UserDesktop:
+                        o.Log.Write($"Desktop: the helper in session {_helperSession} saw a user's desktop ({DesktopWire.ReadText(m)})");
                         return new HelperExit(false, "a user's desktop appeared", UserDesktop: true);
+                    case (byte)HelperMessage.SecureAttentionResult when helper == _helper:
+                        var sas = DesktopWire.ReadText(m);
+                        LogSecureAttention("helper", sas);
+                        if (sas.Length > 0) await Status(DesktopStatusState.Connected, sas, ct);
+                        break;
                     case (byte)HelperMessage.End:
                         var end = DesktopWire.ReadJson(m, HelperJson.Default.HelperEnd);
                         if (!_connected)
@@ -512,6 +608,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         return new HelperExit(end.ByUser, end.Reason);
                     case (byte)DesktopMessage.Layout or (byte)DesktopMessage.Video or (byte)DesktopMessage.CursorShape
                         or (byte)DesktopMessage.CursorPosition or (byte)DesktopMessage.Stats when _live && helper == _helper:
+                        if (m[0] == (byte)DesktopMessage.Video) Interlocked.Increment(ref _framesSinceSwitch);
+                        else if (m[0] == (byte)DesktopMessage.Layout) LogDesktopSwitch(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopLayout).SecureDesktop);
                         await SendWs(m, ct);
                         break;
                     case (byte)DesktopMessage.Clipboard when _live && helper == _helper && _clipboard >= DesktopClipboardLevel.Text:
@@ -526,9 +624,18 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     case (byte)DesktopMessage.TransferData when _live && helper == _helper:
                         if (Within(_fromDevice, m)) await SendWs(m, ct);
                         break;
+                    case (byte)DesktopMessage.TransferOffer when _live && helper == _helper:
+                        // Copied on the device: names and sizes for RemoteHub's clipboard – the data follows when pasted there.
+                        if (TransferAllowed(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)) is null) await SendWs(m, ct);
+                        break;
+                    case (byte)DesktopMessage.TransferRequest when _live && helper == _helper:
+                        Touch();
+                        await SendWs(m, ct);
+                        break;
                     case (byte)DesktopMessage.TransferEnd when helper == _helper:
                         var te = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd);
-                        if (_fromDevice.TryRemove(te.Id, out _) || !te.Ok) await SendWs(m, ct); // also: a transfer to the device failed there
+                        // The device's own transfer ended – or one to the device arrived there (receipt) or failed there.
+                        if ((te.ToDevice ? _toDevice.TryRemove(te.Id, out _) : _fromDevice.TryRemove(te.Id, out _)) || !te.Ok) await SendWs(m, ct);
                         break;
                 }
             }
@@ -623,11 +730,14 @@ internal static class DesktopResume
         return entry;
     }
 
-    /// <summary>The entry if the token is valid for this account (it is used up either way).</summary>
+    /// <summary>
+    /// The entry if the token is valid for this account – then it is used up. Presented by another account it stays
+    /// valid: that account can't use it, and mustn't be able to spoil the reconnect of the one it belongs to.
+    /// </summary>
     public static async Task<Entry?> TakeAsync(string token, string account)
     {
-        if (!Entries.TryRemove(token, out var e)) return null;
-        if (!string.Equals(e.Account, account, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Entries.TryGetValue(token, out var e) || !string.Equals(e.Account, account, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!Entries.TryRemove(new KeyValuePair<string, Entry>(token, e))) return null; // taken at the same moment by another connection
         if (e.ExpiresUtc is { } x && x < DateTime.UtcNow) return null;
         if (e.ExpiresUtc is null)
         {

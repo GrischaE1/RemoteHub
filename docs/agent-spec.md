@@ -61,8 +61,9 @@ RemoteHub (operator PC)                               Device
   - Windows account lockout applies.
   - Events 4624 and 4625 are written to the Security log.
 - **UAC:** for an administrator, the agent uses the full linked token. LocalSystem is allowed to obtain it.
+  - Deliberately more permissive than WinRM: WinRM gives local administrators other than the built-in Administrator only a filtered token (UAC remote restrictions) unless `LocalAccountTokenFilterPolicy=1`. The agent gives them full rights without that setting, so local accounts (LAPS) work for admin tasks out of the box.
 - **Allowed accounts:** members of local Administrators (`S-1-5-32-544`) by default, or the groups listed in `allowedGroups`.
-- **PowerShell runs as the signed-in user,** with their profile and environment, in a job object that is killed when the session ends. Rights and auditing are the same as with PowerShell remoting.
+- **PowerShell runs as the signed-in user,** with their profile and environment, in a job object that is killed when the session ends. Rights and auditing are the same as with PowerShell remoting, except for the UAC point above.
 - Kerberos and NTLM aren't used. Kerberos doesn't work across untrusted forests, and NTLM is deprecated by Microsoft.
 
 ### 4.3 Brute-force and limits
@@ -145,10 +146,21 @@ Out of scope for v1. The design keeps it possible:
   "listenPort": 58732,
   "certificateThumbprint": "<SHA-1 thumbprint of the device certificate in LocalMachine\\My>",
   "allowedGroups": ["S-1-5-32-544"],
+  "virtualDisplay": "auto",
   "logRetentionDays": 30,
   "maxSessions": 20
 }
 ```
+
+`virtualDisplay`: the virtual monitor for devices without one – `auto` (switched on for a desktop connection only when
+the shown display offers less than the window and at most 1280×720, e.g. 640×480 without a monitor), `always`, `off`
+(driver not installed). Chosen at install (install dialog, MSI property `VIRTUALDISPLAY`, or the `.rhagent` file;
+default on). The driver – the third-party Virtual Display Driver (MIT, IddCx, signed by SignPath Foundation, shipped
+unchanged and hash-checked) – is installed with the device switched off; the service switches it on at the viewer's
+window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml`, reloaded through its control pipe on a resize),
+the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the service switches it off when the last
+connection that asked for it ends (and at service start). Uninstall removes device, driver package, settings and the
+publisher trust (Trusted Publishers – only if the agent added it).
 
 ## 8. Logging
 
@@ -197,7 +209,7 @@ Endpoint `/v1/desktop` (WebSocket, same TLS pin and sign-in). Contract: `Desktop
 - **Idle timeout** (policy `DesktopIdleTimeoutMinutes`): no mouse or keyboard input for that long ends the session, with a notice shortly before.
 - **Audit** to the Application log (source *RemoteHub Agent*, policy `AuditToEventLog`), event IDs as in the README.
 - **Helper:** `RemoteHubAgent.exe desktop`, started by the service with its own LocalSystem token moved into the session (`winsta0\default`), in a job object; stdin/stdout carry length-prefixed messages. It never decides rights – the service relays only allowed messages (no input before consent or in view-only).
-- **Picture:** DXGI Desktop Duplication (GDI fallback, initial frame by GDI), follows the input desktop; H.264 (Media Foundation, low latency, no B-frames, quality-based VBR, key frames on request); BGRA↔NV12 BT.709 full range; ≤ 2 frames in flight; quality steps down when acks lag.
-- **Device UI:** consent, code and banner drawn in RemoteHub's palette (light/dark from the session user's setting); the banner is excluded from capture.
+- **Picture:** DXGI Desktop Duplication (GDI fallback, initial frame by GDI), follows the input desktop; H.264 (Media Foundation, low latency, no B-frames, quality-based VBR, key frames on request; software by default, the GPU's encoder for "Smooth" above 30 fps when there is one – asynchronous, event-driven, never waiting more than a few ms, and replaced by the software encoder if it fails or stops delivering); BGRA↔NV12 BT.709 full range; ≤ 2 frames in flight; quality steps down when acks lag.
+- **Device UI:** consent, code and banner drawn in RemoteHub's dark palette (dark only for now); the banner is excluded from capture and shown on the user's desktop – not on the sign-in screen or UAC prompts, where nobody is signed in to see it or Windows shows only its own window.
 - **Audit:** start, refusal and end with account, source, session, consent mode, view-only and duration.
 - **Backlog:** automatic sign-in with stored credentials (credential provider), WebRTC transport and relay, audio, file drag and drop.

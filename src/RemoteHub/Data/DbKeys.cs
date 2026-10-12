@@ -62,8 +62,11 @@ internal static class DbKeys
         }
     }
 
-    /// <summary>Writes the keys with the protection that is on now (DPAPI, plus the startup lock if enabled).</summary>
-    public static void Write(string path, Keys keys)
+    /// <summary>
+    /// Writes the keys with the protection that is on now (DPAPI, plus the startup lock if enabled), or with DPAPI only
+    /// when <paramref name="dpapiOnly"/> is set (the copy kept while the protection changes, see <see cref="LocalDb.BeginReprotect"/>).
+    /// </summary>
+    public static void Write(string path, Keys keys, bool dpapiOnly = false)
     {
         var plain = GC.AllocateUninitializedArray<byte>(2 * KeySize, pinned: true);
         keys.Db.CopyTo(plain, 0);
@@ -72,7 +75,7 @@ internal static class DbKeys
         try
         {
             byte[] bytes;
-            if (AppLock.IsEnabled)
+            if (AppLock.IsEnabled && !dpapiOnly)
             {
                 sealedData = AppLock.Seal(plain);
                 bytes = [.. MagicLocked, .. ProtectedData.Protect(sealedData, Entropy, DataProtectionScope.CurrentUser)];

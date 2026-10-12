@@ -115,48 +115,14 @@ internal sealed class WindowsHelperLauncher : IDesktopHelperLauncher
             {
                 if (!WtsNative.SetTokenInformation(token, 12 /* TokenSessionId */, ref sessionId, sizeof(int))) throw new Win32Exception();
 
-                var inherit = new Native.SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf<Native.SECURITY_ATTRIBUTES>(), bInheritHandle = true };
-                if (!Native.CreatePipe(out var stdinRead, out var stdinWrite, ref inherit, 0)) throw new Win32Exception();
-                if (!Native.CreatePipe(out var stdoutRead, out var stdoutWrite, ref inherit, 1024 * 1024)) throw new Win32Exception();
-                Native.SetHandleInformation(stdinWrite, Native.HANDLE_FLAG_INHERIT, 0);
-                Native.SetHandleInformation(stdoutRead, Native.HANDLE_FLAG_INHERIT, 0);
-                try
-                {
-                    var nul = WtsNative.CreateFileW("NUL", 0x40000000, 3, ref inherit, 3, 0, IntPtr.Zero);
-                    var si = new Native.STARTUPINFO
-                    {
-                        cb = Marshal.SizeOf<Native.STARTUPINFO>(),
-                        dwFlags = Native.STARTF_USESTDHANDLES,
-                        hStdInput = stdinRead.DangerousGetHandle(),
-                        hStdOutput = stdoutWrite.DangerousGetHandle(),
-                        hStdError = nul.DangerousGetHandle(),
-                        lpDesktop = @"winsta0\default",
-                    };
-                    var exe = Environment.ProcessPath ?? throw new InvalidOperationException("The agent's path is unknown.");
-                    try
-                    {
-                        if (!Native.CreateProcessAsUser(token, null, $"\"{exe}\" desktop", IntPtr.Zero, IntPtr.Zero, true,
-                                Native.CREATE_NO_WINDOW | Native.CREATE_SUSPENDED, IntPtr.Zero, Path.GetDirectoryName(exe), ref si, out var pi))
-                            throw new Win32Exception();
-                        _process = pi.hProcess;
-                        ProcessId = pi.dwProcessId;
-                        _job = Native.CreateJobObject(IntPtr.Zero, null);
-                        var limits = new Native.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-                        limits.BasicLimitInformation.LimitFlags = Native.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-                        Native.SetInformationJobObject(_job, Native.JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(limits));
-                        Native.AssignProcessToJobObject(_job, _process);
-                        Native.ResumeThread(pi.hThread);
-                        Native.CloseHandle(pi.hThread);
-                    }
-                    finally { nul.Dispose(); }
-                }
-                finally
-                {
-                    stdinRead.Dispose();
-                    stdoutWrite.Dispose();
-                }
+                var exe = Environment.ProcessPath ?? throw new InvalidOperationException("The agent's path is unknown.");
+                var (pi, stdinWrite, stdoutRead) = ChildProcess.Start(token, $"\"{exe}\" desktop", Native.CREATE_NO_WINDOW, IntPtr.Zero,
+                    Path.GetDirectoryName(exe), @"winsta0\default", stdoutBuffer: 1024 * 1024, stderrToNul: true);
+                _process = pi.hProcess;
+                ProcessId = pi.dwProcessId;
                 _input = new FileStream(stdinWrite, FileAccess.Write, 1);
                 _output = new FileStream(stdoutRead, FileAccess.Read, 64 * 1024);
+                _job = ChildProcess.RunInJob(pi);
             }
             finally { Native.CloseHandle(token); }
         }
@@ -196,6 +162,8 @@ internal static class WtsNative
     /// The lock screen runs as LogonUI.exe in the session (it exits after unlock). The WTSSessionInfoEx lock flag is only
     /// the fallback: it is reversed on some Windows versions and wrong for some RDP sessions, and a session wrongly seen
     /// as locked would be shown without asking its user.
+    /// <para>The Ctrl+Alt+Del screen of a signed-in user runs as LogonUI too, so it counts as locked. That shows only
+    /// that screen: the helper holds the picture when the user's desktop comes back and asks them first (HoldUserDesktop).</para>
     /// </summary>
     public static bool IsLocked(int session)
     {

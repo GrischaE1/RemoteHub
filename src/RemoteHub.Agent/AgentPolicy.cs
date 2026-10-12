@@ -23,7 +23,7 @@ public enum AgentRight
 /// Read again for every connection, so a changed policy applies without restarting the service.
 /// <list type="bullet">
 /// <item><c>DesktopEnabled</c> (DWORD) – 0 turns the remote desktop off.</item>
-/// <item><c>AllowedConsentModes</c> (REG_MULTI_SZ) – any of Ask, Pin, None.</item>
+/// <item><c>AllowedConsentModes</c> (REG_MULTI_SZ) – any of Ask, Pin, None (default: Ask, Pin; None also needs the ConsentBypass right).</item>
 /// <item><c>ConsentTimeoutSeconds</c> (DWORD) – how long the user is asked before it counts as "deny".</item>
 /// <item><c>MaxFramesPerSecond</c>, <c>MaxQuality</c> (DWORD) – upper limits for what RemoteHub may choose.</item>
 /// <item><c>DesktopClipboard</c> (DWORD) – 0 off, 1 text, 2 text and images, 3 text, images and files (default).</item>
@@ -47,22 +47,32 @@ public sealed class AgentPolicy
     public bool AuditToEventLog { get; init; } = true;
     public IReadOnlyDictionary<AgentRight, IReadOnlyList<string>> Rights { get; init; } = new Dictionary<AgentRight, IReadOnlyList<string>>();
 
+    /// <summary>Set when the policy key couldn't be read: then nothing is allowed (see <see cref="Load"/>).</summary>
+    public string? LoadError { get; init; }
+
     public IReadOnlyList<string> Groups(AgentRight right) => Rights.TryGetValue(right, out var g) ? g : [];
 
-    /// <summary>Defaults: everything for the groups in agent.json (Administrators), nothing view-only.</summary>
+    /// <summary>
+    /// Defaults: everything for the groups in agent.json (Administrators), nothing view-only – except connecting without
+    /// asking: the signed-in user is asked (or shown a PIN) unless a policy allows the mode None and grants ConsentBypass.
+    /// </summary>
     public static AgentPolicy Defaults(AgentConfig config) => new()
     {
+        ConsentModes = [DesktopConsent.Ask, DesktopConsent.Pin],
         Rights = new Dictionary<AgentRight, IReadOnlyList<string>>
         {
             [AgentRight.PowerShell] = config.AllowedGroups,
             [AgentRight.Desktop] = config.AllowedGroups,
             [AgentRight.DesktopViewOnly] = [],
             [AgentRight.SecureDesktop] = config.AllowedGroups,
-            [AgentRight.ConsentBypass] = config.AllowedGroups,
+            [AgentRight.ConsentBypass] = [],
         },
     };
 
-    /// <summary>The defaults with every value from the policy key applied (missing or invalid values keep the default).</summary>
+    /// <summary>
+    /// The defaults with every value from the policy key applied (missing or invalid values keep the default). If the key
+    /// exists but can't be read, nothing is allowed – a policy that restricts access must not turn into the defaults.
+    /// </summary>
     public static AgentPolicy Load(AgentConfig config)
     {
         try
@@ -70,8 +80,17 @@ public sealed class AgentPolicy
             using var key = Registry.LocalMachine.OpenSubKey(RegistryPath);
             return From(config, key is null ? null : new RegistryValues(key));
         }
-        catch (Exception) { return Defaults(config); }
+        catch (Exception ex) { return Refused(ex.Message); }
     }
+
+    /// <summary>No right for anyone, no remote desktop.</summary>
+    internal static AgentPolicy Refused(string reason) => new()
+    {
+        DesktopEnabled = false,
+        ConsentModes = [],
+        LoadError = reason,
+        Rights = Enum.GetValues<AgentRight>().ToDictionary(r => r, _ => (IReadOnlyList<string>)[]),
+    };
 
     /// <summary>Applies policy values (tests pass their own).</summary>
     internal static AgentPolicy From(AgentConfig config, IPolicyValues? values)

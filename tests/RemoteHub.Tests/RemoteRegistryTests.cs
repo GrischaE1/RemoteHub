@@ -80,10 +80,10 @@ public class RemoteRegistryTests : IDisposable
     [Fact]
     public void Local_runspace_lists_and_edits() => ListAndEdit(Local());
 
-    [Fact]
+    [SkippableFact]
     public void Windows_PowerShell_51_lists_and_edits()
     {
-        if (!HasWindowsPowerShell) return;
+        Skip.IfNot(HasWindowsPowerShell, "Windows PowerShell 5.1 isn't installed.");
         var proc = new PowerShellProcessInstance(new Version(5, 1), null, null, false);
         var rs = RunspaceFactory.CreateOutOfProcessRunspace(null, proc);
         rs.Open();

@@ -26,6 +26,7 @@ public partial class App : Application
 
         DispatcherUnhandledException += (_, args) =>
         {
+            CrashReporter.RecordHandled(args.Exception); // RemoteHub keeps running, but the error is reported like a crash
             System.Windows.MessageBox.Show(args.Exception.Message, "RemoteHub – unexpected error",
                 MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
@@ -82,6 +83,9 @@ public partial class App : Application
             var file = SettingsStore.UnreadableFile ?? SettingsStore.FilePath;
             var broken = file + $".unreadable-{DateTime.Now:yyyyMMdd-HHmmss}";
             try { File.Copy(file, broken, overwrite: true); } catch { /* best effort */ }
+            // The database's recent changes may still be in its write-ahead log: keep that with the copy.
+            foreach (var part in new[] { "-wal", "-shm" })
+                try { if (File.Exists(file + part)) File.Copy(file + part, broken + part, overwrite: true); } catch { /* best effort */ }
             System.Windows.MessageBox.Show(
                 $"The settings file could not be read ({ex.Message}).\n\n" +
                 $"A copy was saved to:\n{broken}\n\nYou can restore an exported backup via Menu → Import.",
@@ -94,6 +98,9 @@ public partial class App : Application
         {
             try
             {
+                // Left over after a crash: staged agent files (may hold a device key) and old clipboard copies from devices.
+                Remoting.AgentInstaller.CleanTemp(TimeSpan.Zero);
+                Remoting.AgentDesktopSession.CleanReceived(TimeSpan.FromDays(1));
                 LocalDb.BackupIfDue();
                 AuditLog.ApplyRetention(AuditLog.RetentionDays);
             }
@@ -170,6 +177,7 @@ public partial class App : Application
         _instance?.Dispose();
         if (_instance is not null) CrashReporter.Stop();
         if (_instance is not null) Remoting.AgentInstaller.CleanTemp(TimeSpan.Zero); // staged agent files may hold a device key
+        if (_instance is not null) Remoting.AgentDesktopSession.CleanReceived(TimeSpan.FromDays(1));
         base.OnExit(e);
     }
 }

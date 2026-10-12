@@ -126,11 +126,12 @@ public class RemoteToolsTests
     [Fact]
     public void Lists_processes_and_services_locally() => ListBoth(Local(), ownProcessVisible: true);
 
-    [Fact]
+    [SkippableFact]
     public void Lists_processes_and_services_in_Windows_PowerShell_51()
     {
-        if (WindowsPowerShell() is not { } rs) return;
-        ListBoth(rs, ownProcessVisible: false);
+        var rs = WindowsPowerShell();
+        Skip.If(rs is null, "Windows PowerShell 5.1 isn't available.");
+        ListBoth(rs!, ownProcessVisible: false);
     }
 
     private static void ListBoth(Runspace rs, bool ownProcessVisible)
@@ -163,11 +164,12 @@ public class RemoteToolsTests
 
     private static Process Sleeper(string file, string args) => Process.Start(new ProcessStartInfo(file, args) { CreateNoWindow = true, UseShellExecute = false })!;
 
-    [Fact]
+    [SkippableFact]
     public void Ends_a_process_and_a_process_tree_in_Windows_PowerShell_51()
     {
-        if (WindowsPowerShell() is not { } rs) return;
-        using (rs)
+        var rs = WindowsPowerShell();
+        Skip.If(rs is null, "Windows PowerShell 5.1 isn't available.");
+        using (rs!)
         {
             var one = Sleeper("ping.exe", "-n 120 127.0.0.1");
             RemoteProcesses.Stop(rs, [(one.Id, "PING.EXE")], tree: false);

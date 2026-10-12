@@ -38,6 +38,18 @@ public class CrashReporterTests
         Assert.Equal(11, CrashReporter.Redact(new string('x', 50), 10).Length); // 10 + "…"
     }
 
+    [Fact]
+    public void Upper_case_hosts_short_ipv6_and_other_accounts_are_redacted()
+    {
+        var r = CrashReporter.Redact(@"Connect to SRV01.CONTOSO.COM, Web01.Contoso.local, fe80::1%12 and ::1 as FABRIKAM\jdoe failed " +
+                                     "in System.Net.Sockets.Socket.Connect at 12:30:45", 2000);
+        foreach (var leak in new[] { "SRV01", "Contoso", "fe80", "::1", "FABRIKAM", "jdoe" })
+            Assert.DoesNotContain(leak, r, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("System.Net.Sockets.Socket.Connect", r); // code names stay readable
+        Assert.Contains("12:30:45", r);                           // a time isn't an address
+        Assert.Contains("[account]", r);
+    }
+
     private static void Thrower() => throw new InvalidOperationException(@"Bad state in C:\Data\x", new IOException("disk"));
 
     [Fact]

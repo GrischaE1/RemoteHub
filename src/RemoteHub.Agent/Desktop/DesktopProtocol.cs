@@ -51,6 +51,10 @@ public static class DesktopFeatures
     public const string Ping = "ping";
     public const string Resume = "resume";
     public const string Transfer = "transfer";
+    /// <summary>The device confirms a transfer to it (TransferEnd with ToDevice, Ok) once the files are on its clipboard.</summary>
+    public const string TransferReceipt = "transferReceipt";
+    /// <summary>Copies from RemoteHub are offered and only sent when pasted on the device (TransferOffer / TransferRequest).</summary>
+    public const string TransferOnPaste = "transferOnPaste";
 }
 
 /// <summary>What may go through the clipboard (policy <c>DesktopClipboard</c>).</summary>
@@ -76,6 +80,13 @@ public enum DesktopMessage : byte
     TransferStart = 9,
     /// <summary>Both ways: a transfer was cancelled or failed (<see cref="DesktopTransferEnd"/>); a complete one needs no end.</summary>
     TransferEnd = 10,
+    /// <summary>
+    /// RemoteHub → agent: files or an image were copied on this PC (<see cref="DesktopTransfer"/>, names and sizes only).
+    /// The device's clipboard offers them; nothing is sent until someone pastes there (<see cref="TransferRequest"/>).
+    /// </summary>
+    TransferOffer = 11,
+    /// <summary>Agent → RemoteHub: someone pastes on the device – send the offered transfer now (text: its id).</summary>
+    TransferRequest = 12,
 
     // binary
     Video = 20,
@@ -153,7 +164,9 @@ public sealed record DesktopHello(int Protocol, string Device, string Account, D
 /// The token from the last <see cref="DesktopStatus.Resume"/>: continues a session that was cut off a moment ago – the
 /// user who allowed it isn't asked again while they are still the one signed in.
 /// </param>
-public sealed record DesktopStart(int SessionId, string Consent, bool ViewOnly, int FramesPerSecond, int Quality, int Monitor, string? Resume = null);
+/// <param name="Features">What this RemoteHub supports (<see cref="DesktopFeatures"/>; null from older versions).</param>
+public sealed record DesktopStart(int SessionId, string Consent, bool ViewOnly, int FramesPerSecond, int Quality, int Monitor, string? Resume = null,
+    string[]? Features = null);
 
 /// <param name="Resume">With Connected: a single-use token to continue after a dropped connection (see <see cref="DesktopStart.Resume"/>).</param>
 public sealed record DesktopStatus(string State, string Message, int PinAttemptsLeft = 0, string? Resume = null);
@@ -174,7 +187,8 @@ public static class DesktopTransferKind
 
 public sealed record DesktopTransfer(int Id, string Kind, DesktopTransferItem[] Items, long Total);
 
-public sealed record DesktopTransferEnd(int Id, bool Ok, string Reason = "");
+/// <param name="ToDevice">About a transfer to the device (its receipt, or why it failed there) – the two directions number their transfers separately.</param>
+public sealed record DesktopTransferEnd(int Id, bool Ok, string Reason = "", bool ToDevice = false);
 
 public sealed record DesktopPin(string Pin);
 
@@ -360,16 +374,35 @@ public static class DesktopWire
         : throw new InvalidDataException("Short transfer message.");
 
     /// <summary>
-    /// A transfer item's path made safe to write below a folder: relative, no "..", no drive or invalid characters.
-    /// Null if nothing usable is left.
+    /// A transfer item's path made safe to write below a folder: relative, no "..", no drive or invalid characters, no
+    /// device names (CON, NUL, COM1 …). Null if nothing usable is left.
     /// </summary>
     public static string? SafeRelativePath(string path)
     {
         var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries)
             .Select(p => new string(p.Where(c => c >= 32 && Array.IndexOf(Path.GetInvalidFileNameChars(), c) < 0).ToArray()).Trim().TrimEnd('.'))
             .ToList();
-        if (parts.Count == 0 || parts.Any(p => p.Length == 0 || p is "." or "..")) return null;
+        if (parts.Count == 0 || parts.Any(p => p.Length == 0 || p is "." or ".." || IsDeviceName(p))) return null;
         return Path.Combine([.. parts]);
+    }
+
+    /// <summary>
+    /// The full path of <paramref name="path"/> (made safe, see <see cref="SafeRelativePath"/>) below
+    /// <paramref name="folder"/>, or null if it would end up anywhere else.
+    /// </summary>
+    public static string? PathBelow(string folder, string path)
+    {
+        if (SafeRelativePath(path) is not { } relative) return null;
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(Path.Combine(root, relative));
+        return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? full : null;
+    }
+
+    private static bool IsDeviceName(string name)
+    {
+        var stem = name.Split('.')[0].TrimEnd().ToUpperInvariant();
+        return stem is "CON" or "PRN" or "AUX" or "NUL" or "CONIN$" or "CONOUT$"
+            || stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && stem[3] is >= '0' and <= '9' or '¹' or '²' or '³';
     }
 
     /// <summary>Length-prefixed messages on a byte stream (the pipe between the agent service and its desktop helper).</summary>

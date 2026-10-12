@@ -155,6 +155,8 @@ public sealed class AgentDevice
     public DateTime? InstalledUtc { get; set; }
     /// <summary>Agent version seen at the last successful connection or install.</summary>
     public string? Version { get; set; }
+    /// <summary>The virtual display option chosen at the last install or update (null: never chosen – on).</summary>
+    public bool? VirtualDisplay { get; set; }
 
     public AgentDevice Clone() => (AgentDevice)MemberwiseClone();
 }
@@ -224,6 +226,8 @@ public sealed class UiState
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }
+    /// <summary>With startup protection on: lock RemoteHub after this many minutes without any input on this PC (0 = never).</summary>
+    public int AutoLockMinutes { get; set; }
     public string Theme { get; set; } = "Dark";
     /// <summary>Id of the <see cref="Services.SwitchHotkeys"/> preset used to switch sessions.</summary>
     public string SwitchKeys { get; set; } = "Less";

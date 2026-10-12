@@ -1,3 +1,5 @@
 * text=auto
 *.ico binary
 *.png binary
+# Vendored driver files are hash-checked and covered by the driver signature: never change their line endings.
+third-party/VirtualDisplayDriver/** binary

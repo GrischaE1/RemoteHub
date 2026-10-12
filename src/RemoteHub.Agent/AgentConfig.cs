@@ -16,9 +16,14 @@ public sealed class AgentConfig
     /// <summary>Who may connect: group SIDs or names. Default: the local Administrators group.</summary>
     public List<string> AllowedGroups { get; set; } = [AdministratorsSid];
 
+    /// <summary>
+    /// Virtual monitor for the remote desktop (third-party driver, installed with the agent unless switched off at install):
+    /// "auto" – only when the device offers no usable resolution (no monitor connected), "always", "off" (not installed).
+    /// </summary>
+    public string VirtualDisplay { get; set; } = VirtualDisplayModes.Auto;
+
     public int LogRetentionDays { get; set; } = 30;
     public int MaxSessions { get; set; } = 20;
-
     public const string AdministratorsSid = "S-1-5-32-544";
 
     [JsonIgnore]
@@ -45,7 +50,14 @@ public sealed class AgentConfig
         if (ListenPort is < 1 or > 65535) throw new InvalidDataException($"listenPort {ListenPort} is not a valid port.");
         if (AllowedGroups.Count == 0) throw new InvalidDataException("allowedGroups is empty – nobody could connect.");
         if (MaxSessions < 1) throw new InvalidDataException("maxSessions must be at least 1.");
+        if (!VirtualDisplayModes.IsValid(VirtualDisplay)) throw new InvalidDataException($"virtualDisplay must be \"auto\", \"always\" or \"off\", not \"{VirtualDisplay}\".");
     }
+}
+
+public static class VirtualDisplayModes
+{
+    public const string Auto = "auto", Always = "always", Off = "off";
+    public static bool IsValid(string? mode) => mode is Auto or Always or Off;
 }
 
 [JsonSerializable(typeof(AgentConfig))]

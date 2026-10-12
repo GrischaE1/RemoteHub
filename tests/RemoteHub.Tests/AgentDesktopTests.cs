@@ -6,8 +6,10 @@ using RemoteHub.Agent;
 namespace RemoteHub.Tests;
 
 /// <summary>Remote desktop through the agent: wire format and video codec.</summary>
-public class AgentDesktopTests
+public class AgentDesktopTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output = output;
+
     private static unsafe byte[] TestImage(int w, int h, int shift)
     {
         var img = new byte[w * h * 4];
@@ -64,6 +66,30 @@ public class AgentDesktopTests
         Assert.Equal(1, keyFrames);
         Assert.True(sizes[1] < sizes[0] / 4, $"unchanged frame not small: {string.Join(",", sizes)}");
         Assert.True(sw.ElapsedMilliseconds < 5000, $"{sw.ElapsedMilliseconds} ms");
+    }
+
+    /// <summary>
+    /// "Smooth": the GPU encoder when there is one – on a PC or VM without one (CI) it falls back to software; either way
+    /// the frames decode. On a PC with a GPU, this runs the GPU path (its output may start a frame or two late).
+    /// </summary>
+    [Fact]
+    public unsafe void Preferring_the_GPU_encoder_still_gives_a_decodable_picture()
+    {
+        const int w = 640, h = 360;
+        using var encoder = new H264Encoder(w, h, 60, 70, preferHardware: true);
+        _output.WriteLine("Encoder: " + encoder.Kind);
+        Assert.Contains(encoder.Kind, new[] { "hardware", "software" });
+        using var decoder = new H264Decoder();
+        var decoded = 0;
+        for (var n = 0; n < 20; n++)
+        {
+            var image = TestImage(w, h, n);
+            byte[]? au;
+            fixed (byte* p = image) au = encoder.Encode(p, w * 4, n == 0, out _);
+            if (au is null) continue;
+            decoder.Decode(au, w, h, (_, fw, fh) => { if (fw == w && fh == h) decoded++; });
+        }
+        Assert.True(decoded > 10, $"only {decoded} of 20 frames decoded ({encoder.Kind})");
     }
 
     [Fact]

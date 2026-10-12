@@ -135,17 +135,24 @@ public static class AppLock
         _key = null;
     }
 
-    public static void ChangePassword(string newPassword)
+    /// <summary>
+    /// A new password with a new settings key – so an old copy of lock.json with the old password opens nothing any more.
+    /// Call via <see cref="SettingsStore.Reprotect"/> (it stores everything again with the new key). Windows Hello wrapped
+    /// the old key: its key is removed and has to be set up again (<see cref="AddHello"/>).
+    /// </summary>
+    internal static async Task ChangePassword(string newPassword)
     {
         if (Read() is not { } f || _key is null) throw new InvalidOperationException("The protection isn't on or not unlocked.");
+        if (f.Hello is { } h) await WindowsHello.DeleteAsync(h.Credential);
+        var key = RandomNumberGenerator.GetBytes(32);
         var salt = RandomNumberGenerator.GetBytes(16);
-        var kek = Derive(newPassword, salt, Iterations);
+        var kek = await Task.Run(() => Derive(newPassword, salt, Iterations));
         try
         {
-            f.Salt = Convert.ToBase64String(salt);
-            f.Iterations = Iterations;
-            f.Password = Wrap(_key, kek);
-            Write(f);
+            Write(new LockFile { Salt = Convert.ToBase64String(salt), Password = Wrap(key, kek), CreatedUtc = f.CreatedUtc });
+            var old = _key;
+            _key = key;
+            CryptographicOperations.ZeroMemory(old);
         }
         finally { CryptographicOperations.ZeroMemory(kek); }
     }
@@ -227,6 +234,13 @@ public static class AppLock
 
     private static byte[] Derive(string password, byte[] salt, int iterations) =>
         Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, 32);
+
+    /// <summary>Locks while running (auto-lock): the settings key is wiped from memory until the next unlock.</summary>
+    public static void Lock()
+    {
+        if (_key is not null) CryptographicOperations.ZeroMemory(_key);
+        _key = null;
+    }
 
     /// <summary>For tests: forget the settings key (as after a restart).</summary>
     internal static void Forget() => _key = null;

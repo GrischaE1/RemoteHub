@@ -123,7 +123,7 @@ public sealed class StartupProtectionWindow : FluentWindow
         {
             if (CheckNew(p1.Password ?? "", p2.Password ?? "") is { } bad) return bad;
             var pw = p1.Password!;
-            await SettingsStore.Reprotect(_data(), () => { AppLock.Enable(pw); return Task.CompletedTask; });
+            await SettingsStore.Reprotect(_data(), () => Task.Run(() => AppLock.Enable(pw)));
             DiagLog.Write("Startup protection: turned on");
             string? warn = null;
             if (hello.IsChecked == true && await AppLock.AddHello() is { } helloError) warn = helloError;
@@ -144,7 +144,12 @@ public sealed class StartupProtectionWindow : FluentWindow
         _body.Children.Add(current);
         var error = Error();
         _body.Children.Add(error);
-        string? Verify() => AppLock.VerifyPassword(current.Password ?? "") ? null : "The current password is wrong.";
+        // PBKDF2 with 600,000 rounds takes a moment: not on the UI thread.
+        async Task<string?> Verify()
+        {
+            var pw = current.Password ?? "";
+            return await Task.Run(() => AppLock.VerifyPassword(pw)) ? null : "The current password is wrong.";
+        }
 
         // Windows Hello
         _body.Children.Add(Header("Windows Hello"));
@@ -153,7 +158,7 @@ public sealed class StartupProtectionWindow : FluentWindow
             var remove = new Button { Content = "Stop using Windows Hello", Icon = new SymbolIcon(SymbolRegular.Fingerprint24) };
             remove.Click += (_, _) => _ = Run(remove, error, async () =>
             {
-                if (Verify() is { } bad) return bad;
+                if (await Verify() is { } bad) return bad;
                 await AppLock.RemoveHello();
                 DiagLog.Write("Startup protection: Windows Hello removed");
                 return null;
@@ -165,7 +170,7 @@ public sealed class StartupProtectionWindow : FluentWindow
             var add = new Button { Content = "Set up Windows Hello", Icon = new SymbolIcon(SymbolRegular.Fingerprint24), IsEnabled = _helloAvailable == true };
             add.Click += (_, _) => _ = Run(add, error, async () =>
             {
-                if (Verify() is { } bad) return bad;
+                if (await Verify() is { } bad) return bad;
                 var e = await AppLock.AddHello();
                 if (e is null) DiagLog.Write("Startup protection: Windows Hello set up");
                 return e;
@@ -173,6 +178,25 @@ public sealed class StartupProtectionWindow : FluentWindow
             _body.Children.Add(add);
             if (_helloAvailable == false) _body.Children.Add(Text("Windows Hello isn't set up on this PC.", muted: true, size: 12));
         }
+
+        // Auto-lock
+        _body.Children.Add(Header("Lock when you're away"));
+        _body.Children.Add(Text("Locks RemoteHub after a while without mouse or keyboard input on this PC. Sessions keep running; " +
+                                "unlocking asks for the password or Windows Hello.", muted: true, bottom: 6));
+        var lockAfter = new System.Windows.Controls.ComboBox { Width = 220, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 8) };
+        foreach (var (minutes, label) in new[] { (0, "Never"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes"), (60, "After 1 hour") })
+            lockAfter.Items.Add(new ComboBoxItem { Content = label, Tag = minutes });
+        var currentMinutes = _data().Ui.AutoLockMinutes;
+        lockAfter.SelectedItem = lockAfter.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == currentMinutes) ?? lockAfter.Items[0];
+        lockAfter.SelectionChanged += (_, _) =>
+        {
+            if (lockAfter.SelectedItem is not ComboBoxItem { Tag: int minutes }) return;
+            var data = _data();
+            data.Ui.AutoLockMinutes = minutes;
+            try { SettingsStore.Save(data); } catch (Exception ex) { error.Text = ex.Message; }
+            DiagLog.Write($"Startup protection: auto-lock {(minutes == 0 ? "off" : $"after {minutes} min")}");
+        };
+        _body.Children.Add(lockAfter);
 
         // Change password
         _body.Children.Add(Header("Change password"));
@@ -183,12 +207,16 @@ public sealed class StartupProtectionWindow : FluentWindow
         var change = new Button { Content = "Change password", Icon = new SymbolIcon(SymbolRegular.Key24) };
         change.Click += (_, _) => _ = Run(change, error, async () =>
         {
-            if (Verify() is { } bad) return bad;
+            if (await Verify() is { } bad) return bad;
             if (CheckNew(n1.Password ?? "", n2.Password ?? "") is { } badNew) return badNew;
             var pw = n1.Password!;
-            await Task.Run(() => AppLock.ChangePassword(pw));
+            var hadHello = AppLock.HasHello;
+            await SettingsStore.Reprotect(_data(), () => AppLock.ChangePassword(pw));
             DiagLog.Write("Startup protection: password changed");
-            await Dialogs.Info(this, "Startup protection", "The startup password was changed.");
+            // Windows Hello unlocked the old key: set it up again for the new one.
+            var helloError = hadHello ? await AppLock.AddHello() : null;
+            await Dialogs.Info(this, "Startup protection", "The startup password was changed." +
+                (helloError is null ? "" : $"\n\nWindows Hello has to be set up again: {helloError}"));
             return null;
         });
         _body.Children.Add(change);
@@ -199,7 +227,7 @@ public sealed class StartupProtectionWindow : FluentWindow
         var off = new Button { Content = "Turn off startup protection", Icon = new SymbolIcon(SymbolRegular.LockOpen24) };
         off.Click += (_, _) => _ = Run(off, error, async () =>
         {
-            if (Verify() is { } bad) return bad;
+            if (await Verify() is { } bad) return bad;
             if (!await Dialogs.Confirm(this, "Turn off startup protection", "RemoteHub will open without a password or Windows Hello on this PC. Turn it off?", "Turn off")) return "";
             await SettingsStore.Reprotect(_data(), AppLock.Disable);
             DiagLog.Write("Startup protection: turned off");

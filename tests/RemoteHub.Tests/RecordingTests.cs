@@ -146,7 +146,7 @@ public class RecordingTests
     /// top and a WinForms panel below, partly covered by another window – both halves land in the frame at the right offset.
     /// GPU capture (Windows.Graphics.Capture) and the GDI fallback; borderless and with a normal window frame.
     /// </summary>
-    [Theory]
+    [SkippableTheory]
     [InlineData(true, false)]
     [InlineData(true, true)]
     [InlineData(false, false)]
@@ -154,7 +154,8 @@ public class RecordingTests
     public void FrameGrabber_CapturesHostedChildWindowsAndCoveredContent(bool gpu, bool bordered)
     {
         // GPU capture talks to the graphics driver: only when asked for (a test run on a dual-GPU laptop ended in a bluescreen).
-        if (gpu && Environment.GetEnvironmentVariable("REMOTEHUB_GPU_TESTS") != "1") return;
+        Skip.If(gpu && Environment.GetEnvironmentVariable("REMOTEHUB_GPU_TESTS") != "1", "GPU capture runs only with REMOTEHUB_GPU_TESTS=1.");
+        Skip.IfNot(TestScreen.Available, TestScreen.Reason);
         Exception? failure = null;
         var thread = new System.Threading.Thread(() =>
         {

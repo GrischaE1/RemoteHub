@@ -48,6 +48,30 @@ internal interface IScreenSource : IDisposable
 
     /// <summary>The last resolution change (asked → now), "" when none.</summary>
     string FitInfo => "";
+
+    /// <summary>For the log: the input desktop's name as last seen, and the error when it couldn't be opened.</summary>
+    string DesktopDescription => "";
+
+    /// <summary>Windows' lock screen (LogonUI) is still running in this session; it ends when the session is unlocked.</summary>
+    bool LockScreenUp => false;
+
+    /// <summary>Something for the agent's log since the last call (capture method changed and why), "" when nothing.</summary>
+    string TakeLogNote() => "";
+
+    /// <summary>Capture with GDI only (the GPU picture stood still earlier in this connection).</summary>
+    void PreferGdi() { }
+
+    /// <summary>
+    /// On: the display is required – a display Windows switched off (idle, 60 s on the lock screen) comes back and stays
+    /// on while connected. Off: Windows' own timeouts again. For the calling thread (the capture thread).
+    /// </summary>
+    void KeepDisplayOn(bool on) { }
+
+    /// <summary>
+    /// The picture stays black: switches a dark display on the way input does (a one-pixel pointer move and back) and
+    /// asks the monitors to power on. Returns what happened, for the log.
+    /// </summary>
+    string WakeDisplay() => "";
 }
 
 /// <summary>
@@ -67,12 +91,36 @@ internal sealed unsafe class WindowsScreen : IScreenSource
 
     public bool SecureDesktop => _desktop.IsSecure;
 
+    private readonly System.Diagnostics.Stopwatch _lockCheck = new();
+    private bool _lockScreenUp;
+
+    /// <summary>Checked at most every 250 ms. Unknown counts as unlocked – then the user is asked.</summary>
+    public bool LockScreenUp
+    {
+        get
+        {
+            if (_lockCheck.IsRunning && _lockCheck.ElapsedMilliseconds < 250) return _lockScreenUp;
+            _lockCheck.Restart();
+            try
+            {
+                var mine = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+                var logonUi = System.Diagnostics.Process.GetProcessesByName("LogonUI");
+                try { _lockScreenUp = logonUi.Any(p => p.SessionId == mine); }
+                finally { foreach (var p in logonUi) p.Dispose(); }
+            }
+            catch { _lockScreenUp = false; }
+            return _lockScreenUp;
+        }
+    }
+
+    public string DesktopDescription => $"input desktop \"{_desktop.Name}\"{(_desktop.LastError != 0 ? $", couldn't open it (error {_desktop.LastError})" : "")}";
+
     /// <summary><see cref="DesktopMonitor.Name"/> of the picture of all monitors (one GDI copy of the whole desktop).</summary>
     public const string AllMonitorsName = "*all*";
 
     private string _method = "";
     public string CaptureMethod => _method;
-    public string FitInfo => _resized is null ? "" : DisplayModes.LastFit;
+    public string FitInfo => DisplayModes.LastFit;
 
     public IReadOnlyList<DesktopMonitor> Monitors() => DisplayMonitors.List();
 
@@ -81,15 +129,19 @@ internal sealed unsafe class WindowsScreen : IScreenSource
         if (!_desktop.Sync()) return false;
         // A new desktop: the duplication of the old one is invalid.
         ResetDxgi();
-        _dxgiFailed = false;
+        _dxgiFailed = _dxgiStalled; // once the GPU picture stood still, GDI for the rest of the connection
+        _probePrimed = false;
+        _dxgiQuiet.Restart();
         _lastCursor = IntPtr.Zero;
         return true;
     }
 
     public CaptureResult Capture(DesktopMonitor monitor, int timeoutMs, FrameBuffer target)
     {
-        // Desktop Duplication is per monitor: the picture of all of them is one GDI copy of the whole desktop.
-        if (!_dxgiFailed && monitor.Name != AllMonitorsName)
+        // Desktop Duplication is per monitor: the picture of all of them is one GDI copy of the whole desktop. The secure
+        // desktop (sign-in, lock and UAC screens) is always copied with GDI: duplicating it with the GPU is refused or
+        // stalls on some drivers, and speed doesn't matter there.
+        if (!_dxgiFailed && monitor.Name != AllMonitorsName && !SecureDesktop)
         {
             try
             {
@@ -112,6 +164,8 @@ internal sealed unsafe class WindowsScreen : IScreenSource
                         _gdi ??= new GdiScreen();
                         return _gdi.Capture(monitor, target);
                     }
+                    if (r == CaptureResult.Changed) _dxgiQuiet.Restart();
+                    else if (r == CaptureResult.Unchanged && StoodStill(monitor, target)) return CaptureResult.Changed;
                     if (r != CaptureResult.Failed) return r;
                     ResetDxgi(); // access lost (desktop switch, resolution change): new duplication next time
                     return CaptureResult.Unchanged;
@@ -128,6 +182,65 @@ internal sealed unsafe class WindowsScreen : IScreenSource
         var result = _gdi.Capture(monitor, target);
         if (result == CaptureResult.Unchanged && timeoutMs > 0) Thread.Sleep(Math.Min(timeoutMs, 15));
         return result;
+    }
+
+    // ---- GPU picture that stands still (seen on servers without a monitor): Desktop Duplication reports "unchanged"
+    // while the screen changes. After a second without a GPU frame GDI takes a reference copy; if a second later GDI
+    // sees a change the GPU didn't report, GDI is used for the rest of the connection (this helper).
+    private readonly System.Diagnostics.Stopwatch _dxgiQuiet = System.Diagnostics.Stopwatch.StartNew();
+    private FrameBuffer? _probe;
+    private bool _probePrimed;
+    private bool _dxgiStalled;
+    private string _logNote = "";
+
+    public string TakeLogNote() { var n = _logNote; _logNote = ""; return n; }
+
+    public void KeepDisplayOn(bool on) =>
+        SetThreadExecutionState(on ? 0x80000003u /* ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED */ : 0x80000000u /* ES_CONTINUOUS */);
+
+    [DllImport("kernel32.dll")] private static extern uint SetThreadExecutionState(uint flags);
+
+    public string WakeDisplay()
+    {
+        SetThreadExecutionState(0x80000003u);
+        // Windows switches a display that went dark back on for input, not for a power request alone.
+        var nudge = stackalloc InputNative.INPUT[2];
+        nudge[0] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = 1, dwFlags = InputNative.MOVE } };
+        nudge[1] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = -1, dwFlags = InputNative.MOVE } };
+        var sent = InputNative.SendInput(2, nudge, sizeof(InputNative.INPUT));
+        var error = sent == 2 ? 0 : Marshal.GetLastPInvokeError();
+        PostMessageW((IntPtr)0xFFFF, 0x0112 /* WM_SYSCOMMAND */, (IntPtr)0xF170 /* SC_MONITORPOWER */, (IntPtr)(-1) /* on */);
+        return sent == 2 ? "pointer nudged, monitors asked to power on" : $"pointer nudge refused (error {error}), monitors asked to power on";
+    }
+
+    [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    public void PreferGdi()
+    {
+        ResetDxgi();
+        _dxgiFailed = _dxgiStalled = true;
+    }
+
+    private bool StoodStill(DesktopMonitor monitor, FrameBuffer target)
+    {
+        if (_dxgiQuiet.ElapsedMilliseconds < 1000) return false;
+        _dxgiQuiet.Restart();
+        _gdi ??= new GdiScreen();
+        _probe ??= new FrameBuffer();
+        if (!_probePrimed)
+        {
+            _gdi.Capture(monitor, _probe); // reference copy
+            _probePrimed = true;
+            return false;
+        }
+        if (_gdi.Capture(monitor, _probe) != CaptureResult.Changed) return false;
+        // The screen changed, the GPU said nothing: GDI from now on (this desktop).
+        ResetDxgi();
+        _dxgiFailed = _dxgiStalled = true;
+        _logNote = "the GPU picture (Desktop Duplication) stood still while the screen changed – using GDI for this connection";
+        _gdi.Capture(monitor, target);
+        _method = "GDI";
+        return true;
     }
 
     private string? _resized;
@@ -227,10 +340,10 @@ internal static unsafe class DisplayModes
             if (w < 640 || h < 480) break;
             if (Apply(device, current, w, h, test: true) && Apply(device, current, w, h, test: false)) return Done(device, width, height, k < 1 ? "same shape, smaller" : "exact");
         }
-        if (Choose(modes, width, height) is not { } best) { LastFit = $"{width}×{height} asked – no display mode fits"; return false; }
+        if (Choose(modes, width, height) is not { } best) { LastFit = $"{width}×{height} asked – no display mode fits" + Sizes(device); return false; }
         if (best.Width == current.dmPelsWidth && best.Height == current.dmPelsHeight) return Done(device, width, height, "closest listed mode");
         return Apply(device, current, best.Width, best.Height, test: false) ? Done(device, width, height, "closest listed mode")
-            : Fail(width, height, best);
+            : Fail(device, width, height, best);
     }
 
     private static bool Apply(string device, DEVMODEW current, int w, int h, bool test)
@@ -245,15 +358,22 @@ internal static unsafe class DisplayModes
     private static bool Done(string device, int width, int height, string how)
     {
         var now = New();
-        LastFit = EnumDisplaySettingsW(device, -1, ref now)
+        LastFit = (EnumDisplaySettingsW(device, -1, ref now)
             ? $"{width}×{height} asked → {now.dmPelsWidth}×{now.dmPelsHeight} ({how})"
-            : $"{width}×{height} asked ({how})";
+            : $"{width}×{height} asked ({how})") + Sizes(device);
         return true;
     }
 
-    private static bool Fail(int width, int height, (int Width, int Height) best)
+    /// <summary>For the log: the sizes the display offers (largest first).</summary>
+    private static string Sizes(string device)
     {
-        LastFit = $"{width}×{height} asked – {best.Width}×{best.Height} was refused by the display";
+        var sizes = List(device).Select(m => (m.Width, m.Height)).Distinct().OrderByDescending(m => m.Width * m.Height).Take(10).Select(m => $"{m.Width}×{m.Height}").ToList();
+        return sizes.Count == 0 ? "" : "; display modes: " + string.Join(", ", sizes);
+    }
+
+    private static bool Fail(string device, int width, int height, (int Width, int Height) best)
+    {
+        LastFit = $"{width}×{height} asked – {best.Width}×{best.Height} was refused by the display" + Sizes(device);
         return false;
     }
 
@@ -276,6 +396,119 @@ internal static unsafe class DisplayModes
         public uint dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
     }
 
+    /// <summary>Pixels of the largest mode the display offers (0 if unknown) – a GPU without a monitor offers only 640×480.</summary>
+    public static long LargestArea(string device) => List(device).Select(m => (long)m.Width * m.Height).DefaultIfEmpty(0).Max();
+
+    /// <summary>The display (\\.\DISPLAYn) of the agent's virtual monitor (<see cref="VirtualDisplay"/>), or null.</summary>
+    public static string? VirtualMonitor()
+    {
+        var dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) };
+        for (uint i = 0; EnumDisplayDevicesW(null, i, ref dd, 0); i++, dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) })
+        {
+            if ((dd.StateFlags & 0x1 /* DISPLAY_DEVICE_ATTACHED_TO_DESKTOP */) == 0) continue;
+            var description = new string(dd.DeviceString);
+            if (description.Contains("Virtual Display Driver", StringComparison.OrdinalIgnoreCase)) return new string(dd.DeviceName);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Makes <paramref name="device"/> the primary monitor (taskbar, new windows) – for the virtual monitor, so nothing
+    /// opens on an invisible 640×480 output. The whole layout is moved so that it sits at 0,0 (the monitor at 0,0 is the
+    /// primary one); Windows picks another primary again when the virtual monitor goes away.
+    /// </summary>
+    /// <returns>Null on success, else which step failed (Win32 error).</returns>
+    public static string? MakePrimary(string device)
+    {
+        const uint activeOnly = 0x2; // QDC_ONLY_ACTIVE_PATHS
+        var r = GetDisplayConfigBufferSizes(activeOnly, out var pathCount, out var modeCount);
+        if (r != 0) return $"buffer sizes: {r}";
+        var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+        var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+        r = QueryDisplayConfig(activeOnly, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero);
+        if (r != 0) return $"query: {r}";
+        int? virt = null;
+        for (var i = 0; i < pathCount; i++)
+        {
+            var name = new DISPLAYCONFIG_SOURCE_DEVICE_NAME
+            {
+                type = 1, // DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME
+                size = sizeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME),
+                adapterId = paths[i].sourceAdapterId,
+                id = paths[i].sourceId,
+            };
+            if (DisplayConfigGetDeviceInfo(ref name) != 0) continue;
+            if (new string(name.viewGdiDeviceName).Equals(device, StringComparison.OrdinalIgnoreCase)) virt = (int)paths[i].sourceModeInfoIdx;
+        }
+        if (virt is not { } v || v >= modeCount) return "not among the active displays";
+        var (dx, dy) = (-modes[v].positionX, -modes[v].positionY);
+        for (var i = 0; i < modeCount; i++)
+            if (modes[i].infoType == 1) // DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+            {
+                modes[i].positionX += dx;
+                modes[i].positionY += dy;
+            }
+        const uint apply = 0x80, supplied = 0x20, allowChanges = 0x400, save = 0x200;
+        r = SetDisplayConfig(pathCount, paths, modeCount, modes, apply | supplied | allowChanges | save);
+        return r == 0 ? null : $"apply: {r}";
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LUID { public uint Low; public int High; }
+
+    /// <summary>DISPLAYCONFIG_PATH_INFO (source and target info flattened).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_PATH_INFO
+    {
+        public LUID sourceAdapterId;
+        public uint sourceId, sourceModeInfoIdx, sourceStatusFlags;
+        public LUID targetAdapterId;
+        public uint targetId, targetModeInfoIdx;
+        public int outputTechnology, rotation, scaling;
+        public uint refreshNumerator, refreshDenominator;
+        public int scanLineOrdering, targetAvailable;
+        public uint targetStatusFlags, flags;
+    }
+
+    /// <summary>DISPLAYCONFIG_MODE_INFO with the source-mode view of the union (position of a display).</summary>
+    [StructLayout(LayoutKind.Explicit, Size = 64)]
+    private struct DISPLAYCONFIG_MODE_INFO
+    {
+        [FieldOffset(0)] public int infoType;
+        [FieldOffset(4)] public uint id;
+        [FieldOffset(8)] public LUID adapterId;
+        [FieldOffset(16)] public uint width;
+        [FieldOffset(20)] public uint height;
+        [FieldOffset(24)] public int pixelFormat;
+        [FieldOffset(28)] public int positionX;
+        [FieldOffset(32)] public int positionY;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAYCONFIG_SOURCE_DEVICE_NAME
+    {
+        public int type, size;
+        public LUID adapterId;
+        public uint id;
+        public fixed char viewGdiDeviceName[32];
+    }
+
+    [DllImport("user32.dll")] private static extern int GetDisplayConfigBufferSizes(uint flags, out uint pathCount, out uint modeCount);
+    [DllImport("user32.dll")] private static extern int QueryDisplayConfig(uint flags, ref uint pathCount, [Out] DISPLAYCONFIG_PATH_INFO[] paths, ref uint modeCount, [Out] DISPLAYCONFIG_MODE_INFO[] modes, IntPtr topology);
+    [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint pathCount, [In] DISPLAYCONFIG_PATH_INFO[] paths, uint modeCount, [In] DISPLAYCONFIG_MODE_INFO[] modes, uint flags);
+    [DllImport("user32.dll")] private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME info);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAY_DEVICEW
+    {
+        public int cb;
+        public fixed char DeviceName[32];
+        public fixed char DeviceString[128];
+        public uint StateFlags;
+        public fixed char DeviceID[128];
+        public fixed char DeviceKey[128];
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplayDevicesW(string? device, uint index, ref DISPLAY_DEVICEW dd, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string device, int mode, ref DEVMODEW dm);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int ChangeDisplaySettingsExW(string device, ref DEVMODEW dm, IntPtr hwnd, uint flags, IntPtr param);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int ChangeDisplaySettingsExW(string device, IntPtr dm, IntPtr hwnd, uint flags, IntPtr param);
@@ -290,11 +523,15 @@ internal sealed class DesktopThread : IDisposable
     public string Name => _name;
     public bool IsSecure => _name.Length > 0 && !_name.Equals("Default", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>For the log: the last time the input desktop couldn't be opened (Win32 error), 0 if it could.</summary>
+    public int LastError { get; private set; }
+
     /// <summary>True if the thread moved to another desktop.</summary>
     public bool Sync()
     {
         const uint access = 0x01FF | 0x000F0000; // all desktop rights incl. switch/journal + standard rights
         var input = DesktopNative.OpenInputDesktop(0, false, access);
+        LastError = input == IntPtr.Zero ? Marshal.GetLastPInvokeError() : 0;
         if (input == IntPtr.Zero) return false;
         var name = DesktopNative.DesktopName(input);
         if (name == _name)

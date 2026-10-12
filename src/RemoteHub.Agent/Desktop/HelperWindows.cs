@@ -20,13 +20,20 @@ internal interface IHelperUi : IDisposable
     event Action<string>? ClipboardChanged;
 
     /// <summary>A PNG from RemoteHub onto the device's clipboard.</summary>
-    void SetClipboardImage(byte[] png);
+    /// <summary>An image from RemoteHub: PNG bytes, or BMP bytes when <paramref name="png"/> is false.</summary>
+    void SetClipboardImage(byte[] image, bool png);
 
     /// <summary>Files (already written on the device) onto the clipboard, to be pasted like files copied in Explorer.</summary>
     void SetClipboardFiles(IReadOnlyList<string> paths);
 
     /// <summary>The device's clipboard now holds an image or files.</summary>
     event Action<HelperClipboard>? ClipboardContent;
+
+    /// <summary>
+    /// Files or an image copied in RemoteHub, offered without their data: when someone pastes, <paramref name="fetch"/>
+    /// gets it (the paste waits; its argument names the program that pastes); null if it didn't arrive.
+    /// </summary>
+    void OfferClipboard(DesktopTransfer offer, Func<string, HelperClipboard?> fetch);
 }
 
 /// <summary>
@@ -37,7 +44,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
 {
     private const uint WM_APP = 0x8000, WM_PAINT = 0x000F, WM_ERASEBKGND = 0x0014, WM_TIMER = 0x0113, WM_CLOSE = 0x0010, WM_DESTROY = 0x0002,
         WM_MOUSEMOVE = 0x0200, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSELEAVE = 0x02A3, WM_NCHITTEST = 0x0084,
-        WM_SETCURSOR = 0x0020, WM_KEYDOWN = 0x0100, WM_CLIPBOARDUPDATE = 0x031D;
+        WM_SETCURSOR = 0x0020, WM_KEYDOWN = 0x0100, WM_CLIPBOARDUPDATE = 0x031D,
+        WM_RENDERFORMAT = 0x0305, WM_RENDERALLFORMATS = 0x0306, WM_DESTROYCLIPBOARD = 0x0307;
     private const string ClassName = "RemoteHubAgentWindow";
 
     private static Win32HelperUi? _instance;
@@ -192,6 +200,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             wc.lpszClassName = name;
             RegisterClassExW(ref wc);
         }
+        VirtualFiles.SecurityResult = VirtualFiles.AllowInteractiveCallers(); // pastes from the user's programs reach our clipboard object
         _messageWindow = CreateWindowExW(0, ClassName, "RemoteHub", 0, 0, 0, 0, 0, new IntPtr(-3) /* HWND_MESSAGE */, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
         AddClipboardFormatListener(_messageWindow);
         _ready.Set();
@@ -238,7 +247,14 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         {
             if (ui is not null)
             {
-                if (msg == WM_CLIPBOARDUPDATE && hwnd == ui._messageWindow) { ui.OnClipboard(); return 0; }
+                if (hwnd == ui._messageWindow)
+                    switch (msg)
+                    {
+                        case WM_CLIPBOARDUPDATE: ui.OnClipboard(); return 0;
+                        case WM_RENDERFORMAT: ui.Render((uint)wParam); return 0;
+                        case WM_RENDERALLFORMATS: return 0; // the helper ends: an offer not pasted yet is gone, nothing is fetched
+                        case WM_DESTROYCLIPBOARD: ui.OfferEnded(); return 0;
+                    }
                 if (ui._windows.TryGetValue(hwnd, out var w))
                 {
                     if (msg == WM_DESTROY) ui._windows.Remove(hwnd);
@@ -253,6 +269,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     private void OnClipboard()
     {
         if (GetClipboardSequenceNumber() == _ownSequence) return; // what we put there ourselves
+        if (GetClipboardOwner() == _messageWindow) return;        // still ours (e.g. an offer that was just pasted): never sent back
+        if (VirtualFiles.IsCurrent(_virtual)) return;             // our virtual files (OLE owns the clipboard for us)
         if (!IsClipboardFormatAvailable(13))
         {
             HelperClipboard? other = null;

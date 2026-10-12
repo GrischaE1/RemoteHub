@@ -91,6 +91,42 @@ public class SharedSettingsTests
     }
 
     [Fact]
+    public void Shared_file_keeps_its_iteration_count_and_refuses_unusable_ones()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        var shared = Path.Combine(Path.GetTempPath(), "rdpm-shared-" + Guid.NewGuid().ToString("N"));
+        static void SetIterations(int n) =>
+            File.WriteAllText(SettingsStore.FilePath, System.Text.RegularExpressions.Regex.Replace(
+                File.ReadAllText(SettingsStore.FilePath), "\"Iterations\":\\s*\\d+", $"\"Iterations\": {n}"));
+        try
+        {
+            var data = new AppData();
+            data.Items.Add(new Connection { Name = "web01", Host = "web01" });
+            SettingsStore.CreateShared(shared, "shared-password", data);
+
+            // A file made with another count (another version or PC): this PC opens it with its remembered key and must
+            // write the same count back, or the password stops working everywhere else.
+            SetIterations(300_000);
+            var loaded = SettingsStore.Load();
+            loaded.Tools.ProcessRefreshSeconds = 33;
+            SettingsStore.Save(loaded, force: true);
+            Assert.Contains("\"Iterations\": 300000", File.ReadAllText(SettingsStore.FilePath));
+
+            // A count no RemoteHub writes (damaged or crafted file) is refused before any key derivation.
+            SetIterations(int.MaxValue);
+            Assert.Throws<InvalidDataException>(() => SettingsStore.Load());
+            SetIterations(1);
+            Assert.Throws<InvalidDataException>(() => SettingsStore.Load());
+        }
+        finally
+        {
+            try { Directory.Delete(shared, true); } catch { }
+            StoreReset.Clean();
+        }
+    }
+
+    [Fact]
     public void Old_narrow_sidebar_and_system_theme_are_upgraded_once()
     {
         Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard

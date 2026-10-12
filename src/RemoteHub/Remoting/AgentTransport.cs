@@ -86,6 +86,7 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         string? seen = null;
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+        ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(30); // no answer to a ping: the connection is gone (VPN drop)
         ws.Options.CollectHttpResponseDetails = true;
         ws.Options.RemoteCertificateValidationCallback = (_, cert, _, _) =>
         {

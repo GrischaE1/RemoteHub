@@ -75,6 +75,28 @@ public static class RdpFileParser
         return c;
     }
 
+    /// <summary>
+    /// What an imported connection would do that the user should know before connecting to a server named by a file
+    /// from outside (like mstsc's warning for unsigned .rdp files): who signs in, and what weakens or shares something.
+    /// </summary>
+    public static List<string> Risks(Connection c)
+    {
+        var o = c.Options;
+        var list = new List<string>
+        {
+            c.InheritCredentials
+                ? "Signs in with your default credentials from RemoteHub."
+                : $"Signs in as {(c.Credentials?.Domain is { Length: > 0 } d ? d + "\\" : "")}{c.Credentials?.Username} (from the file).",
+        };
+        if (o.ServerAuthentication == ServerAuth.ConnectWithoutWarning) list.Add("Doesn't check the server's identity (authentication level 0).");
+        if (o.EnableNla == false) list.Add("Network Level Authentication off: the server isn't verified before you sign in.");
+        if (o.RedirectDrives == true) list.Add("Shares this PC's drives with the server.");
+        if (o.RedirectSmartCards == true) list.Add("Shares your smart cards with the server.");
+        if (o.RedirectClipboard == true) list.Add("Shares the clipboard with the server.");
+        if (o.RedirectPrinters == true) list.Add("Shares your printers with the server.");
+        return list;
+    }
+
     /// <summary>"password 51:b:" is DPAPI-protected by mstsc for the current user; only readable on the same account.</summary>
     private static string? TryDecryptPassword(string? hex)
     {

@@ -17,7 +17,8 @@ public sealed record AgentInstallOptions(
     int Port,
     string FirewallScope,
     List<string> AllowedGroups,
-    bool UseAgentAfterwards);
+    bool UseAgentAfterwards,
+    bool VirtualDisplay = true);
 
 /// <summary>
 /// Installs or updates the RemoteHub Agent on a device:
@@ -107,8 +108,8 @@ public static class AgentInstaller
         """;
 
     private const string InstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log)
-        $a = @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$Log`"")
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$VirtualDisplay)
+        $a = @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$Log`"", "VIRTUALDISPLAY=$VirtualDisplay")
         if ($Enrollment) { $a += "ENROLLMENT=`"$Enrollment`"" }
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
         $p.ExitCode
@@ -134,10 +135,13 @@ public static class AgentInstaller
         Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
         """;
 
-    /// <summary>msiexec outside the agent session (via WMI), so restarting the agent doesn't kill it; then the folder is removed.</summary>
+    /// <summary>
+    /// msiexec outside the agent session (via WMI), so restarting the agent doesn't kill it; then the folder is removed –
+    /// only after msiexec has ended ("start /wait": msiexec is a GUI program, which cmd wouldn't wait for otherwise).
+    /// </summary>
     private const string DetachedInstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir)
-        $m = "msiexec.exe /i `"$Msi`" /qn /norestart /l*v `"$Log`""
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir, [string]$VirtualDisplay)
+        $m = "start `"`" /wait msiexec.exe /i `"$Msi`" /qn /norestart /l*v `"$Log`" VIRTUALDISPLAY=$VirtualDisplay"
         if ($Enrollment) { $m += " ENROLLMENT=`"$Enrollment`"" }
         $cmd = "cmd.exe /c `"$m & rd /s /q `"$Dir`"`""
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
@@ -173,7 +177,8 @@ public static class AgentInstaller
     }
 
     /// <summary>Silent install over a WinRM runspace. Throws <see cref="RemoteCommandException"/> with a readable reason.</summary>
-    public static Installed InstallOverRemoting(Runspace rs, string msi, string? enrollment, Action<string> progress)
+    /// <param name="virtualDisplay">Install the virtual monitor for devices without one (MSI property VIRTUALDISPLAY).</param>
+    public static Installed InstallOverRemoting(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true)
     {
         string? folder = null;
         try
@@ -181,15 +186,18 @@ public static class AgentInstaller
             folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
             var log = Path.Combine(folder, "install.log");
             progress("Installing (silent)…");
-            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log)).Last().BaseObject);
+            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("VirtualDisplay", virtualDisplay ? "1" : "0")).Last().BaseObject);
             if (exit is not (0 or 3010))
             {
                 var tail = string.Join("\n", RemoteFs.Invoke(rs, LogTailScript, ("Log", log)).Select(o => o.ToString().Trim()).Where(l => l.Length > 0));
                 throw new RemoteCommandException($"The installer failed (exit code {exit}).{(tail.Length > 0 ? "\n\n" + tail : "")}");
             }
             progress("Checking the installed agent…");
-            var parts = RemoteFs.Invoke(rs, VerifyScript).Single().ToString().Split('|');
-            return new Installed(parts[0], int.Parse(parts[1]), parts[2], parts[3]);
+            var answer = RemoteFs.Invoke(rs, VerifyScript).Single().ToString();
+            var parts = answer.Split('|');
+            if (parts.Length != 4 || parts[0].Length != 64 || !int.TryParse(parts[1], out var port))
+                throw new RemoteCommandException($"The installed agent's certificate or configuration couldn't be read (\"{answer}\").");
+            return new Installed(parts[0], port, parts[2], parts[3]);
         }
         finally
         {
@@ -199,12 +207,12 @@ public static class AgentInstaller
     }
 
     /// <summary>Update through the running agent: upload, then start msiexec detached (the session ends when the agent restarts).</summary>
-    public static void StartUpdateThroughAgent(Runspace rs, string msi, string? enrollment, Action<string> progress)
+    public static void StartUpdateThroughAgent(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true)
     {
         var folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
         var log = Path.Combine(Path.GetDirectoryName(folder)!, "RemoteHub-Agent-update.log");
         progress("Starting the installer on the device…");
-        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder));
+        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder), ("VirtualDisplay", virtualDisplay ? "1" : "0"));
     }
 
     // ------------------------------------------------------------------ health
@@ -225,8 +233,13 @@ public static class AgentInstaller
                ?? throw new InvalidDataException("Empty answer from the agent.");
     }
 
-    /// <summary>After an update through the agent: waits until it has gone away and answers again (with the expected certificate).</summary>
-    public static async Task<AgentHealth?> WaitForRestartAsync(string host, int port, string fingerprint, Action<string> progress, CancellationToken ct)
+    /// <summary>
+    /// After an update through the agent: waits until it has gone away and answers again (with the expected certificate)
+    /// with <paramref name="expectedVersion"/>. Returns the last answer – still the old version if the update didn't
+    /// install (compare <see cref="AgentHealth.Version"/>) – or null if it never answered again.
+    /// </summary>
+    public static async Task<AgentHealth?> WaitForRestartAsync(string host, int port, string fingerprint, string? expectedVersion,
+        Action<string> progress, CancellationToken ct)
     {
         progress("Waiting for the agent to restart…");
         var downBy = DateTime.UtcNow.AddSeconds(90);
@@ -236,14 +249,41 @@ public static class AgentInstaller
             catch (Exception) when (!ct.IsCancellationRequested) { break; } // it went down (or answers with the new certificate)
             await Task.Delay(1500, ct);
         }
+        AgentHealth? last = null;
         var upBy = DateTime.UtcNow.AddMinutes(3);
         while (DateTime.UtcNow < upBy)
         {
-            try { return await HealthAsync(host, port, fingerprint, ct); }
-            catch (Exception) when (!ct.IsCancellationRequested) { await Task.Delay(2000, ct); }
+            try
+            {
+                last = await HealthAsync(host, port, fingerprint, ct);
+                if (expectedVersion is null || last.Version == expectedVersion) return last;
+            }
+            catch (Exception) when (!ct.IsCancellationRequested) { }
+            await Task.Delay(2000, ct); // a short answer from the old agent before msiexec stops it, or not up yet
         }
-        return null;
+        return last;
     }
+
+    /// <summary>The ProductVersion of an MSI (e.g. "0.14.3" – the agent reports the same three numbers), or null.</summary>
+    public static string? PackageVersion(string msi)
+    {
+        try
+        {
+            dynamic installer = Activator.CreateInstance(Type.GetTypeFromProgID("WindowsInstaller.Installer", throwOnError: true)!)!;
+            var db = installer.OpenDatabase(msi, 0); // read-only
+            var view = db.OpenView("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'");
+            view.Execute();
+            var record = view.Fetch();
+            string? version = record?.StringData(1);
+            view.Close();
+            return Version.TryParse(version, out var v) ? $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}" : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The first or last <paramref name="n"/> characters for display (ids and fingerprints from older or edited data may be shorter).</summary>
+    public static string Head(string? s, int n) => s is null ? "" : s.Length <= n ? s : s[..n];
+    public static string Tail(string? s, int n) => s is null ? "" : s.Length <= n ? s : s[^n..];
 
     /// <summary>"Administrators" (any language) becomes its SID; other entries are passed on as typed (names or SIDs).</summary>
     public static List<string> ParseGroups(string text)

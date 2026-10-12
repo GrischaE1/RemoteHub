@@ -275,6 +275,11 @@ What differs from the plan above, and why:
 | Rekey: new DB key and new secret key | New DB key only | Passwords are only reachable through the newly encrypted pages; one key file write keeps it crash-safe (`db.key.next`) |
 | Sync of the audit log (phase 4) | Not yet – per device until phase 4 | Phase 4 |
 | "Unused" filter on the history table | Still uses the last connection time | The same event sets both; the history adds counts and durations (shown in the audit viewer for one connection) |
+| One writer on a background queue, separate read connections (§7) | One writer connection under a lock on the caller's thread; read-only connections of their own for long reads (`LocalDb.Read`: audit viewer, verify, history summary, daily check + backup) | Writes take well under a millisecond, so a queue adds nothing; the long reads were what made saves wait. Reads hold a shared "lifetime" lock so the key can't change under them (0.15.0) |
+| Startup lock with auto-lock (§5) | Auto-lock after 5–60 min without input on the PC (off by default): windows hidden, the startup-lock key wiped from memory; the DB key stays for the running sessions | A UI lock: sessions keep running behind it (0.15.0) |
+
+Audit log additions (0.14.4): a batch that fails to write is kept and tried again; each device's newest entry (id, time,
+hash) is recorded in `meta`, so removing entries from the end is detected too.
 
 Shared-folder mode (phase 4 open): connections stay in `RemoteHub.settings` as before; the database holds this PC's own
 settings (the fallback when the shared file is unavailable), the audit log and the history. A save with no changes
@@ -290,7 +295,10 @@ Measured (Release, this PC, 5,000 connections in 50 folders, ~300-character note
 
 Recovery paths (tested): wrong or missing key → "can't be opened" with the backup offer; a damaged page found while
 loading → same; interrupted re-encryption → the matching key is found and kept; failed migration → settings.dat stays
-in use.
+in use; RemoteHub stopping while the startup protection is turned on or off → `db.key.reprotect` (the keys from before,
+DPAPI only) opens it and the key is stored again with the protection that is on; a write that stops halfway → the
+database as it was; a password moved to another row or field → refused (AAD). A damaged database isn't re-encrypted
+(the check runs first), and "start with a new database" moves the old backups aside with it.
 
 Known limits: failed unlock attempts are written to the audit log only when the next unlock succeeds (before, the
 database can't be opened); the audit log is tamper-evident, not tamper-proof (see section 5).

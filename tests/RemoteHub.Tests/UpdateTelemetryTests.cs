@@ -71,9 +71,14 @@ public class UpdateTelemetryTests
     }
 
     [Theory]
-    [InlineData("https://api.github.com/repositories/1/releases/assets/2", true)]
-    [InlineData("https://objects.githubusercontent.com/x", true)]
+    [InlineData("https://api.github.com/repositories/1409080301/releases/assets/2", true)]
+    [InlineData("https://api.github.com/repos/GrischaE1/RemoteHub/releases/assets/2", true)]
+    [InlineData("https://github.com/GrischaE1/RemoteHub/releases/download/v0.14.3/RemoteHub-0.14.3-x64.msi", true)]
     [InlineData("https://update.remotehub.dev/download/x.msi", true)]
+    // Anything else on GitHub: anyone can publish release files there.
+    [InlineData("https://api.github.com/repositories/1/releases/assets/2", false)]
+    [InlineData("https://github.com/someone/else/releases/download/v1/RemoteHub-9.9.9-x64.msi", false)]
+    [InlineData("https://objects.githubusercontent.com/x", false)]
     [InlineData("http://api.github.com/x", false)]
     [InlineData("https://github.com.evil.example/x", false)]
     [InlineData("https://evilgithub.com/x", false)]
@@ -105,7 +110,7 @@ public class UpdateTelemetryTests
         finally { UpdateService.Http = oldHttp; UpdateService.Current = oldVersion; }
     }
 
-    private static UpdateInfo Info(byte[] content, string? sha = null, long? size = null, string url = "https://api.github.com/repositories/1/releases/assets/2") =>
+    private static UpdateInfo Info(byte[] content, string? sha = null, long? size = null, string url = "https://api.github.com/repositories/1409080301/releases/assets/2") =>
         new("0.9.0", "beta", true, null, null, false, null,
             new UpdateDownload("RemoteHub-0.9.0-x64.msi", url, sha ?? Convert.ToHexString(SHA256.HashData(content)), size ?? content.Length));
 

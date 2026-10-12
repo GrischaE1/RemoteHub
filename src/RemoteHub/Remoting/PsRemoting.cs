@@ -111,6 +111,16 @@ public static class PsRemoting
         }
     });
 
+    /// <summary>The HTTPS test failed on the certificate (the connection test then offers to check and trust it).</summary>
+    public const string UntrustedCertificate = "The HTTPS certificate of the computer is not trusted by this PC, or its name does not match the host name.";
+
+    /// <summary>The account was refused (the connection test then points to the credentials, not to the setup script).</summary>
+    public const string AccessDenied =
+        "Access denied. Either the user name or password is wrong, or the account signs in but isn't allowed: it must be an " +
+        "administrator (or in \"Remote Management Users\") – and a local administrator only gets its admin rights over the network " +
+        "if \"UAC restrictions for local accounts on network logons\" are off there (LocalAccountTokenFilterPolicy = 1; security " +
+        "baselines turn them on). A domain account, or the RemoteHub Agent, works without that.";
+
     /// <summary>Short, actionable text for the usual WinRM failures. Never contains the password.</summary>
     public static string Explain(Exception ex, PsTarget t)
     {
@@ -128,12 +138,11 @@ public static class PsRemoting
                 return "Access denied – no credentials are set for this connection (or its folder), so your own Windows account was used, " +
                        "and the remote computer doesn't accept it. Set credentials on the connection or its folder.";
             if (te.ErrorCode == 5 || msg.Contains("Access is denied", StringComparison.OrdinalIgnoreCase))
-                return "Access denied – the account is not allowed to use PowerShell remoting on this computer (it needs to be an administrator " +
-                       "or a member of \"Remote Management Users\"), or the user name or password is wrong.";
+                return AccessDenied;
             if (msg.Contains("cannot connect", StringComparison.OrdinalIgnoreCase) || msg.Contains("cannot complete the operation", StringComparison.OrdinalIgnoreCase))
                 return $"No WinRM service answered on {t.Display}. PowerShell remoting is probably not enabled there, or a firewall blocks the port.";
             if (msg.Contains("certificate", StringComparison.OrdinalIgnoreCase))
-                return "The HTTPS certificate of the computer is not trusted by this PC, or its name does not match the host name.";
+                return UntrustedCertificate;
         }
         return Trim(msg);
     }

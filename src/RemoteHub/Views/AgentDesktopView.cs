@@ -44,7 +44,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly Button _keysButton;
     private readonly System.Windows.Threading.DispatcherTimer _resizeDebounce = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly Border _choosePanel = new(), _waitPanel = new(), _pinPanel = new(), _endPanel = new(), _securePanel = new(), _noticePanel = new(),
-        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new();
+        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new(), _transferPanel = new();
     private readonly TextBlock _selfViewWarning = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
     private bool _showInfo, _keyCombinations = true;
     private Action<bool, bool> _savePreferences = (_, _) => { };
@@ -109,10 +109,11 @@ public sealed class AgentDesktopView : Border, IRecordableView
         BuildEndPanel(reconnect, close, useRdp);
         BuildSecurePanel();
         BuildNoticePanel();
+        BuildTransferPanel();
         BuildInfoPanel();
         BuildReconnectPanel();
         BuildPausedPanel();
-        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel }) _content.Children.Add(p);
+        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _transferPanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel }) _content.Children.Add(p);
 
         _picture.MouseMove += OnMouseMove;
         _picture.MouseDown += OnMouseDown;
@@ -226,14 +227,13 @@ public sealed class AgentDesktopView : Border, IRecordableView
         p.Children.Add(_viewOnly);
         foreach (var q in DesktopQualityPreset.All) _chooseQuality.Items.Add(new ComboBoxItem { Content = q.Label, Tag = q });
 
-        var connect = new Button { Content = "Connect", Appearance = ControlAppearance.Primary, Icon = new SymbolIcon(SymbolRegular.PlugConnected24), Margin = new Thickness(0, 0, 8, 0) };
-        connect.Click += (_, _) => StartChosen();
+        _connectChosen.Click += (_, _) => StartChosen();
         var rdp = new Button { Content = "Use RDP instead", Icon = new SymbolIcon(SymbolRegular.Desktop24), Margin = new Thickness(0, 0, 8, 0) };
         rdp.Click += (_, _) => useRdp();
         var closeBtn = new Button { Content = "Close tab", Icon = new SymbolIcon(SymbolRegular.Dismiss24) };
         closeBtn.Click += (_, _) => close();
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 22, 0, 0) };
-        buttons.Children.Add(connect);
+        buttons.Children.Add(_connectChosen);
         buttons.Children.Add(rdp);
         buttons.Children.Add(closeBtn);
         p.Children.Add(buttons);
@@ -319,16 +319,22 @@ public sealed class AgentDesktopView : Border, IRecordableView
     /// <summary>The connection dropped: the last picture stays, dimmed, while RemoteHub reconnects.</summary>
     private void BuildReconnectPanel()
     {
-        var p = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        p.Children.Add(new ProgressRing { IsIndeterminate = true, Width = 36, Height = 36, Margin = new Thickness(0, 0, 0, 14) });
-        var t = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 460, TextAlignment = TextAlignment.Center, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 14) };
-        t.SetBinding(TextBlock.TextProperty, nameof(SessionBase.StatusText));
+        var p = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+        p.Children.Add(new ProgressRing { IsIndeterminate = true, Width = 40, Height = 40, Margin = new Thickness(0, 0, 0, 16), HorizontalAlignment = HorizontalAlignment.Center });
+        p.Children.Add(new TextBlock { Text = "Connection lost – reconnecting…", FontSize = 20, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White,
+            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) });
+        var t = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 440, TextAlignment = TextAlignment.Center, FontSize = 13, LineHeight = 20,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xC8, 0xCC, 0xD4)), Margin = new Thickness(0, 0, 0, 18) };
+        t.SetBinding(TextBlock.TextProperty, nameof(AgentDesktopSession.ReconnectDetail));
         p.Children.Add(t);
-        var cancel = new Button { Content = "Stop reconnecting", HorizontalAlignment = HorizontalAlignment.Center };
+        var cancel = new Button { Content = "Stop reconnecting", Icon = new SymbolIcon(SymbolRegular.Dismiss24), HorizontalAlignment = HorizontalAlignment.Center, MinWidth = 160 };
         cancel.Click += (_, _) => _session.Disconnect();
         p.Children.Add(cancel);
-        _reconnectPanel.Background = new SolidColorBrush(Color.FromArgb(0xB0, 0x10, 0x12, 0x18));
-        _reconnectPanel.Child = p;
+        // Darker behind, and an opaque card: readable over any picture (the last frame stays underneath).
+        _reconnectPanel.Background = new SolidColorBrush(Color.FromArgb(0xC8, 0x08, 0x0A, 0x0E));
+        _reconnectPanel.Child = new Border { Child = p, Background = new SolidColorBrush(Color.FromRgb(0x1E, 0x22, 0x2A)), Padding = new Thickness(32, 26, 32, 24),
+            CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1), BorderBrush = new SolidColorBrush(Color.FromRgb(0x3A, 0x40, 0x4C)),
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 520 };
     }
 
     /// <summary>The Windows session is disconnected: the picture stands still under this message until it has a screen again.</summary>
@@ -343,6 +349,32 @@ public sealed class AgentDesktopView : Border, IRecordableView
         p.Children.Add(t);
         _pausedPanel.Child = new Border { Child = p, Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x18, 0x1C, 0x24)), Padding = new Thickness(28, 22, 28, 22),
             CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    /// <summary>A copy of files or an image (either way) in progress: bar, "X of Y · speed · time left", cancel (to the device only).</summary>
+    private void BuildTransferPanel()
+    {
+        var p = new StackPanel { Width = 360 };
+        var head = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        var cancel = new Button { Padding = new Thickness(3), MinWidth = 0, Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+            Content = new SymbolIcon(SymbolRegular.Dismiss24) { FontSize = 12, Foreground = Brushes.White }, ToolTip = "Cancel", VerticalAlignment = VerticalAlignment.Top,
+            Cursor = System.Windows.Input.Cursors.Arrow };
+        cancel.Click += (_, _) => _session.CancelTransfer();
+        cancel.SetBinding(VisibilityProperty, new Binding(nameof(AgentDesktopSession.TransferCancellable)) { Converter = new BooleanToVisibilityConverter() });
+        DockPanel.SetDock(cancel, Dock.Right);
+        head.Children.Add(cancel);
+        var title = new TextBlock { FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
+        title.SetBinding(TextBlock.TextProperty, nameof(AgentDesktopSession.TransferTitle));
+        head.Children.Add(title);
+        p.Children.Add(head);
+        var bar = new System.Windows.Controls.ProgressBar { Height = 4, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 0, 0, 6) };
+        bar.SetBinding(System.Windows.Controls.Primitives.RangeBase.ValueProperty, nameof(AgentDesktopSession.TransferProgress));
+        p.Children.Add(bar);
+        var detail = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Color.FromRgb(0xC8, 0xCC, 0xD4)) };
+        detail.SetBinding(TextBlock.TextProperty, nameof(AgentDesktopSession.TransferDetail));
+        p.Children.Add(detail);
+        _transferPanel.Child = new Border { Child = p, Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x18, 0x1C, 0x24)), Padding = new Thickness(16, 12, 12, 12),
+            CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, 0, 16) };
     }
 
     /// <summary>Remembered per PC: the connection info and sending key combinations.</summary>
@@ -365,14 +397,20 @@ public sealed class AgentDesktopView : Border, IRecordableView
 
     // ---- choosing
 
+    private readonly Button _connectChosen = new()
+        { Content = "Connect", Appearance = ControlAppearance.Primary, Icon = new SymbolIcon(SymbolRegular.PlugConnected24), Margin = new Thickness(0, 0, 8, 0) };
+
     private void FillChoices()
     {
         var hello = _session.Hello;
         _sessionList.Children.Clear();
         if (hello is null) return;
         RadioButton? first = null;
+        // The sign-in and lock screen need the SecureDesktop right – the agent would refuse them anyway: say so here.
+        bool Usable(DesktopSessionInfo s) => s.State != DesktopSessionState.Disconnected &&
+                                             (hello.Rights.SecureDesktop || s.State == DesktopSessionState.Active);
         // Pre-select where someone works: a signed-in session (console or RDP) before a locked one, before the sign-in screen.
-        var preferred = hello.Sessions.Where(s => s.State != DesktopSessionState.Disconnected)
+        var preferred = hello.Sessions.Where(Usable)
             .OrderBy(s => s.State switch { DesktopSessionState.Active => 0, DesktopSessionState.Locked => 1, _ => 2 })
             .ThenByDescending(s => s.Console)
             .FirstOrDefault();
@@ -385,8 +423,10 @@ public sealed class AgentDesktopView : Border, IRecordableView
                 DesktopSessionState.SignIn => "sign-in screen (nobody signed in)",
                 _ => $"{s.User} (disconnected – no screen)",
             };
+            if (s.State is DesktopSessionState.SignIn or DesktopSessionState.Locked && !hello.Rights.SecureDesktop)
+                text += " – your account may not see it";
             var rb = new RadioButton { Content = text, Tag = s, GroupName = "session" + GetHashCode(), Margin = new Thickness(0, 2, 0, 2),
-                IsEnabled = s.State != DesktopSessionState.Disconnected };
+                IsEnabled = Usable(s) };
             rb.Checked += (_, _) => { UpdateConsentChoices(); UpdateSelfViewWarning(); };
             _sessionList.Children.Add(rb);
             if (ReferenceEquals(s, preferred)) first = rb;
@@ -396,6 +436,16 @@ public sealed class AgentDesktopView : Border, IRecordableView
         UpdateSelfViewWarning();
         if (hello.Sessions.Length == 0)
             _sessionList.Children.Add(new TextBlock { Text = "No Windows session with a screen was found on the device.", TextWrapping = TextWrapping.Wrap });
+        else if (!hello.Sessions.Any(Usable))
+            _sessionList.Children.Add(new TextBlock
+            {
+                Text = hello.Rights.SecureDesktop
+                    ? "No session has a screen right now (disconnected). Connect to it by RDP, or wait until someone signs in."
+                    : "Nobody is using a session right now, and your account may not see the sign-in or lock screen on this device " +
+                      "(right \"SecureDesktop\" in the device's policy). Wait until someone signs in, or use RDP.",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0),
+            });
+        _connectChosen.IsEnabled = hello.Sessions.Any(Usable);
 
         _viewOnly.IsChecked = !hello.Rights.Control;
         _viewOnly.IsEnabled = hello.Rights.Control;
@@ -432,7 +482,10 @@ public sealed class AgentDesktopView : Border, IRecordableView
         // until they allow it, the device shows nothing more.
         var later = s.State != DesktopSessionState.Active;
         _consent.IsEnabled = true;
-        foreach (var m in hello.ConsentModes)
+        // Your own signed-in session: connecting without asking is always offered (the agent allows it there).
+        string[] modes = !later && SameAccount(s.User, hello.Account) && !hello.ConsentModes.Contains(DesktopConsent.None)
+            ? [DesktopConsent.None, .. hello.ConsentModes] : hello.ConsentModes;
+        foreach (var m in modes)
             _consent.Items.Add(new ComboBoxItem
             {
                 Tag = m,
@@ -444,7 +497,20 @@ public sealed class AgentDesktopView : Border, IRecordableView
                 },
             });
         var remembered = previous ?? _rememberedConsent;
-        _consent.SelectedItem = _consent.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == remembered) ?? _consent.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        _consent.SelectedItem = _consent.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == remembered)
+            ?? _consent.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == DesktopConsent.Ask)
+            ?? _consent.Items.OfType<ComboBoxItem>().FirstOrDefault();
+    }
+
+    /// <summary>The same account: "DEVICE\user" and ".\user" name the same local account.</summary>
+    private static bool SameAccount(string a, string b)
+    {
+        static string Local(string x) => x.StartsWith(@".\", StringComparison.Ordinal) ? x[2..] : x;
+        if (a.Length == 0 || b.Length == 0) return false;
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!a.StartsWith(@".\", StringComparison.Ordinal) && !b.StartsWith(@".\", StringComparison.Ordinal)) return false;
+        string Name(string x) => Local(x)[(Local(x).LastIndexOf('\\') + 1)..];
+        return string.Equals(Name(a), Name(b), StringComparison.OrdinalIgnoreCase);
     }
 
     private string? _rememberedConsent;
@@ -478,6 +544,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
             case nameof(AgentDesktopSession.Paused):
             case nameof(AgentDesktopSession.SecureDesktopHidden):
             case nameof(AgentDesktopSession.Notice):
+            case nameof(AgentDesktopSession.TransferActive):
             case nameof(AgentDesktopSession.ViewOnly):
             case nameof(AgentDesktopSession.PinAttemptsLeft):
                 Refresh();
@@ -514,6 +581,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         _endPanel.Visibility = V(phase is DesktopPhase.Ended or DesktopPhase.Idle);
         _securePanel.Visibility = V(phase == DesktopPhase.Live && _session.SecureDesktopHidden);
         _noticePanel.Visibility = V(phase is DesktopPhase.Live or DesktopPhase.Reconnecting && _session.Notice.Length > 0);
+        _transferPanel.Visibility = V(phase is DesktopPhase.Live or DesktopPhase.Reconnecting && _session.TransferActive);
         _reconnectPanel.Visibility = V(phase == DesktopPhase.Reconnecting);
         _pausedPanel.Visibility = V(phase == DesktopPhase.Live && _session.Paused.Length > 0);
         var live = phase == DesktopPhase.Live;
