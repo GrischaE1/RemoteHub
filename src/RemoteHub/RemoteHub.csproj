@@ -42,7 +42,8 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
-    <!-- Licenses of the libraries shipped with RemoteHub (installed next to RemoteHub.exe) -->
+    <!-- RemoteHub's own license (AGPL-3.0) and those of the libraries shipped with it (installed next to RemoteHub.exe) -->
+    <None Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\PRIVACY.md" Link="PRIVACY.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

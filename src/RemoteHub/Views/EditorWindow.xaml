@@ -382,6 +382,15 @@
                                    ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
                     </StackPanel>
 
+                    <TextBlock Text="License" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10"
+                               Text="RemoteHub and the RemoteHub Agent are free software under the GNU Affero General Public License version 3 (AGPL-3.0): you may use, change and share them under its terms. They come without any warranty. The libraries they ship keep their own licenses." />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button x:Name="LicenseButton" Content="Open license" Icon="{ui:SymbolIcon Document24}" Margin="0,0,8,0" />
+                        <ui:Button x:Name="NoticesButton" Content="Third-party notices" Icon="{ui:SymbolIcon Document24}" />
+                    </StackPanel>
+                    <TextBlock x:Name="LicenseErrorText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0" Visibility="Collapsed" />
+
                     <TextBlock Text="Keyboard shortcuts" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
                     <StackPanel>
                         <DockPanel Margin="0,3">
