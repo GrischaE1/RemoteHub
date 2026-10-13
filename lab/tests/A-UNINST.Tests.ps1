@@ -25,50 +25,50 @@ AfterAll {
 
 Describe 'A-UNINST <VmName>' -Tag Agent, 'A-UNINST' {
 
-    It 'had the agent installed and running before the uninstall' {
+    It 'A-UNINST-01 had the agent installed and running before the uninstall' -Tag 'A-UNINST-01' {
         $installed.Product | Should -Not -BeNullOrEmpty
         $installed.Service.State | Should -Be 'Running'
         @($installed.OurCertificates).Count | Should -Be 1
         $installed.Firewall | Should -Not -BeNullOrEmpty
     }
 
-    It 'uninstalls silently (msiexec exit code 0)' {
+    It 'A-UNINST-02 uninstalls silently (msiexec exit code 0)' -Tag 'A-UNINST-02' {
         $uninstall.ExitCode | Should -BeIn 0, 3010
     }
 
-    It 'removes the product, the service and the program folder' {
+    It 'A-UNINST-03 removes the product, the service and the program folder' -Tag 'A-UNINST-03' {
         $after.Product | Should -BeNullOrEmpty
         $after.Service | Should -BeNullOrEmpty
         $after.InstallFolder | Should -Be $false
     }
 
-    It 'removes the firewall rule' {
+    It 'A-UNINST-04 removes the firewall rule' -Tag 'A-UNINST-04' {
         $after.Firewall | Should -BeNullOrEmpty
     }
 
-    It 'removes the certificate from LocalMachine\My' {
+    It 'A-UNINST-05 removes the certificate from LocalMachine\My' -Tag 'A-UNINST-05' {
         @($after.OurCertificates) | Should -BeNullOrEmpty
     }
 
-    It 'removes agent.json' {
+    It 'A-UNINST-06 removes agent.json' -Tag 'A-UNINST-06' {
         $after.Config | Should -BeNullOrEmpty
     }
 
-    It 'keeps the logs, ending with the uninstall line' {
+    It 'A-UNINST-07 keeps the logs, ending with the uninstall line' -Tag 'A-UNINST-07' {
         $after.LogFolder | Should -Be $true
         # wording grew over versions ("..., configuration and Ctrl+Alt+Del setting removed" from 0.15.8)
         ($after.LogLines -join "`n") | Should -Match 'Uninstalled: firewall rule, certificate.* removed'
     }
 
-    It 'removes the event source' {
+    It 'A-UNINST-08 removes the event source' -Tag 'A-UNINST-08' {
         $after.EventSource | Should -Be $false
     }
 
-    It 'no longer answers on the agent port' {
+    It 'A-UNINST-09 no longer answers on the agent port' -Tag 'A-UNINST-09' {
         { Get-LabAgentHealth -Name $VmName -Pin $install.pin } | Should -Throw
     }
 
-    It 'puts the Ctrl+Alt+Del setting (SoftwareSASGeneration) back as it was before the install' {
+    It 'A-UNINST-10 puts the Ctrl+Alt+Del setting (SoftwareSASGeneration) back as it was before the install' -Tag 'A-UNINST-10' {
         # agents up to 0.15.5 only switch it temporarily; later ones set it at service start (SecureAttention.EnsureAllowed)
         if ("$($installed.SoftwareSas)" -eq "$($clean.SoftwareSas)") {
             Set-ItResult -Skipped -Because "agent $($installed.Product.Version) left SoftwareSASGeneration unchanged ('$($clean.SoftwareSas)')"

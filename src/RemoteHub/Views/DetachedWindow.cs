@@ -31,6 +31,7 @@ public sealed class DetachedWindow : FluentWindow
             Icon = new ImageIcon(),
         };
         AppIcon.Apply((ImageIcon)titleBar.Icon, 18);
+        AppIcon.ApplyTo(this);
         titleBar.SetBinding(TitleBar.TitleProperty, nameof(SessionBase.Title));
 
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 8, 4) };

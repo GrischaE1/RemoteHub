@@ -60,7 +60,25 @@ public static class Inheritance
 
     public static SavedCredential? FindSaved(AppData data, Guid id) => data.SavedCredentials.FirstOrDefault(c => c.Id == id);
 
-    /// <summary>Number of folders/connections (plus the global defaults) that reference a saved credential.</summary>
-    public static int UsageCount(AppData data, Guid id, IEnumerable<NodeBase> allNodes) =>
-        allNodes.Count(n => !n.InheritCredentials && n.CredentialId == id) + (data.DefaultCredentialId == id ? 1 : 0);
+    /// <summary>A network share's account: its own, or its server's – for a share on its own, its folders' (inherited as usual).</summary>
+    public static (CredentialSet Credentials, string Source) ResolveCredentials(NetworkShare share, AppData data)
+    {
+        if (!share.InheritCredentials) return Own(share.CredentialId, share.Credentials, data, "this share");
+        if (share.Server is null)
+        {
+            var (inherited, from) = ResolveCredentials((NodeBase)share, data, includeSelf: false);
+            return inherited.IsEmpty ? (new CredentialSet(), "none") : (inherited, from);
+        }
+        var (cred, src) = ResolveCredentials(share.Server, data);
+        return (cred, src == "this item" ? $"server \"{share.Server.Name}\"" : src);
+    }
+
+    /// <summary>Number of folders/connections/shares (plus the global defaults) that reference a saved credential.</summary>
+    public static int UsageCount(AppData data, Guid id, IEnumerable<NodeBase> allNodes)
+    {
+        var nodes = allNodes.ToList();
+        return nodes.Count(n => !n.InheritCredentials && n.CredentialId == id)
+               + nodes.OfType<Connection>().SelectMany(c => c.Shares).Count(s => !s.InheritCredentials && s.CredentialId == id)
+               + (data.DefaultCredentialId == id ? 1 : 0);
+    }
 }

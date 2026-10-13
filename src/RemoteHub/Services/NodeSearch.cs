@@ -2,7 +2,7 @@ using RemoteHub.Models;
 
 namespace RemoteHub.Services;
 
-/// <summary>One search result: a folder or connection plus its folder path.</summary>
+/// <summary>One search result: a folder, connection or network share plus its folder path.</summary>
 /// <param name="Note">Shown first in the subtitle (e.g. when a connection was last used, in the "not used" filter).</param>
 public sealed record SearchHit(NodeBase Node, string Path, int Score, string? Note = null)
 {
@@ -12,6 +12,7 @@ public sealed record SearchHit(NodeBase Node, string Path, int Score, string? No
     public string Subtitle => (Note is { Length: > 0 } ? Note + "  ·  " : "") + Node switch
     {
         Connection c => Path.Length > 0 ? $"{c.Address}  ·  {Path}" : c.Address,
+        NetworkShare s => (Path.Length > 0 ? $"{s.Address}  ·  {Path}" : s.Address) + $"  ·  {s.ProtocolLabel}",
         Folder f => $"Folder · {f.Descendants().OfType<Connection>().Count()} connection(s)" + (Path.Length > 0 ? $"  ·  {Path}" : ""),
         _ => Path,
     };
@@ -70,7 +71,7 @@ public static class NodeSearch
         foreach (var n in nodes)
         {
             var path = PathOf(n);
-            var host = (n as Connection)?.Host ?? "";
+            var host = n switch { Connection c => c.Host, NetworkShare s => s.Host ?? "", _ => "" };
             int score = 0;
             bool all = true;
             foreach (var t in terms)

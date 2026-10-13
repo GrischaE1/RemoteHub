@@ -7,6 +7,7 @@ namespace RemoteHub.Models;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(Folder), "folder")]
 [JsonDerivedType(typeof(Connection), "connection")]
+[JsonDerivedType(typeof(NetworkShare), "share")]
 public abstract partial class NodeBase : ObservableObject
 {
     public Guid Id { get; set; } = Guid.NewGuid();
@@ -31,7 +32,7 @@ public abstract partial class NodeBase : ObservableObject
     /// <summary>Effective (inherited) colour tag brush for the tree; null = no tag. Computed by the view model.</summary>
     [ObservableProperty] [property: JsonIgnore] private System.Windows.Media.Brush? _tagBrush;
     /// <summary>Icon to show (computed): the item's icon or the default for its type.</summary>
-    [JsonIgnore] public string DisplaySymbol => Icon ?? (this is Folder ? "Folder24" : "Desktop24");
+    [JsonIgnore] public virtual string DisplaySymbol => Icon ?? (this is Folder ? "Folder24" : "Desktop24");
     /// <summary>For the tree: folders get a frame around themselves and their contents.</summary>
     [JsonIgnore] public bool IsFolder => this is Folder;
     partial void OnIconChanged(string? value) => OnPropertyChanged(nameof(DisplaySymbol));
@@ -81,6 +82,11 @@ public sealed partial class Connection : NodeBase
     /// <summary>When a tab of this connection last connected (any kind: RDP, agent desktop, PowerShell, tools).</summary>
     [ObservableProperty] private DateTime? _lastConnectedUtc;
 
+    /// <summary>Network shares of this server (SMB, SFTP, FTP, WebDAV), shown below it in the navigation.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<NetworkShare> Shares { get; set; } = new();
+    /// <summary>The shares below it are shown in the navigation.</summary>
+    [ObservableProperty] private bool _isExpanded = true;
+
     [JsonIgnore] public string Address => Port == 3389 ? Host : $"{Host}:{Port}";
 
     /// <summary>Beside the name in the navigation: when it was last used ("today 15:42"), or "never connected".</summary>
@@ -126,7 +132,11 @@ public sealed partial class Connection : NodeBase
     /// <summary>"0.13.0+4dd1aa1…" → "0.13.0".</summary>
     public static string ShortVersion(string version) => version.Split('+')[0];
 
-    partial void OnHostChanged(string value) => OnPropertyChanged(nameof(Address));
+    partial void OnHostChanged(string value)
+    {
+        OnPropertyChanged(nameof(Address));
+        foreach (var s in Shares) s.RefreshLabels();
+    }
     partial void OnPortChanged(int value) => OnPropertyChanged(nameof(Address));
     partial void OnLastConnectedUtcChanged(DateTime? value) => RefreshLabels();
     partial void OnAgentChanged(AgentDevice? value) => RefreshLabels();
@@ -233,7 +243,7 @@ public sealed class UiState
     public string SwitchKeys { get; set; } = "Less";
     /// <summary>Folder shown on the "this PC" side of the file transfer tab last time.</summary>
     public string? LastLocalFolder { get; set; }
-    /// <summary>Anonymous start counter (see <see cref="Services.Telemetry"/>). IT policy can turn it off.</summary>
+    /// <summary>Anonymous usage data and crash reports (see <see cref="Services.Telemetry"/>). IT policy can turn it off.</summary>
     public bool TelemetryEnabled { get; set; } = true;
     /// <summary>Look for a newer version when RemoteHub starts.</summary>
     public bool UpdateCheckEnabled { get; set; } = true;

@@ -16,6 +16,8 @@ public enum AgentRight
     SecureDesktop,
     /// <summary>Connect to a signed-in user's screen without asking them.</summary>
     ConsentBypass,
+    /// <summary>Black out the device's screen while working on it (policy <c>PrivacyScreen</c> must allow it too).</summary>
+    PrivacyScreen,
 }
 
 /// <summary>
@@ -29,7 +31,9 @@ public enum AgentRight
 /// <item><c>DesktopClipboard</c> (DWORD) – 0 off, 1 text, 2 text and images, 3 text, images and files (default).</item>
 /// <item><c>DesktopIdleTimeoutMinutes</c> (DWORD) – a remote desktop without mouse or keyboard input for this long ends (0 = never, default).</item>
 /// <item><c>AuditToEventLog</c> (DWORD) – 0: audit entries only in the agent's log file, not in the Windows Application log.</item>
-/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass (REG_MULTI_SZ) – group SIDs or names.</item>
+/// <item><c>PrivacyScreen</c> (DWORD) – 0: the admin can't black out the device's screen; 1: can, but the mouse and keyboard at the device stay usable; 2: can, and the mouse and keyboard at the device are blocked with it (default – the admin can still leave them usable).</item>
+/// <item><c>HiddenApps</c> (REG_MULTI_SZ) – apps never shown to an admin, whatever the user chooses: full program paths, or <c>aumid:</c> + a Store app's AppUserModelID.</item>
+/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen (REG_MULTI_SZ) – group SIDs or names.</item>
 /// </list>
 /// </summary>
 public sealed class AgentPolicy
@@ -45,6 +49,10 @@ public sealed class AgentPolicy
     /// <summary>DesktopIdleTimeoutMinutes; zero = never.</summary>
     public TimeSpan IdleTimeout { get; init; }
     public bool AuditToEventLog { get; init; } = true;
+    /// <summary>PrivacyScreen: see <see cref="PrivacyScreenLevel"/>.</summary>
+    public int PrivacyScreen { get; init; } = PrivacyScreenLevel.WithInputBlock;
+    /// <summary>HiddenApps: programs (full path) or Store apps (<c>aumid:</c> + AppUserModelID) never shown to an admin.</summary>
+    public IReadOnlyList<string> HiddenApps { get; init; } = [];
     public IReadOnlyDictionary<AgentRight, IReadOnlyList<string>> Rights { get; init; } = new Dictionary<AgentRight, IReadOnlyList<string>>();
 
     /// <summary>Set when the policy key couldn't be read: then nothing is allowed (see <see cref="Load"/>).</summary>
@@ -66,6 +74,7 @@ public sealed class AgentPolicy
             [AgentRight.DesktopViewOnly] = [],
             [AgentRight.SecureDesktop] = config.AllowedGroups,
             [AgentRight.ConsentBypass] = [],
+            [AgentRight.PrivacyScreen] = config.AllowedGroups,
         },
     };
 
@@ -88,6 +97,7 @@ public sealed class AgentPolicy
     {
         DesktopEnabled = false,
         ConsentModes = [],
+        PrivacyScreen = PrivacyScreenLevel.Off,
         LoadError = reason,
         Rights = Enum.GetValues<AgentRight>().ToDictionary(r => r, _ => (IReadOnlyList<string>)[]),
     };
@@ -113,6 +123,8 @@ public sealed class AgentPolicy
             Clipboard = values.Number(null, "DesktopClipboard") is { } c and >= 0 and <= 3 ? c : d.Clipboard,
             IdleTimeout = values.Number(null, "DesktopIdleTimeoutMinutes") is { } idle and >= 0 and <= 1440 ? TimeSpan.FromMinutes(idle) : d.IdleTimeout,
             AuditToEventLog = values.Number(null, "AuditToEventLog") is not 0,
+            PrivacyScreen = values.Number(null, "PrivacyScreen") is { } p and >= PrivacyScreenLevel.Off and <= PrivacyScreenLevel.WithInputBlock ? p : d.PrivacyScreen,
+            HiddenApps = values.Strings(null, "HiddenApps")?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.HiddenApps,
             Rights = rights,
         };
     }
@@ -141,6 +153,12 @@ public sealed class AgentPolicy
             return key?.GetValue(name);
         }
     }
+}
+
+/// <summary>Policy <c>PrivacyScreen</c>: what the admin's privacy screen may do.</summary>
+public static class PrivacyScreenLevel
+{
+    public const int Off = 0, Allowed = 1, WithInputBlock = 2;
 }
 
 /// <summary>Group names or SIDs as configured → SIDs.</summary>

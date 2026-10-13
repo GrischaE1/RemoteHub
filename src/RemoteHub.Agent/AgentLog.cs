@@ -76,11 +76,17 @@ public enum AuditEvent
     /// <summary>The user who signed in or unlocked allowed the running remote desktop (or was connected to without asking).</summary>
     DesktopUserAllowed = 1102,
     DesktopResumed = 1103,
+    /// <summary>The admin turned the privacy screen on or off.</summary>
+    DesktopPrivacyScreen = 1104,
+    /// <summary>The user at the device hid or showed their screen.</summary>
+    DesktopUserHid = 1105,
     SignInRefused = 2000,
     DesktopRefused = 2100,
     /// <summary>The user who signed in or unlocked refused the running remote desktop; it ended.</summary>
     DesktopUserRefused = 2101,
     DesktopIdleEnded = 2102,
+    /// <summary>A privacy screen request was refused (right, policy, Windows version) or couldn't be shown.</summary>
+    DesktopPrivacyRefused = 2103,
     DesktopError = 3100,
 }
 

@@ -205,8 +205,8 @@ internal sealed unsafe class WindowsScreen : IScreenSource
         SetThreadExecutionState(0x80000003u);
         // Windows switches a display that went dark back on for input, not for a power request alone.
         var nudge = stackalloc InputNative.INPUT[2];
-        nudge[0] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = 1, dwFlags = InputNative.MOVE } };
-        nudge[1] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = -1, dwFlags = InputNative.MOVE } };
+        nudge[0] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = 1, dwFlags = InputNative.MOVE, dwExtraInfo = InputNative.Tag } };
+        nudge[1] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = -1, dwFlags = InputNative.MOVE, dwExtraInfo = InputNative.Tag } };
         var sent = InputNative.SendInput(2, nudge, sizeof(InputNative.INPUT));
         var error = sent == 2 ? 0 : Marshal.GetLastPInvokeError();
         PostMessageW((IntPtr)0xFFFF, 0x0112 /* WM_SYSCOMMAND */, (IntPtr)0xF170 /* SC_MONITORPOWER */, (IntPtr)(-1) /* on */);

@@ -145,6 +145,13 @@ public static class FileUploader
     private const int BatchFiles = 1000;
     private const long BatchBytes = 512L * 1024 * 1024;
 
+    /// <summary>
+    /// Data per remote command. WinRM refuses more than 50 MB of input per command (MaxReceivedDataSizePerCommandMB,
+    /// counted after serialization, which adds a third for byte arrays), so a batch is sent as several commands of this
+    /// size; the open files and their hashes stay in the session in between.
+    /// </summary>
+    internal static long CommandBytes = 30L * 1024 * 1024;
+
     private const string ResolveFolderScript = """
         param([string]$Folder)
         $f = $Folder.Trim()
@@ -163,11 +170,20 @@ public static class FileUploader
     /// Input messages: begin|i|path, data|i|bytes|gzip, end|i|sha256, abort|i, and for files that fit in one chunk
     /// file|i|path|bytes|gzip|sha256 (all in one). Output lines: ack|i|bytes, done|i, skip|i, fail|i|reason,
     /// cancelled|i. A failing file never stops the others. Plain .NET calls only (cmdlets cost milliseconds per file).
+    /// One batch can span several commands (<see cref="CommandBytes"/>): the open files live in a session variable,
+    /// the batch's first command drops what an earlier, broken batch left, and close|0 ends the batch.
     /// </summary>
     private const string StreamScript = """
-        param([bool]$Overwrite)
+        param([bool]$Overwrite, [bool]$First)
         begin {
-            $files = @{}
+            function Drop($i) {
+                $f = $files[$i]
+                if ($f -and $f.S) { try { $f.S.Dispose() } catch { }; try { [IO.File]::Delete($f.P + '.remotehub-part') } catch { } }
+                $files[$i] = @{ Dead = $true }
+            }
+            $files = $global:RemoteHubUpload
+            if ($First -and $files) { foreach ($k in @($files.Keys)) { Drop $k } }
+            if ($First -or -not $files) { $files = $global:RemoteHubUpload = @{} }
             $sha = [Security.Cryptography.SHA256]::Create()
             function Unzip([byte[]]$d) {
                 $z = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream(,$d)), [IO.Compression.CompressionMode]::Decompress)
@@ -196,11 +212,6 @@ public static class FileUploader
                 [IO.File]::Move($part, $f.P)
                 $files.Remove($i)
                 "done|$i"
-            }
-            function Drop($i) {
-                $f = $files[$i]
-                if ($f -and $f.S) { try { $f.S.Dispose() } catch { }; try { [IO.File]::Delete($f.P + '.remotehub-part') } catch { } }
-                $files[$i] = @{ Dead = $true }
             }
         }
         process {
@@ -231,13 +242,13 @@ public static class FileUploader
                         Finish $i ([string]$m[2])
                     }
                     'abort' { Drop $i; "cancelled|$i" }
+                    'close' { foreach ($k in @($files.Keys)) { if ($files[$k].S) { Drop $k } }; $global:RemoteHubUpload = $null }
                 }
             } catch {
                 Drop $i
                 "fail|$i|$($_.Exception.Message)"
             }
         }
-        end { foreach ($k in @($files.Keys)) { if ($files[$k].S) { Drop $k } } }
         """;
 
     /// <summary>
@@ -328,18 +339,13 @@ public static class FileUploader
 
     private static void SendBatch(Runspace rs, List<(TransferItem Item, string Target)> batch, bool overwrite, Action<Action> post)
     {
-        using var ps = PowerShell.Create();
-        ps.Runspace = rs;
-        ps.AddScript(StreamScript).AddParameter("Overwrite", overwrite);
-        var input = new PSDataCollection<object>();
-        var output = new PSDataCollection<PSObject>();
         var files = batch.Select(b => new Progress(b.Item)).ToArray();
         var gate = new object();
         long inFlight = 0;
 
-        output.DataAdded += (_, e) =>
+        void Answer(string line)
         {
-            var parts = (output[e.Index]?.ToString() ?? "").Split('|', 3);
+            var parts = line.Split('|', 3);
             if (parts.Length < 2 || !int.TryParse(parts[1], out var i) || i < 0 || i >= files.Length) return;
             var f = files[i];
             var item = f.Item;
@@ -383,63 +389,106 @@ public static class FileUploader
                     post(() => Fail(item, why));
                     break;
             }
-        };
-
-        var run = ps.BeginInvoke(input, output);
-        var buffer = new byte[ChunkSize];
-        for (var i = 0; i < files.Length && !run.IsCompleted; i++)
-        {
-            var f = files[i];
-            var item = f.Item;
-            if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); f.Finished = true; continue; }
-            post(() => { item.State = TransferState.Running; item.StatusText = "Starting…"; });
-            f.Clock.Start();
-            var tryCompress = !LikelyCompressed(item.LocalPath);
-
-            if (item.TotalBytes <= ChunkSize)
-            {
-                // Small file: begin, data and checksum in one message – no extra round trips per file.
-                var whole = File.ReadAllBytes(item.LocalPath);
-                var (small, zipped) = tryCompress ? Compress(whole) : (whole, false);
-                lock (gate) { f.Sent += whole.Length; f.Wire += small.Length; }
-                input.Add(new object[] { "file", i, batch[i].Target, small, zipped, Convert.ToHexString(SHA256.HashData(whole)) });
-                continue;
-            }
-            input.Add(new object[] { "begin", i, batch[i].Target });
-
-            var misses = 0;
-            using var file = new FileStream(item.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkSize, FileOptions.SequentialScan);
-            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var aborted = false;
-            int read;
-            while ((read = ReadFull(file, buffer)) > 0)
-            {
-                lock (gate)
-                {
-                    // Bounded: wait while too much is unwritten on the remote side (or stop if this file already failed).
-                    while (inFlight > WindowBytes && !f.Finished && !run.IsCompleted) Monitor.Wait(gate, 200);
-                    if (f.Finished || run.IsCompleted) { aborted = true; break; }
-                }
-                if (item.CancelRequested) { input.Add(new object[] { "abort", i }); aborted = true; break; }
-                var chunk = buffer.AsSpan(0, read).ToArray();
-                sha.AppendData(chunk);
-                var (payload, gzip) = tryCompress ? Compress(chunk) : (chunk, false);
-                if (tryCompress && !gzip && ++misses >= 2) tryCompress = false; // incompressible content: stop trying
-                lock (gate) { inFlight += read; f.Sent += read; f.Wire += payload.Length; }
-                input.Add(new object[] { "data", i, payload, gzip });
-            }
-            if (aborted) continue;
-            if (item.CancelRequested) { input.Add(new object[] { "abort", i }); continue; }
-            input.Add(new object[] { "end", i, Convert.ToHexString(sha.GetHashAndReset()) });
         }
-        input.Complete();
-        try { ps.EndInvoke(run); }
-        catch (RuntimeException ex) when (ex is not System.Management.Automation.Remoting.PSRemotingTransportException)
+
+        // One remote command per CommandBytes: the next one starts once the previous one has answered everything.
+        PowerShell ps = null!;
+        PSDataCollection<object> input = null!;
+        IAsyncResult run = null!;
+        long commandBytes = 0;
+        void Start(bool first)
         {
-            throw new RemoteCommandException(ex.ErrorRecord?.Exception?.Message ?? ex.Message);
+            ps = PowerShell.Create();
+            ps.Runspace = rs;
+            ps.AddScript(StreamScript).AddParameter("Overwrite", overwrite).AddParameter("First", first);
+            input = new PSDataCollection<object>();
+            var output = new PSDataCollection<PSObject>();
+            output.DataAdded += (_, e) => Answer(output[e.Index]?.ToString() ?? "");
+            run = ps.BeginInvoke(input, output);
+            commandBytes = 0;
+        }
+        void End()
+        {
+            input.Complete();
+            try { ps.EndInvoke(run); }
+            catch (RuntimeException ex) when (ex is not System.Management.Automation.Remoting.PSRemotingTransportException)
+            {
+                throw new RemoteCommandException(ex.ErrorRecord?.Exception?.Message ?? ex.Message);
+            }
+            finally { ps.Dispose(); }
+        }
+        void Send(object[] message, long bytes)
+        {
+            if (commandBytes > 0 && commandBytes + bytes > CommandBytes) { End(); Start(first: false); }
+            input.Add(message);
+            commandBytes += bytes;
+        }
+
+        Start(first: true);
+        try
+        {
+            SendFiles();
+            Send(["close", 0], 0);
+            End();
+        }
+        catch
+        {
+            try { ps.Stop(); ps.Dispose(); } catch { /* already ended */ }
+            throw;
         }
         foreach (var f in files.Where(f => !f.Finished))
             post(() => { if (f.Item.IsActive) Fail(f.Item, "no answer from the remote computer for this file"); });
+        return;
+
+        void SendFiles()
+        {
+            var buffer = new byte[ChunkSize];
+            for (var i = 0; i < files.Length && !run.IsCompleted; i++)
+            {
+                var f = files[i];
+                var item = f.Item;
+                if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); f.Finished = true; continue; }
+                post(() => { item.State = TransferState.Running; item.StatusText = "Starting…"; });
+                f.Clock.Start();
+                var tryCompress = !LikelyCompressed(item.LocalPath);
+
+                if (item.TotalBytes <= ChunkSize)
+                {
+                    // Small file: begin, data and checksum in one message – no extra round trips per file.
+                    var whole = File.ReadAllBytes(item.LocalPath);
+                    var (small, zipped) = tryCompress ? Compress(whole) : (whole, false);
+                    lock (gate) { f.Sent += whole.Length; f.Wire += small.Length; }
+                    Send(["file", i, batch[i].Target, small, zipped, Convert.ToHexString(SHA256.HashData(whole))], small.Length);
+                    continue;
+                }
+                Send(["begin", i, batch[i].Target], 0);
+
+                var misses = 0;
+                using var file = new FileStream(item.LocalPath, FileMode.Open, FileAccess.Read, FileShare.Read, ChunkSize, FileOptions.SequentialScan);
+                using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                var aborted = false;
+                int read;
+                while ((read = ReadFull(file, buffer)) > 0)
+                {
+                    lock (gate)
+                    {
+                        // Bounded: wait while too much is unwritten on the remote side (or stop if this file already failed).
+                        while (inFlight > WindowBytes && !f.Finished && !run.IsCompleted) Monitor.Wait(gate, 200);
+                        if (f.Finished || run.IsCompleted) { aborted = true; break; }
+                    }
+                    if (item.CancelRequested) { Send(["abort", i], 0); aborted = true; break; }
+                    var chunk = buffer.AsSpan(0, read).ToArray();
+                    sha.AppendData(chunk);
+                    var (payload, gzip) = tryCompress ? Compress(chunk) : (chunk, false);
+                    if (tryCompress && !gzip && ++misses >= 2) tryCompress = false; // incompressible content: stop trying
+                    lock (gate) { inFlight += read; f.Sent += read; f.Wire += payload.Length; }
+                    Send(["data", i, payload, gzip], payload.Length);
+                }
+                if (aborted) continue;
+                if (item.CancelRequested) { Send(["abort", i], 0); continue; }
+                Send(["end", i, Convert.ToHexString(sha.GetHashAndReset())], 0);
+            }
+        }
     }
 
     /// <summary>Files that are already compressed: gzip would only cost time.</summary>

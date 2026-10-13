@@ -38,6 +38,16 @@ public static class AppIcon
         image.DpiChanged += (_, _) => image.Source = Get(size, image);
     }
 
+    /// <summary>
+    /// The window's own icon (taskbar, Alt+Tab). Without it Windows reads the icon from RemoteHub.exe, which can come
+    /// up empty when the exe is started from a network share. WPF picks the small and large frames from the .ico.
+    /// </summary>
+    public static void ApplyTo(Window window)
+    {
+        try { window.Icon = BitmapFrame.Create(Source, BitmapCreateOptions.None, BitmapCacheOption.OnLoad); }
+        catch { /* the exe's icon is used */ }
+    }
+
     /// <summary>For title bars (WPF-UI ImageIcon).</summary>
     public static void Apply(Wpf.Ui.Controls.ImageIcon icon, double size)
     {

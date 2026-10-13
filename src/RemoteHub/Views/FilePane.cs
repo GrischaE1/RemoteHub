@@ -21,6 +21,8 @@ public sealed class FilePane : DockPanel
 {
     private readonly Func<string, Task<Listing>> _list;
     private readonly Func<string, Task<string>> _mkdir;
+    private readonly Func<string, string> _parent;
+    private readonly Func<string, string, string> _join;
     private readonly TextBox _address = new() { PlaceholderText = "Path, e.g. C:\\Temp or %TEMP% – Enter opens it", ClearButtonEnabled = false };
     private readonly ListView _listView = new() { SelectionMode = SelectionMode.Extended, AllowDrop = true, BorderThickness = new Thickness(0) };
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(4, 6, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
@@ -30,10 +32,16 @@ public sealed class FilePane : DockPanel
     private FileEntry? _pressed;
     private bool _deferSelect;
 
-    public FilePane(string title, string symbol, Func<string, Task<Listing>> list, Func<string, Task<string>> mkdir)
+    /// <param name="parent">The folder above a path (default: Windows paths, "" = drives).</param>
+    /// <param name="join">A folder and a name joined (default: with a backslash).</param>
+    public FilePane(string title, string symbol, Func<string, Task<Listing>> list, Func<string, Task<string>> mkdir,
+                    Func<string, string>? parent = null, Func<string, string, string>? join = null, string? pathHint = null)
     {
         _list = list;
         _mkdir = mkdir;
+        _parent = parent ?? RemoteFs.Parent;
+        _join = join ?? ((folder, name) => folder.TrimEnd('\\') + "\\" + name);
+        if (pathHint is not null) _address.PlaceholderText = pathHint;
         LastChildFill = true;
 
         // ---- title + address bar
@@ -44,7 +52,7 @@ public sealed class FilePane : DockPanel
         DockPanel.SetDock(titleRow, Dock.Top);
         head.Children.Add(titleRow);
 
-        var up = Tool(SymbolRegular.ArrowUp24, "Up one folder (Backspace)", () => _ = Navigate(RemoteFs.Parent(CurrentPath)));
+        var up = Tool(SymbolRegular.ArrowUp24, "Up one folder (Backspace)", () => _ = Navigate(_parent(CurrentPath)));
         var refresh = Tool(SymbolRegular.ArrowClockwise24, "Refresh (F5)", () => _ = Navigate(CurrentPath));
         var newFolder = Tool(SymbolRegular.FolderAdd24, "New folder", () => _ = NewFolder());
         DockPanel.SetDock(up, Dock.Left);
@@ -211,7 +219,7 @@ public sealed class FilePane : DockPanel
         if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) { SetError("That is not a valid folder name."); return; }
         try
         {
-            await _mkdir(CurrentPath.TrimEnd('\\') + "\\" + name);
+            await _mkdir(_join(CurrentPath, name));
             await Refresh();
         }
         catch (Exception ex) { SetError(ex.Message); }
@@ -229,7 +237,7 @@ public sealed class FilePane : DockPanel
         switch (e.Key)
         {
             case Key.Enter when SelectedEntries is [{ IsContainer: true } f]: _ = Navigate(f.FullPath); e.Handled = true; break;
-            case Key.Back: _ = Navigate(RemoteFs.Parent(CurrentPath)); e.Handled = true; break;
+            case Key.Back: _ = Navigate(_parent(CurrentPath)); e.Handled = true; break;
             case Key.F5: _ = Refresh(); e.Handled = true; break;
             case Key.F2 when SelectedEntries is [{ Kind: not EntryKind.Drive } one]: RenameRequested?.Invoke(one); e.Handled = true; break;
             case Key.Delete when SelectedEntries.Where(x => x.Kind != EntryKind.Drive).ToList() is { Count: > 0 } del: DeleteRequested?.Invoke(del); e.Handled = true; break;

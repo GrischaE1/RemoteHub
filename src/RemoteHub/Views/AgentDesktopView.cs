@@ -32,12 +32,18 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly System.Windows.Controls.Image _screen = new() { Stretch = Stretch.Fill };
     private readonly System.Windows.Controls.Image _cursorOverlay = new() { IsHitTestVisible = false };
     private readonly Canvas _cursorLayer = new() { IsHitTestVisible = false };
+    private readonly Canvas _regionLayer = new() { IsHitTestVisible = false }; // "Hidden by the user" over the areas of hidden apps
     private readonly Viewbox _viewbox = new() { Stretch = Stretch.Uniform };
     private readonly Grid _content = new() { Focusable = true, FocusVisualStyle = null, Background = Brushes.Black };
     private readonly ComboBox _monitors = new() { MinWidth = 150, Margin = new Thickness(0, 0, 6, 0), ToolTip = "Monitor of the device" };
     private readonly ComboBox _quality = new() { MinWidth = 210, Margin = new Thickness(0, 0, 6, 0), ToolTip = "Frames per second and picture quality" };
     private readonly TextBlock _viewOnlyBadge = new() { Text = "View only", FontSize = 12, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+    private readonly TextBlock _privacyBadge = new() { FontSize = 12, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly Button _cad;
+    private readonly Button _privacy;
+    private readonly SymbolIcon _pausedIcon = new(SymbolRegular.PlugDisconnected24) { FontSize = 36, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly TextBlock _pausedHeading = new() { FontSize = 18, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) };
+    private readonly TextBlock _pausedText = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 460, TextAlignment = TextAlignment.Center, Foreground = Brushes.White };
     private readonly Button _winKey;
     private readonly Button _fit;
     private readonly Button _infoButton;
@@ -73,6 +79,9 @@ public sealed class AgentDesktopView : Border, IRecordableView
         SetResourceReference(BorderBrushProperty, "ChromeStrokeBrush");
 
         _cad = RemoteToolChrome.Tool(SymbolRegular.Keyboard24, "Send Ctrl+Alt+Del", session.SendCtrlAltDel);
+        _privacy = RemoteToolChrome.Tool(SymbolRegular.EyeOff24, "", () => { });
+        _privacy.Click += (_, _) => { var m = PrivacyMenu(); m.PlacementTarget = _privacy; m.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom; m.IsOpen = true; };
+        _privacyBadge.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         _winKey = RemoteToolChrome.Tool(SymbolRegular.Grid24, "Press the Windows key (Start menu)", PressWindowsKey);
         _fit = RemoteToolChrome.Tool(SymbolRegular.ScaleFit24, "", () => session.FitToWindow = !session.FitToWindow);
         _fit.Margin = new Thickness(0, 0, 4, 0);
@@ -80,6 +89,8 @@ public sealed class AgentDesktopView : Border, IRecordableView
         _infoButton.Margin = new Thickness(0, 0, 4, 0);
         _keysButton = RemoteToolChrome.Tool(SymbolRegular.KeyCommand24, "", () => { _keyCombinations = !_keyCombinations; _savePreferences(_showInfo, _keyCombinations); UpdateKeyHook(); Refresh(); });
         _keysButton.Margin = new Thickness(0, 0, 4, 0);
+        // Disabled while the user at the device hides their screen – the tooltip says why.
+        foreach (var b in new[] { _cad, _winKey }) ToolTipService.SetShowOnDisabled(b, true);
         session.FitToWindow = fitToWindow();
         _resizeDebounce.Tick += (_, _) => { _resizeDebounce.Stop(); ReportSize(); };
         _content.SizeChanged += (_, _) => { _resizeDebounce.Stop(); _resizeDebounce.Start(); };
@@ -96,9 +107,11 @@ public sealed class AgentDesktopView : Border, IRecordableView
 
         // Picture + pointer, in the remote screen's pixels, scaled to fit.
         _picture.Children.Add(_screen);
+        _picture.Children.Add(_regionLayer);
         _cursorLayer.Children.Add(_cursorOverlay);
         _picture.Children.Add(_cursorLayer);
         _viewbox.Child = _picture;
+        _viewbox.SizeChanged += (_, _) => UpdateRegions(); // the labels keep their size on the screen
         _content.Children.Add(_viewbox);
         _screen.SetBinding(System.Windows.Controls.Image.SourceProperty, nameof(AgentDesktopSession.Screen));
         _cursorOverlay.SetBinding(System.Windows.Controls.Image.SourceProperty, nameof(AgentDesktopSession.CursorImage));
@@ -167,6 +180,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         _viewOnlyBadge.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         right.Children.Add(_viewOnlyBadge);
+        right.Children.Add(_privacyBadge);
         right.Children.Add(_monitors);
         right.Children.Add(_quality);
         right.Children.Add(_infoButton);
@@ -175,6 +189,8 @@ public sealed class AgentDesktopView : Border, IRecordableView
         right.Children.Add(_winKey);
         _cad.Margin = new Thickness(4, 0, 0, 0);
         right.Children.Add(_cad);
+        _privacy.Margin = new Thickness(4, 0, 0, 0);
+        right.Children.Add(_privacy);
         var row = new DockPanel();
         DockPanel.SetDock(right, Dock.Right);
         row.Children.Add(right);
@@ -340,15 +356,98 @@ public sealed class AgentDesktopView : Border, IRecordableView
     /// <summary>The Windows session is disconnected: the picture stands still under this message until it has a screen again.</summary>
     private void BuildPausedPanel()
     {
+        // Why the picture stands still: the session is disconnected, or the user at the device hid their screen (UpdatePausedPanel).
         var p = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
-        p.Children.Add(new SymbolIcon(SymbolRegular.PlugDisconnected24) { FontSize = 36, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = HorizontalAlignment.Center });
-        p.Children.Add(new TextBlock { Text = "The session is disconnected", FontSize = 18, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White,
-            HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 0, 0, 8) });
-        var t = new TextBlock { TextWrapping = TextWrapping.Wrap, MaxWidth = 460, TextAlignment = TextAlignment.Center, Foreground = Brushes.White };
-        t.SetBinding(TextBlock.TextProperty, nameof(AgentDesktopSession.Paused));
-        p.Children.Add(t);
+        p.Children.Add(_pausedIcon);
+        p.Children.Add(_pausedHeading);
+        p.Children.Add(_pausedText);
         _pausedPanel.Child = new Border { Child = p, Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x18, 0x1C, 0x24)), Padding = new Thickness(28, 22, 28, 22),
             CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+    }
+
+    private DesktopPrivacy? _privacyShown;
+
+    /// <summary>"Hidden by the user" over each area a hidden app covers in the picture (the device sends where they are).</summary>
+    private void UpdateRegions()
+    {
+        _privacyShown = _session.Privacy with { Regions = null };
+        _regionLayer.Children.Clear();
+        if (_session.Phase != DesktopPhase.Live || _session.HiddenByUser || _session.Privacy.Regions is not { } regions) return;
+        // The layer lies in the picture's own pixels, scaled with it: frame and label are scaled back, so they keep their
+        // size on the screen whatever the device's resolution.
+        var scale = _picture.ActualWidth > 0 && _picture.ActualHeight > 0 ? Math.Min(_viewbox.ActualWidth / _picture.ActualWidth, _viewbox.ActualHeight / _picture.ActualHeight) : 1; // Uniform
+        if (scale <= 0 || double.IsNaN(scale)) scale = 1;
+        foreach (var r in regions)
+        {
+            var area = new Border { Width = r.Width, Height = r.Height, BorderThickness = new Thickness(1 / scale), ClipToBounds = true };
+            area.SetResourceReference(Border.BorderBrushProperty, "ChromeStrokeBrush");
+            // The label only where it fits on the screen; small pieces (a covered strip beside another window) stay plain.
+            if (r.Width * scale >= 200 && r.Height * scale >= 56)
+            {
+                var label = new StackPanel { Orientation = Orientation.Horizontal };
+                label.Children.Add(new SymbolIcon(SymbolRegular.EyeOff24) { FontSize = 16, Foreground = Brushes.White, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
+                label.Children.Add(new TextBlock { Text = "Hidden by the user", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center });
+                // The same dark card as the tab's other notices over the picture.
+                area.Child = new Border
+                {
+                    Child = label, Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x18, 0x1C, 0x24)), Padding = new Thickness(12, 6, 12, 6),
+                    CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+                    LayoutTransform = new ScaleTransform(1 / scale, 1 / scale),
+                };
+            }
+            Canvas.SetLeft(area, r.X);
+            Canvas.SetTop(area, r.Y);
+            _regionLayer.Children.Add(area);
+        }
+    }
+
+    private void UpdatePausedPanel()
+    {
+        var hidden = _session.HiddenByUser;
+        var blurred = _session.Privacy.User == DesktopScreenHide.Blur;
+        _pausedIcon.Symbol = hidden ? SymbolRegular.EyeOff24 : SymbolRegular.PlugDisconnected24;
+        _pausedHeading.Text = hidden ? (blurred ? "The user has blurred their screen" : "The user has hidden their screen") : "The session is disconnected";
+        _pausedText.Text = hidden ? "You'll see it again when they click \"Show screen\". Mouse and keyboard are paused." : _session.Paused;
+        // Blurred: the card moves to the bottom edge, so the blurred picture stays in view.
+        if (_pausedPanel.Child is Border card)
+        {
+            card.VerticalAlignment = hidden && blurred ? VerticalAlignment.Bottom : VerticalAlignment.Center;
+            card.Margin = hidden && blurred ? new Thickness(0, 0, 0, 24) : new Thickness(0);
+        }
+    }
+
+    /// <summary>The privacy screen's menu: what the person at the device sees while you work.</summary>
+    private System.Windows.Controls.ContextMenu PrivacyMenu()
+    {
+        var on = _session.Privacy.Screen != DesktopPrivacyStyle.Off;
+        var block = new System.Windows.Controls.MenuItem
+        {
+            Header = "Block mouse and keyboard at the device", IsCheckable = true,
+            IsChecked = _session.CanBlockLocalInput && (on ? _session.Privacy.LocalInputBlocked : _session.BlockLocalInput),
+            IsEnabled = _session.CanBlockLocalInput, StaysOpenOnClick = true,
+            ToolTip = _session.CanBlockLocalInput ? "On by default. Clicks on \"Disconnect\" at the device and Ctrl+Alt+Del still work there." : "Not allowed on this device (policy).",
+        };
+        ToolTipService.SetShowOnDisabled(block, true);
+        // Remembered for this tab; while the screen is on it applies at once, in the style that is on.
+        block.Click += (_, _) =>
+        {
+            _session.BlockLocalInput = block.IsChecked;
+            if (on) _session.SetPrivacyScreen(_session.Privacy.Screen);
+        };
+        var m = new System.Windows.Controls.ContextMenu();
+        // The style that is on now shows a tick in place of its icon (a menu item with an icon has no separate tick column).
+        var black = RemoteToolChrome.Item("Black screen", _session.Privacy.Screen == DesktopPrivacyStyle.Black ? SymbolRegular.Checkmark24 : SymbolRegular.EyeOff24, () => _session.SetPrivacyScreen(DesktopPrivacyStyle.Black));
+        var message = RemoteToolChrome.Item("Black screen with a message", _session.Privacy.Screen == DesktopPrivacyStyle.Message ? SymbolRegular.Checkmark24 : SymbolRegular.Chat24, () => _session.SetPrivacyScreen(DesktopPrivacyStyle.Message));
+        m.Items.Add(black);
+        m.Items.Add(message);
+        m.Items.Add(new Separator());
+        m.Items.Add(block);
+        if (on)
+        {
+            m.Items.Add(new Separator());
+            m.Items.Add(RemoteToolChrome.Item("Turn off the privacy screen", SymbolRegular.Eye24, () => _session.SetPrivacyScreen(DesktopPrivacyStyle.Off)));
+        }
+        return m;
     }
 
     /// <summary>A copy of files or an image (either way) in progress: bar, "X of Y · speed · time left", cancel (to the device only).</summary>
@@ -540,8 +639,12 @@ public sealed class AgentDesktopView : Border, IRecordableView
     {
         switch (e.PropertyName)
         {
+            case nameof(AgentDesktopSession.Privacy) when (_session.Privacy with { Regions = null }) == _privacyShown:
+                UpdateRegions(); // only the hidden areas moved (several times a second while a window is dragged)
+                break;
             case nameof(AgentDesktopSession.Phase):
             case nameof(AgentDesktopSession.Paused):
+            case nameof(AgentDesktopSession.Privacy):
             case nameof(AgentDesktopSession.SecureDesktopHidden):
             case nameof(AgentDesktopSession.Notice):
             case nameof(AgentDesktopSession.TransferActive):
@@ -583,11 +686,31 @@ public sealed class AgentDesktopView : Border, IRecordableView
         _noticePanel.Visibility = V(phase is DesktopPhase.Live or DesktopPhase.Reconnecting && _session.Notice.Length > 0);
         _transferPanel.Visibility = V(phase is DesktopPhase.Live or DesktopPhase.Reconnecting && _session.TransferActive);
         _reconnectPanel.Visibility = V(phase == DesktopPhase.Reconnecting);
-        _pausedPanel.Visibility = V(phase == DesktopPhase.Live && _session.Paused.Length > 0);
+        _pausedPanel.Visibility = V(phase == DesktopPhase.Live && (_session.Paused.Length > 0 || _session.HiddenByUser));
+        UpdatePausedPanel();
         var live = phase == DesktopPhase.Live;
         _infoPanel.Visibility = V(live && _showInfo);
         _monitors.Visibility = _quality.Visibility = _infoButton.Visibility = V(live);
         _cad.Visibility = _winKey.Visibility = _fit.Visibility = _keysButton.Visibility = V(live && !_session.ViewOnly);
+        // The user at the device hid their screen: nothing typed or sent from here gets through until they show it again.
+        var hidden = _session.HiddenByUser;
+        _cad.IsEnabled = _winKey.IsEnabled = !hidden; // the keys toggle is this PC's setting: it stays usable
+        _cad.ToolTip = hidden ? "Not while the user at the device hides their screen" : "Send Ctrl+Alt+Del";
+        _winKey.ToolTip = hidden ? "Not while the user at the device hides their screen" : "Press the Windows key (Start menu)";
+        _privacy.Visibility = V(live && !_session.ViewOnly && _session.CanUsePrivacyScreen);
+        var screenOn = _session.Privacy.Screen != DesktopPrivacyStyle.Off;
+        _privacy.Appearance = screenOn ? ControlAppearance.Primary : ControlAppearance.Secondary;
+        var withMessage = _session.Privacy.Screen == DesktopPrivacyStyle.Message;
+        _privacy.ToolTip = screenOn
+            ? $"The device's screen is blacked out{(withMessage ? " with a message" : "")} – the person at the device can't see what you do. Click to change or turn it off."
+            : "Black out the device's screen – the person at the device can't see what you do";
+        System.Windows.Automation.AutomationProperties.SetName(_privacy, "Privacy screen");
+        var apps = _session.Privacy.HiddenApps switch { 0 => "", 1 => "1 app hidden by the user", var n => $"{n} apps hidden by the user" };
+        var screenText = screenOn ? $"Privacy screen on ({(withMessage ? "message" : "black")}){(_session.Privacy.LocalInputBlocked ? " · mouse and keyboard blocked" : "")}" : "";
+        _privacyBadge.Text = hidden ? (_session.Privacy.User == DesktopScreenHide.Blur ? "Blurred by the user" : "Hidden by the user")
+            : string.Join(" · ", new[] { screenText, apps }.Where(t => t.Length > 0));
+        _privacyBadge.Visibility = V(live && _privacyBadge.Text.Length > 0);
+        UpdateRegions();
         _infoButton.Appearance = _showInfo ? ControlAppearance.Primary : ControlAppearance.Secondary;
         _infoButton.ToolTip = _showInfo ? "Hide the connection info" : "Show connection info (frames, data rate, round trip, quality)";
         _keysButton.Appearance = _keyCombinations ? ControlAppearance.Primary : ControlAppearance.Secondary;

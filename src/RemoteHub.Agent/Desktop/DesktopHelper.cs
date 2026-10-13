@@ -26,6 +26,13 @@ internal enum HelperMessage : byte
     /// which session gets it – not always the one being viewed.
     /// </summary>
     SecureAttention = 105,
+    /// <summary>Service → helper: the admin's privacy screen (<see cref="DesktopPrivacyScreen"/>; the service checked the right and policy).</summary>
+    PrivacyScreen = 109,
+    /// <summary>
+    /// Helper → service: the apps the user at the device hides (<see cref="HelperHiddenApps"/>) – kept for a helper started
+    /// later and a continued connection. Never passed on to RemoteHub: the admin learns how many, not which.
+    /// </summary>
+    HiddenApps = 110,
     /// <summary>Helper → service: the result of <see cref="SecureAttention"/> (text: empty when sent, else why not).</summary>
     SecureAttentionResult = 106,
     /// <summary>Helper → service: a line for the agent's log (capture method, resolution change).</summary>
@@ -44,9 +51,18 @@ internal enum HelperMessage : byte
 /// <param name="Clipboard">What may go through the clipboard (<see cref="DesktopClipboardLevel"/>; 0 when viewing).</param>
 /// <param name="VirtualDisplay">The virtual monitor (<see cref="VirtualDisplayModes"/>) if it's installed, else "".</param>
 /// <param name="OfferToViewer">RemoteHub takes offers: what is copied here goes only when pasted there (TransferOffer / TransferRequest).</param>
+/// <param name="UserHidden">
+/// The user at the device hid their screen with the helper before this one (<see cref="DesktopScreenHide"/>): it stays
+/// hidden from the first frame on.
+/// </param>
+/// <param name="HiddenApps">The apps the user hid with the helper before this one (<see cref="AppIds"/>): hidden from the first frame on.</param>
+/// <param name="AlwaysHidden">Apps the device's policy always hides (policy HiddenApps); the user can't show them.</param>
 internal sealed record HelperInit(string Account, string Device, string Consent, string Pin, int TimeoutSeconds, bool ViewOnly,
     bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text,
-    bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false);
+    bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false, string UserHidden = DesktopScreenHide.None,
+    string[]? HiddenApps = null, string[]? AlwaysHidden = null);
+
+internal sealed record HelperHiddenApps(string[] Apps);
 
 internal sealed record HelperConsent(bool Granted, string Reason);
 
@@ -56,6 +72,7 @@ internal sealed record HelperEnd(string Reason, bool ByUser = false);
 [JsonSerializable(typeof(HelperInit))]
 [JsonSerializable(typeof(HelperConsent))]
 [JsonSerializable(typeof(HelperEnd))]
+[JsonSerializable(typeof(HelperHiddenApps))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class HelperJson : JsonSerializerContext;
 
@@ -74,7 +91,7 @@ internal static class DesktopHelperProgram
         using var ui = new Win32HelperUi();
         using var screen = new WindowsScreen();
         using var keyboard = new WindowsInput();
-        var session = new DesktopHelperSession(input, output, ui, screen, keyboard);
+        var session = new DesktopHelperSession(input, output, ui, screen, keyboard, new WindowsAppWindows());
         session.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
         return 0;
     }
@@ -83,7 +100,7 @@ internal static class DesktopHelperProgram
 }
 
 /// <summary>The work of the desktop helper, independent of Windows' screen and input (tests use doubles).</summary>
-internal sealed class DesktopHelperSession(Stream fromService, Stream toService, IHelperUi ui, IScreenSource screen, IInputSink input)
+internal sealed class DesktopHelperSession(Stream fromService, Stream toService, IHelperUi ui, IScreenSource screen, IInputSink input, IAppWindows apps)
 {
     private readonly SemaphoreSlim _write = new(1, 1);
     private readonly CancellationTokenSource _stop = new();
@@ -103,6 +120,17 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private volatile int _scale = 1; // the picture of all monitors is scaled down by this when it is too large for H.264
     private int _sent;               // frames sent since the last stats
 
+    // Privacy: what the user at the device hid (DesktopScreenHide), and what RemoteHub is told about it and the privacy screen.
+    private volatile string _userHide = DesktopScreenHide.None;
+    private volatile DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
+    private volatile bool _privacyChanged; // the capture thread sends the right picture at once
+    private readonly object _privacyLock = new();
+
+    // Hidden apps: the user's choice (and the policy's), where they are on the screen now (screen pixels, for input).
+    private volatile IReadOnlySet<string> _chosenApps = new HashSet<string>(), _alwaysHidden = new HashSet<string>(), _hiddenApps = new HashSet<string>();
+    private volatile ScreenRect[] _mask = [];
+    private readonly AppMask _appMask = new(apps);
+
     // Clipboard images and files: one transfer each way at a time (a newer copy replaces an unfinished one).
     private TransferReceiver? _receiving;
     private CancellationTokenSource? _sending;
@@ -114,8 +142,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         var token = linked.Token;
-        ui.ClipboardChanged += text => { if (_begun && Level >= DesktopClipboardLevel.Text) _ = Send(DesktopWire.Text(DesktopMessage.Clipboard, text)); };
-        ui.ClipboardContent += content => { if (_begun) SendClipboard(content); };
+        ui.ClipboardChanged += text => { if (_begun && Level >= DesktopClipboardLevel.Text && !CopiedInHiddenApp()) _ = Send(DesktopWire.Text(DesktopMessage.Clipboard, text)); };
+        ui.ClipboardContent += content => { if (_begun && !CopiedInHiddenApp()) SendClipboard(content); };
         var capture = new Thread(() => CaptureLoop(token)) { IsBackground = true, Name = "Desktop capture" };
         var inject = new Thread(() => InputLoop(token)) { IsBackground = true, Name = "Desktop input" };
         try
@@ -132,14 +160,24 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         // Decided for each event on the desktop it would go to – not on what the capture thread last
                         // saw – so nothing reaches the secure desktop without the right, or a user's desktop while held.
                         var init = _init;
-                        input.Allowed = secure => !_held && (secure ? init.SecureDesktop : !init.HoldUserDesktop);
+                        _userHide = DesktopScreenHide.Valid(init.UserHidden);
+                        _alwaysHidden = (init.AlwaysHidden ?? []).Select(AppIds.Normalize).ToHashSet();
+                        ChooseApps((init.HiddenApps ?? []).Select(AppIds.Normalize).ToHashSet(), report: false);
+                        _privacy = _privacy with { User = _userHide, HiddenApps = _hiddenApps.Count };
+                        // Before the question: the user can pick apps to hide before anything is sent.
+                        ui.OfferHideApps(_chosenApps, _alwaysHidden, chosen => ChooseApps(chosen, report: _begun));
+                        // Nothing from the admin while the user has hidden their screen – also not on the secure desktop.
+                        input.Allowed = secure => !_held && _userHide == DesktopScreenHide.None && (secure ? init.SecureDesktop : !init.HoldUserDesktop);
                         if (init.Gdi) screen.PreferGdi(); // the GPU picture stood still earlier in this connection
                         StartConsent(_init);
                         break;
                     case (byte)HelperMessage.Begin when _init is not null && !_begun:
                         _begun = true;
                         ui.CloseDialogs();
-                        ui.ShowBanner(_init, () => _ = End("The user at the device ended the session.", byUser: true));
+                        ui.ShowBanner(_init, () => _ = End("The user at the device ended the session.", byUser: true), HideScreen);
+                        if (_userHide != DesktopScreenHide.None || _hiddenApps.Count > 0) ui.ShowPrivacy(_privacy);
+                        _ = Send(DesktopWire.Json(DesktopMessage.Privacy, _privacy, DesktopJson.Default.DesktopPrivacy));
+                        if (_chosenApps.Count > 0) _ = Send(DesktopWire.Json((DesktopMessage)HelperMessage.HiddenApps, new HelperHiddenApps([.. _chosenApps]), HelperJson.Default.HelperHiddenApps));
                         capture.Start();
                         inject.Start();
                         break;
@@ -157,17 +195,25 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)DesktopMessage.KeyFrameRequest when _begun:
                         _keyFrameRequested = true;
                         break;
-                    case (byte)HelperMessage.SecureAttention when _begun && _init?.ViewOnly == false && _init.SecureDesktop:
+                    case (byte)HelperMessage.PrivacyScreen when _begun && _init?.ViewOnly == false:
+                        var screenAsked = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacyScreen);
+                        var style = DesktopPrivacyStyle.Valid(screenAsked.Style);
+                        // Called again (with why) if the overlays have to come down later, e.g. when the monitors change.
+                        ui.SetPrivacyScreen(screenAsked with { Style = style }, error => Report(error is null
+                            ? _privacy with { Screen = style, LocalInputBlocked = style != DesktopPrivacyStyle.Off && screenAsked.BlockLocalInput, Reason = "" }
+                            : _privacy with { Screen = DesktopPrivacyStyle.Off, LocalInputBlocked = false, Reason = error }));
+                        break;
+                    case (byte)HelperMessage.SecureAttention when _begun && _init?.ViewOnly == false && _init.SecureDesktop && _userHide == DesktopScreenHide.None:
                         // In this session, as LocalSystem (the service checked the right). Not on this loop's thread.
                         _ = Task.Run(() =>
                         {
                             _ = Send(DesktopWire.Text((DesktopMessage)HelperMessage.SecureAttentionResult, input.SecureAttention() ?? ""));
                         });
                         break;
-                    case (byte)DesktopMessage.Mouse when _begun && _init?.ViewOnly == false:
+                    case (byte)DesktopMessage.Mouse when _begun && _init?.ViewOnly == false && _userHide == DesktopScreenHide.None:
                         _input.TryAdd(new RemoteKeyOrMouse(DesktopWire.ReadMouse(m), null));
                         break;
-                    case (byte)DesktopMessage.Key when _begun && _init?.ViewOnly == false:
+                    case (byte)DesktopMessage.Key when _begun && _init?.ViewOnly == false && _userHide == DesktopScreenHide.None:
                         _input.TryAdd(new RemoteKeyOrMouse(null, DesktopWire.ReadKey(m)), 1000);
                         break;
                     case (byte)DesktopMessage.Clipboard when _begun && Level >= DesktopClipboardLevel.Text:
@@ -220,6 +266,63 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     new HelperConsent(false, "The user at the device refused."), HelperJson.Default.HelperConsent)));
                 break;
         }
+    }
+
+    /// <summary>The user at the device hid their screen (Black, Blur) or shows it again (None) – from the banner.</summary>
+    private void HideScreen(string mode)
+    {
+        mode = DesktopScreenHide.Valid(mode);
+        if (mode == _userHide) return;
+        _userHide = mode;
+        if (mode != DesktopScreenHide.None) input.ReleaseAll(); // nothing the admin holds stays pressed
+        _keyFrameRequested = true;
+        _privacyChanged = true;
+        Report(_privacy with { User = mode, Reason = "" });
+    }
+
+    /// <summary>What is hidden now: to the banner and to RemoteHub (through the service, which audits it).</summary>
+    private void Report(DesktopPrivacy privacy) => Report(_ => privacy);
+
+    /// <summary>Changes what is reported (from the UI thread and the capture thread – one at a time).</summary>
+    private void Report(Func<DesktopPrivacy, DesktopPrivacy> change)
+    {
+        lock (_privacyLock)
+        {
+            var before = _privacy;
+            var now = _privacy = change(before);
+            // The banner only cares about these; a moved hidden area alone doesn't redraw it.
+            if (now.User != before.User || now.Screen != before.Screen || now.LocalInputBlocked != before.LocalInputBlocked || now.HiddenApps != before.HiddenApps)
+                ui.ShowPrivacy(now);
+            _ = Send(DesktopWire.Json(DesktopMessage.Privacy, now, DesktopJson.Default.DesktopPrivacy));
+        }
+    }
+
+    /// <summary>The user picked the apps to hide (in the consent question, the code dialog or from the banner).</summary>
+    private void ChooseApps(IReadOnlySet<string> chosen, bool report)
+    {
+        _chosenApps = chosen;
+        var all = chosen.Union(_alwaysHidden).ToHashSet();
+        _appMask.Reset(Environment.TickCount64); // nothing goes out until the new choice is in the picture
+        _hiddenApps = all;
+        _privacyChanged = true;
+        _keyFrameRequested = true;
+        if (!report)
+        {
+            // Before the session began (picked in the question): it goes out with the first report.
+            lock (_privacyLock) _privacy = _privacy with { HiddenApps = all.Count };
+            return;
+        }
+        _ = Send(DesktopWire.Json((DesktopMessage)HelperMessage.HiddenApps, new HelperHiddenApps([.. chosen]), HelperJson.Default.HelperHiddenApps));
+        Report(p => p with { HiddenApps = all.Count, Regions = all.Count == 0 ? null : p.Regions, Reason = "" });
+    }
+
+    /// <summary>What was just copied comes from a hidden app: it isn't sent to RemoteHub.</summary>
+    private bool CopiedInHiddenApp()
+    {
+        var hidden = _hiddenApps;
+        if (hidden.Count == 0) return false;
+        try { return hidden.Contains(apps.ClipboardOwnerApp()); }
+        catch { return true; } // unknown: not sent
     }
 
     private async Task End(string reason, bool byUser = false)
@@ -489,16 +592,59 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             foreach (var i in _input.GetConsumingEnumerable(ct))
             {
                 if (_held || _init!.HoldUserDesktop && !screen.SecureDesktop) continue; // not allowed by the user now there
-                if (i.Key is { } k) input.Key(k);
+                if (_userHide != DesktopScreenHide.None) continue;                      // the user hid their screen
+                if (i.Key is { } k)
+                {
+                    // Not typed blind into a hidden app (a password manager…): only a key's release goes through there.
+                    if ((k.Flags & RemoteKeyFlags.Up) == 0 && IntoHiddenApp()) continue;
+                    input.Key(k);
+                }
                 else if (i.Mouse is { } m && _shown is { } monitor)
                 {
                     var f = _scale;
-                    input.Mouse(monitor, f == 1 ? m : m with { X = m.X * f + f / 2, Y = m.Y * f + f / 2 });
+                    var at = f == 1 ? m : m with { X = m.X * f + f / 2, Y = m.Y * f + f / 2 };
+                    // No clicks or scrolling on what the admin can't see; moving the pointer and letting go still work.
+                    if (m.Action is RemoteMouseAction.Down or RemoteMouseAction.Wheel or RemoteMouseAction.HorizontalWheel &&
+                        _mask.Any(r => r.Contains(monitor.X + at.X, monitor.Y + at.Y))) continue;
+                    input.Mouse(monitor, at);
                 }
             }
         }
         catch (OperationCanceledException) { }
         finally { input.ReleaseAll(); }
+    }
+
+    private DesktopRect[]? _regionsSent;
+
+    /// <summary>
+    /// Where hidden apps cover the picture, for the viewer's "Hidden by the user" labels: sent when it changed, at most
+    /// 5 times a second.
+    /// </summary>
+    private void ReportRegions(ScreenRect[] mask, DesktopMonitor monitor, Stopwatch clock)
+    {
+        DesktopRect[]? regions = null;
+        if (mask.Length > 0)
+        {
+            var f = Math.Max(1, _scale);
+            var picture = new ScreenRect(0, 0, monitor.Width, monitor.Height);
+            regions = mask.Select(r => r.Offset(-monitor.X, -monitor.Y).Intersect(picture)).Where(r => !r.IsEmpty)
+                .Select(r => new DesktopRect(r.Left / f, r.Top / f, (r.Width + f - 1) / f, (r.Height + f - 1) / f)).Distinct().Take(64).ToArray();
+            if (regions.Length == 0) regions = null;
+        }
+        if (regions is null && _regionsSent is null || regions is not null && _regionsSent is not null && regions.SequenceEqual(_regionsSent)) return;
+        if (clock.ElapsedMilliseconds < 200 && regions is not null) return; // a moving window: the next one is sent shortly
+        clock.Restart();
+        _regionsSent = regions;
+        Report(p => p with { Regions = regions });
+    }
+
+    /// <summary>The window with the keyboard belongs to a hidden app (unknown counts as hidden).</summary>
+    private bool IntoHiddenApp()
+    {
+        var hidden = _hiddenApps;
+        if (hidden.Count == 0) return false;
+        try { return hidden.Contains(apps.ForegroundApp()); }
+        catch { return true; }
     }
 
     // ---- capture thread
@@ -507,6 +653,14 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         var frame = new FrameBuffer();
         var scaled = new FrameBuffer();
+        var hidden = new FrameBuffer(); // what is sent instead while the user hides their screen (the capture stays untouched)
+        var blackSent = false;
+        var blurPending = false;
+        var blurClock = Stopwatch.StartNew();
+        var covered = new FrameBuffer(); // the picture with the hidden apps covered
+        var appsPending = false;
+        var maskFailed = false;
+        var regionClock = Stopwatch.StartNew();
         var lastStats = Stopwatch.StartNew();
         H264Encoder? encoder = null;
         var quality = _quality;
@@ -636,13 +790,40 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     if (!black) { dark.Restart(); wakes = 0; darkLogged = false; }
                     else why = "the captured picture is black";
                 }
+                // The user hid their screen: black – one black frame and no pointer; blurred – few, blurred frames.
+                var hide = _userHide;
+                var privacyChanged = _privacyChanged;
+                if (privacyChanged) { _privacyChanged = false; blackSent = false; }
+
+                // Hidden apps: where their windows are now – and whether a frame may go out at all (one of them is
+                // opening, moving or being restored). Worked out after the capture: the positions are never older than
+                // the picture. Anything going wrong here sends no picture rather than an uncovered one.
+                ScreenRect[] mask = [];
+                var appsHold = false;
+                if (hide != DesktopScreenHide.Black && _hiddenApps is { Count: > 0 } hiddenApps)
+                {
+                    try { mask = _appMask.Compute(hiddenApps, Environment.TickCount64, out appsHold); }
+                    catch (Exception ex)
+                    {
+                        appsHold = true;
+                        if (!maskFailed) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "hidden apps: their windows couldn't be found – no picture until they can: " + ex.Message));
+                        maskFailed = true;
+                    }
+                }
+                _mask = mask;
+                ReportRegions(mask, monitor, regionClock);
+
                 var cursor = screen.Cursor(monitor, out var shape);
                 if (_scale > 1) cursor = cursor with { X = cursor.X / _scale, Y = cursor.Y / _scale };
-                if (shape is not null) SendSync(DesktopWire.CursorShape(shape.Width, shape.Height, shape.HotX, shape.HotY, shape.Bgra));
-                if (cursor != lastCursor)
+                if (hide == DesktopScreenHide.Black) lastCursor = default; // sent again once it is shown
+                else
                 {
-                    lastCursor = cursor;
-                    SendSync(DesktopWire.Cursor(cursor));
+                    if (shape is not null) SendSync(DesktopWire.CursorShape(shape.Width, shape.Height, shape.HotX, shape.HotY, shape.Bgra));
+                    if (cursor != lastCursor)
+                    {
+                        lastCursor = cursor;
+                        SendSync(DesktopWire.Cursor(cursor));
+                    }
                 }
 
                 var send = false;
@@ -660,13 +841,62 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 }
                 else if (haveImage && _keyFrameRequested) send = true;
 
+                switch (hide)
+                {
+                    case DesktopScreenHide.Black:
+                        send = haveImage && (!blackSent || _keyFrameRequested);
+                        break;
+                    case DesktopScreenHide.Blur:
+                        // At most 2 frames a second, so movement doesn't help to read what is blurred.
+                        if (send || privacyChanged) blurPending = true;
+                        send = haveImage && blurPending && (privacyChanged || blurClock.ElapsedMilliseconds >= 500);
+                        break;
+                    default:
+                        if (privacyChanged) send = haveImage; // shown again: the picture as it is now, at once
+                        break;
+                }
+                // While a hidden app's window moves or animates the viewer keeps the last covered picture; the current one follows.
+                if (appsHold)
+                {
+                    if (send) appsPending = true;
+                    send = false;
+                }
+                else if (appsPending)
+                {
+                    send = haveImage;
+                    appsPending = false;
+                }
+
                 if (send)
                 {
                     var picture = frame;
+                    if (mask.Length > 0)
+                    {
+                        // Covered in a copy before scaling (nothing of a hidden window blends into an edge pixel);
+                        // the capture itself stays as it is for the next frames.
+                        covered.Ensure(frame.Width, frame.Height);
+                        Buffer.BlockCopy(frame.Pixels, 0, covered.Pixels, 0, frame.Width * frame.Height * 4);
+                        AppMask.Apply(covered, monitor, mask);
+                        picture = covered;
+                    }
                     if (_scale > 1)
                     {
-                        Downscale(frame, scaled, _scale);
+                        Downscale(picture, scaled, _scale);
                         picture = scaled;
+                    }
+                    if (hide == DesktopScreenHide.Black)
+                    {
+                        hidden.Ensure(picture.Width, picture.Height);
+                        Array.Clear(hidden.Pixels);
+                        picture = hidden;
+                        blackSent = true;
+                    }
+                    else if (hide == DesktopScreenHide.Blur)
+                    {
+                        Blur(picture, hidden);
+                        picture = hidden;
+                        blurPending = false;
+                        blurClock.Restart();
                     }
                     int w = picture.Width & ~1, h = picture.Height & ~1;
                     if (encoder is null || encoder.Width != w || encoder.Height != h || quality != _quality && !encoder.TrySetQuality(_quality))
@@ -729,6 +959,64 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         }
     }
 
+
+    /// <summary>The pixels of one blurred block (<see cref="Blur"/>).</summary>
+    internal const int BlurBlock = 32;
+
+    /// <summary>
+    /// The picture the admin gets while the user blurred their screen: averaged over blocks of
+    /// <see cref="BlurBlock"/> × <see cref="BlurBlock"/> pixels (≈ 60 × 34 values for 1920 × 1080 – no text survives that),
+    /// then smoothly scaled back up. Nothing of the detail within a block is left to undo.
+    /// </summary>
+    internal static void Blur(FrameBuffer source, FrameBuffer target)
+    {
+        int w = source.Width, h = source.Height;
+        target.Ensure(w, h);
+        if (w <= 0 || h <= 0) return;
+        int gw = (w + BlurBlock - 1) / BlurBlock, gh = (h + BlurBlock - 1) / BlurBlock;
+        var sum = new long[gw * gh * 3];
+        var count = new int[gw * gh];
+        var src = source.Pixels;
+        for (var y = 0; y < h; y++)
+        {
+            var row = y / BlurBlock * gw;
+            for (var x = 0; x < w; x++)
+            {
+                var cell = row + x / BlurBlock;
+                var p = (y * w + x) * 4;
+                sum[cell * 3] += src[p];
+                sum[cell * 3 + 1] += src[p + 1];
+                sum[cell * 3 + 2] += src[p + 2];
+                count[cell]++;
+            }
+        }
+        var avg = new float[gw * gh * 3];
+        for (var c = 0; c < count.Length; c++)
+            for (var k = 0; k < 3; k++) avg[c * 3 + k] = sum[c * 3 + k] / (float)count[c];
+
+        // Bilinear between the block centres.
+        var dst = target.Pixels;
+        for (var y = 0; y < h; y++)
+        {
+            var fy = Math.Clamp((y + 0.5f) / BlurBlock - 0.5f, 0, gh - 1);
+            int y0 = (int)fy, y1 = Math.Min(y0 + 1, gh - 1);
+            var ty = fy - y0;
+            for (var x = 0; x < w; x++)
+            {
+                var fx = Math.Clamp((x + 0.5f) / BlurBlock - 0.5f, 0, gw - 1);
+                int x0 = (int)fx, x1 = Math.Min(x0 + 1, gw - 1);
+                var tx = fx - x0;
+                var p = (y * w + x) * 4;
+                for (var k = 0; k < 3; k++)
+                {
+                    var top = avg[(y0 * gw + x0) * 3 + k] * (1 - tx) + avg[(y0 * gw + x1) * 3 + k] * tx;
+                    var bottom = avg[(y1 * gw + x0) * 3 + k] * (1 - tx) + avg[(y1 * gw + x1) * 3 + k] * tx;
+                    dst[p + k] = (byte)Math.Clamp(top * (1 - ty) + bottom * ty + 0.5f, 0, 255);
+                }
+                dst[p + 3] = 255;
+            }
+        }
+    }
 
     /// <summary>All of a 16×16 grid of samples is (nearly) black: a display that went dark, a blank screen saver.</summary>
     internal static bool IsBlack(FrameBuffer frame)

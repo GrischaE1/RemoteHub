@@ -9,9 +9,11 @@ using RemoteHub.Models;
 namespace RemoteHub.Services;
 
 /// <summary>
-/// Anonymous start counter (and crash reports, see <see cref="CrashReporter"/>): one small POST per start to update.remotehub.dev/telemetry, fire-and-forget with a short
-/// timeout; failures are swallowed. The install ID is a random GUID created once on this PC – never derived from the
-/// computer name, MAC address or machine SID – so it only counts installs and can't identify a machine or person.
+/// Anonymous usage data (and crash reports, see <see cref="CrashReporter"/>): small POSTs at start-up to
+/// update.remotehub.dev/telemetry, fire-and-forget with a short timeout; failures are swallowed. "app_start" carries how
+/// many connections, agents, shares and folders there are (counts only); "app_session" how long the previous session
+/// ran. The install ID is a random GUID created once on this PC – never derived from the computer name, MAC address or
+/// machine SID – so it only counts installs and can't identify a machine or person. See PRIVACY.md.
 /// </summary>
 public static class Telemetry
 {
@@ -49,10 +51,13 @@ public static class Telemetry
         try { File.Delete(path ?? InstallIdPath); } catch { /* best effort */ }
     }
 
-    /// <summary>Exactly what is sent – nothing else. <paramref name="extra"/>: the crash fields (errorType, message, stack).</summary>
-    internal static byte[] Payload(string evt, string version, string channel, string installId, IReadOnlyDictionary<string, string>? extra = null)
+    /// <summary>
+    /// Exactly what is sent – nothing else. <paramref name="extra"/>: the counts of "app_start", the run time of
+    /// "app_session" or the crash fields (errorType, message, stack).
+    /// </summary>
+    internal static byte[] Payload(string evt, string version, string channel, string installId, IReadOnlyDictionary<string, object>? extra = null)
     {
-        var body = new Dictionary<string, string>
+        var body = new Dictionary<string, object>
         {
             ["event"] = evt,
             ["version"] = version,
@@ -85,12 +90,52 @@ public static class Telemetry
         var a => a.ToString().ToLowerInvariant(),
     };
 
+    /// <summary>How many of each kind of item the navigation holds – numbers only, no names, hosts or settings.</summary>
+    public sealed record UsageCounts(int Connections, int Agents, int Shares, int Folders)
+    {
+        public IReadOnlyDictionary<string, object> ToFields() => new Dictionary<string, object>
+        {
+            ["connections"] = Connections,
+            ["agents"] = Agents,
+            ["shares"] = Shares,
+            ["folders"] = Folders,
+        };
+    }
+
     /// <summary>
-    /// At start-up, in the background if telemetry is on: "app_start", then an "app_crash" for each crash of an earlier
-    /// session that <see cref="CrashReporter"/> recorded. Never throws, never waits. With telemetry off, recorded crashes
-    /// are discarded.
+    /// Counts the tree: every connection, those with an installed RemoteHub Agent, every network share (below a server or
+    /// on its own) and every folder. Call on the UI thread (the collections are the view model's).
     /// </summary>
-    public static void AppStart(UiState ui)
+    public static UsageCounts Count(IEnumerable<NodeBase> items)
+    {
+        int connections = 0, agents = 0, shares = 0, folders = 0;
+        void Walk(IEnumerable<NodeBase> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                switch (n)
+                {
+                    case Folder f: folders++; Walk(f.Children); break;
+                    case Connection c:
+                        connections++;
+                        if (c.Agent is { Status: AgentStatus.Installed }) agents++;
+                        shares += c.Shares.Count;
+                        break;
+                    case NetworkShare: shares++; break;
+                }
+            }
+        }
+        Walk(items);
+        return new UsageCounts(connections, agents, shares, folders);
+    }
+
+    /// <summary>
+    /// At start-up, in the background if telemetry is on: "app_start" (with <paramref name="counts"/>), "app_session" for
+    /// the previous session's run time, then an "app_crash" for each crash of an earlier session that
+    /// <see cref="CrashReporter"/> recorded. Never throws, never waits. With telemetry off, recorded crashes and the
+    /// previous run time are discarded and this session's run time isn't recorded.
+    /// </summary>
+    public static void AppStart(UiState ui, UsageCounts counts)
     {
         // Fire-and-forget on a background thread: the policy lookup, files and network calls never touch the UI thread.
         _ = Task.Run(async () =>
@@ -98,19 +143,129 @@ public static class Telemetry
             try
             {
                 var crashes = CrashReporter.TakePending();
+                var previous = RunTime.TakePrevious();
                 if (!Enabled(ui)) { CrashReporter.Discard(crashes); return; }
+                RunTime.Start();
                 var channel = UpdateService.EffectiveChannel(ui);
                 var id = GetOrCreateInstallId();
-                await SendAsync(Payload("app_start", AppVersion.Current.ToString(), channel, id)).ConfigureAwait(false);
+                await SendAsync(Payload("app_start", AppVersion.Current.ToString(), channel, id, counts.ToFields())).ConfigureAwait(false);
+                if (previous is { Seconds: > 0 })
+                    await SendAsync(Payload("app_session", previous.Version, channel, id, new Dictionary<string, object> { ["runSeconds"] = previous.Seconds })).ConfigureAwait(false);
                 foreach (var crash in crashes)
                 {
-                    var extra = new Dictionary<string, string> { ["errorType"] = crash.ErrorType, ["message"] = crash.Message, ["stack"] = crash.Stack };
+                    var extra = new Dictionary<string, object> { ["errorType"] = crash.ErrorType, ["message"] = crash.Message, ["stack"] = crash.Stack };
                     // Kept for the next start if it couldn't be sent (CrashReporter ages old ones out).
                     if (await SendAsync(Payload("app_crash", crash.Version, channel, id, extra)).ConfigureAwait(false)) CrashReporter.Sent(crash);
                 }
             }
             catch { /* telemetry is invisible: success or failure doesn't matter to the user */ }
         });
+    }
+
+    /// <summary>
+    /// How long RemoteHub runs: %LOCALAPPDATA%\RemoteHub\run-time.json holds this session's version and seconds so far,
+    /// updated once a minute and at a clean exit, and is sent at the next start (so a crash or power loss still counts up
+    /// to the last minute). Time the PC sleeps doesn't count: a tick adds at most two minutes.
+    /// </summary>
+    public static class RunTime
+    {
+        internal sealed record Session(string Version, long Seconds);
+
+        /// <summary>Settable for tests.</summary>
+        internal static string FilePath { get; set; } =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RemoteHub", "run-time.json");
+
+        private static readonly TimeSpan Tick = TimeSpan.FromMinutes(1), MaxStep = TimeSpan.FromMinutes(2);
+        private static readonly object Gate = new();
+        private static Timer? _timer;
+        private static long _seconds, _lastTick;
+        private static bool _running;
+
+        /// <summary>The last session's run time (the file is removed), or null if none was recorded.</summary>
+        internal static Session? TakePrevious()
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return null;
+                var s = JsonSerializer.Deserialize<Session>(File.ReadAllText(FilePath));
+                File.Delete(FilePath);
+                return s;
+            }
+            catch
+            {
+                try { File.Delete(FilePath); } catch { /* ignore */ }
+                return null;
+            }
+        }
+
+        internal static void Start()
+        {
+            lock (Gate)
+            {
+                if (_running) return;
+                _running = true;
+                _seconds = 0;
+                _lastTick = Environment.TickCount64;
+                Save();
+                _timer = new Timer(_ => Update(), null, Tick, Tick);
+            }
+        }
+
+        /// <summary>Clean exit: the last partial minute is added. Does nothing if run time isn't recorded this session.</summary>
+        public static void Stop()
+        {
+            lock (Gate)
+            {
+                if (!_running) return;
+                _timer?.Dispose();
+                _timer = null;
+                Advance();
+                Save();
+                _running = false;
+            }
+        }
+
+        /// <summary>Telemetry was turned off: stop recording and remove what this session recorded.</summary>
+        public static void Forget()
+        {
+            lock (Gate)
+            {
+                _timer?.Dispose();
+                _timer = null;
+                _running = false;
+                try { File.Delete(FilePath); } catch { /* best effort */ }
+            }
+        }
+
+        private static void Update()
+        {
+            lock (Gate)
+            {
+                if (!_running) return;
+                Advance();
+                Save();
+            }
+        }
+
+        private static void Advance()
+        {
+            var now = Environment.TickCount64;
+            _seconds += (long)Step(TimeSpan.FromMilliseconds(now - _lastTick), MaxStep).TotalSeconds;
+            _lastTick = now;
+        }
+
+        /// <summary>The time a tick adds: the elapsed time, but no more than <paramref name="max"/> (the PC was asleep).</summary>
+        internal static TimeSpan Step(TimeSpan elapsed, TimeSpan max) => elapsed < TimeSpan.Zero ? TimeSpan.Zero : elapsed > max ? max : elapsed;
+
+        private static void Save()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                File.WriteAllText(FilePath, JsonSerializer.Serialize(new Session(AppVersion.Current.ToString(), _seconds)));
+            }
+            catch { /* not recorded this time */ }
+        }
     }
 
     /// <summary>One POST with a short deadline. True when the server accepted it.</summary>

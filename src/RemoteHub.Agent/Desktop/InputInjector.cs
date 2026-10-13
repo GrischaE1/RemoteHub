@@ -137,6 +137,9 @@ internal sealed unsafe class WindowsInput : IInputSink, IDisposable
 
     private static void Send(InputNative.INPUT input)
     {
+        // Tagged, so the privacy screen's input block lets the admin's input through and nothing else.
+        if (input.type == 0) input.mi.dwExtraInfo = InputNative.Tag;
+        else input.ki.dwExtraInfo = InputNative.Tag;
         if (InputNative.SendInput(1, &input, sizeof(InputNative.INPUT)) == 1) Interlocked.Increment(ref _injected);
         else
         {
@@ -282,6 +285,9 @@ internal static class InputNative
 {
     public const uint MOVE = 0x0001, ABSOLUTE = 0x8000, VIRTUALDESK = 0x4000, WHEEL = 0x0800, HWHEEL = 0x1000;
     public const uint EXTENDEDKEY = 0x0001, KEYUP = 0x0002, SCANCODE = 0x0008;
+
+    /// <summary>dwExtraInfo of the input the agent injects ("RHA1"): the only input the privacy screen's block lets through.</summary>
+    public static readonly IntPtr Tag = 0x52484131;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MOUSEINPUT { public int dx, dy, mouseData; public uint dwFlags, time; public IntPtr dwExtraInfo; }

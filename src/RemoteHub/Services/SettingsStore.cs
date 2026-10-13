@@ -772,6 +772,11 @@ public static class SettingsStore
             n.Options ??= new RdpOptions();
             n.Credentials ??= new CredentialSet();
             if (n is Folder f) RelinkParents(f.Children, f);
+            if (n is Connection c)
+            {
+                c.Shares ??= new();
+                foreach (var s in c.Shares) { s.Server = c; s.Options ??= new RdpOptions(); s.Credentials ??= new CredentialSet(); }
+            }
         }
     }
 }

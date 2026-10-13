@@ -19,7 +19,7 @@ public interface IRecordableView
 internal static class RemoteToolChrome
 {
     /// <summary>Header bar: colour stripe, icon, connection name and what the tab is.</summary>
-    public static Border Header(RemoteToolSession session, SymbolRegular icon, string kind, Border stripe)
+    public static Border Header(SessionBase session, SymbolRegular icon, string kind, Border stripe, string? where = null)
     {
         var header = new Border { CornerRadius = new CornerRadius(6, 6, 0, 0), Padding = new Thickness(12, 6, 12, 6) };
         header.SetResourceReference(Border.BackgroundProperty, "SessionHeaderBrush");
@@ -29,7 +29,7 @@ internal static class RemoteToolChrome
         var title = new TextBlock { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(SessionBase.Title));
         left.Children.Add(title);
-        var sub = new TextBlock { Text = $"  ·  {kind}  ·  " + session.Connection.Host, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var sub = new TextBlock { Text = $"  ·  {kind}  ·  " + (where ?? session.Connection.Host), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         left.Children.Add(sub);
         left.Children.Add(TransportBadge());

@@ -10,7 +10,7 @@ using TextBlock = System.Windows.Controls.TextBlock;
 namespace RemoteHub.Views;
 
 /// <summary>Remote files dragged out of a file transfer tab.</summary>
-public sealed record RemoteDrag(FileBrowserSession Source, string[] Paths)
+public sealed record RemoteDrag(IRemoteFiles Source, string[] Paths)
 {
     // Drag & drop data crosses an OLE boundary: only plain text survives (.NET 10 has no BinaryFormatter for objects).
     public string Encode() => Source.DragId + "\n" + string.Join("\n", Paths);
@@ -19,7 +19,7 @@ public sealed record RemoteDrag(FileBrowserSession Source, string[] Paths)
     {
         if (data is not string s) return null;
         var lines = s.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        return lines.Length > 1 && FileBrowserSession.FindByDragId(lines[0]) is { } src ? new RemoteDrag(src, lines[1..]) : null;
+        return lines.Length > 1 && RemoteFilesRegistry.Find(lines[0]) is { } src ? new RemoteDrag(src, lines[1..]) : null;
     }
 }
 
@@ -32,7 +32,8 @@ public sealed class FileBrowserView : Border, IRecordableView
     public FrameworkElement RecordingArea { get; }
 
     public const string RemoteDragFormat = "RemoteHub.RemoteDrag";
-    private readonly FileBrowserSession _session;
+    private readonly IRemoteFiles _files;
+    private readonly Rdp.SessionBase _session;
     private readonly Border _headerStripe = new() { Width = 4, Height = 18, CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 0, 10, 0) };
     private bool _remoteLoaded;
 
@@ -44,9 +45,10 @@ public sealed class FileBrowserView : Border, IRecordableView
     /// <summary>Download these remote files/folders into the local folder.</summary>
     public event Action<RemoteDrag, string>? DownloadRequested;
 
-    public FileBrowserView(FileBrowserSession session, string localStart, Action reconnect, Action close)
+    public FileBrowserView(IRemoteFiles files, string localStart, Action reconnect, Action close)
     {
-        _session = session;
+        _files = files;
+        var session = _session = files.Session;
         DataContext = session;
         CornerRadius = new CornerRadius(8);
         BorderThickness = new Thickness(2);
@@ -58,7 +60,7 @@ public sealed class FileBrowserView : Border, IRecordableView
         Child = root;
 
         // ---- header
-        root.Children.Add(RemoteToolChrome.Header(session, SymbolRegular.FolderSwap24, "File transfer", _headerStripe));
+        root.Children.Add(RemoteToolChrome.Header(session, Enum.Parse<SymbolRegular>(session.KindSymbol), files.KindText, _headerStripe, files.WhereText));
 
         // ---- panes
         var body = new Grid { Margin = new Thickness(10, 10, 10, 8) };
@@ -71,7 +73,7 @@ public sealed class FileBrowserView : Border, IRecordableView
 
         Local = new FilePane("This PC", "Desktop24", p => Task.Run(() => RemoteFs.ListLocal(p)),
             p => Task.Run(() => Directory.CreateDirectory(Environment.ExpandEnvironmentVariables(p)).FullName));
-        Remote = new FilePane($"{session.Connection.Name}  ({session.Connection.Host})", "Server24", session.ListAsync, session.MkdirAsync);
+        Remote = new FilePane(files.RemoteTitle, files.RemoteSymbol, files.ListAsync, files.MkdirAsync, files.ParentOf, files.Join, files.PathHint);
         body.Children.Add(Local);
 
         var mid = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 10, 0) };
@@ -104,7 +106,7 @@ public sealed class FileBrowserView : Border, IRecordableView
         Remote.CanAccept = d => d.GetDataPresent(DataFormats.FileDrop) && _session.IsConnected;
         Remote.Dropped += (d, folder) => { if (d.GetData(DataFormats.FileDrop) is string[] files) UploadRequested?.Invoke(files, folder); };
         Remote.DragStarting += items =>
-            DragDrop.DoDragDrop(Remote, new DataObject(RemoteDragFormat, new RemoteDrag(_session, items.Select(i => i.FullPath).ToArray()).Encode()), DragDropEffects.Copy);
+            DragDrop.DoDragDrop(Remote, new DataObject(RemoteDragFormat, new RemoteDrag(_files, items.Select(i => i.FullPath).ToArray()).Encode()), DragDropEffects.Copy);
 
         // ---- right-click menus, rename and delete
         Remote.MenuFor = RemoteMenu;
@@ -112,8 +114,8 @@ public sealed class FileBrowserView : Border, IRecordableView
         Remote.RenameRequested += e => _ = RenameRemote(e);
         Remote.DeleteRequested += list => _ = DeleteRemote(list);
 
-        session.Ready += () => _ = LoadRemote();
-        session.FocusRequested += () => Remote.FocusList();
+        files.Ready += () => _ = LoadRemote();
+        files.FocusRequested += () => Remote.FocusList();
         session.PropertyChanged += OnSessionChanged;
         Loaded += (_, _) => { if (Local.Entries.Count == 0 && Local.CurrentPath.Length == 0) _ = Local.Navigate(localStart); };
         UpdateFrame();
@@ -121,9 +123,9 @@ public sealed class FileBrowserView : Border, IRecordableView
 
     private async Task LoadRemote()
     {
-        var start = _remoteLoaded ? Remote.CurrentPath : _session.StartRemotePath;
-        if (!await Remote.Navigate(string.IsNullOrWhiteSpace(start) ? @"C:\" : start) && !_remoteLoaded)
-            await Remote.Navigate(@"C:\");
+        var start = _remoteLoaded ? Remote.CurrentPath : _files.StartRemotePath;
+        if (!await Remote.Navigate(string.IsNullOrWhiteSpace(start) ? _files.FallbackPath : start) && !_remoteLoaded)
+            await Remote.Navigate(_files.FallbackPath);
         _remoteLoaded = true;
     }
 
@@ -136,7 +138,7 @@ public sealed class FileBrowserView : Border, IRecordableView
     private void DownloadSelection()
     {
         var sel = Remote.SelectedEntries.Where(e => e.Kind != EntryKind.Drive).Select(e => e.FullPath).ToArray();
-        if (sel.Length > 0 && Local.CurrentPath.Length > 0 && _session.IsConnected) DownloadRequested?.Invoke(new RemoteDrag(_session, sel), Local.CurrentPath);
+        if (sel.Length > 0 && Local.CurrentPath.Length > 0 && _session.IsConnected) DownloadRequested?.Invoke(new RemoteDrag(_files, sel), Local.CurrentPath);
     }
 
     private static System.Windows.Controls.MenuItem Item(string header, SymbolRegular icon, Action action, bool enabled = true, string? gesture = null) =>
@@ -193,7 +195,7 @@ public sealed class FileBrowserView : Border, IRecordableView
         if (!RemoteFs.IsValidName(name)) { Remote.ShowError($"\"{name}\" is not a valid name."); return; }
         try
         {
-            await _session.RenameAsync(e.FullPath, name);
+            await _files.RenameAsync(e.FullPath, name);
             await Remote.Refresh();
         }
         catch (Exception ex) { Remote.ShowError("Rename failed: " + ex.Message); }
@@ -210,7 +212,7 @@ public sealed class FileBrowserView : Border, IRecordableView
         if (Window.GetWindow(this) is not { } owner || !await Dialogs.Confirm(owner, "Delete on remote computer", text, "Delete")) return;
         try
         {
-            await _session.DeleteAsync(items.Select(i => i.FullPath));
+            await _files.DeleteAsync(items.Select(i => i.FullPath));
             Services.DiagLog.Write($"Remote delete: {items.Count} item(s)");
         }
         catch (Exception ex) { Remote.ShowError("Delete failed: " + ex.Message); }
@@ -219,7 +221,7 @@ public sealed class FileBrowserView : Border, IRecordableView
 
     private void OnSessionChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(FileBrowserSession.AccentBrush)) UpdateFrame();
+        if (e.PropertyName is nameof(Rdp.SessionBase.AccentBrush)) UpdateFrame();
     }
 
     private void UpdateFrame()

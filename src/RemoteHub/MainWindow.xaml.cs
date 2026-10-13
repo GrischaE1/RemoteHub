@@ -39,6 +39,7 @@ public partial class MainWindow : FluentWindow
         _vm = vm;
         InitializeComponent();
         AppIcon.Apply(TitleIcon, 18);
+        AppIcon.ApplyTo(this);
         DataContext = vm;
 
         var ui = vm.Data.Ui;
@@ -382,7 +383,11 @@ public partial class MainWindow : FluentWindow
                 tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", r.SendCtrlAltDel));
                 tools.Add((SymbolRegular.FullScreenMaximize24, null, "Full screen", r.EnterFullScreen));
             }
-            if (s is AgentDesktopSession d) tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", d.SendCtrlAltDel));
+            if (s is AgentDesktopSession d)
+            {
+                tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", d.SendCtrlAltDel));
+                if (d.CanUsePrivacyScreen) tools.Add((SymbolRegular.EyeOff24, "Privacy screen", "Turn the privacy screen on or off (the person at the device can't see what you do)", d.TogglePrivacyScreen));
+            }
             if (RecordingAllowed) tools.Add((SymbolRegular.Record24, null, "Start / stop recording this tab (the header shows REC while recording)", () => ToggleRecording(s)));
             if (s is PsSession p)
             {
@@ -416,6 +421,7 @@ public partial class MainWindow : FluentWindow
         else if (s is AgentDesktopSession d) ConnectAgentDesktop(d);
         else if (s is PsSession p) ConnectPs(p);
         else if (s is FileBrowserSession f) ConnectFileBrowser(f);
+        else if (s is ShareSession sh) ConnectShare(sh);
         else if (s is RemoteToolSession t) ConnectTool(t);
     }
 
@@ -491,6 +497,16 @@ public partial class MainWindow : FluentWindow
 
     private void Tree_KeyDown(object sender, KeyEventArgs e)
     {
+        if (Tree.SelectedItem is NetworkShare share)
+        {
+            switch (e.Key)
+            {
+                case Key.Enter: OpenShare(share); e.Handled = true; break;
+                case Key.F2: EditShare(share); e.Handled = true; break;
+                case Key.Delete: _ = DeleteShare(share); e.Handled = true; break;
+            }
+            return;
+        }
         if (_vm.SelectedNode is not { } n) return;
         switch (e.Key)
         {
@@ -545,10 +561,11 @@ public partial class MainWindow : FluentWindow
         else if (e.Key == Key.Escape) { _vm.SearchText = ""; Tree.Focus(); e.Handled = true; }
     }
 
-    /// <summary>Connection: open it. Folder: jump to it in the list.</summary>
+    /// <summary>Connection or share: open it. Folder: jump to it in the list.</summary>
     private void ActivateHit(SearchHit hit)
     {
         if (hit.Node is Connection c) OpenConnection(c);
+        else if (hit.Node is NetworkShare s) OpenShare(s);
         else RevealInTree(hit.Node);
     }
 
@@ -579,7 +596,16 @@ public partial class MainWindow : FluentWindow
             foreach (var level in node.Ancestors().Reverse().Cast<NodeBase>().Append(node))
             {
                 parent.UpdateLayout();
-                if (parent.ItemContainerGenerator.ContainerFromItem(level) is not TreeViewItem tvi) return;
+                if (parent.ItemContainerGenerator.ContainerFromItem(level) is not TreeViewItem tvi)
+                {
+                    // The tree only builds the rows on screen: scroll the item in first so it gets one.
+                    var index = parent.Items.IndexOf(level);
+                    if (index < 0 || FindDescendant<VirtualizingStackPanel>(parent) is not { } panel) return;
+                    panel.BringIndexIntoViewPublic(index);
+                    parent.UpdateLayout();
+                    if (parent.ItemContainerGenerator.ContainerFromItem(level) is not TreeViewItem shown) return;
+                    tvi = shown;
+                }
                 tvi.BringIntoView();
                 parent = tvi;
             }
@@ -592,14 +618,14 @@ public partial class MainWindow : FluentWindow
     // =====================================================================
 
     private void Tree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e) =>
-        _vm.SelectedNode = e.NewValue as NodeBase;
+        _vm.SelectedNode = e.NewValue is NetworkShare { Server: not null } ? null : e.NewValue as NodeBase; // a server's share isn't a node of its own
 
     private void Tree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (FindAncestor<TreeViewItem>(e.OriginalSource)?.DataContext is Connection c)
+        switch (FindAncestor<TreeViewItem>(e.OriginalSource)?.DataContext)
         {
-            OpenConnection(c);
-            e.Handled = true;
+            case Connection c: OpenConnection(c); e.Handled = true; break;
+            case NetworkShare s: OpenShare(s); e.Handled = true; break;
         }
     }
 
@@ -648,7 +674,7 @@ public partial class MainWindow : FluentWindow
         CmPsTest.IsEnabled = c?.PsChecking != true;
         CmPsTest.ToolTip = st == PsRemotingState.Unavailable ? $"Last result: {c!.PsRemoting!.Message}" : null;
         CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !UsesAgent(c!));
-        CmAgent.Visibility = V(c is not null);
+        CmAgent.Visibility = CmAddShare.Visibility = V(c is not null);
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
     }
 
@@ -712,6 +738,10 @@ public partial class MainWindow : FluentWindow
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
         if (st == PsRemotingState.Unavailable && !UsesAgent(c))
             cm.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
+        // Network shares need neither remoting nor the agent.
+        foreach (var share in c.Shares)
+            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), tip: $"{share.ProtocolLabel} · {share.Address}"));
+        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c)));
         cm.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
             SymbolRegular.Shield24, () => _ = InstallAgent(c)));
     }
@@ -782,7 +812,12 @@ public partial class MainWindow : FluentWindow
             Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, r.SendCtrlAltDel, r.IsConnected);
             Add("Full screen", SymbolRegular.FullScreenMaximize24, r.EnterFullScreen, r.IsConnected);
         }
-        if (s is AgentDesktopSession d) Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, d.SendCtrlAltDel, d.IsConnected && !d.ViewOnly);
+        if (s is AgentDesktopSession d)
+        {
+            Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, d.SendCtrlAltDel, d.IsConnected && !d.ViewOnly);
+            if (d.CanUsePrivacyScreen)
+                Add(d.Privacy.Screen == DesktopPrivacyStyle.Off ? "Turn on the privacy screen" : "Turn off the privacy screen", d.Privacy.Screen == DesktopPrivacyStyle.Off ? SymbolRegular.EyeOff24 : SymbolRegular.Eye24, d.TogglePrivacyScreen, d.IsConnected && !d.ViewOnly);
+        }
         if (RecordingAllowed)
             Add(s.IsRecording ? "Stop recording" : "Record to a video file…", s.IsRecording ? SymbolRegular.RecordStop24 : SymbolRegular.Record24, () => ToggleRecording(s));
         Add(s.IsDetached ? "Dock back" : "Detach into its own window", SymbolRegular.WindowNew24, () => ToggleDetach(s));
@@ -1408,7 +1443,9 @@ public partial class MainWindow : FluentWindow
     /// <summary>Downloads remote files/folders into <paramref name="localFolder"/>.</summary>
     private async Task Download(RemoteDrag drag, string localFolder)
     {
-        if (drag.Source.Target is not { } target) return;
+        PsTarget? target = null;
+        if (drag.Source is FileBrowserSession fb) { if ((target = fb.Target) is null) return; }
+        else if (drag.Source is not ShareSession) return;
         List<(long Size, string FullPath, string Relative)> files;
         try { files = await drag.Source.ExpandAsync(drag.Paths); }
         catch (Exception ex) { await Dialogs.Info(this, "Download", ex.Message); return; }
@@ -1426,13 +1463,22 @@ public partial class MainWindow : FluentWindow
         var overwrite = await AskOverwrite(existing, localFolder);
         if (overwrite is null) return;
 
-        var name = drag.Source.Connection.Name;
-        var items = files.Select((f, i) => TransferItem.Download(f.FullPath, targets[i]!, f.Relative, name, f.Size)).ToList();
-        await RunTransfers(drag.Source.Connection, items, "download", () => FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target),
-            overwrite.Value, items, a => Dispatcher.BeginInvoke(a)));
+        var c = drag.Source.Session.Connection;
+        if (drag.Source is ShareSession share)
+        {
+            var items = files.Select((f, i) => TransferItem.Download(f.FullPath, targets[i]!, f.Relative, ShareLabel(share.Share), f.Size)).ToList();
+            await RunTransfers(c, items, "download", () => Remoting.Shares.ShareTransfer.DownloadAsync(share.OpenAnother, overwrite.Value, items, a => Dispatcher.BeginInvoke(a)),
+                $"share {share.Share.Address}");
+        }
+        else
+        {
+            var items = files.Select((f, i) => TransferItem.Download(f.FullPath, targets[i]!, f.Relative, c.Name, f.Size)).ToList();
+            await RunTransfers(c, items, "download", () => FileDownloader.DownloadAsync(() => PsRemoting.Open(target!), ex => PsRemoting.Explain(ex, target!),
+                overwrite.Value, items, a => Dispatcher.BeginInvoke(a)));
+        }
     }
 
-    private async Task RunTransfers(Connection c, List<TransferItem> items, string kind, Func<Task> run)
+    private async Task RunTransfers(Connection c, List<TransferItem> items, string kind, Func<Task> run, string where = "the device")
     {
         for (int i = items.Count - 1; i >= 0; i--) _vm.Transfers.Insert(0, items[i]);
         _vm.ShowTransfers = true;
@@ -1444,7 +1490,7 @@ public partial class MainWindow : FluentWindow
             $"{items.Count(i => i.State is TransferState.Cancelled or TransferState.Skipped)} cancelled/skipped"),
             System.Windows.Threading.DispatcherPriority.Background);
         await Dispatcher.InvokeAsync(() => Data.AuditLog.Write(Data.AuditEvents.FilesTransferred, c,
-            $"{(kind == "upload" ? "Upload to the device" : "Download from the device")}: {items.Count(i => i.IsDone)} done, " +
+            $"{(kind == "upload" ? $"Upload to {where}" : $"Download from {where}")}: {items.Count(i => i.IsDone)} done, " +
             $"{items.Count(i => i.State == TransferState.Failed)} failed, {items.Count(i => i.State is TransferState.Cancelled or TransferState.Skipped)} cancelled or skipped, " +
             $"{TransferItem.Size(items.Where(i => i.IsDone).Sum(i => i.TotalBytes))}"),
             System.Windows.Threading.DispatcherPriority.Background);
@@ -1750,11 +1796,11 @@ public partial class MainWindow : FluentWindow
 
     private UpdateCheckResult? _availableUpdate;
 
-    /// <summary>After the window is shown: the anonymous start ping (if on) and the update check (if on). Neither delays the start.</summary>
+    /// <summary>After the window is shown: the anonymous usage data (if on) and the update check (if on). Neither delays the start.</summary>
     private async void StartupChecks()
     {
         var ui = _vm.Data.Ui;
-        Telemetry.AppStart(ui);
+        Telemetry.AppStart(ui, Telemetry.Count(_vm.Data.Items));
         // Everything below runs on a background thread (policy lookup, network, parsing); only the result comes back here.
         var check = await Task.Run(async () =>
         {
@@ -1876,8 +1922,10 @@ public partial class MainWindow : FluentWindow
     private void Tree_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _dragStart = e.GetPosition(Tree);
+        // A server's shares stay with it; a share on its own moves like a connection.
         _dragCandidate = FindAncestor<ToggleButton>(e.OriginalSource) is null
-            ? FindAncestor<TreeViewItem>(e.OriginalSource)?.DataContext as NodeBase
+                         && FindAncestor<TreeViewItem>(e.OriginalSource)?.DataContext is NodeBase n and not NetworkShare { Server: not null }
+            ? n
             : null;
     }
 
@@ -1896,6 +1944,8 @@ public partial class MainWindow : FluentWindow
     private (NodeBase? Target, DropPos Pos, FrameworkElement? Header) HitTest(DragEventArgs e)
     {
         var tvi = FindAncestor<TreeViewItem>(e.OriginalSource);
+        // Over a server's share: as if below the server (shares themselves don't move).
+        if (tvi?.DataContext is NetworkShare { Server: { } server }) return (server, DropPos.After, tvi.Template.FindName("PART_Header", tvi) as FrameworkElement ?? tvi);
         if (tvi?.DataContext is not NodeBase target) return (null, DropPos.Into, null);
         var header = tvi.Template.FindName("PART_Header", tvi) as FrameworkElement ?? tvi;
         var y = e.GetPosition(header).Y;

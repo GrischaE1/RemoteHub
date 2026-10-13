@@ -140,7 +140,8 @@ internal static class AppDataRecords
             {
                 var n = items[i];
                 if (!seenNodes.Add(n.Id)) seenNodes.Add(n.Id = Guid.NewGuid());
-                parts.Add((Nodes, n.Id.ToString(), parent?.ToString(), i, n is Folder ? "folder" : "connection", n.Name, (n as Connection)?.Host, n, typeof(NodeBase)));
+                parts.Add((Nodes, n.Id.ToString(), parent?.ToString(), i, n switch { Folder => "folder", NetworkShare => "share", _ => "connection" }, n.Name,
+                    n switch { Connection c => c.Host, NetworkShare s => s.Host, _ => null }, n, typeof(NodeBase)));
                 if (n is Folder f) Walk(f.Children, f.Id);
             }
         }
@@ -339,6 +340,7 @@ internal static class AppDataRecords
     {
         "folder" => "Folder",
         "connection" => "Connection",
+        "share" => "Network share",
         "credential" => "Saved credential",
         _ => r.Id switch
         {

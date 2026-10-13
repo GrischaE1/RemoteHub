@@ -206,4 +206,75 @@ public class UpdateTelemetryTests
         Assert.True(new UiState().TelemetryEnabled);
         Assert.True(new UiState().UpdateCheckEnabled);
     }
+
+    [Fact]
+    public void Start_payload_adds_only_the_counts_as_numbers()
+    {
+        var counts = new Telemetry.UsageCounts(200, 100, 232, 12);
+        using var doc = JsonDocument.Parse(Telemetry.Payload("app_start", "0.9.0", "beta", Guid.NewGuid().ToString(), counts.ToFields()));
+        Assert.Equal(["agents", "arch", "channel", "connections", "event", "folders", "installId", "os", "shares", "version"],
+            doc.RootElement.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal(200, doc.RootElement.GetProperty("connections").GetInt32());
+        Assert.Equal(100, doc.RootElement.GetProperty("agents").GetInt32());
+        Assert.Equal(232, doc.RootElement.GetProperty("shares").GetInt32());
+        Assert.Equal(12, doc.RootElement.GetProperty("folders").GetInt32());
+    }
+
+    [Fact]
+    public void Session_payload_adds_only_the_run_time()
+    {
+        var extra = new Dictionary<string, object> { ["runSeconds"] = 5400L };
+        using var doc = JsonDocument.Parse(Telemetry.Payload("app_session", "0.9.0", "beta", Guid.NewGuid().ToString(), extra));
+        Assert.Equal(["arch", "channel", "event", "installId", "os", "runSeconds", "version"],
+            doc.RootElement.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal(5400, doc.RootElement.GetProperty("runSeconds").GetInt64());
+    }
+
+    [Fact]
+    public void Counts_cover_nested_folders_agents_and_both_kinds_of_share()
+    {
+        var withAgent = new Connection { Name = "a", Host = "srv-a", Agent = new AgentDevice { Status = AgentStatus.Installed } };
+        withAgent.Shares.Add(new NetworkShare { Name = "s1" });
+        withAgent.Shares.Add(new NetworkShare { Name = "s2" });
+        var enrolledOnly = new Connection { Name = "b", Host = "srv-b", Agent = new AgentDevice { Status = AgentStatus.NotInstalled } };
+        var inner = new Folder { Name = "inner" };
+        inner.Children.Add(enrolledOnly);
+        inner.Children.Add(new NetworkShare { Name = "standalone" });
+        var outer = new Folder { Name = "outer" };
+        outer.Children.Add(withAgent);
+        outer.Children.Add(inner);
+
+        Assert.Equal(new Telemetry.UsageCounts(Connections: 3, Agents: 1, Shares: 3, Folders: 2),
+            Telemetry.Count([outer, new Connection { Name = "top", Host = "srv-c" }]));
+        Assert.Equal(new Telemetry.UsageCounts(0, 0, 0, 0), Telemetry.Count([]));
+    }
+
+    [Fact]
+    public void Run_time_skips_sleep_and_is_taken_once()
+    {
+        var max = TimeSpan.FromMinutes(2);
+        Assert.Equal(TimeSpan.FromSeconds(61), Telemetry.RunTime.Step(TimeSpan.FromSeconds(61), max));
+        Assert.Equal(max, Telemetry.RunTime.Step(TimeSpan.FromHours(8), max));          // PC slept with RemoteHub open
+        Assert.Equal(TimeSpan.Zero, Telemetry.RunTime.Step(TimeSpan.FromSeconds(-5), max));
+
+        var old = Telemetry.RunTime.FilePath;
+        var dir = Path.Combine(Path.GetTempPath(), "rh-runtime-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Telemetry.RunTime.FilePath = Path.Combine(dir, "run-time.json");
+            Assert.Null(Telemetry.RunTime.TakePrevious());
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Telemetry.RunTime.FilePath, """{"Version":"0.9.0","Seconds":3600}""");
+            Assert.Equal(new Telemetry.RunTime.Session("0.9.0", 3600), Telemetry.RunTime.TakePrevious());
+            Assert.Null(Telemetry.RunTime.TakePrevious());                                  // sent once, not again
+            File.WriteAllText(Telemetry.RunTime.FilePath, "garbage");
+            Assert.Null(Telemetry.RunTime.TakePrevious());
+            Assert.False(File.Exists(Telemetry.RunTime.FilePath));
+        }
+        finally
+        {
+            Telemetry.RunTime.FilePath = old;
+            try { Directory.Delete(dir, true); } catch { /* temp */ }
+        }
+    }
 }
