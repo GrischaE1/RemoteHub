@@ -42,6 +42,12 @@
     <InternalsVisibleTo Include="RemoteHub.Tests" />
   </ItemGroup>
 
+  <!-- The agent's license (AGPL-3.0) and the notices of what it ships (the virtual display driver), next to the exe. -->
+  <ItemGroup>
+    <None Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
   <!-- Optional virtual monitor for devices without one (third-party, MIT, signed – see third-party\...\README.md).
        Installed next to the exe in "VirtualDisplay"; the agent checks the files' hashes before it installs the driver. -->
   <ItemGroup>

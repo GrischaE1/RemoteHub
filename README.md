@@ -283,3 +283,19 @@ Choose the location under *Settings → Security & storage → Change location�
 - **Export / import backup** (Menu): portable, password-protected file (AES-256-GCM, PBKDF2-SHA256 with 600k iterations), including saved credentials. You can restore it on any PC or user account, either as a new folder or by replacing everything.
 - The single-instance pipe only accepts connections from the same Windows user (`PipeOptions.CurrentUserOnly`).
 - The `RDPMANAGER_DATA_DIR` environment variable points the app at a different local data folder, which is useful for testing.
+
+## License
+
+Copyright (C) 2026 Grischa Ernst.
+
+RemoteHub and the RemoteHub Agent are free software: you can redistribute and/or modify them under the terms of the
+**GNU Affero General Public License, version 3** (AGPL-3.0-only), as published by the Free Software Foundation – see
+[LICENSE](LICENSE). They are distributed in the hope that they will be useful, but **without any warranty**; without
+even the implied warranty of merchantability or fitness for a particular purpose.
+
+- The AGPL also covers use over a network: if you run a modified version that people use remotely, you must offer them
+  its source code.
+- The libraries and the driver shipped with RemoteHub keep their own licenses – see
+  [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- Both files are installed next to `RemoteHub.exe` and `RemoteHubAgent.exe` (`LICENSE.txt`), and RemoteHub shows them
+  under *Settings → Help & about*.

@@ -228,6 +228,24 @@ public partial class EditorWindow : FluentWindow
             TelemetryPolicyText.Text = "Turned off by your organisation.";
             TelemetryPolicyText.Visibility = Visibility.Visible;
         }
+        LicenseButton.Click += (_, _) => OpenProgramFile("LICENSE.txt", "The license");
+        NoticesButton.Click += (_, _) => OpenProgramFile("THIRD-PARTY-NOTICES.md", "The third-party notices");
+        void OpenProgramFile(string name, string what)
+        {
+            // Installed next to RemoteHub.exe; opened in Notepad like the privacy statement.
+            var path = Path.Combine(AppContext.BaseDirectory, name);
+            try
+            {
+                if (!File.Exists(path)) throw new FileNotFoundException($"{name} is missing from the program folder.");
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
+                LicenseErrorText.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                LicenseErrorText.Text = $"{what} can't be opened: {ex.Message}";
+                LicenseErrorText.Visibility = Visibility.Visible;
+            }
+        }
         PrivacyButton.Click += (_, _) =>
         {
             // Installed next to RemoteHub.exe; Notepad, like the diagnostic log (.md often has no viewer).

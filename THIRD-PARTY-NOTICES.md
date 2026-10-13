@@ -1,5 +1,8 @@
 # Third-party notices
 
+RemoteHub itself is licensed under the GNU AGPL-3.0 (see LICENSE). The components below ship with it under their own
+licenses.
+
 ## Virtual Display Driver (RemoteHub Agent, optional)
 
 The RemoteHub Agent ships the signed x64 driver files of the Virtual Display Driver (version 24.12.24) unchanged, in
