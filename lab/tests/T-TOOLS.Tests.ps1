@@ -10,7 +10,6 @@ param(
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
-    $vmIp = Get-LabVmAddress -Name $VmName
     function Save($name, $data) { $data | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir "t-$name.json") -Encoding UTF8 }
     function Get-Sha([string]$Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash }
     function Get-GuestFiles([string]$Root) {
@@ -121,7 +120,10 @@ Describe 'T <VmName>' -Tag Tools, 'T' {
 
         It 'T-FS-07 [<Via>] downloads a file and a folder, hashes equal' -Tag 'T-FS-07' {
             $local = Join-Path $data "down-$tag"
-            $down = T fs-download @{ remote = @("$remote\big\random.bin", "$remote\small"); local = $local }
+            # the 200 MB file is put on the device over PowerShell Direct: the download must not depend on T-FS-03
+            $null = Invoke-LabGuest -Name $VmName -ArgumentList "$remote\seed" -ScriptBlock { param($p) New-Item -ItemType Directory -Path $p -Force }
+            Copy-LabFile -Name $VmName -Path $random -Destination "$remote\seed"
+            $down = T fs-download @{ remote = @("$remote\seed\random.bin", "$remote\small"); local = $local }
             Save "$tag-download" $down
             @($down.result.items | Where-Object state -ne 'Done') | Should -BeNullOrEmpty
             ($down.result.items | Where-Object RelativePath -eq 'random.bin').sha256 | Should -Be $bigHashes['random.bin']

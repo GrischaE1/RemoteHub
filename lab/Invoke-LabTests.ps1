@@ -70,7 +70,7 @@ function Invoke-TestFile([string]$File, $V, [string]$VmDir) {
     $log = Join-Path $VmDir "console-$base.log"
     $runner = Join-Path $PSScriptRoot 'Invoke-LabTestFile.ps1'
     $cmd = "& '$runner' -TestFile '$File' -VmName '$($V.Name)' -EvidenceDir '$VmDir' -OutputPath '$xml' -Tag '$($Tag -join ',')' *> '$log'"
-    $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd -WindowStyle Hidden -PassThru
+    $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $cmd -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddMinutes($FileTimeoutMin)
     $shown = 0
     $timedOut = $false
@@ -103,7 +103,6 @@ $summary = foreach ($v in $vms) {
     try {
         foreach ($file in $testFiles) {
             $timeouts += @(Invoke-TestFile $file $v $vmDir)
-            Stop-LabVm -Name $v.Name
         }
     }
     finally { Stop-LabVm -Name $v.Name }

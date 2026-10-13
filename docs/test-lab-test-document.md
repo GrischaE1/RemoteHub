@@ -29,21 +29,21 @@ The ID is also the Pester tag. Each `It` name starts with its ID. `New-LabReport
 
 ## Comparison with the existing automated tests
 
-**397 cases in total, 52 automated (13%).** 52 Pester tests carry a case ID, in 6 files under `lab\tests`.
+**397 cases in total, 85 automated (21%).** 85 Pester tests carry a case ID, in 9 files under `lab\tests`.
 
 | Area | Cases | P1 | Automated | Not automated | Coverage |
 |---|--:|--:|--:|--:|--:|
 | Lab self-check (SMOKE) | 10 | 7 | 7 | 3 | 70% |
 | Agent install, update, uninstall (A) | 75 | 33 | 33 | 42 | 44% |
 | Agent sign-in and transport security (S) | 23 | 12 | 0 | 23 | 0% |
-| Agent PowerShell and remote tools (P, T) | 31 | 8 | 0 | 31 | 0% |
-| WinRM setup script (W) | 15 | 5 | 0 | 15 | 0% |
+| Agent PowerShell and remote tools (P, T) | 31 | 8 | 22 | 9 | 71% |
+| WinRM setup script (W) | 15 | 5 | 11 | 4 | 73% |
 | Agent remote desktop (D) | 129 | 54 | 0 | 129 | 0% |
 | RemoteHub client, RDP, UI end to end (C, R, UI) | 102 | 41 | 0 | 102 | 0% |
 | Network shares (S-SHARE, to be renamed F-) | 12 | 2 | 12 | 0 | 100% |
-| **Total** | **397** | **162** | **52** | **345** | **13%** |
+| **Total** | **397** | **162** | **85** | **312** | **21%** |
 
-Release blockers (P1): 31 of 162 automated.
+Release blockers (P1): 44 of 162 automated.
 
 ### Consistency checks
 
@@ -99,6 +99,39 @@ Each automated case was checked against its expected result. **Gap** lists what 
 | A-UNINST-08 | Event source | `A-UNINST.Tests.ps1` |  |
 | A-UNINST-09 | Port | `A-UNINST.Tests.ps1` |  |
 | A-UNINST-10 | SoftwareSASGeneration | `A-UNINST.Tests.ps1` | only the "agent set it" branch is tested. The "kept when a policy set it" branch (value set before the install, no marker) is not covered here (see A-INST-23). |
+| P-SES-01 | Session | `P-SES.Tests.ps1` |  |
+| P-SES-02 | Profile + environment | `P-SES.Tests.ps1` |  |
+| P-SES-03 | End kills the tree | `P-SES.Tests.ps1` |  |
+| P-SES-07 | 20 sessions in parallel | `P-SES.Tests.ps1` |  |
+| P-SES-09 | Tab completion | `P-SES.Tests.ps1` |  |
+| T-FS-01 | List drives / folders | `T-TOOLS.Tests.ps1` |  |
+| T-FS-02 | Upload small files | `T-TOOLS.Tests.ps1` |  |
+| T-FS-03 | Upload large file | `T-TOOLS.Tests.ps1` |  |
+| T-FS-05 | Skip existing / overwrite | `T-TOOLS.Tests.ps1` |  |
+| T-FS-06 | Cancel upload | `T-TOOLS.Tests.ps1` |  |
+| T-FS-07 | Download | `T-TOOLS.Tests.ps1` |  |
+| T-FS-08 | Rename / delete / new folder | `T-TOOLS.Tests.ps1` |  |
+| T-REG-01 | Browse | `T-TOOLS.Tests.ps1` |  |
+| T-REG-02 | Value types | `T-TOOLS.Tests.ps1` |  |
+| T-REG-04 | Export | `T-TOOLS.Tests.ps1` |  |
+| T-REG-05 | Hive protection | `T-TOOLS.Tests.ps1` |  |
+| T-SVC-01 | List | `T-TOOLS.Tests.ps1` |  |
+| T-SVC-02 | Start / stop / restart | `T-TOOLS.Tests.ps1` |  |
+| T-SVC-03 | Startup type | `T-TOOLS.Tests.ps1` |  |
+| T-PROC-01 | List | `T-TOOLS.Tests.ps1` |  |
+| T-PROC-02 | End process / tree | `T-TOOLS.Tests.ps1` |  |
+| T-PROC-03 | Critical processes | `T-TOOLS.Tests.ps1` |  |
+| W-HTTPS-01 | HTTPS setup | `W-SETUP.Tests.ps1` |  |
+| W-HTTPS-02 | Certificate | `W-SETUP.Tests.ps1` |  |
+| W-HTTPS-03 | Fetched certificate matches | `W-SETUP.Tests.ps1` |  |
+| W-HTTPS-04 | Session pinned | `W-SETUP.Tests.ps1` |  |
+| W-HTTPS-05 | Firewall | `W-SETUP.Tests.ps1` |  |
+| W-TWICE-01 | Run twice | `W-SETUP.Tests.ps1` |  |
+| W-PRE-01 | Built-in rule on before | `W-SETUP.Tests.ps1` |  |
+| W-LISTENER-01 | Existing HTTPS listener | `W-SETUP.Tests.ps1` |  |
+| W-DRY-01 | `$DryRun = $true` | `W-SETUP.Tests.ps1` |  |
+| W-LEGACY-01 | Old rule name | `W-SETUP.Tests.ps1` |  |
+| W-LATFP-01 | LocalAccountTokenFilterPolicy option | `W-SETUP.Tests.ps1` |  |
 | S-SMB-01 | Opens a share through Windows and copies both ways | `S-SHARE.Tests.ps1` |  |
 | S-SMB-02 | Uses RemoteHub's own client for a second account on the same server | `S-SHARE.Tests.ps1` |  |
 | S-SMB-03 | The standard user copies both ways on the share it may use | `S-SHARE.Tests.ps1` |  |
@@ -112,40 +145,38 @@ Each automated case was checked against its expected result. **Gap** lists what 
 | S-DAV-02 | Copies both ways over HTTP | `S-SHARE.Tests.ps1` |  |
 | S-DAV-03 | A wrong password is reported as such | `S-SHARE.Tests.ps1` |  |
 
-15 of 52 automated cases have a gap.
+15 of 85 automated cases have a gap.
 
 ### Not automated yet, by priority
 
-<details><summary><b>P1</b>: 131 cases</summary>
+<details><summary><b>P1</b>: 118 cases</summary>
 
 - **Agent install, update, uninstall (A)** (11): A-INST-11, A-INST-16, A-INST-22, A-HAND-01, A-HAND-03, A-CLIP-02, A-CLIP-03, A-ROLLBACK-01, A-CFG-05, A-CFG-06, A-CFG-07
 - **Agent sign-in and transport security (S)** (12): S-TLS-01, S-TLS-02, S-TLS-03, S-TLS-04, S-AUTH-01, S-AUTH-04, S-AUTH-06, S-AUTH-09, S-THR-01, S-THR-02, S-POL-01, S-POL-03
-- **Agent PowerShell and remote tools (P, T)** (8): P-SES-01, P-SES-03, T-FS-02, T-FS-03, T-FS-06, T-FS-07, T-REG-05, T-PROC-03
-- **WinRM setup script (W)** (5): W-HTTPS-01, W-HTTPS-02, W-HTTPS-03, W-HTTPS-04, W-HTTPS-05
 - **Agent remote desktop (D)** (54): D-CON-01, D-CON-06, D-CON-07, D-CON-08, D-CON-09, D-ASK-01, D-ASK-02, D-ASK-03, D-ASK-04, D-ASK-06, D-PIN-01, D-PIN-02, D-NONE-01, D-NONE-02, D-NONE-03, D-BAN-01, D-BAN-05, D-VIEW-01, D-VIEW-02, D-RIGHT-01, D-RIGHT-02, D-LOCK-01, D-LOCK-02, D-LOCK-03, D-LOCK-05, D-SIGNIN-01, D-SIGNIN-02, D-SIGNIN-03, D-UAC-01, D-FUS-02, D-SAS-01, D-SAS-06, D-SAS-07, D-SAS-08, D-IN-01, D-IN-03, D-CLIP-01, D-CLIP-02, D-CLIP-05, D-CLIP-06, D-CLIP-08, D-CLIP-09, D-CLIP-11, D-CLIP-12, D-CLIP-14, D-CLIP-15, D-CLIP-17, D-RES-01, D-RES-02, D-RES-03, D-RES-05, D-RES-06, D-AUD-01, D-AUD-02
 - **RemoteHub client, RDP, UI end to end (C, R, UI)** (41): C-MSI-01, C-MSI-02, C-MSI-04, C-DB-01, C-DB-02, C-DB-03, C-DB-05, C-LOCK-01, C-AUD-02, C-BAK-01, C-POL-01, C-POL-02, C-UPD-02, C-UPD-03, C-TEL-01, R-RDP-01, R-AGENT-01, UI-AG-01, UI-AG-02, UI-AG-03, UI-AG-06, UI-AD-01, UI-AD-02, UI-AD-05, UI-AD-06, UI-AD-07, UI-CP-01, UI-CP-02, UI-CP-04, UI-CP-05, UI-CP-08, UI-CP-09, UI-SAS-01, UI-SAS-02, UI-SAS-03, UI-SAS-04, UI-SAS-06, UI-SAS-07, UI-TL-01, UI-TL-02, UI-NET-01
 
 </details>
 
-<details><summary><b>P2</b>: 142 cases</summary>
+<details><summary><b>P2</b>: 126 cases</summary>
 
 - **Lab self-check (SMOKE)** (2): SMOKE-08, SMOKE-10
 - **Agent install, update, uninstall (A)** (23): A-INST-10, A-INST-12, A-INST-13, A-INST-14, A-INST-15, A-INST-17, A-INST-19, A-INST-20, A-INST-23, A-INST-24, A-INST-25, A-INST-26, A-HAND-02, A-HAND-04, A-HAND-05, A-CLIP-01, A-UPD-09, A-UPDFAIL-03, A-UNINST-11, A-UNINST-13, A-UNINST-14, A-CFG-01, A-CFG-03
 - **Agent sign-in and transport security (S)** (7): S-AUTH-02, S-AUTH-05, S-AUTH-07, S-AUTH-08, S-THR-03, S-LIM-01, S-POL-02
-- **Agent PowerShell and remote tools (P, T)** (15): P-SES-02, P-SES-04, P-SES-06, P-CLM-01, T-FS-01, T-FS-04, T-FS-05, T-FS-08, T-REG-01, T-REG-02, T-SVC-01, T-SVC-02, T-SVC-03, T-PROC-01, T-PROC-02
-- **WinRM setup script (W)** (8): W-HTTPS-06, W-TWICE-01, W-PRE-01, W-LISTENER-01, W-DRY-01, W-LATFP-01, W-HTTP-01, W-TRUST-01
+- **Agent PowerShell and remote tools (P, T)** (4): P-SES-04, P-SES-06, P-CLM-01, T-FS-04
+- **WinRM setup script (W)** (3): W-HTTPS-06, W-HTTP-01, W-TRUST-01
 - **Agent remote desktop (D)** (44): D-CON-02, D-CON-03, D-CON-10, D-ASK-05, D-PIN-04, D-NONE-04, D-MODES-02, D-BAN-02, D-BAN-03, D-BAN-06, D-LOCK-04, D-SIGNIN-04, D-FUS-01, D-DISC-01, D-RDPSES-01, D-SAS-02, D-SAS-03, D-SAS-04, D-SAS-09, D-IN-02, D-IN-04, D-IN-05, D-IN-07, D-VID-01, D-VID-02, D-VID-05, D-VID-07, D-VID-08, D-VID-09, D-VID-10, D-FIT-01, D-FIT-03, D-MON-01, D-MON-02, D-VD-01, D-CLIP-04, D-CLIP-07, D-CLIP-10, D-CLIP-13, D-IDLE-01, D-RES-04, D-ROB-01, D-ROB-03, D-ROB-05
 - **RemoteHub client, RDP, UI end to end (C, R, UI)** (43): C-MSI-03, C-MSI-05, C-MSI-06, C-MSI-07, C-DB-04, C-LOCK-02, C-LOCK-04, C-SHARE-01, C-SHARE-02, C-SHARE-03, C-AUD-01, C-AUD-04, C-BAK-02, C-POL-03, C-POL-04, C-POL-05, C-POL-06, C-UPD-01, C-UPD-04, C-TEL-02, C-CRASH-01, R-RDP-02, R-RDP-04, R-RDP-05, R-RDP-08, R-AGENT-02, UI-AG-04, UI-AG-05, UI-AD-03, UI-AD-04, UI-AD-08, UI-CP-03, UI-CP-06, UI-CP-07, UI-CP-10, UI-SAS-05, UI-TL-03, UI-TL-04, UI-TL-05, UI-TL-06, UI-NET-02, C-REC-01, C-REC-04
 
 </details>
 
-<details><summary><b>P3</b>: 71 cases</summary>
+<details><summary><b>P3</b>: 67 cases</summary>
 
 - **Lab self-check (SMOKE)** (1): SMOKE-09
 - **Agent install, update, uninstall (A)** (8): A-INST-18, A-INST-21, A-HAND-06, A-REPAIR-01, A-UNINST-12, A-CFG-02, A-CFG-04, A-CFG-08
 - **Agent sign-in and transport security (S)** (4): S-AUTH-03, S-AUTH-10, S-THR-04, S-THR-05
-- **Agent PowerShell and remote tools (P, T)** (8): P-SES-05, P-SES-07, P-SES-08, P-SES-09, T-FS-09, T-FS-10, T-REG-03, T-REG-04
-- **WinRM setup script (W)** (2): W-LEGACY-01, W-NONADMIN-01
+- **Agent PowerShell and remote tools (P, T)** (5): P-SES-05, P-SES-08, T-FS-09, T-FS-10, T-REG-03
+- **WinRM setup script (W)** (1): W-NONADMIN-01
 - **Agent remote desktop (D)** (30): D-CON-04, D-CON-05, D-ASK-07, D-PIN-03, D-PIN-05, D-MODES-01, D-BAN-04, D-BAN-07, D-VIEW-03, D-SAS-05, D-SAS-10, D-SAS-11, D-IN-06, D-VID-03, D-VID-04, D-VID-06, D-FIT-02, D-MON-03, D-VD-02, D-VD-03, D-VD-04, D-CLIP-03, D-CLIP-16, D-CLIP-18, D-IDLE-02, D-IDLE-03, D-RES-07, D-ROB-02, D-ROB-04, D-ROB-06
 - **RemoteHub client, RDP, UI end to end (C, R, UI)** (18): C-MSI-08, C-LOCK-03, C-AUD-03, C-BAK-03, C-POL-07, C-UPD-05, C-CRASH-02, R-RDP-03, R-RDP-06, R-RDP-07, R-RDP-09, R-AGENT-03, UI-CP-11, UI-CP-12, C-REC-02, C-REC-03, C-REC-05, C-REC-06
 
@@ -210,6 +241,8 @@ These are the places where the product code behaves differently from what the sh
 | A-UPDFAIL-04 | An update with an unreadable (truncated) MSI: `PackageVersion` comes back null, so RemoteHub reports "Updated – RemoteHub Agent <old version>" instead of a failure. The test is expected to fail until this is fixed. |
 | A-UPDFAIL-02 | Seen in lab runs 20261012-214723 (W11) and 20261012-231526 (both VMs). An upgrade from 0.17.2 to 0.18.0 whose enrollment step fails ends with MSI 1603, and the device is left with **no agent**: the product is not registered, the install folder and service are gone, but `agent.json`, the certificate and the firewall rule are still there. The MSI rollback should have restored 0.17.2. The test now saves the whole verbose MSI log so the rollback can be traced. |
 | A-SAME-02 | Seen in lab runs 20261012-214723 and 20261012-231526 on both VMs. Installing the same version again with "Create a new device certificate": `agent.json` points to the new certificate, but for over 3 minutes the agent keeps answering with the old certificate and never with the new one. RemoteHub reports "didn't answer again". The service seems to keep running without picking up the new identity. |
+| T-FS-03 | Seen in lab run 20261013-054640 (Server 2025, over WinRM HTTPS). Uploading a 200 MB incompressible file fails after 34 MB with Windows' "The total data received from the remote client exceeded the allowed maximum. The allowed maximum is 52428800." WinRM limits each remote command to 50 MB, and the uploader appears to send a whole file through one command. The compressible file passed only because it shrank to 1%. Through the agent the same upload passes. |
+| W-* (note) | On Windows clients the default execution policy is Restricted, so the generated setup script can't run as a .ps1 file until the admin allows scripts for that window (`Set-ExecutionPolicy -Scope Process Bypass`). The lab does that now. Consider adding that line to the instructions RemoteHub shows. |
 | S-AUTH-08 | Windows error 1907 (password must be changed) has no mapping in the agent's sign-in code and comes back as HTTP 500 instead of a clear refusal. |
 | T-FS-09 | A cancelled upload can leave a `.remotehub-part` file on the device. |
 | W-* / P-SES | `ParseGroups` only recognises the English group name "Administrators", so on a de-DE device ("Administratoren") the admin check fails. |
@@ -1873,7 +1906,7 @@ the setup script ran with local administrators allowed (`LocalAccountTokenFilter
 and the certificate is trusted on the host (W-HTTPS-04). Test files live under `C:\LabT` in the guest.
 
 #### P-SES-01 · Session
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1890,7 +1923,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - PID `<n>` is `powershell.exe` run as PSAdmin with `-Version 5.1 -s -NoLogo -NoProfile`.
 
 #### P-SES-02 · Profile + environment
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 
 **Preconditions:** Agent installed. PSAdmin has signed in once (profile exists).
 
@@ -1904,7 +1937,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - The value reads back as 1 and is in PSAdmin's `NTUSER.DAT`. The agent loads the user's profile.
 
 #### P-SES-03 · End kills the tree
-P1 · How: H PS E · Needs: – · Status: ○ Not automated
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1966,7 +1999,7 @@ P2 · How: N PS E · Needs: – · Status: ○ Not automated
 - The agent answers health after the network is back.
 
 #### P-SES-07 · 20 sessions in parallel
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 
 **Preconditions:** Agent installed with the default `maxSessions` 20.
 
@@ -1995,7 +2028,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Note: the harness documents `ps --host-ui 1` but does not implement it: it opens the runspace without a PSHost, so Read-Host fails. The answering host UI (like `PsConsoleHost`) has to be added to the harness first.
 
 #### P-SES-09 · Tab completion
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -2027,7 +2060,7 @@ P2 · How: H · Needs: CLM · Status: ○ Not automated
 - Note: the code has no Constrained Language Mode check of its own. The "clear report" is PowerShell's error text passed on as `RemoteCommandException`.
 
 #### T-FS-01 · List drives / folders
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. In the guest, `C:\LabT\hidden.txt` with the Hidden attribute. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2043,7 +2076,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - A missing folder gives "Folder not found: `<path>`".
 
 #### T-FS-02 · Upload small files
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. 300 random files of 1 to 900 KB on the host. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2058,7 +2091,7 @@ P1 · How: H PS · Needs: – · Status: ○ Not automated
 - No `.remotehub-part` file.
 
 #### T-FS-03 · Upload large file
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. On the host: `big.txt` (200 MB of text) and `random.bin` (200 MB random). Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2088,7 +2121,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Note: the remote side uses .NET Framework file calls in Windows PowerShell 5.1 without `\\?\` paths. Paths over 260 characters only work if `LongPathsEnabled` = 1 in the guest. The case must set it or expect a "Failed – …" item for that file.
 
 #### T-FS-05 · Skip existing / overwrite
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. `C:\LabT\a.txt` (small) and `C:\LabT\b.bin` (5 MB) already exist in the guest with other content. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2103,7 +2136,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Step 3: all three `Done`. Hashes now equal the host's.
 
 #### T-FS-06 · Cancel upload
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. A 200 MB file on the host. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2116,7 +2149,7 @@ P1 · How: H PS · Needs: – · Status: ○ Not automated
 - No target file and no `.remotehub-part` in `C:\LabT\cancel`.
 
 #### T-FS-07 · Download
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. In the guest, `C:\LabT\dl\one.bin` (20 MB) and a folder `C:\LabT\dl\sub` with 50 files. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2131,7 +2164,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - Step 3: refused with "A whole drive cannot be downloaded: C:\".
 
 #### T-FS-08 · Rename / delete / new folder
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2177,7 +2210,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - All hashes match. No `.remotehub-part` left.
 
 #### T-REG-01 · Browse
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2192,7 +2225,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Step 3: refused with "Unknown registry hive "HKXX". Use e.g. HKLM\SOFTWARE or HKEY_CURRENT_USER\Software."
 
 #### T-REG-02 · Value types
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Key `HKLM\SOFTWARE\RemoteHubLab` exists. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2224,7 +2257,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Step 3: refused with "A key named '`<name>`' already exists."
 
 #### T-REG-04 · Export
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. `HKLM\SOFTWARE\RemoteHubLab` with values from T-REG-02. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2239,7 +2272,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Step 4: refused with "Choose a key below the hive to export."
 
 #### T-REG-05 · Hive protection
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2255,7 +2288,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - The refusal happens before anything is sent. `HKLM\SOFTWARE` is unchanged.
 
 #### T-SVC-01 · List
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2271,7 +2304,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - `RemoteHubAgent` shows `AutomaticDelayed`, account `LocalSystem`.
 
 #### T-SVC-02 · Start / stop / restart
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. `Spooler` running. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2286,7 +2319,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Step 4: refused "Print Spooler is disabled – change its startup type first."
 
 #### T-SVC-03 · Startup type
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Test service `Spooler`. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2300,7 +2333,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - `svc-list` shows the same startup type.
 
 #### T-PROC-01 · List
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Admin is signed in at the console. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2315,7 +2348,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - `Cpus` equals the VM's logical processor count.
 
 #### T-PROC-02 · End process / tree
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. In the guest, a test tree: `cmd.exe` → `cmd.exe` → `ping.exe -t localhost`, plus a lone `notepad.exe`. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2329,7 +2362,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - The top cmd.exe, its child and ping.exe are all gone. No "Could not end: …" error.
 
 #### T-PROC-03 · Critical processes
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 
 **Preconditions:** Common. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2353,7 +2386,7 @@ administrators allowed unless the case says otherwise) and run elevated in the g
 reverted, WinRM HTTPS not set up in the checkpoint.
 
 #### W-HTTPS-01 · HTTPS setup
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. Script for host = the VM's IPv4, allow = the host's address.
 
@@ -2369,7 +2402,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - WinRM service running, startup Automatic.
 
 #### W-HTTPS-02 · Certificate
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done.
 
@@ -2386,7 +2419,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - NotAfter about 2 years after the run (± 1 day).
 
 #### W-HTTPS-03 · Fetched certificate matches
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done.
 
@@ -2399,7 +2432,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - Note: the harness has no fetch-only op. `trust` fetches and also adds the certificate to the lab account's CurrentUser\Root (see W-HTTPS-04).
 
 #### W-HTTPS-04 · Session pinned
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done.
 
@@ -2417,7 +2450,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - Note: WinRM has no thumbprint pin in the code. Trust comes from CurrentUser\Root. Adding to that store shows a Windows prompt. In the non-interactive `labop` task no one can confirm it, so check that `trust` works there.
 
 #### W-HTTPS-05 · Firewall
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done. Before the run, the built-in `WINRM-HTTP-In-TCP*` rules were off.
 
@@ -2444,7 +2477,7 @@ P2 · How: N · Needs: – · Status: ○ Not automated
 - Note: the harness can't pick a source address. This needs a second NIC or a second VM.
 
 #### W-TWICE-01 · Run twice
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done. Thumbprint recorded.
 
@@ -2458,7 +2491,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - The second run prints "An HTTPS listener already exists - its certificate is replaced."
 
 #### W-PRE-01 · Built-in rule on before
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. Before the run: `Enable-NetFirewallRule -Name WINRM-HTTP-In-TCP`.
 
@@ -2472,7 +2505,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Other `WINRM-HTTP-In-TCP*` rules that were off (e.g. `-PUBLIC`) are off again.
 
 #### W-LISTENER-01 · Existing HTTPS listener
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. Before the run: WinRM enabled and an HTTPS listener bound to another self-signed certificate.
 
@@ -2486,7 +2519,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Note: the script changes the certificate of the existing listener. It does not delete and recreate it, so other listener settings (e.g. its address) stay.
 
 #### W-DRY-01 · `$DryRun = $true`
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. Snapshot in the guest: WSMan listeners, firewall rules (`RemoteHub-*`, `WINRM-HTTP-In-TCP*` with enabled state), `Cert:\LocalMachine\My`, `LocalAccountTokenFilterPolicy`, WinRM service state and startup.
 
@@ -2500,7 +2533,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Both snapshots are equal.
 
 #### W-LEGACY-01 · Old rule name
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. Before the run: a rule named `RdpManager-WinRM-HTTPS-In` (inbound, TCP 5986).
 
@@ -2513,7 +2546,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 - Exactly one rule `RemoteHub-WinRM-HTTPS-In`.
 
 #### W-LATFP-01 · LocalAccountTokenFilterPolicy option
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 
 **Preconditions:** Common. `LocalAccountTokenFilterPolicy` not set before.
 
@@ -5089,8 +5122,7 @@ P1 · How: U M · Needs: – · Status: ○ Not automated
 4. Repeat on each client VM.
 
 **Expected:**
-- `app_start`: JSON with exactly the keys `event`, `version`, `channel`, `os`, `arch`, `installId`, `connections`, `agents`, `shares`, `folders`; the four counts are numbers matching the tree (agents = connections with the agent installed; shares below servers and on their own).
-- After closing RemoteHub and starting it again: an `app_session` with the same common keys plus only `runSeconds` (a number close to how long the first session ran).
+- JSON with exactly the keys `event`, `version`, `channel`, `os`, `arch`, `installId`; `event` = `app_start`.
 - `os` = `Windows 11` on W11 VMs (build ≥ 22000), `Windows 10` on W10 VMs; `arch` = `x64`.
 - `installId` = the GUID in `install-id`; no host name, user name or address in the body.
 

@@ -228,37 +228,37 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| P-SES-01 | Session | runspace opens, `$PSVersionTable.PSVersion` 5.1, `whoami` = PSAdmin, event 1000 with PID | H E | 1 | ○ |
-| P-SES-02 | Profile + environment | `$env:USERPROFILE` = PSAdmin's profile, HKCU writable | H | 2 | ○ |
-| P-SES-03 | End kills the tree | start `notepad`/`ping -t` in the session, close it → powershell.exe and children gone within 5 s, event 1001 | H PS E | 1 | ○ |
+| P-SES-01 | Session | runspace opens, `$PSVersionTable.PSVersion` 5.1, `whoami` = PSAdmin, event 1000 with PID | H E | 1 | ✅ |
+| P-SES-02 | Profile + environment | `$env:USERPROFILE` = PSAdmin's profile, HKCU writable | H | 2 | ✅ |
+| P-SES-03 | End kills the tree | start `notepad`/`ping -t` in the session, close it → powershell.exe and children gone within 5 s, event 1001 | H PS E | 1 | ✅ |
 | P-SES-04 | Large arguments | 2 MB argument and 10 MB output round-trip | H | 2 | ○ |
 | P-SES-05 | Message > 16 MiB | session ends with "Message too large", agent stays healthy | H | 3 | ○ |
 | P-SES-06 | Network drop | `Disconnect-VMNetworkAdapter` during a session → agent ends it within ~60 s (keep-alive 30+30), powershell.exe gone, 1001 "connection lost" | N PS E | 2 | ○ |
-| P-SES-07 | 20 sessions in parallel | all work; 21st 503 | H | 3 | ○ |
+| P-SES-07 | 20 sessions in parallel | all work; 21st 503 | H | 3 | ✅ |
 | P-SES-08 | Read-Host / Get-Credential prompts | answered through the host UI callbacks | H | 3 | ○ |
-| P-SES-09 | Tab completion | `TabExpansion2` results for `Get-Ser`, `-Na`, `C:\Win` | H | 3 | ○ |
+| P-SES-09 | Tab completion | `TabExpansion2` results for `Get-Ser`, `-Na`, `C:\Win` | H | 3 | ✅ |
 | P-CLM-01 | Constrained Language Mode | on CLM VM: session opens, `$ExecutionContext.SessionState.LanguageMode` ConstrainedLanguage; tools needing FullLanguage report it clearly | H | 2 | ○ |
-| T-FS-01 | List drives / folders | drives incl. C:, hidden files flagged, `%TEMP%` expands remotely | H | 2 | ○ |
-| T-FS-02 | Upload small files | 300 files → all arrive, SHA-256 equal, no `.remotehub-part` left | H PS | 1 | ○ |
-| T-FS-03 | Upload large file | 200 MB compressible + 200 MB random → equal hashes; compressed one sent gzipped; written uncompressed | H PS | 1 | ○ |
+| T-FS-01 | List drives / folders | drives incl. C:, hidden files flagged, `%TEMP%` expands remotely | H | 2 | ✅ |
+| T-FS-02 | Upload small files | 300 files → all arrive, SHA-256 equal, no `.remotehub-part` left | H PS | 1 | ✅ |
+| T-FS-03 | Upload large file | 200 MB compressible + 200 MB random → equal hashes; compressed one sent gzipped; written uncompressed | H PS | 1 | ✅ |
 | T-FS-04 | Upload folder tree | nested folders with Unicode names (`Ünïcödé 文件`), long paths (> 260) | H PS | 2 | ○ |
-| T-FS-05 | Skip existing / overwrite | existing files not sent with skip; replaced with overwrite | H PS | 2 | ○ |
-| T-FS-06 | Cancel upload | cancel mid-file → no partial file, no `.remotehub-part` | H PS | 1 | ○ |
-| T-FS-07 | Download | file and folder download, hashes equal | H | 1 | ○ |
-| T-FS-08 | Rename / delete / new folder | done remotely; drive root delete refused | H PS | 2 | ○ |
+| T-FS-05 | Skip existing / overwrite | existing files not sent with skip; replaced with overwrite | H PS | 2 | ✅ |
+| T-FS-06 | Cancel upload | cancel mid-file → no partial file, no `.remotehub-part` | H PS | 1 | ✅ |
+| T-FS-07 | Download | file and folder download, hashes equal | H | 1 | ✅ |
+| T-FS-08 | Rename / delete / new folder | done remotely; drive root delete refused | H PS | 2 | ✅ |
 | T-FS-09 | Locked file | upload over a file opened exclusively → clear error, original untouched | H PS | 3 | ○ |
 | T-FS-10 | Defender real-time on | large tree upload still verified (rename scanning) | H | 3 | ○ |
-| T-REG-01 | Browse | `HKLM\SOFTWARE`, all path spellings (`HKLM:\`, `Registry::`, `Computer\`) | H | 2 | ○ |
-| T-REG-02 | Value types | create, read, modify, delete String, ExpandString (stays unexpanded), Multi, DWORD, QWORD, Binary; check with `reg query` | H PS | 2 | ○ |
+| T-REG-01 | Browse | `HKLM\SOFTWARE`, all path spellings (`HKLM:\`, `Registry::`, `Computer\`) | H | 2 | ✅ |
+| T-REG-02 | Value types | create, read, modify, delete String, ExpandString (stays unexpanded), Multi, DWORD, QWORD, Binary; check with `reg query` | H PS | 2 | ✅ |
 | T-REG-03 | Key rename keeps ACL | rename a key with a custom ACL → ACL kept | H PS | 3 | ○ |
-| T-REG-04 | Export | `.reg` file arrives and matches `reg export` | H | 3 | ○ |
-| T-REG-05 | Hive protection | delete/rename `HKLM\SOFTWARE` refused | H | 1 | ○ |
-| T-SVC-01 | List | matches `Get-CimInstance Win32_Service` (name, state, start mode, account, PID) | H PS | 2 | ○ |
-| T-SVC-02 | Start / stop / restart | a test service (`Spooler`) changes state within 60 s | H PS | 2 | ○ |
-| T-SVC-03 | Startup type | Automatic, Automatic (delayed), Manual, Disabled set and verified | H PS | 2 | ○ |
-| T-PROC-01 | List | contains the tab's own process, user names shown for an admin | H | 2 | ○ |
-| T-PROC-02 | End process / tree | test process tree ended completely | H PS | 2 | ○ |
-| T-PROC-03 | Critical processes | ending lsass, csrss, winlogon, own remoting process refused | H | 1 | ○ |
+| T-REG-04 | Export | `.reg` file arrives and matches `reg export` | H | 3 | ✅ |
+| T-REG-05 | Hive protection | delete/rename `HKLM\SOFTWARE` refused | H | 1 | ✅ |
+| T-SVC-01 | List | matches `Get-CimInstance Win32_Service` (name, state, start mode, account, PID) | H PS | 2 | ✅ |
+| T-SVC-02 | Start / stop / restart | a test service (`Spooler`) changes state within 60 s | H PS | 2 | ✅ |
+| T-SVC-03 | Startup type | Automatic, Automatic (delayed), Manual, Disabled set and verified | H PS | 2 | ✅ |
+| T-PROC-01 | List | contains the tab's own process, user names shown for an admin | H | 2 | ✅ |
+| T-PROC-02 | End process / tree | test process tree ended completely | H PS | 2 | ✅ |
+| T-PROC-03 | Critical processes | ending lsass, csrss, winlogon, own remoting process refused | H | 1 | ✅ |
 
 ## 8. WinRM setup script (W)
 
@@ -267,18 +267,18 @@ remoting code connects from the host.
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| W-HTTPS-01 | HTTPS setup | runs without errors; prints a thumbprint; listener on 5986 bound to it | PS | 1 | ○ | |
-| W-HTTPS-02 | Certificate | end-entity, server auth only, RSA 3072, key not exportable, SAN = IP or name, 2 years | PS | 1 | ○ | |
-| W-HTTPS-03 | Fetched certificate matches | `FetchCertificateAsync` sees the same thumbprint | H | 1 | ○ | |
-| W-HTTPS-04 | Session pinned | HTTPS session from the host works with the certificate trusted | H | 1 | ○ | |
-| W-HTTPS-05 | Firewall | `RemoteHub-WinRM-HTTPS-In` only for the given addresses; built-in `WINRM-HTTP-In-TCP` off | PS | 1 | ○ | |
+| W-HTTPS-01 | HTTPS setup | runs without errors; prints a thumbprint; listener on 5986 bound to it | PS | 1 | ✅ | |
+| W-HTTPS-02 | Certificate | end-entity, server auth only, RSA 3072, key not exportable, SAN = IP or name, 2 years | PS | 1 | ✅ | |
+| W-HTTPS-03 | Fetched certificate matches | `FetchCertificateAsync` sees the same thumbprint | H | 1 | ✅ | |
+| W-HTTPS-04 | Session pinned | HTTPS session from the host works with the certificate trusted | H | 1 | ✅ | |
+| W-HTTPS-05 | Firewall | `RemoteHub-WinRM-HTTPS-In` only for the given addresses; built-in `WINRM-HTTP-In-TCP` off | PS | 1 | ✅ | |
 | W-HTTPS-06 | Reject from elsewhere | connection from an address outside the list fails (second NIC / other VM) | N | 2 | ○ | |
-| W-TWICE-01 | Run twice | same thumbprint (reused while valid > 30 days), one rule | PS | 2 | ○ | |
-| W-PRE-01 | Built-in rule on before | stays on, script warns | PS | 2 | ○ | |
-| W-LISTENER-01 | Existing HTTPS listener | replaced, warning printed | PS | 2 | ○ | |
-| W-DRY-01 | `$DryRun = $true` | prints changes, changes nothing (listeners, rules, certs compared before/after) | PS | 2 | ○ | |
-| W-LEGACY-01 | Old rule name | `RdpManager-WinRM-HTTPS-In` present → removed | PS | 3 | ○ | |
-| W-LATFP-01 | LocalAccountTokenFilterPolicy option | set only when chosen | PS | 2 | ○ | |
+| W-TWICE-01 | Run twice | same thumbprint (reused while valid > 30 days), one rule | PS | 2 | ✅ | |
+| W-PRE-01 | Built-in rule on before | stays on, script warns | PS | 2 | ✅ | |
+| W-LISTENER-01 | Existing HTTPS listener | replaced, warning printed | PS | 2 | ✅ | |
+| W-DRY-01 | `$DryRun = $true` | prints changes, changes nothing (listeners, rules, certs compared before/after) | PS | 2 | ✅ | |
+| W-LEGACY-01 | Old rule name | `RdpManager-WinRM-HTTPS-In` present → removed | PS | 3 | ✅ | |
+| W-LATFP-01 | LocalAccountTokenFilterPolicy option | set only when chosen | PS | 2 | ✅ | |
 | W-NONADMIN-01 | Non-RID-500 admin over WinRM without LATFP | filtered token (documents the difference to the agent, S-AUTH-09) | H | 3 | ○ | |
 | W-HTTP-01 | HTTP + Kerberos by name | session works, 5985 only from given addresses | H PS | 2 | ○ | Domain |
 | W-TRUST-01 | Trust prompt on the admin's PC | **2VM**: "Test again" puts "RemoteHub – WinRM <host>" in CurrentUser\Root after the Windows prompt (UIA clicks Yes), connection switches to HTTPS | U | 2 | ○ | 2VM |

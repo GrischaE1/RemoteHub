@@ -688,7 +688,8 @@ function Invoke-LabSetupScript {
         [string[]]$Allow,
         [bool]$Https = $true,
         [bool]$LocalAdmins = $true,
-        [switch]$DryRun
+        [switch]$DryRun,
+        [int]$TimeoutSec = 600
     )
     if (-not $Allow) { $Allow = @(Get-LabHostAddress -Name $Name) }
     $local = Join-Path $env:TEMP "RemoteHub-setup-$([guid]::NewGuid().ToString('N').Substring(0, 8)).ps1"
@@ -697,12 +698,27 @@ function Invoke-LabSetupScript {
     try {
         $text = [IO.File]::ReadAllText($local)
         if ($DryRun) { $text = $text -replace '(?m)^\$DryRun = \$false', '$DryRun = $true' }
-        Invoke-LabGuest -Name $Name -ArgumentList $text -ScriptBlock {
-            param($text)
+        # in a job with a time limit: the script once hung on W11 for hours (2026-10-13); a hang must fail the test
+        # and say which step it was in (the last "<step>..." line)
+        Invoke-LabGuest -Name $Name -ArgumentList $text, $TimeoutSec -ScriptBlock {
+            param($text, $TimeoutSec)
             $file = Join-Path $env:TEMP 'RemoteHub-setup.ps1'
             Set-Content -Path $file -Value $text -Encoding UTF8
+            $job = Start-Job -ArgumentList $file -ScriptBlock {
+                param($file)
+                # a client's default policy (Restricted) blocks .ps1 files; an admin allows it for their window the same way
+                Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+                try { & $file *>&1 | ForEach-Object { "$_" } } catch { "FAILED: $($_.Exception.Message)" }
+            }
+            $finished = Wait-Job $job -Timeout $TimeoutSec
+            $out = @(Receive-Job $job -Keep 2>&1 | ForEach-Object { "$_" })
             $failed = $null
-            $out = try { & $file *>&1 | ForEach-Object { "$_" } } catch { $failed = $_.Exception.Message }
+            if (-not $finished) {
+                Stop-Job $job
+                $failed = "The setup script didn't finish within $TimeoutSec s. Last output: $(@($out)[-1])"
+            }
+            elseif ($out -and $out[-1] -like 'FAILED: *') { $failed = $out[-1].Substring(8); $out = @($out | Select-Object -SkipLast 1) }
+            Remove-Job $job -Force
             Remove-Item $file -ErrorAction SilentlyContinue
             [pscustomobject]@{ Output = @($out); Failed = $failed }
         }
@@ -715,7 +731,11 @@ function Get-LabWinRmState {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
     Invoke-LabGuest -Name $Name -ScriptBlock {
-        $listeners = @(Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue | ForEach-Object {
+        # WSMan:\ asks "start the WinRM service?" when it is stopped (the client default) - over PowerShell Direct that
+        # question goes to the lab process, which nobody answers: it hung W11 runs for hours (2026-10-13)
+        $winrmUp = (Get-Service WinRM).Status -eq 'Running'
+        $found = @(if ($winrmUp) { Get-ChildItem WSMan:\localhost\Listener -ErrorAction SilentlyContinue })
+        $listeners = @($found | ForEach-Object {
                 $keys = @($_.Keys)
                 $thumb = (Get-ChildItem "WSMan:\localhost\Listener\$($_.Name)" | Where-Object Name -eq 'CertificateThumbprint').Value
                 [pscustomobject]@{ Transport = ($keys | Where-Object { $_ -like 'Transport=*' }) -replace 'Transport=', ''; Thumbprint = $thumb }

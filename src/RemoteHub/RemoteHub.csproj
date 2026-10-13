@@ -16,7 +16,7 @@
     <Authors>Grischa Ernst</Authors>
     <Company>Grischa Ernst</Company>
     <Copyright>© 2026 Grischa Ernst</Copyright>
-    <Version>0.18.2</Version>
+    <Version>0.18.3</Version>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>

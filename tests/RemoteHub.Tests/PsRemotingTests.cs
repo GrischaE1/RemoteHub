@@ -143,6 +143,41 @@ public class PsRemotingTests
         }
     }
 
+    /// <summary>
+    /// WinRM refuses more than 50 MB of input per command: a batch is split into several commands, with files open
+    /// across them (lab T-FS-03 over WinRM). Small command size here so the split happens mid-file and between files.
+    /// </summary>
+    [Fact]
+    public async Task Upload_spans_several_remote_commands()
+    {
+        var src = Path.Combine(Path.GetTempPath(), "rdpm-split-" + Guid.NewGuid().ToString("N"));
+        var dst = Path.Combine(Path.GetTempPath(), "rdpm-split-dst-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(src);
+        var big = new byte[FileUploader.ChunkSize * 5 + 777];
+        RandomNumberGenerator.Fill(big);
+        File.WriteAllBytes(Path.Combine(src, "a.bin"), big);
+        File.WriteAllBytes(Path.Combine(src, "b.bin"), big.Reverse().ToArray());
+        for (var i = 0; i < 6; i++) { var s = new byte[600_000]; RandomNumberGenerator.Fill(s); File.WriteAllBytes(Path.Combine(src, $"s{i}.bin"), s); }
+        var limit = FileUploader.CommandBytes;
+        FileUploader.CommandBytes = FileUploader.ChunkSize * 2;
+        try
+        {
+            var items = FileUploader.Expand([src]).Select(x => new TransferItem(x.Local, x.Relative, "test")).ToList();
+            Runspace Local() { var rs = RunspaceFactory.CreateRunspace(); rs.Open(); return rs; }
+            await FileUploader.UploadAsync(Local, ex => ex.Message, dst, false, items, a => a());
+            Assert.All(items, i => Assert.True(i.State == TransferState.Done, $"{i.RelativePath}: {i.StatusText}"));
+            foreach (var (local, rel) in FileUploader.Expand([src]))
+                Assert.Equal(File.ReadAllBytes(local), File.ReadAllBytes(Path.Combine(dst, rel)));
+            Assert.Empty(Directory.GetFiles(dst, "*.remotehub-part", SearchOption.AllDirectories));
+        }
+        finally
+        {
+            FileUploader.CommandBytes = limit;
+            Directory.Delete(src, true);
+            if (Directory.Exists(dst)) Directory.Delete(dst, true);
+        }
+    }
+
     [Fact]
     public async Task Cancelled_upload_leaves_no_partial_file()
     {

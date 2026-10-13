@@ -9,11 +9,6 @@ param(
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
-    # progress lines: the W11 run of 2026-10-13 hung before the first context started
-    Write-Host "W-SETUP: addresses..."
-    $vmIp = Get-LabVmAddress -Name $VmName
-    $hostIp = Get-LabHostAddress -Name $VmName
-    Write-Host "W-SETUP: VM $vmIp, host $hostIp"
     $rule = 'RemoteHub-WinRM-HTTPS-In'
     $legacyRule = 'RdpManager-WinRM-HTTPS-In'
     function Save($name, $data) { $data | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir "w-$name.json") -Encoding UTF8 }
@@ -37,6 +32,9 @@ Describe 'W-SETUP <VmName>' -Tag WinRM, 'W' {
     Context 'HTTPS setup on a fresh device, dry run first, then twice' {
         BeforeAll {
             Reset-LabVm -Name $VmName
+            # after the revert: a VM that is off reports no address
+            $vmIp = Get-LabVmAddress -Name $VmName
+            $hostIp = Get-LabHostAddress -Name $VmName
             $pre = Get-LabWinRmState -Name $VmName
             $dry = Invoke-LabSetupScript -Name $VmName -DryRun
             $afterDry = Get-LabWinRmState -Name $VmName
