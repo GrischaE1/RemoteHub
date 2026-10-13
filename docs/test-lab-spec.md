@@ -187,13 +187,16 @@ Location `lab/RemoteHub.TestLab/` (Windows PowerShell 5.1 and 7, `Set-StrictMode
 | Console | `Get-LabScreenshot` (PNG at the guest's resolution, reports a blank screen), `Send-LabText`, `Send-LabKey`, `Send-LabCtrlAltDel` |
 | Sessions | `Set-LabAutoLogon`, `Clear-LabAutoLogon`, `Wait-LabDesktop` (user's explorer running + screenshot not blank), `Invoke-LabInSession`, `Lock-LabSession`, `Unlock-LabSession` |
 | RemoteHub | `Get-LabHostAddress` (host's source address towards the VM, also across a router), `Install-LabAgent` (harness: `AgentEnrollment.Create` + `AgentInstaller.Prepare` + `InstallOverRemoting` over PowerShell Direct; returns deviceId, pin, installed.*), `Get-LabAgentHealth` (harness: `HealthAsync`, TLS pinned), `Get-LabAgentState` (service, agent.json, certificate incl. key exportability, folder ACL, firewall rule, leftovers, log lines), `Uninstall-LabAgent` (msiexec /x, returns exit code + guest log path), `Save-LabAgentEvidence` |
-| RemoteHub (next) | `Update-LabAgent`, `Set-LabAgentPolicy` (registry under `HKLM\SOFTWARE\Policies\RemoteHub\Agent`), `Invoke-LabSetupScript` |
+| RemoteHub (updates, policy) | `Get-LabAgentMsi [-Previous]` (build under test / release before it), `Update-LabAgent` (harness: `StartUpdateThroughAgent` + `WaitForRestartAsync` and RemoteHub's verdict), `Invoke-LabAgentCommand` (PowerShell through the agent), `New-LabBrokenMsi` (false launch condition / truncated), `Set-LabAgentPolicy` / `Get-LabAgentPolicy` (`HKLM\SOFTWARE\Policies\RemoteHub\Agent` and `Rights`) |
+| RemoteHub (next) | `Invoke-LabSetupScript` |
 | Evidence (next) | `Save-LabEvidence` → `results\<run>\<vm>\`: agent logs, Application/Security event log extracts (RemoteHub Agent source, 4624/4625), MSI logs, screenshots, `query session` output |
 
 Rules: every function is idempotent where it can be; every wait has a timeout and a clear error ("RH-W11: no
 desktop for labuser after 180 s"); waits poll a condition, never a fixed `Start-Sleep` alone.
 
 ## 9. Test scenarios
+
+The full release test sheet for Windows clients (every case, its checks and how it is automated) is [test-lab-cases.md](test-lab-cases.md); the table below is the scenario overview.
 
 Pester files in `lab/tests/*.Tests.ps1`, each with `param($VmName, $EvidenceDir)`; `Invoke-LabTests.ps1` runs every
 file once per VM. Each file: revert → set up → act → check → collect evidence. The parts that need RemoteHub's client
@@ -252,7 +255,12 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
 - Output: Pester NUnit XML per VM, `summary.json` and a summary table, `console.log`, evidence (screenshots) – in
   `D:\RemoteHubLab\results\<run>\<Id>\`, copied to `artifacts\lab\<run>\` by `Start-LabRun.ps1`.
 - A run uses the newest `RemoteHub-Agent-<version>-x64.msi` from `artifacts\` (the build being tested), copied to
-  `D:\RemoteHubLab\msi\`; the version in the report is read from the file name.
+  `D:\RemoteHubLab\msi\`, and the release before it in `msi\previous\` (the update scenarios start from it); the
+  version in the report is read from the file name. `run.json` records both with their SHA-256 and each VM's
+  checkpoint.
+- Every test name starts with its case ID from [test-lab-cases.md](test-lab-cases.md) and carries it as a tag
+  (`-Tag A-UPD-04` runs one case). After the run `Start-LabRun.ps1` writes the PR report `report.md`
+  (`New-LabReport.ps1`).
 - Requests run one after another, and so do the VMs within a run. Only the VM under test is on: a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
 - Measured: SMOKE on W11-26H2-en-US ≈ 110 s. Target: one VM × all scenarios < 30 min.
 

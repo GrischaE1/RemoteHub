@@ -26,7 +26,7 @@ function Submit-LabRequest {
     param(
         [Parameter(Mandatory)][hashtable]$Request,
         [Parameter(Mandatory)][string]$DoneFile,
-        [int]$TimeoutMin = 240
+        [int]$TimeoutMin = 780   # longer than the watcher's own 12 h limit for a test run
     )
     if (-not (Test-LabWatcher)) {
         throw "The lab watcher (scheduled task '$script:LabTask') isn't running. It starts at boot; to start it now " +

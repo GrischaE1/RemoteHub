@@ -112,7 +112,7 @@ public class CrashReporterTests
     [Fact]
     public void Crash_payload_adds_exactly_the_three_fields()
     {
-        var extra = new Dictionary<string, string> { ["errorType"] = "NativeCrash", ["message"] = "Exception 0xc0000005 in mstscax.dll", ["stack"] = "mstscax.dll+0x1234" };
+        var extra = new Dictionary<string, object> { ["errorType"] = "NativeCrash", ["message"] = "Exception 0xc0000005 in mstscax.dll", ["stack"] = "mstscax.dll+0x1234" };
         using var doc = JsonDocument.Parse(Telemetry.Payload("app_crash", "0.9.0", "beta", Guid.NewGuid().ToString(), extra));
         Assert.Equal(["arch", "channel", "errorType", "event", "installId", "message", "os", "stack", "version"],
             doc.RootElement.EnumerateObject().Select(p => p.Name).Order());

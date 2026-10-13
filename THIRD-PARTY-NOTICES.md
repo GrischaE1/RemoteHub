@@ -29,3 +29,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## SSH.NET (RemoteHub, network shares over SFTP)
+
+SSH.NET 2026.0.0 – Copyright © Renci 2010-2026. MIT License (text as above).
+Source: https://github.com/sshnet/SSH.NET
+
+## FluentFTP (RemoteHub, network shares over FTP/FTPS)
+
+FluentFTP 55.0.0 – Copyright (c) 2015 Robin Rodricks and FluentFTP Contributors. MIT License (text as above).
+Source: https://github.com/robinrodricks/FluentFTP
+
+## SMBLibrary (RemoteHub, network shares over SMB with a second account)
+
+SMBLibrary 1.5.8.1 – Copyright © Tal Aloni 2014-2026. GNU Lesser General Public License v3.0 or later
+(https://www.gnu.org/licenses/lgpl-3.0.html). Used unchanged as a separate library (`SMBLibrary.dll` next to
+`RemoteHub.exe`); it can be replaced by a compatible build of the library.
+Source: https://github.com/TalAloni/SMBLibrary

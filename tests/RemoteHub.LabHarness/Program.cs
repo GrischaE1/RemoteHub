@@ -15,8 +15,22 @@ using RemoteHub.Remoting;
 //   install --vm <Hyper-V name> --user <guest admin> --password <pw> --msi <path> --label <label> [--scope <addresses>] [--port <n>]
 //       AgentEnrollment.Create + AgentInstaller.Prepare + AgentInstaller.InstallOverRemoting. The runspace is a
 //       PowerShell Direct session instead of WinRM - everything the client does over it is the same.
+//       --keep-identity 1: no new enrollment (an update over remoting); --virtual-display 0|1 (default 1).
 //   health --host <address> --port <n> --pin <sha256>
 //       AgentInstaller.HealthAsync (TLS, certificate pinned to the fingerprint).
+//   update --host <address> --port <n> --pin <sha256> --user <guest admin> --password <pw> --msi <path>
+//          [--new-identity <label> [--scope <addresses>]] [--enrollment-file <path>] [--virtual-display 0|1] [--hold-session 1]
+//       Update through the running agent, as MainWindow.RunAgentInstall (AgentInstallMethod.ThroughAgent) does it:
+//       PowerShell over the agent, AgentInstaller.StartUpdateThroughAgent, PackageVersion, WaitForRestartAsync, and the
+//       same verdict (updated / not installed / no answer). --enrollment-file sends any file as the enrollment (to
+//       break an update on purpose); --hold-session keeps another agent session open during the update.
+//   run --host <address> --port <n> --pin <sha256> --user <account> --password <pw> --script <PowerShell>
+//       A PowerShell session through the agent (AgentConnectionInfo, as every RemoteHub tool opens it); answers the
+//       script's output as strings.
+//   share ... / share-conflict ...   network shares (see ShareHarness.cs)
+//   seed --connections n [--folders n] [--shares n] [--standalone n]   test data for the start-time test (see SeedHarness.cs)
+//   tool --op <op> --via agent|winrm ...   RemoteHub's PowerShell connection and remote tools (see LabTools.cs)
+//   probe --kind <kind> ...                raw HTTP/TLS/WebSocket checks of the agent (see LabProbes.cs)
 // Answers one JSON object on stdout; exit code 0 = ok, 1 = failed (the object then has "error").
 
 var json = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -30,6 +44,13 @@ try
         "health" => await Health(opt),
         "cad" => await CtrlAltDel(opt),
         "copy" => await CopyFiles(opt),
+        "update" => await Update(opt),
+        "run" => RunOverAgent(opt),
+        "share" => ShareHarness.Run(opt),
+        "share-conflict" => ShareHarness.Conflict(opt),
+        "seed" => SeedHarness.Run(opt),
+        "tool" => await LabTools.Run(opt),
+        "probe" => await LabProbes.Run(opt),
         _ => throw new ArgumentException("usage: install --vm .. --user .. --password .. --msi .. --label .. [--scope ..] [--port ..] | health --host .. --port .. --pin .. | " +
                                          "cad --host .. --port .. --pin .. --user .. --password .."),
     };
@@ -48,8 +69,11 @@ static object Install(Dictionary<string, string> o)
     var scope = o.GetValueOrDefault("scope");
     var progress = new List<string>();
 
-    // exactly what MainWindow.RunAgentInstall does before installing: create the device identity, keep the pin
-    var (enrollment, pin) = AgentEnrollment.Create(o["label"], port, null, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    // exactly what MainWindow.RunAgentInstall does before installing: create the device identity, keep the pin -
+    // or, for an update with the device's identity kept, no enrollment at all
+    var keep = o.GetValueOrDefault("keep-identity") == "1";
+    var (enrollment, pin) = keep ? (null, null) : AgentEnrollment.Create(o["label"], port, null, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
     var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
     try
     {
@@ -58,15 +82,15 @@ static object Install(Dictionary<string, string> o)
         var session = OpenDirectSession(local, o["vm"], o["user"], o["password"]);
         try
         {
-            var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add);
+            var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add, virtualDisplay);
             return new
             {
-                deviceId = enrollment.DeviceId,
-                label = enrollment.DeviceLabel,
-                pin,
+                deviceId = enrollment?.DeviceId ?? installed.DeviceId,
+                label = enrollment?.DeviceLabel,
+                pin = pin ?? installed.Fingerprint,
                 port,
                 scope,
-                enrollmentFile = Path.GetFileName(rhagent),
+                enrollmentFile = rhagent is null ? null : Path.GetFileName(rhagent),
                 installed,
                 progress,
             };
@@ -207,6 +231,133 @@ static async Task<object> CopyFiles(Dictionary<string, string> o)
     var sent = sw.Elapsed.TotalSeconds;
     await Task.Delay(TimeSpan.FromSeconds(int.TryParse(o.GetValueOrDefault("wait"), out var w) ? w : 5), cts.Token);
     return new { bytes = transfer.Transfer.Total, requestedAfter, sentSeconds = Math.Round(sent, 2), messages };
+}
+
+static object RunOverAgent(Dictionary<string, string> o)
+{
+    var secure = new SecureString();
+    foreach (var c in o["password"]) secure.AppendChar(c);
+    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], new AgentEndpoint(int.Parse(o["port"]), o["pin"]),
+        new PSCredential(o["user"], secure)));
+    rs.Open();
+    using var ps = PowerShell.Create();
+    ps.Runspace = rs;
+    var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();
+    return new { output, errors = ps.Streams.Error.Select(e => e.ToString()).ToList() };
+}
+
+// Update through the running agent - the ThroughAgent branch of MainWindow.RunAgentInstall, step by step, with the
+// same verdict and texts. Keep the two in step when that branch changes.
+static async Task<object> Update(Dictionary<string, string> o)
+{
+    var host = o["host"];
+    var port = int.Parse(o["port"]);
+    var pin = o["pin"];
+    var secure = new SecureString();
+    foreach (var c in o["password"]) secure.AppendChar(c);
+    var credential = new PSCredential(o["user"], secure);
+    var progress = new List<string>();
+    var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
+
+    // "Create a new device certificate": a new identity, and RemoteHub then waits for the new fingerprint
+    AgentEnrollment? enrollment = null;
+    var expectedPin = pin;
+    if (o.TryGetValue("new-identity", out var label))
+    {
+        var scope = o.GetValueOrDefault("scope");
+        (enrollment, expectedPin) = AgentEnrollment.Create(label, port, null, string.IsNullOrWhiteSpace(scope) ? null : scope, virtualDisplay: virtualDisplay);
+    }
+    var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
+    if (o.TryGetValue("enrollment-file", out var forced))
+    {
+        rhagent = Path.Combine(folder, Path.GetFileName(forced));
+        File.Copy(forced, rhagent, true);
+    }
+
+    Runspace? held = null;
+    int? heldPid = null;
+    try
+    {
+        var before = await AgentInstaller.HealthAsync(host, port, pin, CancellationToken.None);
+        if (o.GetValueOrDefault("hold-session") == "1")
+        {
+            held = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, new AgentEndpoint(port, pin), credential));
+            held.Open();
+            using var ps = PowerShell.Create();
+            ps.Runspace = held;
+            heldPid = Convert.ToInt32(ps.AddScript("$PID").Invoke().Single().BaseObject);
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string? startError = null;
+        try
+        {
+            using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, new AgentEndpoint(port, pin), credential));
+            rs.Open();
+            AgentInstaller.StartUpdateThroughAgent(rs, msi, rhagent, progress.Add, virtualDisplay);
+        }
+        catch (Exception ex) { startError = ex.Message; }
+
+        string verdict, message;
+        AgentHealth? health = null;
+        var expected = AgentInstaller.PackageVersion(msi);
+        if (startError is not null)
+        {
+            verdict = "failed";
+            message = "Failed: " + startError;
+        }
+        else
+        {
+            health = await AgentInstaller.WaitForRestartAsync(host, port, expectedPin, expected, progress.Add, CancellationToken.None);
+            if (health is null) { verdict = "noAnswer"; message = "The agent didn't answer again within a few minutes."; }
+            else if (expected is not null && health.Version != expected) { verdict = "notInstalled"; message = $"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expected})."; }
+            else { verdict = "updated"; message = $"Updated – RemoteHub Agent {health.Version} is running."; }
+        }
+        var seconds = Math.Round(sw.Elapsed.TotalSeconds, 1);
+
+        // the session that was open during the update: does it still work?
+        string? heldAfter = null;
+        if (held is not null)
+        {
+            // bounded: a session whose agent went away must end, not hang - "hung" is a finding, not a lab timeout
+            var call = Task.Run(() =>
+            {
+                using var ps = PowerShell.Create();
+                ps.Runspace = held;
+                return "still works (PID " + ps.AddScript("$PID").Invoke().Single() + ")";
+            });
+            try { heldAfter = await call.WaitAsync(TimeSpan.FromSeconds(60)); }
+            catch (TimeoutException) { heldAfter = "hung: no answer and no error within 60 s"; }
+            catch (Exception ex) { heldAfter = "ended: " + ex.GetBaseException().GetType().Name; }
+        }
+
+        // what the agent answers now with the old and with the expected pin
+        string? oldPinNow;
+        try { oldPinNow = (await AgentInstaller.HealthAsync(host, port, pin, CancellationToken.None)).Version; }
+        catch (Exception ex) { oldPinNow = "refused: " + ex.GetBaseException().GetType().Name; }
+
+        return new
+        {
+            verdict,
+            message,
+            expectedVersion = expected,
+            before = before.Version,
+            health,
+            expectedPin,
+            deviceId = enrollment?.DeviceId ?? before.DeviceId,
+            oldPinNow,
+            heldPid,
+            heldAfter,
+            seconds,
+            progress,
+        };
+    }
+    finally
+    {
+        // a hung session can block Dispose too - don't let it hold the result back
+        if (held is not null) _ = Task.Run(held.Dispose).WaitAsync(TimeSpan.FromSeconds(15)).ContinueWith(_ => { });
+        try { Directory.Delete(folder, true); } catch { /* staging folder in %TEMP% */ }
+    }
 }
 
 // Retries the connection while a busy guest (right after a revert) drops it - nothing has run in the guest yet.

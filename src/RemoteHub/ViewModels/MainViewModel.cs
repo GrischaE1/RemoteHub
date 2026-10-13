@@ -313,6 +313,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Folder f => f,
         Connection c => c.Parent,
+        NetworkShare { Server: null } s => s.Parent,
         _ => null,
     };
 
@@ -367,7 +368,12 @@ public sealed partial class MainViewModel : ObservableObject
         var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes<NodeBase>(node, SettingsStore.Json);
         var copy = System.Text.Json.JsonSerializer.Deserialize<NodeBase>(json, SettingsStore.Json)!;
         // A copy gets new IDs and no agent identity (a pinned agent certificate belongs to exactly one device).
-        void NewIds(NodeBase n) { n.Id = Guid.NewGuid(); if (n is Connection k) k.Agent = null; if (n is Folder f) foreach (var c in f.Children) NewIds(c); }
+        void NewIds(NodeBase n)
+        {
+            n.Id = Guid.NewGuid();
+            if (n is Connection k) { k.Agent = null; foreach (var s in k.Shares) s.Id = Guid.NewGuid(); }
+            if (n is Folder f) foreach (var c in f.Children) NewIds(c);
+        }
         NewIds(copy);
         copy.Name += " (copy)";
         SettingsStore.RelinkParents([copy], node.Parent);
@@ -406,6 +412,13 @@ public sealed partial class MainViewModel : ObservableObject
     public FileBrowserSession OpenFileBrowser(Connection c, string? remoteStart)
     {
         var s = new FileBrowserSession(c, remoteStart);
+        Register(s);
+        return s;
+    }
+
+    public ShareSession OpenShare(Connection c, NetworkShare share)
+    {
+        var s = new ShareSession(c, share);
         Register(s);
         return s;
     }

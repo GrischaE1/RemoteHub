@@ -57,7 +57,7 @@ public class AgentDesktopFlowTests
     }
 
     /// <summary>Runs the real helper session in-process, connected by pipes like the real process.</summary>
-    private sealed class InProcessHelpers(Func<Ui> ui, Func<int, Screen> screen, Input input) : A.IDesktopHelperLauncher
+    private sealed class InProcessHelpers(Func<Ui> ui, Func<int, Screen> screen, Input input, Apps apps) : A.IDesktopHelperLauncher
     {
         public readonly List<Ui> Uis = [];
         public readonly List<Screen> Screens = [];
@@ -76,7 +76,7 @@ public class AgentDesktopFlowTests
             lock (Uis) Uis.Add(u);
             var sc = screen(n);
             lock (Screens) Screens.Add(sc);
-            var session = new A.DesktopHelperSession(helperIn, helperOut, u, sc, input);
+            var session = new A.DesktopHelperSession(helperIn, helperOut, u, sc, input, apps);
             var run = Task.Run(async () =>
             {
                 try { await session.RunAsync(CancellationToken.None); }
@@ -107,9 +107,27 @@ public class AgentDesktopFlowTests
         public Action? Disconnect;
         public readonly List<string> Clipboard = [];
         public event Action<string>? ClipboardChanged;
-        public void AskConsent(A.HelperInit init, Action<bool> answered) { Interlocked.Increment(ref Asked); Task.Run(() => answered(allow)); }
+        public void AskConsent(A.HelperInit init, Action<bool> answered)
+        {
+            Interlocked.Increment(ref Asked);
+            // The user picks apps to hide in the question ("Allow and hide apps…"), then allows.
+            if (PickOnConsent is { } pick && allow) Chosen?.Invoke(pick);
+            Task.Run(() => answered(allow));
+        }
+        public IReadOnlySet<string>? PickOnConsent;
+        public volatile IReadOnlySet<string>? OfferedHidden, OfferedAlways;
+        public volatile Action<IReadOnlySet<string>>? Chosen;
+        public void OfferHideApps(IReadOnlySet<string> hidden, IReadOnlySet<string> always, Action<IReadOnlySet<string>> chosen) => (OfferedHidden, OfferedAlways, Chosen) = (hidden, always, chosen);
         public void ShowPin(A.HelperInit init, Action denied) { Pin = init.Pin; if (!allow) Task.Run(denied); }
-        public void ShowBanner(A.HelperInit init, Action disconnect) { Banner = true; Disconnect = disconnect; }
+        public void ShowBanner(A.HelperInit init, Action disconnect, Action<string> hide) { Banner = true; Disconnect = disconnect; Hide = hide; }
+        /// <summary>The banner's "Hide screen" / "Show screen": plays the user at the device.</summary>
+        public volatile Action<string>? Hide;
+        public volatile A.DesktopPrivacy? Shown;
+        public void ShowPrivacy(A.DesktopPrivacy privacy) => Shown = privacy;
+        /// <summary>The privacy screen as the helper asked for it; <see cref="ScreenError"/> plays a device that can't show it.</summary>
+        public readonly ConcurrentQueue<A.DesktopPrivacyScreen> Screens = new();
+        public volatile string? ScreenError;
+        public void SetPrivacyScreen(A.DesktopPrivacyScreen screen, Action<string?> done) { Screens.Enqueue(screen); done(ScreenError); }
         public void CloseDialogs() { }
         public void SetClipboard(string text) { lock (Clipboard) Clipboard.Add(text); }
         public void RaiseClipboard(string text) => ClipboardChanged?.Invoke(text);
@@ -161,6 +179,17 @@ public class AgentDesktopFlowTests
         public void Dispose() { }
     }
 
+    /// <summary>The device's windows as the test sets them (topmost first), the window with the keyboard and the clipboard's owner.</summary>
+    private sealed class Apps : A.IAppWindows
+    {
+        public volatile A.AppWindow[] Windows = [];
+        public volatile string Foreground = "", ClipboardOwner = "";
+        public IReadOnlyList<A.AppWindow> Visible() => Windows;
+        public IReadOnlyList<A.RunningApp> Running() => Windows.Where(w => w.App.Length > 0).GroupBy(w => w.App).Select(g => new A.RunningApp(g.Key, g.Key, g.Count(), IntPtr.Zero)).ToList();
+        public string ForegroundApp() => Foreground;
+        public string ClipboardOwnerApp() => ClipboardOwner;
+    }
+
     private sealed class Input : A.IInputSink
     {
         public readonly ConcurrentQueue<A.RemoteMouse> Mouse = new();
@@ -181,6 +210,7 @@ public class AgentDesktopFlowTests
         public required InProcessHelpers Helpers;
         public required Sessions Sessions;
         public required Input Input;
+        public required Apps Apps;
         public required ConcurrentQueue<A.AuditEvent> Audits;
         public ValueTask DisposeAsync() => App.DisposeAsync();
     }
@@ -197,12 +227,13 @@ public class AgentDesktopFlowTests
     private static readonly A.DesktopSessionInfo LoginScreen = new(2, "", A.DesktopSessionState.SignIn, false, "Console");
 
     private static async Task<Device> StartDevice(bool allow = true, bool secureScreen = false, A.AgentPolicy? policy = null, Func<int, Screen>? screens = null,
-        Func<int, bool>? allowAt = null, Func<string?>? secureAttention = null)
+        Func<int, bool>? allowAt = null, Func<string?>? secureAttention = null, IReadOnlySet<string>? pickOnConsent = null)
     {
         var cert = SelfSigned();
         var input = new Input();
         var uis = 0;
-        var helpers = new InProcessHelpers(() => new Ui(allowAt?.Invoke(Interlocked.Increment(ref uis)) ?? allow), screens ?? (_ => new Screen(secureScreen)), input);
+        var apps = new Apps();
+        var helpers = new InProcessHelpers(() => new Ui(allowAt?.Invoke(Interlocked.Increment(ref uis)) ?? allow) { PickOnConsent = pickOnConsent }, screens ?? (_ => new Screen(secureScreen)), input, apps);
         var sessions = new Sessions(ActiveUser, LoginScreen);
         var config = new A.AgentConfig { DeviceId = "dev", DeviceLabel = "Device 1", ListenPort = 0 };
         policy ??= new A.AgentPolicy
@@ -222,7 +253,7 @@ public class AgentDesktopFlowTests
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new Auth(), null!, log, IPAddress.Loopback,
             new A.DesktopServices(sessions, helpers, secureAttention ?? (() => null)), () => policy));
         await app.StartAsync();
-        return new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Sessions = sessions, Audits = audits };
+        return new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Apps = apps, Sessions = sessions, Audits = audits };
     }
 
     private static PSCredential Cred(string user)
@@ -242,6 +273,7 @@ public class AgentDesktopFlowTests
         public readonly ConcurrentQueue<string> Clipboard = new();
         public readonly ConcurrentQueue<DesktopTransfer> Transfers = new();
         public readonly ConcurrentQueue<DesktopTransferEnd> TransferEnds = new();
+        public readonly ConcurrentQueue<DesktopPrivacy> Privacy = new();
         public readonly MemoryStream TransferBytes = new();
         public int CursorShapes, CursorMoves, Pongs, Stats;
 
@@ -267,6 +299,7 @@ public class AgentDesktopFlowTests
                     case DesktopMessage.TransferStart: Transfers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); break;
                     case DesktopMessage.TransferData: lock (TransferBytes) TransferBytes.Write(m, DesktopWire.TransferHeaderSize, m.Length - DesktopWire.TransferHeaderSize); break;
                     case DesktopMessage.TransferEnd: TransferEnds.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd)); break;
+                    case DesktopMessage.Privacy: Privacy.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacy)); break;
                 }
             };
             client.Closed += why => _closed = why;
@@ -338,6 +371,354 @@ public class AgentDesktopFlowTests
         // Another monitor: a new layout and a new key frame in its size.
         v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(1, 30, 60), DesktopJson.Default.DesktopSettings));
         WaitFor(() => v.Frames.Any(f => f.Width == 200 && f.Height == 100 && f.KeyFrame), "frames of the second monitor");
+    }
+
+    // ---- privacy
+
+    private static A.AgentPolicy PrivacyPolicy(int level = A.PrivacyScreenLevel.Allowed) => new()
+    {
+        PrivacyScreen = level,
+        Rights = new Dictionary<A.AgentRight, IReadOnlyList<string>>
+        {
+            [A.AgentRight.Desktop] = [Admins],
+            [A.AgentRight.DesktopViewOnly] = [Users],
+            [A.AgentRight.SecureDesktop] = [Admins],
+            [A.AgentRight.PrivacyScreen] = [Admins],
+        },
+    };
+
+    private static void SendPrivacyScreen(Viewer v, string style, bool block = false) =>
+        v.Client.Send(DesktopWire.Json(DesktopMessage.PrivacyScreen, new DesktopPrivacyScreen(style, block), DesktopJson.Default.DesktopPrivacyScreen));
+
+    private static DesktopPrivacy? LastPrivacy(Viewer v) => v.Privacy.LastOrDefault();
+
+    [Fact]
+    public async Task The_user_can_hide_their_screen_and_show_it_again()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        Assert.Contains(DesktopFeatures.UserPrivacy, v.Client.Hello.Features!);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+        WaitFor(() => v.Frames.Count >= 3, "video frames");
+        var ui = d.Helpers.Uis.Single();
+        WaitFor(() => ui.Hide is not null, "the banner");
+
+        // Black: one black frame, then no picture, no pointer and no input until it's shown again.
+        ui.Hide!(DesktopScreenHide.Black);
+        WaitFor(() => LastPrivacy(v)?.User == DesktopScreenHide.Black, "the hidden screen reported to RemoteHub");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopUserHid), "audit entry");
+        Assert.Equal(DesktopScreenHide.Black, ui.Shown?.User);
+        await Task.Delay(400);
+        var (frames, moves) = (v.Frames.Count, v.CursorMoves);
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 5, 6, 0)));
+        v.Client.Send(DesktopWire.Key(new RemoteKey(0x1E, RemoteKeyFlags.None)));
+        v.Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
+        Assert.Contains("hidden their screen", v.Next(DesktopStatusState.Connected).Message);
+        await Task.Delay(600);
+        Assert.Equal(frames, v.Frames.Count);
+        Assert.Equal(moves, v.CursorMoves);
+        Assert.Empty(d.Input.Mouse);
+        Assert.Empty(d.Input.Keys);
+
+        // Shown again: the picture comes at once, and input goes through.
+        ui.Hide(DesktopScreenHide.None);
+        WaitFor(() => LastPrivacy(v)?.User == DesktopScreenHide.None, "the shown screen reported to RemoteHub");
+        WaitFor(() => v.Frames.Count > frames, "the picture again");
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 7, 8, 0)));
+        WaitFor(() => d.Input.Mouse.Count == 1, "input on the device again");
+        Assert.Equal(7, d.Input.Mouse.Single().X);
+    }
+
+    [Fact]
+    public void Blurring_leaves_nothing_of_the_detail_within_a_block()
+    {
+        // Two pictures that differ in every pixel but not in what a block averages to (a checkerboard and its inverse –
+        // like text) come out the same: nothing of the detail is left to undo.
+        A.FrameBuffer Checkerboard(int phase)
+        {
+            var f = new A.FrameBuffer();
+            f.Ensure(4 * A.DesktopHelperSession.BlurBlock, 2 * A.DesktopHelperSession.BlurBlock);
+            for (var y = 0; y < f.Height; y++)
+                for (var x = 0; x < f.Width; x++)
+                {
+                    var p = (y * f.Width + x) * 4;
+                    var v = (byte)((x + y + phase) % 2 == 0 ? 255 : 0);
+                    (f.Pixels[p], f.Pixels[p + 1], f.Pixels[p + 2], f.Pixels[p + 3]) = (v, v, v, 255);
+                }
+            return f;
+        }
+        var (a, b) = (new A.FrameBuffer(), new A.FrameBuffer());
+        A.DesktopHelperSession.Blur(Checkerboard(0), a);
+        A.DesktopHelperSession.Blur(Checkerboard(1), b);
+        Assert.Equal(a.Pixels, b.Pixels);
+        Assert.All(a.Pixels.Where((_, i) => i % 4 != 3), v => Assert.InRange(v, (byte)127, (byte)128)); // mid-grey everywhere
+    }
+
+    [Fact]
+    public async Task The_privacy_screen_needs_the_right()
+    {
+        await using var d = await StartDevice(); // nobody has the PrivacyScreen right
+        using var v = await Connect(d);
+        Assert.False(v.Client.Hello.Rights.PrivacyScreen);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Message);
+        WaitFor(() => v.Privacy.Any(p => p.Reason.Contains("may not use the privacy screen")), "the refusal");
+        Assert.Empty(d.Helpers.Uis.Single().Screens);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopPrivacyRefused), "audit entry");
+    }
+
+    [Fact]
+    public async Task The_privacy_screen_is_shown_on_the_device_and_reported()
+    {
+        if (!A.DesktopEndpoint.PrivacyScreenSupported) return; // this PC's Windows can't keep a window out of captures
+        await using var d = await StartDevice(policy: PrivacyPolicy());
+        using var v = await Connect(d);
+        Assert.Contains(DesktopFeatures.PrivacyScreen, v.Client.Hello.Features!);
+        Assert.True(v.Client.Hello.Rights.PrivacyScreen);
+        Assert.False(v.Client.Hello.Rights.PrivacyInputBlock);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+        var ui = d.Helpers.Uis.Single();
+
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Message);
+        WaitFor(() => LastPrivacy(v)?.Screen == DesktopPrivacyStyle.Message, "the privacy screen reported");
+        Assert.Equal((DesktopPrivacyStyle.Message, false), (ui.Screens.Single().Style, ui.Screens.Single().BlockLocalInput));
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopPrivacyScreen), "audit entry");
+
+        // Blocking the device's input needs policy level 2: refused, nothing changes on the device.
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Black, block: true);
+        WaitFor(() => v.Privacy.Any(p => p.Reason.Contains("isn't allowed")), "the refusal");
+        Assert.Single(ui.Screens);
+
+        // A device that can't show it: off, and RemoteHub is told why.
+        ui.ScreenError = "can't keep it out of the picture";
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Black);
+        WaitFor(() => v.Privacy.Any(p => p is { Screen: DesktopPrivacyStyle.Off, Reason: "can't keep it out of the picture" }), "the failure");
+
+        ui.ScreenError = null;
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Off);
+        WaitFor(() => ui.Screens.LastOrDefault()?.Style == DesktopPrivacyStyle.Off, "turned off on the device");
+    }
+
+    [Fact]
+    public async Task Policy_level_2_lets_the_privacy_screen_block_the_devices_input()
+    {
+        if (!A.DesktopEndpoint.PrivacyScreenSupported) return;
+        await using var d = await StartDevice(policy: PrivacyPolicy(A.PrivacyScreenLevel.WithInputBlock));
+        using var v = await Connect(d);
+        Assert.True(v.Client.Hello.Rights.PrivacyInputBlock);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+        SendPrivacyScreen(v, DesktopPrivacyStyle.Black, block: true);
+        WaitFor(() => LastPrivacy(v) is { Screen: DesktopPrivacyStyle.Black, LocalInputBlocked: true }, "the blocked input reported");
+        Assert.True(d.Helpers.Uis.Single().Screens.Single().BlockLocalInput);
+    }
+
+    [Fact]
+    public async Task What_is_hidden_stays_hidden_after_a_dropped_connection()
+    {
+        if (!A.DesktopEndpoint.PrivacyScreenSupported) return;
+        await using var d = await StartDevice(policy: PrivacyPolicy());
+        var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        SendPrivacyScreen(first, DesktopPrivacyStyle.Message);
+        WaitFor(() => d.Helpers.Uis[0].Screens.Count == 1, "the privacy screen");
+        WaitFor(() => d.Helpers.Uis[0].Hide is not null, "the banner");
+        d.Helpers.Uis[0].Hide!(DesktopScreenHide.Blur);
+        WaitFor(() => LastPrivacy(first)?.User == DesktopScreenHide.Blur, "the blurred screen");
+
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        second.Next(DesktopStatusState.Connected);
+        first.Dispose();
+        WaitFor(() => LastPrivacy(second) is { User: DesktopScreenHide.Blur, Screen: DesktopPrivacyStyle.Message }, "both again in the new connection");
+        Assert.Equal(DesktopPrivacyStyle.Message, d.Helpers.Uis[1].Screens.Single().Style);
+    }
+
+    [Fact]
+    public void The_privacy_screen_policy_is_read()
+    {
+        var config = new A.AgentConfig { AllowedGroups = [Admins] };
+        var d = A.AgentPolicy.From(config, null);
+        Assert.Equal(A.PrivacyScreenLevel.WithInputBlock, d.PrivacyScreen);
+        Assert.Equal([Admins], d.Groups(A.AgentRight.PrivacyScreen));
+        Assert.Equal(A.PrivacyScreenLevel.WithInputBlock, A.AgentPolicy.From(config, new Values(new() { ["PrivacyScreen"] = 2 })).PrivacyScreen);
+        Assert.Equal(A.PrivacyScreenLevel.Off, A.AgentPolicy.From(config, new Values(new() { ["PrivacyScreen"] = 0 })).PrivacyScreen);
+        Assert.Equal(A.PrivacyScreenLevel.WithInputBlock, A.AgentPolicy.From(config, new Values(new() { ["PrivacyScreen"] = 7 })).PrivacyScreen); // invalid: default
+        Assert.Equal(A.PrivacyScreenLevel.Off, A.AgentPolicy.Refused("x").PrivacyScreen);
+    }
+
+    // ---- hidden apps
+
+    private const string Secret = @"c:\apps\secret.exe", Notes = @"c:\apps\notes.exe";
+
+    private static A.AppWindow Win(int id, string app, int l, int t, int r, int b, bool opaque = true, bool shell = false, bool unresolved = false) =>
+        new(id, app, new A.ScreenRect(l, t, r, b), opaque, shell, unresolved);
+
+    private static HashSet<string> Set(params string[] apps) => [.. apps];
+
+    [Fact]
+    public void A_hidden_window_is_covered_except_where_an_opaque_window_lies_over_it()
+    {
+        var apps = new Apps
+        {
+            Windows =
+            [
+                Win(1, Notes, 50, 50, 150, 150),                    // over the secret window: covers part of it
+                Win(2, "", 0, 0, 40, 40, opaque: false),             // layered: doesn't cover anything
+                Win(3, Secret, 0, 0, 100, 100),
+                Win(4, Notes, 200, 200, 300, 300),                    // below, elsewhere
+            ],
+        };
+        var mask = new A.AppMask(apps);
+        var rects = mask.Compute(Set(Secret), 0, out _);
+        bool Covered(int x, int y) => rects.Any(r => r.Contains(x, y));
+        Assert.True(Covered(10, 10));
+        Assert.True(Covered(-3, -3));          // the margin around it
+        Assert.True(Covered(30, 90));
+        Assert.False(Covered(60, 60));         // Notes lies over it there
+        Assert.False(Covered(250, 250));
+        Assert.Empty(mask.Compute(Set(), 0, out var hold));
+        Assert.False(hold);
+    }
+
+    [Fact]
+    public void Shell_previews_and_unresolved_store_frames_are_covered_while_apps_are_hidden()
+    {
+        var apps = new Apps { Windows = [Win(1, "", 0, 0, 50, 50, shell: true), Win(2, "", 100, 100, 150, 150, unresolved: true)] };
+        var mask = new A.AppMask(apps);
+        var rects = mask.Compute(Set(Secret), 0, out _);
+        Assert.Contains(rects, r => r.Contains(25, 25));        // Alt+Tab, thumbnails: covered whenever anything is hidden
+        Assert.DoesNotContain(rects, r => r.Contains(125, 125)); // a Store frame only matters when a Store app is hidden
+        rects = mask.Compute(Set(A.AppIds.Packaged + "contoso.vault_123!app"), 0, out _);
+        Assert.Contains(rects, r => r.Contains(125, 125));
+    }
+
+    [Fact]
+    public void A_moving_hidden_window_holds_the_picture_and_stays_covered_where_it_was()
+    {
+        var apps = new Apps { Windows = [Win(1, Secret, 0, 0, 100, 100)] };
+        var mask = new A.AppMask(apps);
+        mask.Compute(Set(Secret), 0, out var hold);
+        Assert.True(hold);                                        // just appeared
+        mask.Compute(Set(Secret), A.AppMask.HoldMs + 1, out hold);
+        Assert.False(hold);                                       // settled
+
+        apps.Windows = [Win(1, Secret, 300, 0, 400, 100)];
+        var rects = mask.Compute(Set(Secret), 1000, out hold);
+        Assert.True(hold);                                        // moved: no frame for a moment
+        Assert.Contains(rects, r => r.Contains(50, 50));          // the old place is still covered in this frame
+        Assert.Contains(rects, r => r.Contains(350, 50));
+        rects = mask.Compute(Set(Secret), 1000 + A.AppMask.HoldMs + 1, out hold);
+        Assert.False(hold);
+        Assert.DoesNotContain(rects, r => r.Contains(50, 50));
+
+        apps.Windows = [];                                        // minimized: Windows animates it to the taskbar
+        mask.Compute(Set(Secret), 2000, out hold);
+        Assert.True(hold);
+    }
+
+    [Fact]
+    public void Covering_paints_only_the_part_on_the_shown_monitor()
+    {
+        var frame = new A.FrameBuffer();
+        frame.Ensure(100, 50);
+        A.AppMask.Apply(frame, new A.DesktopMonitor(1, "", 1000, 0, 100, 50, false), [new A.ScreenRect(1090, 40, 1200, 80), new A.ScreenRect(0, 0, 500, 500)], 0xFFFFFFFF);
+        int Pixel(int x, int y) => BitConverter.ToInt32(frame.Pixels, (y * 100 + x) * 4);
+        Assert.Equal(-1, Pixel(95, 45));
+        Assert.Equal(0, Pixel(89, 45));
+        Assert.Equal(0, Pixel(95, 39));
+        Assert.Equal(0, Pixel(5, 5)); // the other rectangle is on another monitor
+    }
+
+    [Fact]
+    public void Rectangles_are_subtracted_in_pieces()
+    {
+        var left = A.ScreenRect.Subtract(new A.ScreenRect(0, 0, 100, 100), [new A.ScreenRect(25, 25, 75, 75)]);
+        Assert.Equal(4, left.Count);
+        Assert.Equal(100 * 100 - 50 * 50, left.Sum(r => r.Width * r.Height));
+        Assert.Empty(A.ScreenRect.Subtract(new A.ScreenRect(10, 10, 20, 20), [new A.ScreenRect(0, 0, 50, 50)]));
+    }
+
+    [Fact]
+    public async Task Apps_picked_in_the_question_are_hidden_from_the_first_frame_and_their_input_and_clipboard_too()
+    {
+        await using var d = await StartDevice(pickOnConsent: Set(Secret));
+        d.Apps.Windows = [Win(1, Secret, 10, 10, 110, 110), Win(2, Notes, 150, 10, 300, 200)];
+        using var v = await Connect(d);
+        Assert.Contains(DesktopFeatures.HideApps, v.Client.Hello.Features!);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+
+        // RemoteHub learns how many and where – never which.
+        WaitFor(() => LastPrivacy(v) is { HiddenApps: 1, Regions.Length: > 0 }, "the hidden app reported");
+        var region = LastPrivacy(v)!.Regions!.Single();
+        Assert.True(region.X <= 6 && region.Y <= 6 && region.X + region.Width >= 114 && region.Y + region.Height >= 114);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopUserHid), "audit entry");
+        WaitFor(() => v.Frames.Count >= 1, "video frames");
+
+        // No clicks into it; outside it they go through.
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 50, 50, 0)));
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 200, 50, 0)));
+        WaitFor(() => d.Input.Mouse.Count == 1, "the click outside");
+        Assert.Equal(200, d.Input.Mouse.Single().X);
+
+        // No typing while it has the keyboard; the release of a key still goes through.
+        d.Apps.Foreground = Secret;
+        v.Client.Send(DesktopWire.Key(new RemoteKey(0x1E, RemoteKeyFlags.None)));
+        v.Client.Send(DesktopWire.Key(new RemoteKey(0x1E, RemoteKeyFlags.Up)));
+        WaitFor(() => d.Input.Keys.Count == 1, "the key's release");
+        Assert.Equal((byte)RemoteKeyFlags.Up, (byte)d.Input.Keys.Single().Flags);
+        d.Apps.Foreground = Notes;
+        v.Client.Send(DesktopWire.Key(new RemoteKey(0x1F, RemoteKeyFlags.None)));
+        WaitFor(() => d.Input.Keys.Count == 2, "typing into another app");
+
+        // What is copied there stays on the device.
+        var ui = d.Helpers.Uis.Single();
+        d.Apps.ClipboardOwner = Secret;
+        ui.RaiseClipboard("the password");
+        d.Apps.ClipboardOwner = Notes;
+        ui.RaiseClipboard("a note");
+        WaitFor(() => v.Clipboard.Contains("a note"), "the other app's copy");
+        Assert.DoesNotContain("the password", v.Clipboard);
+
+        // Shown again: no region, nothing hidden.
+        ui.Chosen!(Set());
+        WaitFor(() => LastPrivacy(v) is { HiddenApps: 0, Regions: null }, "nothing hidden any more");
+    }
+
+    [Fact]
+    public async Task Hidden_apps_stay_hidden_after_a_dropped_connection_and_the_policy_hides_its_own()
+    {
+        var policy = PrivacyPolicy();
+        policy = new A.AgentPolicy { PrivacyScreen = policy.PrivacyScreen, Rights = policy.Rights, HiddenApps = [@"C:\Apps\Vault.exe"] };
+        await using var d = await StartDevice(policy: policy);
+        using var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        var ui = d.Helpers.Uis[0];
+        Assert.Equal([@"c:\apps\vault.exe"], ui.OfferedAlways!);
+        WaitFor(() => LastPrivacy(first)?.HiddenApps == 1, "the policy's app counted");
+        ui.Chosen!(Set(Secret));
+        WaitFor(() => LastPrivacy(first)?.HiddenApps == 2, "the user's app counted too");
+
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        second.Next(DesktopStatusState.Connected);
+        Assert.Equal([Secret], d.Helpers.Uis[1].OfferedHidden!);
+        WaitFor(() => LastPrivacy(second)?.HiddenApps == 2, "both still hidden in the new connection");
+    }
+
+    [Fact]
+    public void The_hidden_apps_policy_is_read()
+    {
+        var config = new A.AgentConfig { AllowedGroups = [Admins] };
+        Assert.Empty(A.AgentPolicy.From(config, null).HiddenApps);
+        var p = A.AgentPolicy.From(config, new Values(new() { ["HiddenApps"] = new[] { @"C:\Apps\Vault.exe", " ", "aumid:Contoso.Vault_123!App" } }));
+        Assert.Equal([@"c:\apps\vault.exe", "aumid:contoso.vault_123!app"], p.HiddenApps);
     }
 
     [Fact]

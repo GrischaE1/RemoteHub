@@ -55,6 +55,12 @@ public static class DesktopFeatures
     public const string TransferReceipt = "transferReceipt";
     /// <summary>Copies from RemoteHub are offered and only sent when pasted on the device (TransferOffer / TransferRequest).</summary>
     public const string TransferOnPaste = "transferOnPaste";
+    /// <summary>The admin can black out the device's screen (<see cref="DesktopMessage.PrivacyScreen"/>); Windows 10 2004 and later.</summary>
+    public const string PrivacyScreen = "privacyScreen";
+    /// <summary>The user at the device can hide their screen; the agent reports it (<see cref="DesktopMessage.Privacy"/>).</summary>
+    public const string UserPrivacy = "userPrivacy";
+    /// <summary>The user at the device can hide chosen apps; <see cref="DesktopPrivacy.HiddenApps"/> and <see cref="DesktopPrivacy.Regions"/> say so.</summary>
+    public const string HideApps = "hideApps";
 }
 
 /// <summary>What may go through the clipboard (policy <c>DesktopClipboard</c>).</summary>
@@ -87,6 +93,10 @@ public enum DesktopMessage : byte
     TransferOffer = 11,
     /// <summary>Agent → RemoteHub: someone pastes on the device – send the offered transfer now (text: its id).</summary>
     TransferRequest = 12,
+    /// <summary>RemoteHub → agent: black out the device's screen, or stop it (<see cref="DesktopPrivacyScreen"/>).</summary>
+    PrivacyScreen = 13,
+    /// <summary>Agent → RemoteHub: what is hidden now (<see cref="DesktopPrivacy"/>) – sent on every change.</summary>
+    Privacy = 14,
 
     // binary
     Video = 20,
@@ -119,6 +129,29 @@ public static class DesktopConsent
     public static readonly string[] All = [Ask, Pin, None];
 }
 
+/// <summary>How the user at the device hides their screen from the admin (<see cref="DesktopPrivacy.User"/>).</summary>
+public static class DesktopScreenHide
+{
+    public const string None = "None";
+    /// <summary>Nothing is sent: one black frame, then no picture and no pointer until they show it again.</summary>
+    public const string Black = "Black";
+    /// <summary>The picture is blurred on the device so nothing can be read, at most 2 frames per second.</summary>
+    public const string Blur = "Blur";
+
+    public static string Valid(string? mode) => mode is Black or Blur ? mode : None;
+}
+
+/// <summary>What the admin's privacy screen shows the person at the device (<see cref="DesktopPrivacyScreen.Style"/>).</summary>
+public static class DesktopPrivacyStyle
+{
+    public const string Off = "Off";
+    public const string Black = "Black";
+    /// <summary>The dark background with "Your IT administrator is working on this device".</summary>
+    public const string Message = "Message";
+
+    public static string Valid(string? style) => style is Black or Message ? style : Off;
+}
+
 /// <summary>State of a Windows session as RemoteHub shows it.</summary>
 public static class DesktopSessionState
 {
@@ -149,7 +182,9 @@ public static class DesktopStatusState
 }
 
 /// <summary>What the signed-in admin may do on this device (view is implied by a successful sign-in).</summary>
-public sealed record DesktopRights(bool Control, bool SecureDesktop, bool ConsentBypass);
+/// <param name="PrivacyScreen">May black out the device's screen (right PrivacyScreen, policy, Windows 10 2004 or later).</param>
+/// <param name="PrivacyInputBlock">May also block the mouse and keyboard at the device while it is blacked out (policy PrivacyScreen = 2).</param>
+public sealed record DesktopRights(bool Control, bool SecureDesktop, bool ConsentBypass, bool PrivacyScreen = false, bool PrivacyInputBlock = false);
 
 /// <param name="Client">For a remote (RDP) session: the name of the PC it is connected from ("" otherwise).</param>
 public sealed record DesktopSessionInfo(int Id, string User, string State, bool Console, string Station, string Client = "");
@@ -191,6 +226,23 @@ public sealed record DesktopTransfer(int Id, string Kind, DesktopTransferItem[] 
 public sealed record DesktopTransferEnd(int Id, bool Ok, string Reason = "", bool ToDevice = false);
 
 public sealed record DesktopPin(string Pin);
+
+public sealed record DesktopRect(int X, int Y, int Width, int Height);
+
+/// <param name="Style"><see cref="DesktopPrivacyStyle"/>; Off turns it off.</param>
+/// <param name="BlockLocalInput">Also block the mouse and keyboard at the device (only with <see cref="DesktopRights.PrivacyInputBlock"/>).</param>
+public sealed record DesktopPrivacyScreen(string Style, bool BlockLocalInput = false);
+
+/// <param name="User">What the user at the device hid (<see cref="DesktopScreenHide"/>).</param>
+/// <param name="Screen">The admin's privacy screen as it is on the device (<see cref="DesktopPrivacyStyle"/>).</param>
+/// <param name="LocalInputBlocked">The mouse and keyboard at the device are blocked.</param>
+/// <param name="Reason">Why the last privacy screen request didn't work ("" when it did).</param>
+/// <param name="HiddenApps">How many apps the user at the device hides – never which.</param>
+/// <param name="Regions">Where hidden apps cover the picture now (picture pixels), for the viewer's labels; null when none.</param>
+public sealed record DesktopPrivacy(string User, string Screen, bool LocalInputBlocked, string Reason = "", int HiddenApps = 0, DesktopRect[]? Regions = null)
+{
+    public static readonly DesktopPrivacy Nothing = new(DesktopScreenHide.None, DesktopPrivacyStyle.Off, false);
+}
 
 public sealed record DesktopMonitor(int Index, string Name, int X, int Y, int Width, int Height, bool Primary);
 
@@ -449,5 +501,7 @@ public static class DesktopWire
 [JsonSerializable(typeof(DesktopStats))]
 [JsonSerializable(typeof(DesktopTransfer))]
 [JsonSerializable(typeof(DesktopTransferEnd))]
+[JsonSerializable(typeof(DesktopPrivacyScreen))]
+[JsonSerializable(typeof(DesktopPrivacy))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class DesktopJson : JsonSerializerContext;

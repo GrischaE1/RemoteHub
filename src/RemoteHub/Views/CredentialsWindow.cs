@@ -172,6 +172,11 @@ public sealed class CredentialsWindow : FluentWindow
             n.CredentialId = null;
             n.InheritCredentials = true;
         }
+        foreach (var s in _allNodes().OfType<Connection>().SelectMany(k => k.Shares).Where(s => s.CredentialId == c.Id))
+        {
+            s.CredentialId = null;
+            s.InheritCredentials = true;
+        }
         if (_data.DefaultCredentialId == c.Id) _data.DefaultCredentialId = null;
         _data.SavedCredentials.Remove(c);
         _list.SelectedIndex = _data.SavedCredentials.Count > 0 ? 0 : -1;

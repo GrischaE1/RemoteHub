@@ -9,7 +9,9 @@
 param(
     [string]$Version,
     [string]$Configuration = "Release",
-    [string]$OutputPath
+    [string]$OutputPath,
+    # Leaves out the start-time check (Test-StartTime.ps1), e.g. on a machine without a screen session
+    [switch]$SkipStartTime
 )
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -44,7 +46,8 @@ if ($LASTEXITCODE) { throw "agent publish failed" }
 & "$publishAgent\RemoteHubAgent.exe" selftest
 if ($LASTEXITCODE) { throw "agent self-test failed" }
 
-dotnet build "$root\installer\RemoteHub.Agent.Installer\RemoteHub.Agent.Installer.wixproj" -c $Configuration `
+# -t:Rebuild: WiX's incremental build doesn't notice a new MSI name (another version) and then fails to copy it.
+dotnet build "$root\installer\RemoteHub.Agent.Installer\RemoteHub.Agent.Installer.wixproj" -t:Rebuild -c $Configuration `
     -p:Version=$msiVersion -p:ReleaseVersion=$Version -p:AgentPublishDir=$publishAgent -o $out
 if ($LASTEXITCODE) { throw "agent installer build failed" }
 $agentMsi = Join-Path $out "RemoteHub-Agent-$Version-x64.msi"
@@ -58,7 +61,13 @@ if ($LASTEXITCODE) { throw "publish failed" }
 New-Item -ItemType Directory -Force -Path "$publish\Agent" | Out-Null
 Copy-Item $agentMsi "$publish\Agent\RemoteHub-Agent-x64.msi"
 
-dotnet build "$root\installer\RemoteHub.Installer.wixproj" -c $Configuration `
+# Start-time baseline (< 3 s with 500 connections). Not on CI runners: their speed varies too much for a time limit.
+if ($SkipStartTime -or $env:GITHUB_ACTIONS) { Write-Warning "Start-time check skipped." }
+else {
+    & "$PSScriptRoot\Test-StartTime.ps1" -Publish $publish
+}
+
+dotnet build "$root\installer\RemoteHub.Installer.wixproj" -t:Rebuild -c $Configuration `
     -p:Version=$msiVersion -p:ReleaseVersion=$Version -p:PublishDir=$publish -o $out
 if ($LASTEXITCODE) { throw "installer build failed" }
 

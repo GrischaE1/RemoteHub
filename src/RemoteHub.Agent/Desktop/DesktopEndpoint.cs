@@ -35,7 +35,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private readonly ConcurrentDictionary<int, long> _toDevice = new(), _fromDevice = new();
 
     private static readonly string[] Features =
-        [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer, DesktopFeatures.TransferReceipt, DesktopFeatures.TransferOnPaste];
+        [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer, DesktopFeatures.TransferReceipt, DesktopFeatures.TransferOnPaste,
+         DesktopFeatures.UserPrivacy, DesktopFeatures.HideApps];
+
+    // Privacy: what the admin may do, and what is hidden now (as the helper last reported it).
+    private bool _privacyRight, _privacyInputRight;
+    private volatile DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
+    private DesktopPrivacyScreen? _screen; // the admin's privacy screen while on: given to a helper started later, too
+    private string[]? _hiddenApps;         // the apps the user hid – kept here for the next helper, never sent to RemoteHub
+
+    /// <summary>Windows hides a window from captures only from Windows 10 2004 on – before, the privacy screen would black out the picture too.</summary>
+    internal static bool PrivacyScreenSupported => Environment.OSVersion.Version.Build >= 19041;
 
     public async Task RunAsync(WebSocket ws, CancellationToken aborted)
     {
@@ -52,12 +62,15 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         var what = "";
         Task? fromClient = null;
         _clipboard = control ? policy.Clipboard : DesktopClipboardLevel.Off;
+        _privacyRight = control && PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off && identity.InAny(policy.Groups(AgentRight.PrivacyScreen));
+        _privacyInputRight = _privacyRight && policy.PrivacyScreen == PrivacyScreenLevel.WithInputBlock;
+        string[] features = PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off ? [.. Features, DesktopFeatures.PrivacyScreen] : Features;
 
         try
         {
             await SendWs(DesktopWire.Json(DesktopMessage.Hello, new DesktopHello(DesktopProtocol.Version, o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName,
-                identity.Account, new DesktopRights(control, _secureRight, bypass), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
-                policy.ConsentTimeoutSeconds, Features, _clipboard, AgentHost.AgentVersion), DesktopJson.Default.DesktopHello), ct);
+                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
+                policy.ConsentTimeoutSeconds, features, _clipboard, AgentHost.AgentVersion), DesktopJson.Default.DesktopHello), ct);
 
             // ---- Start
             using var startTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -84,7 +97,11 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
 
             // Continuing after a dropped connection: who allowed it carries over (single-use token, same account, a minute).
             var resumed = start.Resume is { Length: > 0 } token ? await DesktopResume.TakeAsync(token, identity.Account) : null;
-            if (resumed is not null) _allowedBy = resumed.AllowedBy;
+            if (resumed is not null)
+            {
+                _allowedBy = resumed.AllowedBy;
+                _screen = _privacyRight && (resumed.Screen?.BlockLocalInput != true || _privacyInputRight) ? resumed.Screen : null;
+            }
 
             // The user is asked only when someone is signed in and using the session; the sign-in and lock screen show nothing
             // private. Started there, the chosen mode is used later: when someone unlocks or signs in, they are asked first.
@@ -131,7 +148,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 Math.Clamp(start.FramesPerSecond, 1, policy.MaxFramesPerSecond), Math.Clamp(start.Quality, 1, policy.MaxQuality), monitor,
                 HoldUserDesktop: !active && !(session.State == DesktopSessionState.Locked && SameUser(session.User, _allowedBy)), Clipboard: _clipboard,
                 VirtualDisplay: o.Config.VirtualDisplay != VirtualDisplayModes.Off && VirtualDisplay.Installed ? o.Config.VirtualDisplay : "",
-                OfferToViewer: start.Features?.Contains(DesktopFeatures.TransferOnPaste) == true);
+                OfferToViewer: start.Features?.Contains(DesktopFeatures.TransferOnPaste) == true,
+                // Continued after a dropped connection, nobody new asked: what the user hid stays hidden.
+                UserHidden: resumed is not null && consent == DesktopConsent.None ? resumed.UserHidden : DesktopScreenHide.None,
+                HiddenApps: resumed is not null && consent == DesktopConsent.None ? resumed.HiddenApps : null, AlwaysHidden: [.. policy.HiddenApps]);
+            _hiddenApps = init.HiddenApps;
+            _privacy = _privacy with { User = init.UserHidden };
             _settings = new DesktopSettings(init.Monitor, init.FramesPerSecond, init.Quality);
             await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.Init, init, HelperJson.Default.HelperInit), ct);
 
@@ -152,6 +174,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             _connected = _live = true;
             Touch();
             _resume = DesktopResume.Issue(identity.Account, _allowedBy, cts);
+            _resume.UserHidden = _privacy.User;
+            _resume.HiddenApps = _hiddenApps;
+            _resume.Screen = _screen;
+            if (_screen is { } resumedScreen) await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, resumedScreen, DesktopJson.Default.DesktopPrivacyScreen), ct);
             await Status(DesktopStatusState.Connected, _viewOnly ? "Connected (view only)." : "Connected.", ct, resume: _resume.Token);
             o.Log.Audit(resumed is not null ? AuditEvent.DesktopResumed : AuditEvent.DesktopStarted,
                 $"Desktop session {(resumed is not null ? "continued" : "started")}: {identity.Account} from {source} – {what}");
@@ -250,8 +276,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 NewConsent();
                 _helper = next;
                 fromHelper = Task.Run(() => HelperLoop(next, ct), ct);
+                // The user who hid their screen keeps it hidden in the new helper; someone else signing in decides for themselves.
                 await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.Init, init with { Consent = mode, Pin = mode == DesktopConsent.Pin ? _pin : "",
-                    Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold, Gdi = _gdi },
+                    Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold, Gdi = _gdi,
+                    UserHidden = ask ? DesktopScreenHide.None : _privacy.User, HiddenApps = ask ? null : _hiddenApps },
                     HelperJson.Default.HelperInit), ct);
                 if (ask)
                 {
@@ -269,8 +297,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         ? $"Desktop: {now.User} signed in to session {target} – the remote desktop of {identity.Account} from {source} continued without asking (policy and right allow it)"
                         : $"Desktop: {now.User} in session {target} allowed the remote desktop of {identity.Account} from {source} ({mode})");
                 }
+                _privacy = _privacy with { Screen = DesktopPrivacyStyle.Off, LocalInputBlocked = false }; // the new helper starts without it
                 await SendPipe([(byte)HelperMessage.Begin], ct);
                 _live = true;
+                if (_screen is { } screen) await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, screen, DesktopJson.Default.DesktopPrivacyScreen), ct);
                 if (ask) await Status(DesktopStatusState.Connected, mode == DesktopConsent.None ? $"{now!.User} signed in – connected." : $"{now!.User} allowed access.", ct);
                 if (_settings.FitWidth > 0 || _settings.Monitor != init.Monitor)
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
@@ -394,7 +424,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
                 case DesktopMessage.Mouse or DesktopMessage.Key when _live && !_viewOnly:
                     Touch();
-                    await SendPipe(m, ct);
+                    if (_privacy.User == DesktopScreenHide.None) await SendPipe(m, ct); // the user hid their screen: no input (the helper checks too)
+                    break;
+                case DesktopMessage.PrivacyScreen when _live && !_viewOnly:
+                    await PrivacyScreen(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacyScreen), ct);
                     break;
                 case DesktopMessage.Clipboard when _live && _clipboard >= DesktopClipboardLevel.Text:
                     Touch();
@@ -437,6 +470,11 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         await Status(DesktopStatusState.Connected, "Your account may not use the sign-in screen on this device.", ct);
                         break;
                     }
+                    if (_privacy.User != DesktopScreenHide.None)
+                    {
+                        await Status(DesktopStatusState.Connected, "The user at the device has hidden their screen – Ctrl+Alt+Del isn't sent until they show it again.", ct);
+                        break;
+                    }
                     // The console: sent by the service itself – Windows accepts it from services, and from session 0 it
                     // goes to the console. Another session (RDP): by the helper in that session.
                     if (o.Desktop!.Sessions.ConsoleSessionId() == _helperSession)
@@ -449,6 +487,53 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
             }
         }
+    }
+
+    /// <summary>The admin turns the privacy screen on, changes it or turns it off – checked here, shown by the helper.</summary>
+    private async Task PrivacyScreen(DesktopPrivacyScreen asked, CancellationToken ct)
+    {
+        var style = DesktopPrivacyStyle.Valid(asked.Style);
+        var refused = style == DesktopPrivacyStyle.Off ? null
+            : !PrivacyScreenSupported ? "Windows on this device is too old for the privacy screen (it needs Windows 10 version 2004 or later)."
+            : policy.PrivacyScreen == PrivacyScreenLevel.Off ? "The privacy screen is turned off on this device (policy)."
+            : !_privacyRight ? "Your account may not use the privacy screen on this device."
+            : asked.BlockLocalInput && !_privacyInputRight ? "Blocking the mouse and keyboard at the device isn't allowed on this device (policy)."
+            : null;
+        if (refused is not null)
+        {
+            o.Log.Audit(AuditEvent.DesktopPrivacyRefused, $"Desktop: privacy screen refused for {identity.Account} from {source} in session {_helperSession}: {refused}");
+            await SendWs(DesktopWire.Json(DesktopMessage.Privacy, _privacy with { Reason = refused }, DesktopJson.Default.DesktopPrivacy), ct);
+            return;
+        }
+        var screen = new DesktopPrivacyScreen(style, style != DesktopPrivacyStyle.Off && asked.BlockLocalInput);
+        _screen = style == DesktopPrivacyStyle.Off ? null : screen;
+        _resume?.Screen = _screen;
+        await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, screen, DesktopJson.Default.DesktopPrivacyScreen), ct);
+    }
+
+    /// <summary>The helper reports what is hidden now: audited when it changed, then passed on to RemoteHub.</summary>
+    private async Task PrivacyReported(DesktopPrivacy now, CancellationToken ct)
+    {
+        var before = _privacy;
+        _privacy = now;
+        _resume?.UserHidden = now.User;
+        if (now.HiddenApps != before.HiddenApps)
+            o.Log.Audit(AuditEvent.DesktopUserHid, $"Desktop: the user in session {_helperSession} hides {now.HiddenApps} app(s) from {identity.Account} from {source}");
+        if (now.User != before.User)
+            o.Log.Audit(AuditEvent.DesktopUserHid, now.User == DesktopScreenHide.None
+                ? $"Desktop: the user in session {_helperSession} shows their screen to {identity.Account} from {source} again"
+                : $"Desktop: the user in session {_helperSession} {(now.User == DesktopScreenHide.Blur ? "blurred" : "hid")} their screen for {identity.Account} from {source}");
+        if (now.Reason.Length == 0 && (now.Screen != before.Screen || now.LocalInputBlocked != before.LocalInputBlocked))
+            o.Log.Audit(AuditEvent.DesktopPrivacyScreen, now.Screen == DesktopPrivacyStyle.Off
+                ? $"Desktop: {identity.Account} from {source} turned the privacy screen off in session {_helperSession}"
+                : $"Desktop: {identity.Account} from {source} turned the privacy screen on in session {_helperSession} ({now.Screen.ToLowerInvariant()}{(now.LocalInputBlocked ? ", mouse and keyboard at the device blocked" : "")})");
+        if (now.Reason.Length > 0)
+        {
+            _screen = null; // it couldn't be shown (or had to come down): a new helper doesn't try again on its own
+            _resume?.Screen = null;
+            o.Log.Audit(AuditEvent.DesktopPrivacyRefused, $"Desktop: privacy screen for {identity.Account} from {source} in session {_helperSession} not shown: {now.Reason}");
+        }
+        await SendWs(DesktopWire.Json(DesktopMessage.Privacy, now, DesktopJson.Default.DesktopPrivacy), ct);
     }
 
     private volatile bool _gdi;
@@ -536,7 +621,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         {
             if (mode == DesktopConsent.Ask) await Status(DesktopStatusState.WaitingForUser, $"Waiting for {user} to allow access…", ct);
             else await Status(DesktopStatusState.EnterPin, $"Ask {user} for the code shown on their screen.", ct, _pinAttempts);
-            var timeout = mode == DesktopConsent.Pin ? TimeSpan.FromMinutes(3) : TimeSpan.FromSeconds(policy.ConsentTimeoutSeconds + 10);
+            // Ask: the helper counts down itself; picking apps to hide stops its countdown, so this is only the last resort.
+            var timeout = mode == DesktopConsent.Pin ? TimeSpan.FromMinutes(3) : TimeSpan.FromSeconds(policy.ConsentTimeoutSeconds + 10 + 180);
             var decided = await Task.WhenAny(consent.Task, Task.Delay(timeout, ct), fromClient, fromHelper);
             return decided == consent.Task ? consent.Task.Result
                 : decided == fromClient || decided == fromHelper ? new HelperConsent(false, "The connection ended before access was granted.")
@@ -611,6 +697,13 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         if (m[0] == (byte)DesktopMessage.Video) Interlocked.Increment(ref _framesSinceSwitch);
                         else if (m[0] == (byte)DesktopMessage.Layout) LogDesktopSwitch(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopLayout).SecureDesktop);
                         await SendWs(m, ct);
+                        break;
+                    case (byte)HelperMessage.HiddenApps when helper == _helper:
+                        _hiddenApps = DesktopWire.ReadJson(m, HelperJson.Default.HelperHiddenApps).Apps;
+                        _resume?.HiddenApps = _hiddenApps;
+                        break;
+                    case (byte)DesktopMessage.Privacy when helper == _helper:
+                        await PrivacyReported(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacy), ct);
                         break;
                     case (byte)DesktopMessage.Clipboard when _live && helper == _helper && _clipboard >= DesktopClipboardLevel.Text:
                         await SendWs(m, ct);
@@ -704,6 +797,15 @@ internal static class DesktopResume
         internal CancellationTokenSource Owner => owner;
 
         public void Update(string allowedBy) => AllowedBy = allowedBy;
+
+        /// <summary>What the user at the device hid: still hidden in the continued connection.</summary>
+        public string UserHidden { get; set; } = DesktopScreenHide.None;
+
+        /// <summary>The admin's privacy screen, if it was on: on again in the continued connection.</summary>
+        public DesktopPrivacyScreen? Screen { get; set; }
+
+        /// <summary>The apps the user hid: still hidden in the continued connection.</summary>
+        public string[]? HiddenApps { get; set; }
 
         /// <summary>The connection broke: usable for <see cref="Window"/>.</summary>
         public void Release()

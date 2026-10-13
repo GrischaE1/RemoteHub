@@ -13,6 +13,7 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        StartupTiming.Mark("app");
 
         _instance = SingleInstance.ClaimOrForward(e.Args);
         if (_instance is null)
@@ -54,6 +55,7 @@ public partial class App : Application
                 Shutdown();
                 return;
             }
+            StartupTiming.Mark("unlock (waits for the user)");
         }
 
         AppData data;
@@ -107,11 +109,21 @@ public partial class App : Application
             catch (Exception ex) { DiagLog.Write("Database maintenance failed: " + ex.Message); }
         });
 
+        StartupTiming.Mark("settings");
         var vm = new MainViewModel(data);
+        StartupTiming.Mark("view model");
         var window = new MainWindow(vm);
+        StartupTiming.Mark("window");
+        window.ContentRendered += (_, _) =>
+        {
+            var connections = vm.AllNodes().OfType<Connection>().ToList();
+            var shares = connections.Sum(c => c.Shares.Count) + vm.AllNodes().OfType<NetworkShare>().Count();
+            StartupTiming.Finish($"{connections.Count} connections, {shares} shares");
+        };
         MainWindow = window;
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         window.Show();
+        StartupTiming.Mark("show");
 
         HandleArgs(window, e.Args);
         _instance.Listen(args => Dispatcher.BeginInvoke(() =>
@@ -176,6 +188,7 @@ public partial class App : Application
         LocalDb.Close();
         _instance?.Dispose();
         if (_instance is not null) CrashReporter.Stop();
+        if (_instance is not null) Telemetry.RunTime.Stop();
         if (_instance is not null) Remoting.AgentInstaller.CleanTemp(TimeSpan.Zero); // staged agent files may hold a device key
         if (_instance is not null) Remoting.AgentDesktopSession.CleanReceived(TimeSpan.FromDays(1));
         base.OnExit(e);

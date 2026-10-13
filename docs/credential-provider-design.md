@@ -1,6 +1,6 @@
 # RemoteHub Agent – Automatic sign-in (credential provider)
 
-Status: Draft v1 – ready for implementation and the separate security review asked for in [agent-desktop-draft.md](agent-desktop-draft.md) §4.4.
+Status: Draft v2 (2026-10-13) – the review questions in §15 are decided; checked against the code of 0.18.0. Ready for implementation and the separate security review asked for in [agent-desktop-draft.md](agent-desktop-draft.md) §4.4.
 Owner: Grischa Ernst
 
 Covers the backlog item "automatic sign-in with stored credentials (credential provider)" from [agent-spec.md](agent-spec.md) §12 and decision 5 in [agent-desktop-draft.md](agent-desktop-draft.md) §2.
@@ -98,6 +98,7 @@ Automatic sign-in works only if **all** of these are on.
 - `DesktopRights` gets `bool AutoSignIn`. It's true only if the policy is on, the right is granted, the provider is registered and the pipe is up. RemoteHub offers the option only when it's true.
 - New feature string `DesktopFeatures.AutoSignIn = "autoSignIn"` in Hello.
 - `DesktopStart` gets `bool AutoSignIn`. It's the operator's intent, and it's valid only when the selected session is the console in state `SignIn`.
+- `DesktopStart` also gets `string? AutoSignInEndAction` (`Lock` | `SignOut`), the connection's setting (§9). The device policy wins when it's set; anything else, or nothing, means `Lock`.
 - New message `SignInRequest` (RemoteHub → agent):
   - binary, **not JSON**: `[type][u16 len][UTF-16LE password bytes]`;
   - no user name, because the agent uses the account that authenticated (§6.3);
@@ -108,7 +109,9 @@ Automatic sign-in works only if **all** of these are on.
   - `SignInFailed`: carries a reason code (wrong password, account locked, password expired, logon type not granted, restricted hours, smart card required, timeout, …). The message is generic and never echoes input.
 - `AgentPolicy.Refused` and the defaults include `AutoSignIn` = nobody.
 
-> Why the password is sent a second time instead of keeping it from the Basic header: today `AgentHost.SignIn` drops the password right after `LogonUser`, which is good. Keeping it for every connection "just in case" would put every operator's password in memory for the whole session. Sending it again only on explicit request keeps the exposure to a few seconds, and only for connections that use the feature.
+> Why the password is sent a second time instead of keeping it from the Basic header (decided, §15 Q4): the agent doesn't keep the Basic sign-in password after `LogonUser`. Keeping it for every connection "just in case" would put every operator's password in memory for the whole session. Sending it again only on explicit request keeps the exposure to a few seconds, and only for connections that use the feature.
+>
+> Baseline to keep in mind: the Basic sign-in already brings the same password into the service as a .NET `string` on every connection (`AgentHost` `TryBasic` → `WindowsAuthenticator.Authenticate` → `LogonUser`), which can't be zeroed. The careful handling of `SignInRequest` (§10.1) keeps the *additional* copy short-lived; it doesn't lower exposure below that baseline.
 
 ### 6.2 Checks in `DesktopEndpoint` (all in the service; RemoteHub's word is never trusted)
 
@@ -120,6 +123,7 @@ The service checks these **in order**. Any failure → `SignInFailed`, an audit 
    - the selected session is the **current console session** (`WTSGetActiveConsoleSessionId`);
    - its state is **`SignIn`**: no user, `LogonUI` running in it;
    - it's not `Locked` or `Disconnected`, and no user is signed in on the console.
+   - Use the agent's existing session detection (`DesktopServices`, the `LogonUI` check since 0.15.11). On Windows 11 and Server 2025 the "Press Ctrl+Alt+Delete" screen runs on the **Default** desktop, not Winlogon's, so the desktop name alone isn't a reliable signal.
 4. The authenticated account has **no other session on the device** (`WTSEnumerateSessions`, compared by SID). On client Windows, signing in on the console would take over an existing RDP session of that account and disconnect the person using it. → Refused with "This account already has a session on the device – connect to that session instead".
 5. Only one pending ticket per device (§7.3). A second request while one is pending → refused.
 6. At most one attempt per desktop connection. At most 3 attempts per account per 15 minutes, counted in a new `SignInGate` bucket keyed by SID. This protects against account lockout when the stored password is out of date.
@@ -156,7 +160,8 @@ SignInRequest(pw) ─────────▶ checks 6.2 (6–7); ticket = {S
                              helper follows the console (existing code); _allowedBy = identity.Account
 ```
 
-- **Consent after sign-in:** the new session belongs to the operator's own account. `IsSelf` already lets it continue without asking. `_allowedBy` is set to `identity.Account` so that `HoldUserDesktop` releases the picture for this user only.
+- **Ctrl+Alt+Del:** since 0.15.7 the agent sets `SoftwareSASGeneration = 1` for as long as it's installed (marker `sas.agent`), so the service's `SendSAS` is accepted without a policy change at sign-in time.
+- **Consent after sign-in:** the new session belongs to the operator's own account. The existing code already handles it: when the account that signed in is the operator's own (`IsSelf`), `DesktopEndpoint` sets `_allowedBy` to it and continues without asking, and `HoldUserDesktop` releases the picture for this user only. No new code is needed here.
   - If anyone else's desktop shows up (a race, fast user switching), the existing ask/PIN rule applies unchanged.
 
 ## 7. Local channel: service ⇄ provider
@@ -244,11 +249,14 @@ SignInRequest(pw) ─────────▶ checks 6.2 (6–7); ticket = {S
 - **Registration in the agent MSI** (component conditioned on `AUTOSIGNIN=1`), with WiX `RegistryKey`, not `regsvr32`:
   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{CLSID}` (default = "RemoteHub Agent");
   - `HKCR\CLSID\{CLSID}\InprocServer32` (default = full path, `ThreadingModel = Apartment`).
-  - The CLSID is a fixed GUID that never changes, written down here when it is generated, so IT can exclude it.
+  - The CLSID is a fixed GUID that never changes, so IT can exclude it: **`{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}`**.
+- **Upgrades** (decided, §15 Q6), the same rule as `VIRTUALDISPLAY`:
+  - `AUTOSIGNIN=1` installs or keeps the provider; `AUTOSIGNIN=0` removes it;
+  - no value (an ordinary update) **keeps what's installed**. MSI doesn't remember properties, so the installer reads the previous choice (the provider's registry key or a value the agent writes at install) and passes it on.
 - **Uninstall,** or an upgrade with `AUTOSIGNIN=0`, removes both keys and the DLL. `Enrollment.Run cleanup` also deletes the keys, in case MSI didn't.
 - **Signing:** the DLL **and** `RemoteHubAgent.exe` must be Authenticode-signed (SHA-256, timestamped).
   - **Blocker:** `.github/workflows/release.yml` has no code signing yet ("Code signing goes here once a certificate is available"). The provider must not ship unsigned. Customers' WDAC/App Control and Smart App Control will block it, and an unsigned DLL in LogonUI can't be told apart from a malicious one.
-  - The build's existing `build.manifest.sig` should cover the DLL's hash too.
+  - RemoteHub has no signed build manifest of its own. (`build.manifest` / `build.manifest.sig` in the publish folder belong to Microsoft's PowerShell.Native package.) Integrity of updates comes from the SHA-256 of the MSI in the release metadata, which `UpdateService` checks. The DLL ships inside the agent MSI and is covered that way, and by its Authenticode signature.
 - **Until there's a certificate (lab only):**
   - Sign the DLL and the agent with a self-signed code-signing certificate that only the lab VMs trust: LocalMachine `Root` + `TrustedPublisher`.
   - That way the signature check below runs unchanged and gets tested too.
@@ -284,15 +292,17 @@ Measures:
 An administrator's desktop is now open on the physical console. Anyone standing at the device can see it and use the keyboard and mouse.
 
 - **Banner:** the existing banner shows (the session has a user now): "Signed in remotely by RemoteHub – *DOMAIN\user*", with Disconnect.
-- **When the connection ends,** the session created by automatic sign-in is **locked** (`WTSDisconnectSession` on client SKUs, or `LockWorkStation` from the helper) **or signed out** (`WTSLogoffSession`). New policy `AutoSignInEndAction`:
-  - `Lock` (default);
-  - `SignOut`.
+- **When the connection ends,** the session created by automatic sign-in is **locked** (`WTSDisconnectSession` on client SKUs, or `LockWorkStation` from the helper) **or signed out** (`WTSLogoffSession`). Decided (§15 Q2):
+  - **`Lock` is the default**, so the operator can come back to open work.
+  - **Per connection** in RemoteHub: *When the connection ends: Lock / Sign out*, inherited like the other agent settings, sent in `DesktopStart` (§6.1).
+  - **Device policy** `AutoSignInEndAction` (`Lock` | `SignOut`) **wins** when set, so IT can force `SignOut` on shared devices.
+  - With `SignOut`, RemoteHub warns before disconnecting that unsaved work in that session is lost.
   - "Ends" means any of: closed by RemoteHub, Disconnect on the device, idle timeout, a refusal, a dropped connection after the resume window (1 min), and service stop.
 - **Crash safety:**
   - The service writes the session id + logon time of each automatically signed-in session to `%ProgramData%\RemoteHub\Agent\autosignin.json` (no secrets; ACL SYSTEM + Administrators, same as the rest of the folder).
   - At service start, and when a desktop connection ends, every listed session that still exists and has no live agent connection gets the end action. Then the entry is removed.
 - **Resume token:** continuing within a minute keeps the session unlocked (existing behaviour). After that minute, the end action runs.
-- **Known limit:** while connected, a person at the device sees and can use the console. There is no privacy mode or input blocking yet (backlog: "privacy mode"). The documentation must say so, and IT should enable the feature only where that's acceptable.
+- **Known limit (accepted for v1, §15 Q5):** while connected, a person at the device sees and can use the console. There is no privacy mode or input blocking yet; it stays in phase 2 (§12). The README and the install dialog must say so, and IT should enable the feature only where that's acceptable.
 
 ## 10. Handling secrets in .NET (service and RemoteHub)
 
@@ -310,7 +320,7 @@ An administrator's desktop is now open on the physical console. Anyone standing 
 
 ### 10.2 RemoteHub
 
-- **Convert just in time:** take the password from the stored credential (already DPAPI + optional startup lock) as `SecureString` → unmanaged buffer (`Marshal.SecureStringToGlobalAllocUnicode`) → copy into the outgoing frame → `ZeroFreeGlobalAllocUnicode` and zero the frame buffer after the send.
+- **Convert just in time:** stored passwords are sealed in the local database's `secrets` table and are a plain `string` in `CredentialSet.Password` once loaded – there is no `SecureString` path, and that string can't be zeroed. So: encode it into the outgoing binary frame only when sending (no other copy, never through JSON), zero the frame buffer after the send, and don't keep any further copy. A password typed in for this connection follows the same path.
 - **Send conditions:**
   - only when the agent sent `SignInReady` in *this* connection;
   - the pinned fingerprint matched;
@@ -345,7 +355,7 @@ An administrator's desktop is now open on the physical console. Anyone standing 
 ### Agent (`src/RemoteHub.Agent`)
 - [ ] `AgentPolicy`: add `AgentRight.AutoSignIn` (default nobody), `NoUserBehavior` (`SignInScreen` default | `AutoSignIn`) and `AutoSignInEndAction` (`Lock` default | `SignOut`). Include them in `Refused`. Add tests in `AgentDesktopTests`.
 - [ ] `ShellIdentity`: carry the user SID and the resolved `DOMAIN\user`.
-- [ ] `Desktop/DesktopProtocol.cs`: `DesktopRights.AutoSignIn`, `DesktopFeatures.AutoSignIn`, `DesktopStart.AutoSignIn`, message `SignInRequest` (binary), states `SignInReady` / `SigningIn` / `SignedIn` / `SignInFailed` + reason codes.
+- [ ] `Desktop/DesktopProtocol.cs`: `DesktopRights.AutoSignIn` (the record is `DesktopRights(Control, SecureDesktop, ConsentBypass)` today), `DesktopFeatures.AutoSignIn`, `DesktopStart.AutoSignIn` and `DesktopStart.AutoSignInEndAction`, message `SignInRequest` (binary), states `SignInReady` / `SigningIn` / `SignedIn` / `SignInFailed` + reason codes.
 - [ ] New `Desktop/AutoSignInBroker.cs`: the pipe (§7.1), peer checks (§7.2), ticket (§7.3), protected memory (§10.1), cancel on every end condition.
 - [ ] New `Desktop/AutoSignInSessions.cs`: the end action and crash safety (§9).
 - [ ] `DesktopEndpoint`: checks in §6.2, flow in §6.4, `_allowedBy` after a successful sign-in, SID check after sign-in.
@@ -363,12 +373,13 @@ An administrator's desktop is now open on the physical console. Anyone standing 
 - [ ] libFuzzer target for the parser; unit tests for packing.
 
 ### Installer and build
-- [ ] `installer/RemoteHub.Agent.Installer/Package.wxs`: property `AUTOSIGNIN` (Secure); a component with the DLL and the two registry keys, conditioned on it; removed when uninstalling or when set to 0.
-- [ ] `build/build-installer.ps1`, `ci.yml`, `release.yml`: build the vcxproj; **Authenticode signing of the DLL and the agent exe (blocker)**; include the DLL in `build.manifest`.
+- [ ] `installer/RemoteHub.Agent.Installer/Package.wxs`: property `AUTOSIGNIN` (Secure); a component with the DLL and the two registry keys (CLSID `{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}`), conditioned on it; removed when uninstalling or when set to 0; **kept on an update without the property** (§8.4).
+- [ ] `build/build-installer.ps1`, `ci.yml`, `release.yml`: build the vcxproj; **Authenticode signing of the DLL and the agent exe (blocker)**; the release build fails if the DLL isn't signed by the release certificate.
 - [ ] Agent install dialog (`AgentInstallDialog.cs`): checkbox "Allow automatic sign-in (installs a credential provider)", off, with a short warning text.
 
 ### RemoteHub (`src/RemoteHub`)
-- [ ] `RdpOptions`: `AgentAutoSignIn` (bool?, inherited, default false) + the editor UI under *PowerShell remoting* next to *Remote desktop through*. Run the ui-consistency process for the editor and tab changes.
+- [ ] `RdpOptions`: `AgentAutoSignIn` (bool?, inherited, default false) and `AgentAutoSignInEndAction` (`Lock` default | `SignOut`, inherited) + the editor UI under *PowerShell remoting* next to *Remote desktop through*. Run the ui-consistency process for the editor and tab changes.
+- [ ] Disconnect with end action `SignOut`: warn that unsaved work in the signed-in session is lost.
 - [ ] `AppPolicy`: `DisableAgentAutoSignIn`.
 - [ ] `AgentDesktopSession` / `AgentDesktopView`: the option in the start dialog (only when `Hello.Rights.AutoSignIn`), handle `SignInReady` → send the password once (§10.2), show the `SignInFailed` reasons.
 - [ ] `AuditLog`: the new entries.
@@ -413,7 +424,9 @@ An administrator's desktop is now open on the physical console. Anyone standing 
   - account locked;
   - "Deny log on locally";
   - legal notice shown;
-  - `DisableCAD = 0`.
+  - `DisableCAD = 0`, including the "Press Ctrl+Alt+Delete" screen on the Default desktop (Windows 11, Server 2025);
+  - end action: `Lock` and `SignOut` from the connection, and the device policy overriding the connection.
+- Installer: update without `AUTOSIGNIN` keeps the provider; `AUTOSIGNIN=0` removes it and both registry keys.
 - Entra ID and hybrid joined devices (not proven yet):
   - Entra ID joined, cloud-only account (`AzureAD\user@tenant`): first check the agent's own sign-in, which uses a network logon.
   - Entra ID joined: the provider's password sign-in through Negotiate/CloudAP, the first sign-in on the device without internet, the passwordless policy, and Windows Hello for Business being required.
@@ -424,10 +437,15 @@ An administrator's desktop is now open on the physical console. Anyone standing 
 - Robustness: the provider registered while the service is stopped and while the pipe is flooded → the normal sign-in screen and Windows Hello PIN still work.
 - `ExcludedCredentialProviders` with our CLSID → the provider is gone and the agent reports the feature off.
 
-## 15. Security review – questions for the reviewer
+## 15. Security review – decisions (2026-10-13)
 
-1. Is SYSTEM + LogonUI image + session id enough to identify the provider at the pipe? An alternative is an ALPC port or an RPC interface with `RPC_IF_ALLOW_LOCAL_ONLY` and a security callback.
-2. Is `Lock` the right default end action, or should `SignOut` be the default, so no admin profile stays loaded on shared devices?
-3. Should the right be limited to non-built-in accounts (e.g. refuse RID 500), or to members of a dedicated group only?
-4. Is re-sending the password (§6.1) better than keeping it protected from the Basic sign-in for the connection's lifetime?
-5. Does the residual risk T6 (a person at the console during the session) need privacy mode before release, rather than in phase 2?
+The questions from v1, decided by the owner. The reviewer may still challenge them.
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | Is SYSTEM + LogonUI image + session id enough to identify the provider at the pipe, or use ALPC / local RPC with a security callback? | **Named pipe**, as in §7: less native code in LogonUI, easier to review and fuzz. |
+| 2 | `Lock` or `SignOut` as the default end action? | **`Lock` by default**, configurable **per connection** in RemoteHub; the **device policy wins** when set (§9). |
+| 3 | Limit the right to non-built-in accounts (refuse RID 500) or a dedicated group? | **No extra rule:** any account that holds the `AutoSignIn` right (default nobody) and authenticated the connection. |
+| 4 | Re-send the password, or keep it protected from the Basic sign-in for the connection? | **Re-send on request** (§6.1), keeping the extra copy to seconds, and only for connections that use the feature. |
+| 5 | Does T6 (a person at the console) need privacy mode before release? | **No:** v1 ships with the banner, the end action and the documented limit (§9); privacy mode stays in phase 2. |
+| 6 | (added) What does an agent update without `AUTOSIGNIN` do? | **Keeps what's installed**, like `VIRTUALDISPLAY` (§8.4). |

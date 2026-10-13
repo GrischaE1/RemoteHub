@@ -84,7 +84,7 @@ public sealed class SettingsOverviewWindow : FluentWindow
         if (SettingsStore.UsingLocalFallback) storage.Add(("Note", "The shared file wasn't available at start-up – the settings of this PC are used."));
         if (SettingsStore.MigratedFrom is { } from) storage.Add(("Moved", $"Settings of RDP Manager were copied from {from} (the old folder is kept as a backup)."));
 
-        var (_, credSource) = Inheritance.ResolveCredentials(null, d);
+        var (_, credSource) = Inheritance.ResolveCredentials((NodeBase?)null, d);
         var defaults = new List<(string, string)>
         {
             ("Credentials", credSource == "global defaults" ? (d.DefaultCredentials.Password is { Length: > 0 } ? "User name and password set" : "User name set, password asked when connecting") : credSource),

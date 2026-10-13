@@ -52,6 +52,13 @@ Remove-Item $export -ErrorAction SilentlyContinue
 
 # Stop a running watcher and drop requests nobody waits for any more.
 if (Get-ScheduledTask -TaskName $LabTask -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $LabTask }
+# Stopping the task leaves the request it was running (and that one's harness calls) alive - end every process of
+# the lab account, so nothing from the old watcher keeps working on the VMs next to the new one.
+$labUser = ($account -split '\\')[-1]
+Get-CimInstance Win32_Process | Where-Object {
+    $o = Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction SilentlyContinue
+    $o -and $o.User -eq $labUser
+} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Get-ChildItem (Join-Path $LabRoot 'queue') -File -ErrorAction SilentlyContinue | Remove-Item
 
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $LabRoot `

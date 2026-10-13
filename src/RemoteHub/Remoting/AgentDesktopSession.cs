@@ -300,6 +300,37 @@ public sealed partial class AgentDesktopSession : SessionBase
     public void SendKey(RemoteKey k) { if (Phase == DesktopPhase.Live && !ViewOnly) _client?.Send(DesktopWire.Key(k)); }
     public void SendCtrlAltDel() { if (Phase == DesktopPhase.Live && !ViewOnly) _client?.Send(DesktopWire.Empty(DesktopMessage.SecureAttention)); }
 
+    /// <summary>What the device hides now: the user's own choice and the privacy screen (as the agent last reported it).</summary>
+    [ObservableProperty] private DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
+
+    /// <summary>The device's screen can be blacked out from here (agent, Windows version, right and policy allow it).</summary>
+    public bool CanUsePrivacyScreen => Supports(DesktopFeatures.PrivacyScreen) && Hello?.Rights.PrivacyScreen == true;
+
+    /// <summary>With the privacy screen, the device's mouse and keyboard can be blocked too (policy).</summary>
+    public bool CanBlockLocalInput => CanUsePrivacyScreen && Hello?.Rights.PrivacyInputBlock == true;
+
+    /// <summary>The user at the device hid their screen: no picture or a blurred one, and no input from here.</summary>
+    public bool HiddenByUser => Privacy.User != DesktopScreenHide.None;
+
+    /// <summary>
+    /// With the privacy screen, the device's mouse and keyboard are blocked too – unless the admin unticked it in this
+    /// session (or the device's policy doesn't allow it, <see cref="CanBlockLocalInput"/>).
+    /// </summary>
+    public bool BlockLocalInput { get; set; } = true;
+
+    /// <summary>The privacy screen on the device (<see cref="DesktopPrivacyStyle"/>; Off turns it off), blocking the device's input as <see cref="BlockLocalInput"/> says.</summary>
+    public void SetPrivacyScreen(string style)
+    {
+        if (Phase != DesktopPhase.Live || ViewOnly || !CanUsePrivacyScreen) return;
+        _client?.Send(DesktopWire.Json(DesktopMessage.PrivacyScreen, new DesktopPrivacyScreen(style, BlockLocalInput && CanBlockLocalInput), DesktopJson.Default.DesktopPrivacyScreen));
+    }
+
+    /// <summary>On with the message (the usual choice), or off – for the tab's menu and the detached window.</summary>
+    public void TogglePrivacyScreen() =>
+        SetPrivacyScreen(Privacy.Screen == DesktopPrivacyStyle.Off ? DesktopPrivacyStyle.Message : DesktopPrivacyStyle.Off);
+
+    partial void OnPrivacyChanged(DesktopPrivacy value) => OnPropertyChanged(nameof(HiddenByUser));
+
     /// <summary>
     /// Sends this PC's clipboard when it changed (called when it changes and when the tab gets the focus): text, and with
     /// newer agents images and files – as far as the device's policy allows.
@@ -773,6 +804,15 @@ public sealed partial class AgentDesktopSession : SessionBase
                 if (!end.Ok && end.Reason.Length > 0 && end.Reason != "replaced")
                     _ui.BeginInvoke(() => { if (gen == _generation) ShowNotice(end.Reason); });
                 break;
+            case DesktopMessage.Privacy:
+                var privacy = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacy);
+                _ui.BeginInvoke(() =>
+                {
+                    if (gen != _generation) return;
+                    Privacy = privacy;
+                    if (privacy.Reason.Length > 0) ShowNotice(privacy.Reason);
+                });
+                break;
             case DesktopMessage.Status:
                 var status = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopStatus);
                 _ui.BeginInvoke(() => { if (gen == _generation) OnStatus(status); });
@@ -903,6 +943,7 @@ public sealed partial class AgentDesktopSession : SessionBase
     private void End(SessionState state, string why)
     {
         Paused = "";
+        Privacy = DesktopPrivacy.Nothing;
         Drop();
         Phase = DesktopPhase.Ended;
         State = state;

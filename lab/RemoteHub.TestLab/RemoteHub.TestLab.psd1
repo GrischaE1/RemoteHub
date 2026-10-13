@@ -14,7 +14,9 @@
         'Set-LabAutoLogon', 'Clear-LabAutoLogon', 'Wait-LabDesktop',
         'Invoke-LabInSession', 'Lock-LabSession', 'Unlock-LabSession',
         'Get-LabHostAddress', 'Install-LabAgent', 'Get-LabAgentHealth', 'Get-LabAgentState', 'Uninstall-LabAgent',
-        'Save-LabAgentEvidence'
+        'Save-LabAgentEvidence', 'Get-LabAgentMsi', 'Get-LabMsiVersion', 'Update-LabAgent', 'Invoke-LabAgentCommand', 'New-LabBrokenMsi',
+        'Set-LabAgentPolicy', 'Get-LabAgentPolicy', 'Enable-LabShareServers', 'Invoke-LabShare',
+        'Invoke-LabTool', 'Invoke-LabProbe', 'Invoke-LabSetupScript', 'Get-LabWinRmState'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

@@ -51,6 +51,7 @@ public partial class EditorWindow : FluentWindow
         BuildNav();
         if (_vm.IsDefaults) InitAppPages();
         Show(page ?? (_vm.IsDefaults ? PageAppSettings : "PageGeneral"));
+        Loaded += (_, _) => FitNavigation();
         Loaded += (_, _) =>
         {
             if (_vm.IsDefaults) return;
@@ -60,6 +61,26 @@ public partial class EditorWindow : FluentWindow
     }
 
     // ------------------------------------------------------------------ navigation
+
+    /// <summary>
+    /// The window grows (within the screen's work area) until every page in the navigation fits – the settings of
+    /// RemoteHub list more pages than a connection's, and they shouldn't need scrolling.
+    /// </summary>
+    private void FitNavigation()
+    {
+        UpdateLayout();
+        var missing = NavScroll.ExtentHeight - NavScroll.ViewportHeight;
+        if (missing <= 0) return;
+        // The work area of the monitor the window is on (not only the primary one), in WPF's units.
+        var screen = System.Windows.Forms.Screen.FromHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle).WorkingArea;
+        var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this);
+        var (top, bottom) = (screen.Top / dpi.DpiScaleY, screen.Bottom / dpi.DpiScaleY);
+        var grow = Math.Min(Math.Ceiling(missing), bottom - top - Height);
+        if (grow <= 0) return;
+        Height += grow;
+        Top = Math.Max(top, Top - grow / 2); // stays centred where it opened
+        if (Top + Height > bottom) Top = Math.Max(top, bottom - Height);
+    }
 
     private void BuildNav()
     {
@@ -207,6 +228,21 @@ public partial class EditorWindow : FluentWindow
             TelemetryPolicyText.Text = "Turned off by your organisation.";
             TelemetryPolicyText.Visibility = Visibility.Visible;
         }
+        PrivacyButton.Click += (_, _) =>
+        {
+            // Installed next to RemoteHub.exe; Notepad, like the diagnostic log (.md often has no viewer).
+            var path = Path.Combine(AppContext.BaseDirectory, "PRIVACY.md");
+            try
+            {
+                if (!File.Exists(path)) throw new FileNotFoundException("PRIVACY.md is missing from the program folder.");
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("notepad.exe", $"\"{path}\"") { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                TelemetryPolicyText.Text = $"The privacy statement can't be opened: {ex.Message}";
+                TelemetryPolicyText.Visibility = Visibility.Visible;
+            }
+        };
 
         // Security & storage
         RefreshDataPage();
@@ -313,7 +349,7 @@ public partial class EditorWindow : FluentWindow
         if (!AppPolicy.TelemetryDisabled)
         {
             var on = TelemetryToggle.IsChecked == true;
-            if (ui.TelemetryEnabled && !on) { Telemetry.ForgetInstallId(); DiagLog.Write("Telemetry: turned off"); }
+            if (ui.TelemetryEnabled && !on) { Telemetry.ForgetInstallId(); Telemetry.RunTime.Forget(); DiagLog.Write("Telemetry: turned off"); }
             ui.TelemetryEnabled = on;
         }
     }

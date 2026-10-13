@@ -39,7 +39,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- Navigation: one page per group (built in code, depends on what is edited) -->
-            <ScrollViewer Margin="12,0,6,12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer x:Name="NavScroll" Margin="12,0,6,12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel x:Name="Nav" AutomationProperties.Name="Settings pages" />
             </ScrollViewer>
 
@@ -304,8 +304,9 @@
 
                     <TextBlock Text="Privacy" Style="{StaticResource SectionHeader}" />
                     <ui:ToggleSwitch x:Name="TelemetryToggle" Content="Send anonymous usage data and crash reports" Margin="0,0,0,8" />
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None"
-                               Text="When on, RemoteHub sends one small message each time it starts, so we know roughly how many installs are in use: the event &quot;app_start&quot;, the RemoteHub version, the update channel, Windows 10 / 11 / Server, the processor type (x64 / arm64) and a random install ID created on this PC. If RemoteHub crashed, the next start also sends a crash report: the error type, the error message and the program's call stack – with paths, user, computer and server names, IP addresses and quoted values removed. Nothing about your connections, servers, credentials, user or computer name is sent. Like any web request, the server sees your public IP address. Turning it off deletes the install ID, and crashes are no longer reported." />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10"
+                               Text="When on, RemoteHub sends small anonymous messages when it starts, so we know roughly how many installs are in use and how they're used: the RemoteHub version, the update channel, Windows 10 / 11 / Server, the processor type (x64 / arm64), a random install ID created on this PC, how many connections, agents, network shares and folders you have (numbers only), and how long RemoteHub ran last time. If RemoteHub crashed, the next start also sends a crash report: the error type, the error message and the program's call stack – with paths, user, computer and server names, IP addresses and quoted values removed. Nothing about your connections, servers, credentials, user or computer name is sent. Like any web request, the server sees your public IP address. The data is kept for 365 days. Turning it off deletes the install ID, and crashes are no longer reported." />
+                    <ui:Button x:Name="PrivacyButton" Content="Open privacy statement" Icon="{ui:SymbolIcon Document24}" />
                     <TextBlock x:Name="TelemetryPolicyText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0" Visibility="Collapsed" />
                 </StackPanel>
 
