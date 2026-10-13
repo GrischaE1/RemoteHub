@@ -299,3 +299,10 @@ even the implied warranty of merchantability or fitness for a particular purpose
   [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 - Both files are installed next to `RemoteHub.exe` and `RemoteHubAgent.exe` (`LICENSE.txt`), and RemoteHub shows them
   under *Settings → Help & about*.
+
+## Contributing
+
+Contributions are welcome – see [CONTRIBUTING.md](CONTRIBUTING.md). Before a first pull request is merged, contributors
+agree to the [Contributor License Agreement](CLA.md) with a comment in the pull request: they keep the copyright to
+their work and allow the project to license it under other terms too (for example a commercial license), so RemoteHub
+can offer one later. Security problems: [SECURITY.md](SECURITY.md).
