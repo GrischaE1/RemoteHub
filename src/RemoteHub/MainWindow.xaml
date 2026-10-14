@@ -222,6 +222,10 @@
                                     <Trigger Property="IsExpanded" Value="True">
                                         <Setter TargetName="ItemsHost" Property="Visibility" Value="Visible" />
                                     </Trigger>
+                                    <!-- A jump host: what is reached through it sits a step further in than a folder's items -->
+                                    <DataTrigger Binding="{Binding IsJumpHost}" Value="True">
+                                        <Setter TargetName="ItemsHost" Property="Margin" Value="12,0,0,0" />
+                                    </DataTrigger>
                                     <Trigger Property="IsMouseOver" SourceName="Border" Value="True">
                                         <Setter TargetName="Border" Property="Background" Value="{DynamicResource TreeViewItemBackgroundPointerOver}" />
                                     </Trigger>
