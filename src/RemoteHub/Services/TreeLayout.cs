@@ -31,7 +31,7 @@ public static class TreeLayout
         var hosts = items.OfType<Connection>().Where(c => c.JumpHostId is null).ToDictionary(c => c.Id);
         foreach (var n in items.ToList())
         {
-            if (n.JumpHostId is { } id && id != n.Id && hosts.TryGetValue(id, out var host) && n is Connection or Folder
+            if (n.JumpHostId is { } id && id != n.Id && hosts.TryGetValue(id, out var host) && n is Connection or Folder or NetworkShare
                 && !n.Descendants().Any(d => d.JumpHostId is not null))
             {
                 items.Remove(n);
@@ -69,11 +69,10 @@ public static class TreeLayout
         if (container is null) return null;
         if (node == container || Containers(container).Contains(node)) return "An item can't be moved into itself.";
         if (container is NetworkShare) return "Only connections and folders can be placed here.";
-        if (node is NetworkShare && (container is Connection || container.JumpHost is not null))
-            return "Network shares can't be reached through a jump host yet – only connections and folders can be placed below one.";
         if (container is Connection target)
         {
-            if (node is not (Connection or Folder)) return "Only connections and folders can be placed under a connection.";
+            if (node is not (Connection or Folder or NetworkShare { Server: null }))
+                return "Only connections, folders and network shares can be placed under a connection.";
             if (target.JumpHost is { } outer)
                 return $"{target.Name} is reached through {outer.Name}. Only one jump host is supported for now.";
         }

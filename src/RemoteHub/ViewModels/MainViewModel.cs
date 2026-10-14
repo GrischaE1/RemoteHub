@@ -249,12 +249,10 @@ public sealed partial class MainViewModel : ObservableObject
         {
             var options = Inheritance.ResolveOptions(n, Data);
             n.TagBrush = Views.ColorTags.Brush(options.ColorTag);
+            n.RefreshRoute();
             if (n is Connection c)
-            {
                 c.AgentMode = c.Agent is not { Status: AgentStatus.Installed } ? AgentMode.None
                             : Inheritance.UsesAgent(c, Data) ? AgentMode.Active : AgentMode.Available;
-                c.RefreshRoute();
-            }
         }
     }
 

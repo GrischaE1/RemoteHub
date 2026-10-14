@@ -6,15 +6,19 @@ namespace RemoteHub.Remoting.Shares;
 
 /// <summary>
 /// SFTP (SSH.NET). The server's host key must match the fingerprint accepted for the share; the first time, or when
-/// it changed, the user is asked (<paramref name="trust"/>) – nothing is sent before that.
+/// it changed, the user is asked (<paramref name="trust"/>) – nothing is sent before that. Behind a jump host it connects
+/// to <paramref name="forward"/>'s local port; the key is still checked against the share's own fingerprint.
 /// </summary>
 public sealed class SftpShare : ShareFileSystem
 {
     private readonly SftpClient _client;
+    private readonly LocalForward? _forward;
 
-    public SftpShare(string host, int port, string startFolder, CredentialSet credentials, string? trusted, Func<TrustRequest, bool> trust, Action<string> accepted)
+    public SftpShare(string host, int port, string startFolder, CredentialSet credentials, string? trusted, Func<TrustRequest, bool> trust, Action<string> accepted,
+        LocalForward? forward = null)
     {
         if (credentials.IsEmpty) throw new ShareException("SFTP needs an account – set one for the share or its server.");
+        _forward = forward;
         var user = UserName(credentials);
         var password = credentials.Password ?? "";
         var keyboard = new KeyboardInteractiveAuthenticationMethod(user);
@@ -22,7 +26,7 @@ public sealed class SftpShare : ShareFileSystem
         {
             foreach (var p in e.Prompts) if (p.Request.Contains("password", StringComparison.OrdinalIgnoreCase)) p.Response = password;
         };
-        var info = new ConnectionInfo(host, port, user, new PasswordAuthenticationMethod(user, password), keyboard) { Timeout = TimeSpan.FromSeconds(20) };
+        var info = new ConnectionInfo(forward?.Host ?? host, forward?.Port ?? port, user, new PasswordAuthenticationMethod(user, password), keyboard) { Timeout = TimeSpan.FromSeconds(20) };
         // Without a limit a stalled server would hang the tab (SSH.NET waits forever by default).
         _client = new SftpClient(info) { OperationTimeout = TimeSpan.FromSeconds(60) };
         var refused = false;
@@ -109,5 +113,6 @@ public sealed class SftpShare : ShareFileSystem
     {
         try { _client.Disconnect(); } catch { /* connection already gone */ }
         _client.Dispose();
+        _forward?.Dispose();
     }
 }

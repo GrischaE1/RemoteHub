@@ -402,6 +402,7 @@ public partial class MainWindow : FluentWindow
                 Width = Math.Max(800, SessionPanel.ActualWidth),
                 Height = Math.Max(600, SessionPanel.ActualHeight + 80),
             };
+            WindowPlacement.CenterOn(win, this);
             win.DockRequested += () => ToggleDetach(s);
             win.Activated += (_, _) => { if (_vm.SelectedSession != s) _vm.SelectedSession = s; };
             _detached[s] = win;
@@ -660,11 +661,7 @@ public partial class MainWindow : FluentWindow
         CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault || oc.Agent is { Status: AgentStatus.Installed }));
         CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
         CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
-        // Below a jump host shares don't go through yet: offered, but off, with the reason.
-        var jumped = n?.JumpHost is not null;
-        CmAddShare.IsEnabled = !jumped;
-        CmAddShare.ToolTip = jumped ? NotThroughJumpHost : "An SMB, SFTP, FTP or WebDAV share of this server – opened in a file tab, no agent needed";
-        ToolTipService.SetShowOnDisabled(CmAddShare, true);
+        CmAddShare.ToolTip = AddShareTip(n as Connection);
         CmMoveUnder.Visibility = V(n is Connection or Folder);
         if (n is Connection or Folder) FillMoveUnder(CmMoveUnder, n);
         CmConnectAll.Visibility = V(n is Folder);
@@ -720,7 +717,7 @@ public partial class MainWindow : FluentWindow
         var rdp = _vm.FindSession(c);
         var agentDesktop = _vm.FindAgentDesktop(c);
         var viaAgent = AgentDesktopFor(c);
-        var jumped = c.JumpHost is not null; // shares don't go through a jump host yet
+        var jumped = c.JumpHost is not null;
         if (viaAgent)
         {
             cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
@@ -752,11 +749,11 @@ public partial class MainWindow : FluentWindow
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
         if (st == PsRemotingState.Unavailable && !UsesAgent(c))
             cm.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
-        // Network shares need neither remoting nor the agent.
+        // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
         foreach (var share in c.Shares)
-            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), !jumped,
-                jumped ? NotThroughJumpHost : $"{share.ProtocolLabel} · {share.Address}"));
-        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), !jumped, jumped ? NotThroughJumpHost : null));
+            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), WhyNotOpen(share) is null,
+                WhyNotOpen(share) ?? $"{share.ProtocolLabel} · {share.Address}"));
+        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
         cm.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
             SymbolRegular.Shield24, () => _ = InstallAgent(c)));
     }
@@ -1640,7 +1637,7 @@ public partial class MainWindow : FluentWindow
     private void OpenAuditLog(Connection? c)
     {
         _vm.SaveNow(); // pending changes are in the log too
-        new AuditLogWindow(c) { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.Show();
+        new AuditLogWindow(_vm.AllNodes().OfType<Connection>(), c) { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.Show();
     }
     private void CmDelete_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _ = DeleteNode(n); }
 
@@ -1801,7 +1798,7 @@ public partial class MainWindow : FluentWindow
         var names = string.Join("\n", list.Take(12).Select(c => "• " + c.Name)) + (list.Count > 12 ? $"\n… and {list.Count - 12} more" : "");
         if (!await Dialogs.Confirm(this, "Delete unused connections",
                 $"Delete these {list.Count} connection(s), {MainViewModel.FilterText(_vm.UnusedDays)}?\n\n{names}\n\n" +
-                "Their saved credentials and agent pairing go with them. A backup (Settings → Backup) can bring them back.", "Delete")) return;
+                "Their saved credentials and agent pairing go with them. A backup (Settings → Security & storage → Export backup…) can bring them back.", "Delete")) return;
         foreach (var c in list)
         {
             foreach (var s in _vm.Sessions.Where(s => s.Connection == c).ToList()) s.Close();

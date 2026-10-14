@@ -338,12 +338,21 @@
                         <ui:Button x:Name="ImportButton" Content="Import backup…" Icon="{ui:SymbolIcon ArrowImport24}"
                                    ToolTip="Closes this window first (unsaved changes here are discarded)" />
                     </StackPanel>
+                </StackPanel>
 
-                    <TextBlock Text="Audit log" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                <StackPanel x:Name="PageLogs" Visibility="Collapsed">
+                    <TextBlock Text="Audit log" Style="{StaticResource SectionHeader}" Margin="0,0,0,4" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
                                Text="What happened in RemoteHub on this PC: sessions, changes to connections and settings, copied passwords, file transfers, recordings, backups. Never passwords or file contents. Kept in the encrypted database; a hash chain shows if an entry was changed or removed." />
+                    <TextBlock Text="Keep entries for" Margin="0,0,0,4" />
+                    <ComboBox x:Name="AuditRetentionBox" Width="360" HorizontalAlignment="Left" />
+                    <TextBlock x:Name="AuditRetentionText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,10" />
                     <ui:Button x:Name="AuditButton" Content="Open audit log…" Icon="{ui:SymbolIcon DocumentBulletList24}" />
 
+                    <TextBlock Text="Diagnostic log" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                               Text="For troubleshooting: connection and password-prompt events – no passwords, usernames or host names. A text file on this PC." />
+                    <ui:Button x:Name="HelpLogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}" />
                 </StackPanel>
 
                 <StackPanel x:Name="PageRecordings" Visibility="Collapsed">
@@ -379,10 +388,8 @@
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
                         <ui:Button x:Name="AboutButton" Content="About RemoteHub…" Icon="{ui:SymbolIcon Info24}" Margin="0,0,8,0"
                                    ToolTip="Version, build, .NET, Windows, remote desktop client and where the program, settings and log are" />
-                        <ui:Button x:Name="OverviewButton" Content="Settings overview…" Icon="{ui:SymbolIcon TextBulletListSquare24}" Margin="0,0,8,0"
+                        <ui:Button x:Name="OverviewButton" Content="Settings overview…" Icon="{ui:SymbolIcon TextBulletListSquare24}"
                                    ToolTip="Every setting in one place, with Copy as text for support" />
-                        <ui:Button x:Name="HelpLogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}"
-                                   ToolTip="Connection and password-prompt events – no passwords, usernames or host names." />
                     </StackPanel>
 
                     <TextBlock Text="License" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />

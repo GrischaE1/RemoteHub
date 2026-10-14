@@ -36,7 +36,7 @@ public partial class MainWindow
     private void NewShare_Click(object sender, RoutedEventArgs e)
     {
         var share = new NetworkShare();
-        var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew()); // not below a jump host (yet)
+        var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew());
         share.Parent = parent;
         if (new ShareEditorWindow(share, null, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         _vm.Add(share, parent);
@@ -88,7 +88,10 @@ public partial class MainWindow
         e.Handled = true;
         share.IsSelected = true;
         var cm = new ContextMenu();
-        var open = new MenuItem { Header = "Open", FontWeight = FontWeights.SemiBold, Icon = new SymbolIcon(Enum.Parse<SymbolRegular>(share.DisplaySymbol)) };
+        var why = WhyNotOpen(share);
+        var open = new MenuItem { Header = "Open", FontWeight = FontWeights.SemiBold, Icon = new SymbolIcon(Enum.Parse<SymbolRegular>(share.DisplaySymbol)),
+            IsEnabled = why is null, ToolTip = why };
+        ToolTipService.SetShowOnDisabled(open, true);
         open.Click += (_, _) => OpenShare(share);
         cm.Items.Add(open);
         cm.Items.Add(new Separator());
@@ -96,7 +99,13 @@ public partial class MainWindow
         var edit = MenuEntry("Edit…", SymbolRegular.Edit24, () => EditShare(share));
         edit.InputGestureText = "F2";
         cm.Items.Add(edit);
-        if (share.IsStandalone) cm.Items.Add(MenuEntry("Duplicate", SymbolRegular.Copy24, () => _vm.Duplicate(share).IsSelected = true));
+        if (share.IsStandalone)
+        {
+            cm.Items.Add(MenuEntry("Duplicate", SymbolRegular.Copy24, () => _vm.Duplicate(share).IsSelected = true));
+            var moveUnder = new MenuItem { Header = "Move under", Icon = new SymbolIcon(SymbolRegular.Router24) };
+            FillMoveUnder(moveUnder, share);
+            cm.Items.Add(moveUnder);
+        }
         var remove = MenuEntry("Remove", SymbolRegular.Delete24, () => _ = DeleteShare(share));
         remove.InputGestureText = "Del";
         cm.Items.Add(remove);
@@ -115,15 +124,26 @@ public partial class MainWindow
 
     private static string ShareLabel(NetworkShare share) => share.Server is { } c ? $"{c.Name} › {share.Name}" : share.Name;
 
+    /// <summary>The tooltip of "Add network share…" for <paramref name="c"/>.</summary>
+    private static string AddShareTip(Connection? c) => c?.JumpHost is { } jump
+        ? $"An SMB, SFTP or WebDAV share of this server, reached through {jump.Name} – opened in a file tab (FTP can't go through a jump host)"
+        : "An SMB, SFTP, FTP or WebDAV share of this server – opened in a file tab, no agent needed";
+
+    /// <summary>Why the share can't be opened now (shown on its menu entries), or null.</summary>
+    private static string? WhyNotOpen(NetworkShare share) =>
+        share.Protocol == ShareProtocol.Ftp && (share.Server ?? (NodeBase)share).JumpHost is { } jump
+            ? $"Reached through {jump.Name}. {ShareConnector.FtpNotThroughJumpHost}" : null;
+
     /// <summary>Opens the share in a new tab: this PC on the left, the share on the right.</summary>
     private void OpenShare(NetworkShare share)
     {
-        if ((share.Server ?? (NodeBase)share).JumpHost is { } jump)
+        if (WhyNotOpen(share) is not null)
         {
-            _ = Dialogs.Info(this, "Network share", $"{share.Name} is reached through {jump.Name}. Network shares can't be reached through a jump host yet.");
+            _ = Dialogs.Info(this, "Network share", $"{share.Name} is reached through {(share.Server ?? (NodeBase)share).JumpHost!.Name}. {ShareConnector.FtpNotThroughJumpHost}");
             return;
         }
         var c = ServerOf(share);
+        if (!TryRoute(c, quiet: false, out var via)) return;
         if (ShareAccount(share, null) is not { } account) return;
         var s = _vm.OpenShare(c, share);
         s.Account = account.Credentials;
@@ -146,18 +166,20 @@ public partial class MainWindow
         _views[s] = view;
         SessionPanel.Children.Add(view);
         UpdateSessionVisibility();
-        Connect(s, account);
+        Connect(s, account, via);
     }
 
     /// <summary>Reconnect button: asks for the password again only if it isn't stored and wasn't entered before.</summary>
     private void ConnectShare(ShareSession s)
     {
+        if (!TryRoute(ServerOf(s.Share), quiet: false, out var via)) return; // the route as it is now (the share may have moved)
         if (ShareAccount(s.Share, s.Account) is not { } account) return;
         s.Account = account.Credentials;
-        Connect(s, account);
+        Connect(s, account, via);
     }
 
-    private void Connect(ShareSession s, (CredentialSet Credentials, string Source) account)
+    /// <param name="via">The jump host the share is reached through (null: directly).</param>
+    private void Connect(ShareSession s, (CredentialSet Credentials, string Source) account, JumpRoute? via)
     {
         var share = s.Share;
         var cred = account.Credentials;
@@ -166,7 +188,7 @@ public partial class MainWindow
             share.TrustedFingerprint = fp;
             _vm.RequestSave();
             DiagLog.Write($"Share ({share.ProtocolLabel}): key/certificate accepted by the user");
-        })), account.Source, AccentFor(s.Connection));
+        }), via), account.Source, AccentFor(s.Connection));
     }
 
     /// <summary>

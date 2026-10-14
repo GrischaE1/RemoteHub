@@ -132,7 +132,7 @@ public class JumpHostTreeTests : IDisposable
     }
 
     [Fact]
-    public void Only_one_hop_and_no_shares_below_a_jump_host()
+    public void Only_one_hop_below_a_jump_host()
     {
         var (data, customer, jump, sql, branch, pc) = Sample();
         var jump2 = (Connection)data.Items[1];
@@ -150,11 +150,38 @@ public class JumpHostTreeTests : IDisposable
         Assert.Contains("in this folder is a jump host", TreeLayout.WhyNot(holder, jump));   // a folder containing one
         Assert.Contains("itself", TreeLayout.WhyNot(jump, branch));                          // into its own subtree
         Assert.Contains("itself", TreeLayout.WhyNot(customer, branch));
-        Assert.Contains("Network shares", TreeLayout.WhyNot(new NetworkShare(), jump));
-        Assert.Contains("Network shares", TreeLayout.WhyNot(new NetworkShare(), branch));
-        Assert.Null(TreeLayout.WhyNot(new NetworkShare(), customer));
-        Assert.Same(customer, TreeLayout.Allowed(new NetworkShare(), branch)); // the nearest place a share may go
+        Assert.Null(TreeLayout.WhyNot(new NetworkShare(), jump));                            // a share on its own, through the jump host
+        Assert.Null(TreeLayout.WhyNot(new NetworkShare(), branch));
+        Assert.Contains("Only one jump host", TreeLayout.WhyNot(new NetworkShare(), sql));
+        Assert.Contains("Only connections", TreeLayout.WhyNot(new NetworkShare { Server = sql }, jump)); // a server's share stays with it
+        Assert.Same(jump, TreeLayout.Allowed(new NetworkShare(), sql)); // the nearest place a share may go
         Assert.Null(TreeLayout.WhyNot(sql, null));
+    }
+
+    [Fact]
+    public void A_share_on_its_own_below_a_jump_host_is_reached_through_it_and_saved_next_to_it()
+    {
+        var (data, customer, jump, _, branch, _) = Sample();
+        var nas = new NetworkShare { Name = "NAS", Protocol = ShareProtocol.Sftp, Host = "nas01" };
+        var docs = new NetworkShare { Name = "Docs", Protocol = ShareProtocol.Smb, Host = "files01", Path = "docs" };
+        jump.Children.Add(nas);
+        branch.Children.Add(docs);
+        SettingsStore.RelinkParents(data.Items, null);
+        Assert.Same(jump, nas.JumpHost);
+        Assert.Same(jump, docs.JumpHost);
+        Assert.Equal("via JUMP01", docs.RouteHint);
+        Assert.Equal("customer-admin", Inheritance.ResolveCredentials(nas, data).Credentials.Username); // never the jump host's own
+
+        var json = SettingsStore.ToJson(data);
+        var inCustomer = JsonNode.Parse(json)!["Items"]![0]!["Children"]!.AsArray();
+        Assert.Equal(["JUMP01", "SQL01", "Branch", "NAS", "Direct"], inCustomer.Select(n => (string)n!["Name"]!)); // an older RemoteHub shows it next to JUMP01
+        Assert.Equal(jump.Id.ToString(), (string)inCustomer[3]!["JumpHostId"]!);
+
+        var back = SettingsStore.FromJson(json);
+        var loaded = (Connection)((Folder)back.Items[0]).Children[0];
+        Assert.Equal(["SQL01", "Branch", "NAS"], loaded.Children.Select(n => n.Name));
+        Assert.Same(loaded, ((Folder)loaded.Children[1]).Children.OfType<NetworkShare>().Single().JumpHost);
+        Assert.Equal(json, SettingsStore.ToJson(back));
     }
 
     [Fact]

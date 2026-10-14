@@ -1,6 +1,6 @@
 # RemoteHub – Jump hosts
 
-Status: Draft v3 (2026-10-13), checked against the code of 0.18.4. Decisions in §12. **Phase 1 implemented** (§13);
+Status: Draft v3 (2026-10-13), checked against the code of 0.18.4. Decisions in §12. **Phases 1–3 implemented** (§13–§15);
 the lab tests (§11) have not run yet.
 Owner: Grischa Ernst
 
@@ -403,7 +403,7 @@ What was built, and where it differs from the sections above:
   port in Phase 1.
 - **Tree:** `NodeBase.Parent` is the container (folder or jump host); `Ancestors()` returns folders only (inheritance
   skips the jump host); `JumpHost`, `Descendants()` and `Contents` on every node; `Services/TreeLayout.cs` holds the
-  rules (`WhyNot`) and the saved form (§4.1). Standalone network shares can't be placed below a jump host yet.
+  rules (`WhyNot`) and the saved form (§4.1). Standalone network shares can't be placed below a jump host yet (Phase 3: they can, §15).
 - **Navigation:** the middle of a connection takes a drop (top and bottom 30 % mean before/after); a refused drop says
   why in a tooltip at the pointer. **Move under** is a submenu (out of the current jump host; existing jump hosts and
   connections with an agent, at most 40) instead of a list dialog. *New connection / New folder here* on a jump host
@@ -459,3 +459,30 @@ What was built, and where it differs from the sections above:
   refused (`powershell.exe` connecting to the port), a refused target as the forwarder's error, idle close, the RDP
   negotiation and certificate (TLS and old RDP security).
 - **Not done yet:** spikes J1/J2 and lab tests J4, J6, J7, J9 (§11).
+
+## 15. Implementation notes (Phase 3)
+
+- **One entry:** `ShareConnector.Open(…, via)` – the route comes from `TryRoute` on the share's server (or, for a share on its
+  own, the stand-in connection whose parent is the share's), so passwords for the jump host are asked and remembered as for
+  the other tools. A reconnect asks for the route again (the share may have moved).
+- **SMB:** always `ManagedSmbShare` (SMBLibrary) through a local forwarder. SMBLibrary 1.5.8.1 (the latest) only offers port
+  445 publicly; RemoteHub calls its private `Connect(IPAddress, SMBTransportType, int port)` – the one the public overloads
+  call – after setting `m_serverName` to the share's host, so the NTLM SPN (`cifs/<host>`) and the tree-connect path
+  (`\\<host>\<share>`) carry the real name although the socket goes to `127.0.0.1`. A test fails if an update removes
+  either member (`ManagedSmbShare.CanUseOtherPort`).
+- **SFTP:** SSH.NET only takes a host and port → local forwarder; the host key is checked against the share's fingerprint,
+  and the prompt names the share's host.
+- **WebDAV:** in-process – `SocketsHttpHandler` with the agent's `ConnectCallback` (`AgentClientTransport.ThroughJumpHost`);
+  the URL, the certificate check and Kerberos/NTLM keep the share's name. Direct WebDAV uses `SocketsHttpHandler` too
+  (what `HttpClientHandler` wraps).
+- **FTP:** refused before connecting (`ShareConnector.FtpNotThroughJumpHost`); its menu entries are off with that reason.
+- **Errors:** SMB and SFTP only see the local connection closed; the forwarder's kept answer from the jump host becomes the
+  error, as for RDP and WinRM.
+- **Tree (§4.3 change):** a share on its own may be placed directly under a jump host or in a folder below one (saved next
+  to the jump host with `JumpHostId`, like connections; an older RemoteHub shows it as a direct share). It still can't go
+  under a connection that is itself below a jump host, and a server's share stays with its server. Standalone shares have
+  *Move under* in their context menu, and show *via JUMP01* beside their address (`RouteHint` moved to `NodeBase`).
+- **Tests:** WebDAV through a real jump host agent with a name that only the jump host resolves (the Host header keeps it);
+  SMB, SFTP and WebDAV refused by the jump host's policy give its message; FTP isn't tried; SMBLibrary's port overload;
+  standalone shares below a jump host in the tree rules and the saved file.
+- **Not done yet:** lab test J10 (SMB, SFTP and WebDAV against real servers behind a jump host).

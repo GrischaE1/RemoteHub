@@ -13,13 +13,11 @@ namespace RemoteHub;
 
 /// <summary>
 /// Jump hosts: a connection placed under another connection is reached through that connection's RemoteHub Agent – the
-/// agent's own connections in-process, RDP and PowerShell remoting (WinRM) through a local port (<see cref="JumpForwarders"/>).
-/// Network shares follow later.
+/// agent's own connections and WebDAV shares in-process, RDP, PowerShell remoting (WinRM), SMB and SFTP shares through a
+/// local port (<see cref="JumpForwarders"/>).
 /// </summary>
 public partial class MainWindow
 {
-    internal const string NotThroughJumpHost = "Network shares don't go through a jump host yet – RDP, PowerShell remoting and the RemoteHub Agent do.";
-
     /// <summary>Passwords entered for jump hosts (memory only), so each is asked once.</summary>
     private readonly Dictionary<Guid, CredentialSet> _jumpCredentials = new();
 

@@ -596,6 +596,114 @@ public class JumpHostTests : IAsyncLifetime
         finally { old.Stop(); }
     }
 
+    /// <summary>A WebDAV server on 127.0.0.1 that answers every request with the folder /dav/ holding report.txt; records the Host headers.</summary>
+    private static (TcpListener Listener, int Port, List<string> Hosts) WebDavServer()
+    {
+        var hosts = new List<string>();
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        const string body = """<?xml version="1.0" encoding="utf-8"?><d:multistatus xmlns:d="DAV:">""" +
+                            """<d:response><d:href>/dav/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>""" +
+                            """<d:response><d:href>/dav/report.txt</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>5</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>""" +
+                            "</d:multistatus>";
+        _ = Task.Run(async () =>
+        {
+            while (true)
+            {
+                TcpClient client;
+                try { client = await listener.AcceptTcpClientAsync(); } catch { return; }
+                _ = Task.Run(async () =>
+                {
+                    using (client)
+                    {
+                        var s = client.GetStream();
+                        var head = new List<byte>();
+                        var one = new byte[1];
+                        while (!(head.Count >= 4 && head[^4] == '\r' && head[^3] == '\n' && head[^2] == '\r' && head[^1] == '\n'))
+                        {
+                            if (await s.ReadAsync(one) == 0) return;
+                            head.Add(one[0]);
+                        }
+                        var lines = System.Text.Encoding.ASCII.GetString(head.ToArray()).Split("\r\n");
+                        lock (hosts) hosts.Add(lines.First(l => l.StartsWith("Host:", StringComparison.OrdinalIgnoreCase))[5..].Trim());
+                        var length = lines.FirstOrDefault(l => l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase)) is { } cl ? int.Parse(cl[15..].Trim()) : 0;
+                        await s.ReadExactlyAsync(new byte[length]);
+                        var payload = System.Text.Encoding.UTF8.GetBytes(body);
+                        await s.WriteAsync(System.Text.Encoding.ASCII.GetBytes(
+                            $"HTTP/1.1 207 Multi-Status\r\nContent-Type: application/xml\r\nContent-Length: {payload.Length}\r\nConnection: close\r\n\r\n"));
+                        await s.WriteAsync(payload);
+                    }
+                });
+            }
+        });
+        return (listener, ((IPEndPoint)listener.LocalEndpoint).Port, hosts);
+    }
+
+    private static NetworkShare Share(ShareProtocol protocol, string host, int? port, string path) =>
+        new() { Name = "files", Protocol = protocol, Host = host, Port = port, Path = path, WebDavHttps = false };
+
+    private static readonly CredentialSet ShareAccount = new() { Username = "tester", Password = "secret", Domain = "." };
+
+    [Fact]
+    public async Task A_WebDAV_share_is_reached_through_the_jump_host_under_its_own_name()
+    {
+        // The name resolves only on the jump host (as names behind one often do).
+        await using var jump = await StartAgent(resolve: (name, _) => Task.FromResult(name == "dav.branch.test" ? new[] { IPAddress.Loopback } : []));
+        var (listener, port, hosts) = WebDavServer();
+        try
+        {
+            using var fs = Remoting.Shares.ShareConnector.Open(Share(ShareProtocol.WebDav, "dav.branch.test", port, "dav"), ShareAccount,
+                _ => false, _ => { }, Route(jump));
+            var entry = Assert.Single(fs.List("/dav"));
+            Assert.Equal(("report.txt", 5L), (entry.Name, entry.Size));
+            lock (hosts) Assert.All(hosts, h => Assert.Equal($"dav.branch.test:{port}", h)); // the URL keeps the share's name
+            await WaitFor(() => jump.Audit().Contains("dav.branch.test"), "the stream to be audited on the jump host");
+        }
+        finally { listener.Stop(); }
+    }
+
+    [Theory]
+    [InlineData(ShareProtocol.Smb, 445, "files")]
+    [InlineData(ShareProtocol.Sftp, 22, "")]
+    [InlineData(ShareProtocol.WebDav, 80, "dav")]
+    public async Task What_the_jump_host_refuses_for_a_share_is_its_error(ShareProtocol protocol, int port, string path)
+    {
+        await using var jump = await StartAgent(() => new A.AgentPolicy { Tunnel = A.TunnelRules.Parse(["10.0.0.0/8"], null) });
+        var share = Share(protocol, "127.0.0.1", port, path);
+        var ex = await Assert.ThrowsAsync<Remoting.Shares.ShareException>(() => Task.Run(() =>
+            Remoting.Shares.ShareConnector.Open(share, ShareAccount, _ => false, _ => { }, Route(jump))).WaitAsync(TimeSpan.FromSeconds(60)));
+        Assert.Contains("doesn't allow", ex.Message);
+    }
+
+    [Fact]
+    public void An_FTP_share_isnt_tried_through_a_jump_host()
+    {
+        var route = new JumpRoute("JUMP01", "127.0.0.1", new AgentEndpoint(1, "x"), Tester());
+        var ex = Assert.Throws<Remoting.Shares.ShareException>(() =>
+            Remoting.Shares.ShareConnector.Open(Share(ShareProtocol.Ftp, "ftp.branch.test", null, ""), ShareAccount, _ => false, _ => { }, route));
+        Assert.Equal(Remoting.Shares.ShareConnector.FtpNotThroughJumpHost, ex.Message);
+    }
+
+    [Fact]
+    public async Task RemoteHubs_SMB_client_connects_to_another_port_under_the_shares_name()
+    {
+        // SMBLibrary's port overload is private: an update that removes it must fail here, not at a user.
+        Assert.True(Remoting.Shares.ManagedSmbShare.CanUseOtherPort);
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var accepted = listener.AcceptTcpClientAsync();
+            var client = new SMBLibrary.Client.SMB2Client(2000, true);
+            var connect = Task.Run(() => Remoting.Shares.ManagedSmbShare.ConnectToPort(client, "files.branch.test", ((IPEndPoint)listener.LocalEndpoint).Port));
+            (await accepted.WaitAsync(TimeSpan.FromSeconds(10))).Dispose(); // reached the port, then closed without an SMB answer
+            Assert.False(await connect.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.Equal("files.branch.test", typeof(SMBLibrary.Client.SMB2Client)
+                .GetField("m_serverName", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(client));
+        }
+        finally { listener.Stop(); }
+    }
+
     private sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues
     {
         public int? Number(string? subKey, string name) => subKey is null && values.TryGetValue(name, out var v) && v is int i ? i : null;

@@ -5,7 +5,7 @@ namespace RemoteHub.Services;
 /// <summary>Size of the video: the tab's own size, or a fixed presentation size the tab is scaled into.</summary>
 public enum RecordingResolution { Tab, FullHd, Uhd4K }
 
-/// <summary>Frame rate and size of recordings (Settings → Security &amp; storage → Session recordings).</summary>
+/// <summary>Frame rate and size of recordings (Settings → Recordings).</summary>
 /// <param name="UseGpu">
 /// Capture through the graphics card (needed for 30/60 fps). Off by default: it uses the graphics driver directly and is
 /// only turned on by choice.
