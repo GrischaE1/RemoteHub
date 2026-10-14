@@ -699,7 +699,8 @@ public class AgentDesktopFlowTests
         using var first = await Connect(d);
         first.Start(ActiveUser.Id, DesktopConsent.Ask);
         var token = first.Next(DesktopStatusState.Connected).Resume!;
-        var ui = d.Helpers.Uis[0];
+        // The helper's window gets the apps to offer from its own thread – it may be a moment after "Connected".
+        var ui = OfferedOn(d, 0);
         Assert.Equal([@"c:\apps\vault.exe"], ui.OfferedAlways!);
         WaitFor(() => LastPrivacy(first)?.HiddenApps == 1, "the policy's app counted");
         ui.Chosen!(Set(Secret));
@@ -708,8 +709,20 @@ public class AgentDesktopFlowTests
         using var second = await Connect(d);
         second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
         second.Next(DesktopStatusState.Connected);
-        Assert.Equal([Secret], d.Helpers.Uis[1].OfferedHidden!);
+        Assert.Equal([Secret], OfferedOn(d, 1).OfferedHidden!);
         WaitFor(() => LastPrivacy(second)?.HiddenApps == 2, "both still hidden in the new connection");
+    }
+
+    /// <summary>The helper window number <paramref name="index"/>, once it has been offered the apps to hide.</summary>
+    private static Ui OfferedOn(Device d, int index)
+    {
+        Ui? ui = null;
+        WaitFor(() =>
+        {
+            lock (d.Helpers.Uis) ui = d.Helpers.Uis.Count > index ? d.Helpers.Uis[index] : null;
+            return ui?.OfferedHidden is not null;
+        }, $"the apps to hide offered in helper window {index + 1}");
+        return ui!;
     }
 
     [Fact]
