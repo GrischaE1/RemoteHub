@@ -68,18 +68,22 @@ public class LocalDbTests : IDisposable
         var data = Sample();
         SettingsStore.Save(data);
         using var reading = new ManualResetEventSlim();
+        using var saved = new ManualResetEventSlim();
+        // The read (e.g. the audit log viewer or the daily check) stays open until the save is done. If the save waited for
+        // the read, both would wait for each other until the timeout – no timing margin for a slow machine to miss.
         var read = Task.Run(() => LocalDb.Read(c =>
         {
             reading.Set();
-            Thread.Sleep(1500); // e.g. the audit log viewer or the daily check
-            return LocalDb.Scalar(c, "SELECT count(*) FROM nodes");
+            var savedWhileReading = saved.Wait(TimeSpan.FromSeconds(30));
+            return (savedWhileReading, LocalDb.Scalar(c, "SELECT count(*) FROM nodes"));
         }));
         Assert.True(reading.Wait(5000));
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         data.Tools.ProcessRefreshSeconds = 9;
         SettingsStore.Save(data);
-        Assert.True(sw.ElapsedMilliseconds < 1000, $"the save waited {sw.ElapsedMilliseconds} ms for the read");
-        Assert.Equal(6L, await read); // 2 folders, 4 connections – the read isn't disturbed by the save
+        saved.Set();
+        var (savedWhileReading, count) = await read;
+        Assert.True(savedWhileReading, "the save waited for the read to end");
+        Assert.Equal(6L, count); // 2 folders, 4 connections – the read isn't disturbed by the save
         LocalDb.Close();
         Assert.Equal(9, SettingsStore.Load().Tools.ProcessRefreshSeconds);
     }
