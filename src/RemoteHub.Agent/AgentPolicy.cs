@@ -18,6 +18,8 @@ public enum AgentRight
     ConsentBypass,
     /// <summary>Black out the device's screen while working on it (policy <c>PrivacyScreen</c> must allow it too).</summary>
     PrivacyScreen,
+    /// <summary>Use this device as a jump host: connect from it to other devices (policy <c>TunnelEnabled</c>, <c>TunnelTargets</c>, <c>TunnelPorts</c>).</summary>
+    Tunnel,
 }
 
 /// <summary>
@@ -33,7 +35,11 @@ public enum AgentRight
 /// <item><c>AuditToEventLog</c> (DWORD) – 0: audit entries only in the agent's log file, not in the Windows Application log.</item>
 /// <item><c>PrivacyScreen</c> (DWORD) – 0: the admin can't black out the device's screen; 1: can, but the mouse and keyboard at the device stay usable; 2: can, and the mouse and keyboard at the device are blocked with it (default – the admin can still leave them usable).</item>
 /// <item><c>HiddenApps</c> (REG_MULTI_SZ) – apps never shown to an admin, whatever the user chooses: full program paths, or <c>aumid:</c> + a Store app's AppUserModelID.</item>
-/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen (REG_MULTI_SZ) – group SIDs or names.</item>
+/// <item><c>TunnelEnabled</c> (DWORD) – 0: this device is never a jump host.</item>
+/// <item><c>TunnelTargets</c> (REG_MULTI_SZ) – where a jump connection may go: address ranges (<c>10.20.0.0/16</c>, <c>fd00::/8</c>, <c>10.1.2.3</c>) and names (<c>sql01.contoso.local</c>, <c>*.contoso.local</c>). Unset: anywhere – except this device's own loopback, link-local and multicast addresses, which only an address range naming them allows.</item>
+/// <item><c>TunnelPorts</c> (REG_MULTI_SZ) – ports a jump connection may go to: <c>3389</c>, <c>5985-5986</c>, <c>*</c>. Unset: every port.</item>
+/// <item><c>MaxTunnelStreams</c> (DWORD) – connections open at once through one jump connection (default 64).</item>
+/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel (REG_MULTI_SZ) – group SIDs or names.</item>
 /// </list>
 /// </summary>
 public sealed class AgentPolicy
@@ -53,6 +59,12 @@ public sealed class AgentPolicy
     public int PrivacyScreen { get; init; } = PrivacyScreenLevel.WithInputBlock;
     /// <summary>HiddenApps: programs (full path) or Store apps (<c>aumid:</c> + AppUserModelID) never shown to an admin.</summary>
     public IReadOnlyList<string> HiddenApps { get; init; } = [];
+    /// <summary>TunnelEnabled: this device may be used as a jump host.</summary>
+    public bool TunnelEnabled { get; init; } = true;
+    /// <summary>TunnelTargets and TunnelPorts: where jump connections may go.</summary>
+    public TunnelRules Tunnel { get; init; } = TunnelRules.Any;
+    /// <summary>MaxTunnelStreams: connections open at once through one jump connection.</summary>
+    public int MaxTunnelStreams { get; init; } = 64;
     public IReadOnlyDictionary<AgentRight, IReadOnlyList<string>> Rights { get; init; } = new Dictionary<AgentRight, IReadOnlyList<string>>();
 
     /// <summary>Set when the policy key couldn't be read: then nothing is allowed (see <see cref="Load"/>).</summary>
@@ -75,6 +87,7 @@ public sealed class AgentPolicy
             [AgentRight.SecureDesktop] = config.AllowedGroups,
             [AgentRight.ConsentBypass] = [],
             [AgentRight.PrivacyScreen] = config.AllowedGroups,
+            [AgentRight.Tunnel] = config.AllowedGroups,
         },
     };
 
@@ -98,6 +111,7 @@ public sealed class AgentPolicy
         DesktopEnabled = false,
         ConsentModes = [],
         PrivacyScreen = PrivacyScreenLevel.Off,
+        TunnelEnabled = false,
         LoadError = reason,
         Rights = Enum.GetValues<AgentRight>().ToDictionary(r => r, _ => (IReadOnlyList<string>)[]),
     };
@@ -125,6 +139,9 @@ public sealed class AgentPolicy
             AuditToEventLog = values.Number(null, "AuditToEventLog") is not 0,
             PrivacyScreen = values.Number(null, "PrivacyScreen") is { } p and >= PrivacyScreenLevel.Off and <= PrivacyScreenLevel.WithInputBlock ? p : d.PrivacyScreen,
             HiddenApps = values.Strings(null, "HiddenApps")?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.HiddenApps,
+            TunnelEnabled = values.Number(null, "TunnelEnabled") is not 0,
+            Tunnel = TunnelRules.Parse(values.Strings(null, "TunnelTargets"), values.Strings(null, "TunnelPorts")),
+            MaxTunnelStreams = values.Number(null, "MaxTunnelStreams") is { } streams and >= 1 and <= 1024 ? streams : d.MaxTunnelStreams,
             Rights = rights,
         };
     }

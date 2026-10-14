@@ -68,6 +68,9 @@
                             <ui:TextBox Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="3389" />
                         </StackPanel>
                     </Grid>
+                    <!-- Below a jump host: how it is reached (read-only; the navigation sets it) -->
+                    <TextBlock Text="{Binding RouteText}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,-6,0,10"
+                               Visibility="{Binding RouteText, Converter={StaticResource BoolToVis}}" />
                     <TextBlock Text="Notes" Margin="0,0,0,4" />
                     <ui:TextBox Text="{Binding Notes}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="56" PlaceholderText="Optional" />
                 </StackPanel>

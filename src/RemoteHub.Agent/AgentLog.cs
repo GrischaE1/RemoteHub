@@ -80,6 +80,11 @@ public enum AuditEvent
     DesktopPrivacyScreen = 1104,
     /// <summary>The user at the device hid or showed their screen.</summary>
     DesktopUserHid = 1105,
+    /// <summary>A jump connection signed in (this device as a jump host).</summary>
+    TunnelStarted = 1200,
+    /// <summary>A connection through this jump host ended: where to, how long, how much.</summary>
+    TunnelStream = 1201,
+    TunnelEnded = 1202,
     SignInRefused = 2000,
     DesktopRefused = 2100,
     /// <summary>The user who signed in or unlocked refused the running remote desktop; it ended.</summary>
@@ -87,6 +92,8 @@ public enum AuditEvent
     DesktopIdleEnded = 2102,
     /// <summary>A privacy screen request was refused (right, policy, Windows version) or couldn't be shown.</summary>
     DesktopPrivacyRefused = 2103,
+    /// <summary>A connection through this jump host was refused by its policy.</summary>
+    TunnelRefused = 2200,
     DesktopError = 3100,
 }
 

@@ -20,13 +20,15 @@ public sealed class AgentInstallDialog : FluentWindow
     /// <summary>What was chosen (set when the dialog closes with true).</summary>
     public AgentInstallOptions? Options { get; private set; }
     private readonly TextBox _label, _port, _firewall, _groups;
-    private readonly RadioButton _viaRemoting, _viaAgent, _viaClipboard;
+    private readonly RadioButton _viaRemoting, _viaAgent, _viaClipboard, _viaFiles;
     private readonly CheckBox _newIdentity, _useAfter, _virtualDisplay;
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
 
-    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress)
+    /// <param name="localAddress">The address the device sees connections from (this PC, or the jump host in the device's network).</param>
+    /// <param name="jumpHost">The jump host the device is reached through, or null.</param>
+    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress, string? jumpHost = null)
     {
         var existing = c.Agent;
         var installed = existing is { Status: AgentStatus.Installed };
@@ -40,7 +42,7 @@ public sealed class AgentInstallDialog : FluentWindow
         ShowInTaskbar = false;
 
         var body = new StackPanel { Margin = new Thickness(20, 4, 20, 20) };
-        body.Children.Add(new TextBlock { Text = $"{c.Name}  ·  {c.Host}", FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) });
+        body.Children.Add(new TextBlock { Text = $"{c.Name}  ·  {c.HostWithRoute}", FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) });
         body.Children.Add(Muted("The agent gives RemoteHub PowerShell, files, registry, services and processes on this device without WinRM. " +
                                 "Operators sign in with a Windows account of the device (administrators by default); RemoteHub only accepts the " +
                                 "device certificate created here.", 0, 0, 0, 12));
@@ -70,7 +72,7 @@ public sealed class AgentInstallDialog : FluentWindow
             "Firewall scope on the device: empty = any address. Example: 10.1.0.0/16, 192.168.1.20 (all PCs running RemoteHub must be included).");
         if (localAddress is not null)
         {
-            var add = new Button { Content = $"Add this PC ({localAddress})", Icon = new SymbolIcon(SymbolRegular.Add24), Margin = new Thickness(0, 4, 0, 0) };
+            var add = new Button { Content = jumpHost is null ? $"Add this PC ({localAddress})" : $"Add {jumpHost} ({localAddress})", Icon = new SymbolIcon(SymbolRegular.Add24), Margin = new Thickness(0, 4, 0, 0) };
             add.Click += (_, _) => _firewall.Text = string.Join(", ", _firewall.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Append(localAddress).Distinct());
             _options.Children.Add(add);
@@ -92,11 +94,18 @@ public sealed class AgentInstallDialog : FluentWindow
         _viaAgent = Radio("Update through the running agent", installed && agentReachable, installed && agentReachable);
         _viaAgent.Visibility = installed ? Visibility.Visible : Visibility.Collapsed;
         _viaClipboard = Radio("Copy the installer and the enrollment file to the clipboard – paste both into the RDP session (same folder) and run the MSI as administrator",
-            true, !remotingAvailable && !(installed && agentReachable));
+            true, jumpHost is null && !remotingAvailable && !(installed && agentReachable));
+        _viaFiles = Radio("Save the installer and the enrollment file to a folder – install them on the device by hand or with software distribution (both in the same folder)",
+            true, jumpHost is not null && !remotingAvailable && !(installed && agentReachable));
         if (!remotingAvailable)
             _options.Children.Add(Muted("PowerShell remoting isn't available for this connection, so the silent install isn't offered.", 26, 0, 0, 4));
+        if (jumpHost is not null)
+            _options.Children.Add(Muted($"{c.Name} is reached through {jumpHost}, so its agent will only be reached from there: allow connections from " +
+                                        $"{jumpHost}'s address in that network.", 26, 0, 0, 4));
 
-        _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = true, Margin = new Thickness(0, 12, 0, 0) };
+        // Below a jump host an installed agent is used anyway, unless the connection itself says WinRM (Inheritance.UsesAgent).
+        _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = true, Margin = new Thickness(0, 12, 0, 0),
+                                   Visibility = jumpHost is null ? Visibility.Visible : Visibility.Collapsed };
         _options.Children.Add(_useAfter);
 
         body.Children.Add(_error);
@@ -133,6 +142,7 @@ public sealed class AgentInstallDialog : FluentWindow
 
         var method = _viaAgent.IsChecked == true ? AgentInstallMethod.ThroughAgent
                    : _viaRemoting.IsChecked == true ? AgentInstallMethod.Remoting
+                   : _viaFiles.IsChecked == true ? AgentInstallMethod.SaveFiles
                    : AgentInstallMethod.Clipboard;
         var options = new AgentInstallOptions(method, _newIdentity.IsChecked == true, _label.Text.Trim(), port, _firewall.Text.Trim(),
             AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true);

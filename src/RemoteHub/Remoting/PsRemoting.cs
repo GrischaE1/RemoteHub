@@ -10,12 +10,14 @@ namespace RemoteHub.Remoting;
 
 /// <summary>
 /// Where and as whom to open a PowerShell session: over WinRM, or through the RemoteHub Agent when <see cref="Agent"/> is
-/// set. Holds the password in memory only.
+/// set. Holds the password in memory only. <paramref name="Via"/>: WinRM goes through this jump host (the agent's own way
+/// through is <see cref="AgentEndpoint.Via"/>).
 /// </summary>
-public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials, AgentEndpoint? Agent = null)
+public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials, AgentEndpoint? Agent = null, JumpRoute? Via = null)
 {
     public int Port => Agent?.Port ?? (UseSsl ? 5986 : 5985);
-    public string Display => Agent is null ? $"{Host} ({(UseSsl ? "HTTPS" : "HTTP")} {Port})" : $"{Host} (RemoteHub Agent {Port})";
+    public string Display => (Agent is null ? $"{Host} ({(UseSsl ? "HTTPS" : "HTTP")} {Port})" : $"{Host} (RemoteHub Agent {Port})") +
+                             ((Agent?.Via ?? Via) is { } j ? $" via {j.Name}" : "");
     /// <summary>The way the session goes, for the tab header.</summary>
     public string Transport => Agent is null ? $"PowerShell remoting ({(UseSsl ? "HTTPS" : "HTTP")})" : "RemoteHub Agent";
 }
@@ -44,7 +46,9 @@ public static class PsRemoting
     /// <summary>True when a username is set but no password: the caller has to ask for it.</summary>
     public static bool NeedsPassword(CredentialSet c) => !c.IsEmpty && string.IsNullOrEmpty(c.Password);
 
-    public static RunspaceConnectionInfo ConnectionInfo(PsTarget t) => t.Agent is null ? WsManConnectionInfo(t) : AgentConnectionInfo(t);
+    /// <summary>Where a runspace connects to; <paramref name="forward"/>: WinRM through a jump host's local port.</summary>
+    public static RunspaceConnectionInfo ConnectionInfo(PsTarget t, LocalForward? forward = null) =>
+        t.Agent is null ? WsManConnectionInfo(t, forward) : AgentConnectionInfo(t);
 
     /// <summary>The agent signs the account in on the device itself: a local account is ".\user" there.</summary>
     public static string? AgentUserName(CredentialSet c)
@@ -54,6 +58,9 @@ public static class PsRemoting
         if (user.Contains('\\') || user.Contains('@')) return user;
         return c.IsLocalAccount || string.IsNullOrEmpty(c.Domain) ? $".\\{user}" : $"{c.Domain}\\{user}";
     }
+
+    /// <summary>The account for the RemoteHub Agent (see <see cref="AgentUserName"/>), or null without credentials.</summary>
+    public static PSCredential? AgentCredential(CredentialSet c) => Credential(AgentUserName(c), c);
 
     private static PSCredential? Credential(string? user, CredentialSet c)
     {
@@ -68,11 +75,11 @@ public static class PsRemoting
     private static AgentConnectionInfo AgentConnectionInfo(PsTarget t) =>
         new(t.Host.Trim(), t.Agent!, Credential(AgentUserName(t.Credentials), t.Credentials));
 
-    private static WSManConnectionInfo WsManConnectionInfo(PsTarget t)
+    private static WSManConnectionInfo WsManConnectionInfo(PsTarget t, LocalForward? forward)
     {
-        var host = t.Host.Trim();
+        var host = forward?.Host ?? t.Host.Trim();
         if (host.Contains(':') && !host.StartsWith('[')) host = $"[{host}]"; // IPv6
-        var uri = new Uri($"{(t.UseSsl ? "https" : "http")}://{host}:{t.Port}/wsman");
+        var uri = new Uri($"{(t.UseSsl ? "https" : "http")}://{host}:{forward?.Port ?? t.Port}/wsman");
         var cred = Credential(UserName(t.Credentials, t.Host), t.Credentials);
         // No credential: the current Windows user is used (Kerberos/Negotiate).
         return new WSManConnectionInfo(uri, ShellUri, cred)
@@ -81,16 +88,35 @@ public static class PsRemoting
             OpenTimeout = 20_000,
             OperationTimeout = 0, // no limit: long-running commands and big uploads
             IdleTimeout = -1,
+            // Through a jump host the name is 127.0.0.1: the certificate must still be one this PC trusts (set up and
+            // compared like a direct one), and the sign-in is bound to it (channel binding) – only the name isn't checked.
+            SkipCNCheck = forward is not null,
         };
     }
 
     /// <summary>Opens a remote runspace (blocking – call from a background thread).</summary>
     public static Runspace Open(PsTarget t, PSHost? host = null)
     {
-        var rs = host is null ? RunspaceFactory.CreateRunspace(ConnectionInfo(t)) : RunspaceFactory.CreateRunspace(host, ConnectionInfo(t));
-        try { rs.Open(); }
-        catch { rs.Dispose(); throw; }
-        return rs;
+        // WinRM behind a jump host: to a local port that leads there, held while the runspace is open.
+        var forward = t is { Agent: null, Via: { } via } ? JumpForwarders.Open(via, t.Host, t.Port) : null;
+        Runspace? rs = null;
+        try
+        {
+            var info = ConnectionInfo(t, forward);
+            rs = host is null ? RunspaceFactory.CreateRunspace(info) : RunspaceFactory.CreateRunspace(host, info);
+            if (forward is not null)
+                rs.StateChanged += (_, e) => { if (e.RunspaceStateInfo.State is RunspaceState.Closed or RunspaceState.Broken) forward.Dispose(); };
+            rs.Open();
+            return rs;
+        }
+        catch (Exception ex)
+        {
+            rs?.Dispose();
+            forward?.Dispose();
+            // WinRM only saw the connection closed: the jump host's answer says why.
+            if (forward?.TakeError() is { } why) throw new JumpHostException(why, inner: ex);
+            throw;
+        }
     }
 
     /// <summary>Opens a session, reads version and computer name, closes it again.</summary>
@@ -125,9 +151,15 @@ public static class PsRemoting
     public static string Explain(Exception ex, PsTarget t)
     {
         if (t.Agent is not null) return AgentExplain(ex);
+        if (ex is JumpHostException) return Trim(ex.Message);
         var inner = ex;
         while (inner.InnerException is not null && inner is not PSRemotingTransportException) inner = inner.InnerException;
         var msg = inner.Message;
+        if (msg.Contains("TrustedHosts", StringComparison.OrdinalIgnoreCase) && t.Via is { } via)
+            return $"Through the jump host {via.Name}, WinRM connects to a local port (127.0.0.1): Kerberos isn't possible there, and this PC " +
+                   "only sends a password over HTTP to computers it trusts. Use HTTPS for this connection (PowerShell remoting settings, or " +
+                   "\"Set up PowerShell remoting on the target\"), install the RemoteHub Agent on it, or an administrator adds 127.0.0.1 to " +
+                   "this PC's WinRM TrustedHosts list.";
         if (msg.Contains("TrustedHosts", StringComparison.OrdinalIgnoreCase))
             return "This PC only sends a password over HTTP to computers it trusts (Kerberos is not possible here – e.g. an IP address or a " +
                    "computer outside the domain). Use HTTPS for this connection (PowerShell remoting settings), or an administrator adds the " +

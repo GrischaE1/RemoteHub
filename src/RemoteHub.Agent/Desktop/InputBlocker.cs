@@ -129,3 +129,77 @@ internal static unsafe class InputBlocker
     [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr GetModuleHandleW(string? name);
 }
+
+/// <summary>
+/// While the banner lets the admin's clicks through: watches for the device's own mouse (any event the agent didn't
+/// inject) and reports the first one, so the banner becomes the user's to click again. A low-level hook on its own
+/// thread, like <see cref="InputBlocker"/>; it only runs while it is needed.
+/// </summary>
+internal static unsafe class LocalPointerWatch
+{
+    private const int WH_MOUSE_LL = 14;
+    private const uint WM_QUIT = 0x0012;
+
+    private static readonly object Lock = new();
+    private static Thread? _thread;
+    private static uint _threadId;
+    private static Action? _moved;
+
+    public static void Start(Action moved)
+    {
+        lock (Lock)
+        {
+            _moved = moved;
+            if (_thread is not null) return;
+            using var ready = new ManualResetEventSlim();
+            var t = new Thread(() =>
+            {
+                var hook = SetWindowsHookExW(WH_MOUSE_LL, &MouseProc, GetModuleHandleW(null), 0);
+                MSG msg;
+                PeekMessageW(&msg, IntPtr.Zero, 0, 0, 0); // the queue exists before Stop can post to it
+                _threadId = GetCurrentThreadId();
+                ready.Set();
+                if (hook == IntPtr.Zero) return; // no hook: the banner stays click-through until the admin's pointer leaves it
+                while (GetMessageW(&msg, IntPtr.Zero, 0, 0) > 0) { }
+                UnhookWindowsHookEx(hook);
+            }) { IsBackground = true, Name = "Banner: local mouse" };
+            t.Start();
+            ready.Wait(TimeSpan.FromSeconds(5));
+            _thread = t;
+        }
+    }
+
+    public static void Stop()
+    {
+        lock (Lock)
+        {
+            _moved = null;
+            if (_thread is not { } t) return;
+            PostThreadMessageW(_threadId, WM_QUIT, 0, 0);
+            t.Join(TimeSpan.FromSeconds(2));
+            (_thread, _threadId) = (null, 0);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    private static nint MouseProc(int code, nint wParam, nint lParam)
+    {
+        // Only report – never block, and return at once (Windows drops a slow low-level hook).
+        if (code >= 0 && ((MSLLHOOKSTRUCT*)lParam)->dwExtraInfo != InputNative.Tag && Interlocked.Exchange(ref _moved, null) is { } moved)
+            try { moved(); } catch { /* the UI is gone */ }
+        return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+    }
+
+    [StructLayout(LayoutKind.Sequential)] private struct MSLLHOOKSTRUCT { public int X, Y; public uint mouseData, flags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] private struct MSG { public IntPtr hwnd; public uint message; public nint wParam, lParam; public uint time; public int x, y; }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookExW(int id, delegate* unmanaged<int, nint, nint, nint> proc, IntPtr module, uint threadId);
+    [DllImport("user32.dll")] private static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")] private static extern nint CallNextHookEx(IntPtr hook, int code, nint wParam, nint lParam);
+    [DllImport("user32.dll")] private static extern int GetMessageW(MSG* msg, IntPtr hwnd, uint min, uint max);
+    [DllImport("user32.dll")] private static extern bool PeekMessageW(MSG* msg, IntPtr hwnd, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] private static extern bool PostThreadMessageW(uint thread, uint msg, nint wParam, nint lParam);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr GetModuleHandleW(string? name);
+}

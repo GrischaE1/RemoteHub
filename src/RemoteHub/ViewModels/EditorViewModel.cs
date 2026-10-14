@@ -68,6 +68,10 @@ public sealed partial class EditorViewModel : ObservableObject
     public bool IsNew { get; }
     public bool IsDefaults => _node is null;
     public bool IsConnection => _node is Connection;
+    /// <summary>Below a jump host: how it is reached (shown on the General page), else null.</summary>
+    public string? RouteText => _node?.JumpHost is { } j
+        ? $"Reached through {j.Name} – its RemoteHub Agent is the jump host{(_node is Folder ? " for everything in this folder" : "")}. Move it out of {j.Name} in the list to connect directly."
+        : null;
     public bool IsFolder => _node is Folder;
     public bool CanInherit => !IsDefaults;
 
@@ -260,6 +264,11 @@ public sealed partial class EditorViewModel : ObservableObject
             (o, v) => o.PasswordPrompt = (PasswordPromptAction?)v,
             "For servers that refuse saved credentials (\"Your credentials did not work\"): the stored password is copied so you can paste it with Ctrl+V."));
 
+        // Below a jump host an installed agent is used unless the connection itself says WinRM (Inheritance.UsesAgent).
+        var jumpNote = _node?.JumpHost is { } jump
+            ? $" Reached through {jump.Name}: with an agent installed, it is used unless this connection itself is set to PowerShell remoting. " +
+              $"WinRM through {jump.Name} needs HTTPS (or 127.0.0.1 in this PC's TrustedHosts)."
+            : "";
         PsRows.Add(Row("Check automatically after RDP login", own.PsRemoting, parent.PsRemoting, YesNo,
             (o, v) => o.PsRemoting = (bool?)v,
             "Tests WinRM after the first RDP login. You can always test by hand: right-click → Test PowerShell remoting. If it works, right-click offers a PowerShell tab and \"File transfer\" with the same credentials."));
@@ -267,7 +276,7 @@ public sealed partial class EditorViewModel : ObservableObject
             [(false, "PowerShell remoting (WinRM)"), (true, "RemoteHub Agent")],
             (o, v) => o.UseAgent = (bool?)v,
             "RemoteHub Agent: for devices where WinRM isn't allowed. PowerShell, files, registry, services and processes then go through the agent " +
-            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent."));
+            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent." + jumpNote));
         PsRows.Add(Row("Remote desktop through", own.RemoteDesktopVia, parent.RemoteDesktopVia,
             [(DesktopVia.Automatic, "Automatic – the agent if installed, otherwise RDP"), (DesktopVia.Rdp, "RDP"), (DesktopVia.Agent, "RemoteHub Agent")],
             (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
@@ -276,7 +285,7 @@ public sealed partial class EditorViewModel : ObservableObject
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,
-            "Use HTTPS for computers outside the domain or addressed by IP, unless they are in this PC's TrustedHosts list."));
+            "Use HTTPS for computers outside the domain or addressed by IP, unless they are in this PC's TrustedHosts list." + jumpNote));
 
         if (IsDefaults)
         {

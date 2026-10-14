@@ -5,6 +5,13 @@ namespace RemoteHub.Services;
 /// <summary>Resolves effective settings by walking node → parent folders → global defaults.</summary>
 public static class Inheritance
 {
+    /// <summary>
+    /// Tools go through the RemoteHub Agent instead of WinRM. Below a jump host a device with an agent uses it unless the
+    /// connection itself is set to WinRM: an inherited choice was made for devices reached directly.
+    /// </summary>
+    public static bool UsesAgent(Connection c, AppData data) =>
+        (c.JumpHost is not null && c.Options.UseAgent is null && c.Agent is { Fingerprint.Length: > 0 }) || ResolveOptions(c, data).UseAgent == true;
+
     public static RdpOptions ResolveOptions(NodeBase? node, AppData data, bool includeSelf = true)
     {
         var result = new RdpOptions();
@@ -29,12 +36,15 @@ public static class Inheritance
         return cred.IsEmpty ? (new CredentialSet(), "none – Windows will prompt") : (cred, src);
     }
 
-    /// <summary>The credentials <paramref name="node"/> would have inside <paramref name="parent"/> (null = top level) – e.g. before moving it there.</summary>
-    public static (CredentialSet Credentials, string Source) ResolveCredentialsIn(NodeBase node, Folder? parent, AppData data)
+    /// <summary>
+    /// The credentials <paramref name="node"/> would have inside <paramref name="parent"/> (a folder or jump host; null = top
+    /// level) – e.g. before moving it there. Like <see cref="NodeBase.Ancestors"/>, a jump host itself passes nothing on.
+    /// </summary>
+    public static (CredentialSet Credentials, string Source) ResolveCredentialsIn(NodeBase node, NodeBase? parent, AppData data)
     {
         if (!node.InheritCredentials) return Own(node.CredentialId, node.Credentials, data, "this item");
-        for (var f = parent; f is not null; f = f.Parent)
-            if (!f.InheritCredentials) return Own(f.CredentialId, f.Credentials, data, $"folder \"{f.Name}\"");
+        for (var p = parent; p is not null; p = p.Parent)
+            if (p is Folder f && !f.InheritCredentials) return Own(f.CredentialId, f.Credentials, data, $"folder \"{f.Name}\"");
         var (cred, src) = Own(data.DefaultCredentialId, data.DefaultCredentials, data, "global defaults");
         return cred.IsEmpty ? (new CredentialSet(), "none – Windows will prompt") : (cred, src);
     }
@@ -42,7 +52,7 @@ public static class Inheritance
     /// <summary>Where the item is: "LAB › Servers › NUC13", or "Top level › NUC13".</summary>
     public static string Location(NodeBase node)
     {
-        var path = node.Ancestors().Reverse().Select(a => a.Name).ToList();
+        var path = TreeLayout.Containers(node).Reverse().Select(a => a.Name).ToList(); // folders and the jump host
         return (path.Count == 0 ? "Top level" : string.Join(" › ", path)) + " › " + node.Name;
     }
 

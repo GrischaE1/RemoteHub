@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -15,8 +15,8 @@
     <Product>RemoteHub</Product>
     <Authors>Grischa Ernst</Authors>
     <Company>Grischa Ernst</Company>
-    <Copyright>© 2026 Grischa Ernst</Copyright>
-    <Version>0.18.4</Version>
+    <Copyright>Â© 2026 Grischa Ernst</Copyright>
+    <Version>0.18.8</Version>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
@@ -31,7 +31,7 @@
     <!-- PowerShell remoting client (WSMan) for the PowerShell tab and file transfer -->
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.6" />
     <!-- Local database: SQLite with whole-file encryption (SQLite3 Multiple Ciphers, ChaCha20-Poly1305). Only the
-         .Core package – the full Microsoft.Data.Sqlite brings an unencrypted SQLite that conflicts with this bundle. -->
+         .Core package â€“ the full Microsoft.Data.Sqlite brings an unencrypted SQLite that conflicts with this bundle. -->
     <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.12" />
     <PackageReference Include="SQLite3MC.PCLRaw.bundle" Version="2.4.0" />
     <!-- Network shares: SFTP, FTP/FTPS, and SMB when Windows' own client can't be used (another account on the same server) -->
@@ -52,6 +52,7 @@
     <!-- Wire contract shared with the RemoteHub Agent -->
     <Compile Include="..\RemoteHub.Agent\AgentProtocol.cs" Link="Remoting\AgentProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\AgentEnrollment.cs" Link="Remoting\AgentEnrollment.cs" />
+    <Compile Include="..\RemoteHub.Agent\TunnelProtocol.cs" Link="Remoting\TunnelProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\DesktopProtocol.cs" Link="Remoting\Desktop\DesktopProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\VideoCodec.cs" Link="Remoting\Desktop\VideoCodec.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\ClipboardTransfer.cs" Link="Remoting\Desktop\ClipboardTransfer.cs" />

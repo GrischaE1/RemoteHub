@@ -92,6 +92,14 @@ internal static class DesktopHelperProgram
         using var screen = new WindowsScreen();
         using var keyboard = new WindowsInput();
         var session = new DesktopHelperSession(input, output, ui, screen, keyboard, new WindowsAppWindows());
+        // RDP windows in this session keep drawing when minimized while the admin is here (put back when this ends);
+        // tried again until someone is signed in. Disposed in reverse order: the timer first, then the setting is put back.
+        using var keepRdp = new KeepRdpDrawing();
+        using var tryRdp = new Timer(_ =>
+        {
+            try { if (keepRdp.Apply() is { } done) session.Note(done); }
+            catch (Exception ex) { session.Note("RDP minimize setting not changed: " + ex.Message); keepRdp.Dispose(); }
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
         session.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
         return 0;
     }
@@ -343,6 +351,9 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     }
 
     private void SendSync(byte[] message) => Send(message).GetAwaiter().GetResult();
+
+    /// <summary>A line for the agent's log (from any thread).</summary>
+    internal void Note(string text) => _ = Send(DesktopWire.Text((DesktopMessage)HelperMessage.Log, text));
 
     private int Level => _init is null || _init.ViewOnly ? DesktopClipboardLevel.Off : _init.Clipboard;
 
@@ -606,6 +617,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     // No clicks or scrolling on what the admin can't see; moving the pointer and letting go still work.
                     if (m.Action is RemoteMouseAction.Down or RemoteMouseAction.Wheel or RemoteMouseAction.HorizontalWheel &&
                         _mask.Any(r => r.Contains(monitor.X + at.X, monitor.Y + at.Y))) continue;
+                    ui.AdminPointer(monitor.X + at.X, monitor.Y + at.Y); // the user's banner lets the admin's clicks through
                     input.Mouse(monitor, at);
                 }
             }

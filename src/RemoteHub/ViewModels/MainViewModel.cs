@@ -24,7 +24,7 @@ public sealed partial class MainViewModel : ObservableObject
         var labels = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
         labels.Tick += (_, _) =>
         {
-            foreach (var c in Items.SelectMany(n => n is Folder f ? f.Descendants() : [n]).OfType<Connection>()) c.RefreshLabels();
+            foreach (var c in AllNodes().OfType<Connection>()) c.RefreshLabels();
         };
         labels.Start();
         if (data.Ui.UsageTrackedSinceUtc is null)
@@ -236,7 +236,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var n in Items)
         {
             yield return n;
-            if (n is Folder f) foreach (var d in f.Descendants()) yield return d;
+            foreach (var d in n.Descendants()) yield return d;
         }
     }
 
@@ -250,8 +250,11 @@ public sealed partial class MainViewModel : ObservableObject
             var options = Inheritance.ResolveOptions(n, Data);
             n.TagBrush = Views.ColorTags.Brush(options.ColorTag);
             if (n is Connection c)
+            {
                 c.AgentMode = c.Agent is not { Status: AgentStatus.Installed } ? AgentMode.None
-                            : options.UseAgent == true ? AgentMode.Active : AgentMode.Available;
+                            : Inheritance.UsesAgent(c, Data) ? AgentMode.Active : AgentMode.Available;
+                c.RefreshRoute();
+            }
         }
     }
 
@@ -306,23 +309,25 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ---------- tree editing ----------
 
-    public ObservableCollection<NodeBase> ChildrenOf(Folder? f) => f?.Children ?? Items;
+    /// <summary>The items in a folder or under a jump host (null = the top level).</summary>
+    public ObservableCollection<NodeBase> ChildrenOf(NodeBase? container) => TreeLayout.ListOf(container, Items);
 
-    /// <summary>Folder that new items should go into, based on the current selection.</summary>
-    public Folder? TargetFolderForNew() => SelectedNode switch
+    /// <summary>Folder (or jump host) that new items should go into, based on the current selection.</summary>
+    public NodeBase? TargetFolderForNew() => SelectedNode switch
     {
         Folder f => f,
+        Connection { Children.Count: > 0 } jumpHost => jumpHost,
         Connection c => c.Parent,
         NetworkShare { Server: null } s => s.Parent,
         _ => null,
     };
 
-    public void Add(NodeBase node, Folder? parent, int index = -1)
+    public void Add(NodeBase node, NodeBase? parent, int index = -1)
     {
         node.Parent = parent;
         var list = ChildrenOf(parent);
         if (index < 0 || index > list.Count) list.Add(node); else list.Insert(index, node);
-        if (parent is not null) parent.IsExpanded = true;
+        Expand(parent);
         RequestSave();
     }
 
@@ -332,14 +337,20 @@ public sealed partial class MainViewModel : ObservableObject
         RequestSave();
     }
 
-    public static bool CanMove(NodeBase node, Folder? target) =>
-        target is null || (node != target && !(node is Folder f && target.Ancestors().Contains(f)));
+    private static void Expand(NodeBase? container)
+    {
+        if (container is Folder f) f.IsExpanded = true;
+        if (container is Connection c) c.IsExpanded = true;
+    }
+
+    /// <summary>Whether <paramref name="node"/> may go into <paramref name="target"/> – see <see cref="TreeLayout.WhyNot"/>.</summary>
+    public static bool CanMove(NodeBase node, NodeBase? target) => TreeLayout.WhyNot(node, target) is null;
 
     /// <summary>
     /// What changes for the credentials when <paramref name="node"/> moves into <paramref name="target"/> (null = top level):
     /// (old source, new source), or null when they stay the same (e.g. reordering within a folder).
     /// </summary>
-    public (string From, string To)? CredentialChange(NodeBase node, Folder? target)
+    public (string From, string To)? CredentialChange(NodeBase node, NodeBase? target)
     {
         if (node.Parent == target || !node.InheritCredentials) return null;
         var (_, from) = Inheritance.ResolveCredentials(node, Data);
@@ -348,7 +359,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Moves a node into <paramref name="target"/> at <paramref name="index"/> (−1 = end).</summary>
-    public bool Move(NodeBase node, Folder? target, int index = -1)
+    public bool Move(NodeBase node, NodeBase? target, int index = -1)
     {
         if (!CanMove(node, target)) return false;
         var from = ChildrenOf(node.Parent);
@@ -358,21 +369,23 @@ public sealed partial class MainViewModel : ObservableObject
         from.Remove(node);
         node.Parent = target;
         if (index < 0 || index > to.Count) to.Add(node); else to.Insert(index, node);
-        if (target is not null) target.IsExpanded = true;
+        Expand(target);
         RequestSave();
         return true;
     }
 
+    /// <summary>A copy next to the original. A jump host is copied without the items under it.</summary>
     public NodeBase Duplicate(NodeBase node)
     {
         var json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes<NodeBase>(node, SettingsStore.Json);
         var copy = System.Text.Json.JsonSerializer.Deserialize<NodeBase>(json, SettingsStore.Json)!;
+        TreeLayout.Nest(new List<NodeBase> { copy }); // jump hosts inside a copied folder get their items back
         // A copy gets new IDs and no agent identity (a pinned agent certificate belongs to exactly one device).
         void NewIds(NodeBase n)
         {
             n.Id = Guid.NewGuid();
-            if (n is Connection k) { k.Agent = null; foreach (var s in k.Shares) s.Id = Guid.NewGuid(); }
-            if (n is Folder f) foreach (var c in f.Children) NewIds(c);
+            if (n is Connection k) { k.Agent = null; k.RdpCertificate = null; foreach (var s in k.Shares) s.Id = Guid.NewGuid(); }
+            foreach (var c in n.Contents ?? []) NewIds(c);
         }
         NewIds(copy);
         copy.Name += " (copy)";

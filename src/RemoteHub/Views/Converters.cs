@@ -36,6 +36,20 @@ public sealed class BrushTint : IValueConverter
     public object ConvertBack(object? value, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
 }
 
+/// <summary>Several collections shown as one list that follows their changes (a connection's shares, then what is reached through it).</summary>
+public sealed class ConcatCollections : IMultiValueConverter
+{
+    public object Convert(object?[] values, Type t, object? p, CultureInfo c)
+    {
+        var all = new CompositeCollection();
+        foreach (var v in values)
+            if (v is System.Collections.IEnumerable items) all.Add(new CollectionContainer { Collection = items });
+        return all;
+    }
+
+    public object[] ConvertBack(object? value, Type[] t, object? p, CultureInfo c) => throw new NotSupportedException();
+}
+
 public sealed class TransferStateToSymbol : IValueConverter
 {
     public object Convert(object? value, Type t, object? p, CultureInfo c) => value switch

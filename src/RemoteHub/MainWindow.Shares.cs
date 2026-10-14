@@ -35,8 +35,9 @@ public partial class MainWindow
     /// <summary>New → Network share: a share on its own, in the selected folder.</summary>
     private void NewShare_Click(object sender, RoutedEventArgs e)
     {
-        var parent = _vm.TargetFolderForNew();
-        var share = new NetworkShare { Parent = parent };
+        var share = new NetworkShare();
+        var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew()); // not below a jump host (yet)
+        share.Parent = parent;
         if (new ShareEditorWindow(share, null, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         _vm.Add(share, parent);
         share.IsSelected = true;
@@ -117,6 +118,11 @@ public partial class MainWindow
     /// <summary>Opens the share in a new tab: this PC on the left, the share on the right.</summary>
     private void OpenShare(NetworkShare share)
     {
+        if ((share.Server ?? (NodeBase)share).JumpHost is { } jump)
+        {
+            _ = Dialogs.Info(this, "Network share", $"{share.Name} is reached through {jump.Name}. Network shares can't be reached through a jump host yet.");
+            return;
+        }
         var c = ServerOf(share);
         if (ShareAccount(share, null) is not { } account) return;
         var s = _vm.OpenShare(c, share);

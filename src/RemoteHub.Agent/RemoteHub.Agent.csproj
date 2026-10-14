@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -13,8 +13,8 @@
     <Product>RemoteHub Agent</Product>
     <Authors>Grischa Ernst</Authors>
     <Company>Grischa Ernst</Company>
-    <Copyright>© 2026 Grischa Ernst</Copyright>
-    <Version>0.18.4</Version>
+    <Copyright>Â© 2026 Grischa Ernst</Copyright>
+    <Version>0.18.8</Version>
     <PlatformTarget>x64</PlatformTarget>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Publish: one self-contained file, no runtime needed on the device (build-installer.ps1 publishes with
@@ -28,7 +28,7 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <PublishTrimmed>true</PublishTrimmed>
     <TrimMode>partial</TrimMode>
-    <!-- Warnings come from unused framework parts (MVC); the agent itself is reflection-free – checked by "RemoteHubAgent.exe selftest". -->
+    <!-- Warnings come from unused framework parts (MVC); the agent itself is reflection-free â€“ checked by "RemoteHubAgent.exe selftest". -->
     <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
     <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
@@ -48,7 +48,7 @@
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
-  <!-- Optional virtual monitor for devices without one (third-party, MIT, signed – see third-party\...\README.md).
+  <!-- Optional virtual monitor for devices without one (third-party, MIT, signed â€“ see third-party\...\README.md).
        Installed next to the exe in "VirtualDisplay"; the agent checks the files' hashes before it installs the driver. -->
   <ItemGroup>
     <None Include="..\..\third-party\VirtualDisplayDriver\24.12.24\*" Exclude="..\..\third-party\VirtualDisplayDriver\24.12.24\README.md"

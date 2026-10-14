@@ -29,7 +29,7 @@ internal static class RemoteToolChrome
         var title = new TextBlock { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(SessionBase.Title));
         left.Children.Add(title);
-        var sub = new TextBlock { Text = $"  ·  {kind}  ·  " + (where ?? session.Connection.Host), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var sub = new TextBlock { Text = $"  ·  {kind}  ·  " + (where ?? session.Connection.HostWithRoute), FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         left.Children.Add(sub);
         left.Children.Add(TransportBadge());

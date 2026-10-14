@@ -21,7 +21,7 @@ public sealed record SearchHit(NodeBase Node, string Path, int Score, string? No
 /// <summary>Searches folders and connections by name, host, notes and folder path. All words must match.</summary>
 public static class NodeSearch
 {
-    public static string PathOf(NodeBase n) => string.Join(" › ", n.Ancestors().Reverse().Select(a => a.Name));
+    public static string PathOf(NodeBase n) => string.Join(" › ", TreeLayout.Containers(n).Reverse().Select(a => a.Name));
 
     /// <summary>
     /// Connections not used for <paramref name="days"/> days (oldest first), optionally narrowed by a search. Use is recorded

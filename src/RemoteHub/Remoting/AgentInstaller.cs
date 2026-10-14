@@ -1,5 +1,6 @@
 using System.Management.Automation.Runspaces;
 using System.Net.Http;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
@@ -7,7 +8,8 @@ using RemoteHub.Agent;
 
 namespace RemoteHub.Remoting;
 
-public enum AgentInstallMethod { Remoting, ThroughAgent, Clipboard }
+/// <summary>How the agent gets onto the device. SaveFiles: the installer and the enrollment file go to a folder, for installing by hand or with software distribution.</summary>
+public enum AgentInstallMethod { Remoting, ThroughAgent, Clipboard, SaveFiles }
 
 /// <summary>What the operator chose in the install dialog.</summary>
 public sealed record AgentInstallOptions(
@@ -217,15 +219,20 @@ public static class AgentInstaller
 
     // ------------------------------------------------------------------ health
 
-    /// <summary>GET /v1/health over TLS pinned to <paramref name="fingerprint"/>.</summary>
-    public static async Task<AgentHealth> HealthAsync(string host, int port, string fingerprint, CancellationToken ct)
+    /// <summary>GET /v1/health over TLS pinned to <paramref name="fingerprint"/> (directly).</summary>
+    public static Task<AgentHealth> HealthAsync(string host, int port, string fingerprint, CancellationToken ct) =>
+        HealthAsync(host, new AgentEndpoint(port, fingerprint), ct);
+
+    /// <summary>GET /v1/health over TLS pinned to the endpoint's fingerprint – through its jump host, if it has one.</summary>
+    public static async Task<AgentHealth> HealthAsync(string host, AgentEndpoint endpoint, CancellationToken ct)
     {
-        var expected = AgentProtocol.NormalizeFingerprint(fingerprint);
-        using var handler = new HttpClientHandler
-        {
-            ServerCertificateCustomValidationCallback = (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.RawData) == expected,
-        };
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+        var expected = AgentProtocol.NormalizeFingerprint(endpoint.Fingerprint);
+        var port = endpoint.Port;
+        RemoteCertificateValidationCallback pinned = (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.GetRawCertData()) == expected;
+        using var handler = endpoint.Via is { } via
+            ? AgentClientTransport.ThroughJumpHost(via, pinned)
+            : new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = pinned } };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(endpoint.Via is null ? 8 : 30) };
         var h = host.Trim();
         if (h.Contains(':') && !h.StartsWith('[')) h = $"[{h}]";
         var json = await http.GetStringAsync($"https://{h}:{port}{AgentProtocol.HealthPath}", ct).ConfigureAwait(false);
@@ -238,14 +245,14 @@ public static class AgentInstaller
     /// with <paramref name="expectedVersion"/>. Returns the last answer – still the old version if the update didn't
     /// install (compare <see cref="AgentHealth.Version"/>) – or null if it never answered again.
     /// </summary>
-    public static async Task<AgentHealth?> WaitForRestartAsync(string host, int port, string fingerprint, string? expectedVersion,
+    public static async Task<AgentHealth?> WaitForRestartAsync(string host, AgentEndpoint endpoint, string? expectedVersion,
         Action<string> progress, CancellationToken ct)
     {
         progress("Waiting for the agent to restart…");
         var downBy = DateTime.UtcNow.AddSeconds(90);
         while (DateTime.UtcNow < downBy)
         {
-            try { await HealthAsync(host, port, fingerprint, ct); }
+            try { await HealthAsync(host, endpoint, ct); }
             catch (Exception) when (!ct.IsCancellationRequested) { break; } // it went down (or answers with the new certificate)
             await Task.Delay(1500, ct);
         }
@@ -255,7 +262,7 @@ public static class AgentInstaller
         {
             try
             {
-                last = await HealthAsync(host, port, fingerprint, ct);
+                last = await HealthAsync(host, endpoint, ct);
                 if (expectedVersion is null || last.Version == expectedVersion) return last;
             }
             catch (Exception) when (!ct.IsCancellationRequested) { }

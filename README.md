@@ -221,6 +221,7 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
 - **Disconnected sessions:** when the Windows session's RDP connection is closed, it has no screen – RemoteHub says so over the still picture and continues when someone connects to it again.
 - **Your own account:** signing in on the device with the account you connected with (or connecting to your own session) asks nobody – there is nobody else to ask.
 - **Your own RDP session:** when the session you pick is connected by RDP from this PC, RemoteHub warns you – the RDP window moves your mouse to follow the remote pointer. Minimize it while you control the session here, or connect from another PC.
+- **RDP windows on the device:** Remote Desktop Connection stops the server drawing a session while its window is minimized, so an agent connection to that session would show black. While you are connected, the agent sets `RemoteDesktop_SuppressWhenMinimized` = 2 for the signed-in user of the session you see, so RDP windows there keep drawing when minimized, and puts the user's own value back (or removes it) when the connection ends. RDP windows opened before need to reconnect once.
 - **The user at the device:**
   - *Ask them*: a RemoteHub window asks to allow it (denied when nobody answers in time).
   - *Show them a code*: the device shows a 6-digit code that they read out to you (3 attempts).
@@ -244,7 +245,8 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
   - `AuditToEventLog` (DWORD 0): audit entries only in the log file, not in the Windows Application log.
   - `PrivacyScreen` (DWORD): 0 the privacy screen is off; 1 allowed, but the mouse and keyboard at the device stay usable; 2 allowed and the mouse and keyboard at the device are blocked with it (default; the admin can untick it per session).
   - `HiddenApps` (REG_MULTI_SZ): apps never shown to an admin, whatever the user chooses – full program paths (`C:Program FilesKeePassKeePass.exe`) or `aumid:` and a Store app's AppUserModelID.
-  - Subkey `Rights`, values `PowerShell`, `Desktop`, `DesktopViewOnly`, `SecureDesktop`, `ConsentBypass`, `PrivacyScreen` (REG_MULTI_SZ, group SIDs or names). Default: the agent's allowed groups (Administrators) for everything except view-only and `ConsentBypass` (nobody).
+  - `TunnelEnabled`, `TunnelTargets`, `TunnelPorts`, `MaxTunnelStreams`: the device as a jump host – see *Jump hosts* below.
+  - Subkey `Rights`, values `PowerShell`, `Desktop`, `DesktopViewOnly`, `SecureDesktop`, `ConsentBypass`, `PrivacyScreen`, `Tunnel` (REG_MULTI_SZ, group SIDs or names). Default: the agent's allowed groups (Administrators) for everything except view-only and `ConsentBypass` (nobody).
   - If the policy key exists but can't be read, the agent allows nothing until it can (logged).
 - **Ctrl+Alt+Del** (the button) is sent by the agent service for the console session and by the helper for an RDP session. Windows only accepts it when the setting *Disable or enable software Secure Attention Sequence* (`SoftwareSASGeneration`) allows services: when no policy configures it, the agent sets it to *Services* (1) while it is installed (Windows ignores a value switched on only for a moment) and uninstalling removes it again; a configured policy is respected (the tab says so if it doesn't allow it). Each press is logged with the session and the setting.
 - **Virtual display (servers without a monitor):** a GPU without a monitor often offers only 640×480. With the install option *Virtual display for servers without a monitor* (on by default; MSI property `VIRTUALDISPLAY=1|0`, or the `.rhagent` file) the agent installs a virtual monitor driver and switches it on while a desktop connection needs it: at the size of the RemoteHub window, as the primary monitor; it follows the window's size and is switched off when the last connection ends. `virtualDisplay` in `agent.json`: `auto` (default – only when the device offers no usable resolution), `always`, `off`.
@@ -254,6 +256,23 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
   - Warning: 2000 sign-in refused, 2100 remote desktop refused, 2101 the user who signed in or unlocked refused it, 2102 ended for no input.
   - Error: 3100 remote desktop error.
 - **Not yet:** signing in automatically with stored credentials (on the backlog), audio, file drag and drop into the picture, a relay for devices outside the network.
+
+### Jump hosts (devices RemoteHub can't reach directly)
+
+- **Use it:** drag a connection (or a folder) onto the middle of another connection – or right-click → **Move under** – and it is reached **through that connection's RemoteHub Agent**. The jump host shows them below its shares; each shows *via JUMP01* next to its address. Move it out again (drag it into a folder, or *Move under → Out of JUMP01*) and it connects directly. Nothing else to set: the navigation is the route.
+- **What goes through:** RDP, PowerShell remoting (WinRM) and the RemoteHub Agent (remote desktop, PowerShell, files, registry, services, processes). Network shares come later (their menu entries say so). One hop: a connection below a jump host can't be a jump host itself.
+- **RDP through a jump host:** the RDP client connects to a local port on this PC that only RemoteHub itself may use, and it can't check the server's certificate by name there. RemoteHub checks it first: a certificate this PC trusts for the name is fine; otherwise you confirm it once (its thumbprint, and how to show it on the device), and RemoteHub connects without asking until it changes. Sign-in uses NTLM (Kerberos needs the real name); where NTLM is blocked, use the remote desktop through the agent.
+- **PowerShell remoting through a jump host** needs HTTPS (WinRM only sends a password over HTTP to trusted hosts, and 127.0.0.1 isn't one unless you add it). *Set up PowerShell remoting on the target* fills in the jump host's address and fetches the certificate through it. A device with the agent installed uses the agent unless the connection itself is set to PowerShell remoting.
+- **Signing in:** RemoteHub signs in to the jump host's agent with the jump host's credentials and to the device with the device's own – the device's credentials are inherited from the jump host's folders, never from the jump host itself. A password that isn't stored is asked once and kept in memory.
+- **Installing the agent on a device behind a jump host:** silently over PowerShell remoting through the jump host when that works, otherwise *Install RemoteHub Agent… → Save the installer and the enrollment file to a folder* and install them there by hand or with software distribution. The firewall scope can be set to the jump host's address in that network (*Add JUMP01 (…)*). Updates go through the jump host.
+- **Security:** the jump host only relays bytes – TLS to the device's pinned certificate runs end to end, so it never sees the device's credentials, the picture or the commands. RemoteHub keeps one signed-in connection per jump host for all tabs and closes it after 2 minutes without use.
+- **Policy on the jump host** (same key as above):
+  - `TunnelEnabled` (DWORD 0): this device is never a jump host.
+  - `TunnelTargets` (REG_MULTI_SZ): where it may connect to – address ranges (`10.20.0.0/16`, `fd00::/8`, `10.1.2.3`) and names (`sql01.contoso.local`, `*.contoso.local`). Unset: anywhere. The jump host's own addresses are refused unless an entry names that exact address; loopback, link-local (`169.254.0.0/16`, e.g. cloud metadata) and multicast addresses unless a range of /8 or narrower contains them (`0.0.0.0/0` doesn't). A name allowed by pattern that resolves there is refused too.
+  - `TunnelPorts` (REG_MULTI_SZ): ports it may connect to (`58732`, `3389`, `5985-5986`, `*`). Unset: every port.
+  - `MaxTunnelStreams` (DWORD, 1–1024, default 64): connections open at once through one jump connection.
+  - Right `Tunnel` (subkey `Rights`): who may use it as a jump host – by default the agent's allowed groups (Administrators).
+- **Audit on the jump host:** 1200/1202 jump connection started/ended (account, source), 1201 each connection through it (target, address, port, duration, bytes), 2200 refused by policy (which rule).
 
 ## Storage & security
 

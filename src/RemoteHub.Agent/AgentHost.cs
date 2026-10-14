@@ -19,6 +19,9 @@ public sealed record AgentHostOptions(
     DesktopServices? Desktop = null,
     Func<AgentPolicy>? Policy = null)
 {
+    /// <summary>Name resolution for jump connections (tests set their own); null = the system's.</summary>
+    internal TunnelNetwork? TunnelNetwork { get; init; }
+
     /// <summary>The policy for this connection (read again each time, so changes apply without a restart).</summary>
     public AgentPolicy CurrentPolicy() => Policy?.Invoke() ?? AgentPolicy.Load(Config);
 }
@@ -59,8 +62,11 @@ public static class AgentHost
         // RequestDelegates only (no reflection-based parameter binding): the agent is published trimmed.
         app.MapGet(AgentProtocol.HealthPath, (RequestDelegate)(ctx =>
         {
-            string[] features = o.Desktop is not null && o.CurrentPolicy().DesktopEnabled ? [AgentFeatures.PowerShell, AgentFeatures.Desktop] : [AgentFeatures.PowerShell];
-            var health = new AgentHealth("RemoteHub Agent", AgentVersion, AgentProtocol.Version, o.Config.DeviceId, features);
+            var policy = o.CurrentPolicy();
+            List<string> features = [AgentFeatures.PowerShell];
+            if (o.Desktop is not null && policy.DesktopEnabled) features.Add(AgentFeatures.Desktop);
+            if (policy.TunnelEnabled) features.Add(AgentFeatures.Tunnel);
+            var health = new AgentHealth("RemoteHub Agent", AgentVersion, AgentProtocol.Version, o.Config.DeviceId, [.. features]);
             return ctx.Response.WriteAsJsonAsync(health, AgentJson.Default.AgentHealth);
         }));
 
@@ -175,6 +181,33 @@ public static class AgentHost
             {
                 using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
                 await new DesktopEndpoint(o, identity, policy, source).RunAsync(ws, ctx.RequestAborted);
+            }
+            finally { Interlocked.Decrement(ref sessions); }
+        }));
+
+        // The device as a jump host: RemoteHub reaches other devices through it (policy TunnelEnabled/Targets/Ports, right Tunnel).
+        app.Map(TunnelProtocol.Path, (RequestDelegate)(async ctx =>
+        {
+            var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            var policy = Policy();
+            if (!policy.TunnelEnabled)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound; // RemoteHub explains: turned off on this device
+                return;
+            }
+            using var identity = await SignIn(ctx, policy.Groups(AgentRight.Tunnel), source);
+            if (identity is null) return;
+            if (Interlocked.Increment(ref sessions) > o.Config.MaxSessions)
+            {
+                Interlocked.Decrement(ref sessions);
+                o.Log.Write($"Refused {identity.Account} from {source}: session limit ({o.Config.MaxSessions}) reached");
+                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                return;
+            }
+            try
+            {
+                using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+                await new TunnelEndpoint(o.Log, identity.Account, source, Policy, o.TunnelNetwork).RunAsync(ws, ctx.RequestAborted);
             }
             finally { Interlocked.Decrement(ref sessions); }
         }));

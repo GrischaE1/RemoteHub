@@ -69,7 +69,7 @@ public sealed class PsConsoleView : Border, IRecordableView
         header.SetResourceReference(Border.BackgroundProperty, "SessionHeaderBrush");
         var title = new TextBlock { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(PsSession.Title));
-        var kind = new TextBlock { Text = "  ·  PowerShell  ·  " + session.Connection.Host, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var kind = new TextBlock { Text = "  ·  PowerShell  ·  " + session.Connection.HostWithRoute, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         kind.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
         left.Children.Add(_headerStripe);
@@ -520,7 +520,7 @@ public sealed class PsConsoleView : Border, IRecordableView
         var title = new TextBlock { FontSize = 22, FontWeight = FontWeights.SemiBold, TextAlignment = TextAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(PsSession.Title));
         var sub = new TextBlock { FontSize = 13, TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 4, 0, 0) };
-        sub.SetBinding(TextBlock.TextProperty, new Binding(nameof(SessionBase.Transport)) { StringFormat = "{0} · " + session.Connection.Host, TargetNullValue = session.Connection.Host });
+        sub.SetBinding(TextBlock.TextProperty, new Binding(nameof(SessionBase.Transport)) { StringFormat = "{0} · " + session.Connection.HostWithRoute, TargetNullValue = session.Connection.HostWithRoute });
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         var credInfo = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, MaxWidth = 560, Margin = new Thickness(0, -6, 0, 18) };
         credInfo.SetBinding(TextBlock.TextProperty, nameof(PsSession.CredentialInfo));

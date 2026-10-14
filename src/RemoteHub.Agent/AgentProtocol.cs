@@ -40,4 +40,6 @@ public static class AgentFeatures
 {
     public const string PowerShell = "powershell";
     public const string Desktop = "desktop";
+    /// <summary>The device can be used as a jump host (<see cref="TunnelProtocol"/>).</summary>
+    public const string Tunnel = "tunnel";
 }

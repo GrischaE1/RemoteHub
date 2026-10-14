@@ -7,6 +7,16 @@ namespace RemoteHub.Rdp;
 
 public enum SessionState { Idle, Connecting, Connected, Disconnected, Failed }
 
+/// <summary>
+/// How an RDP session reaches its server: directly, or through a local port that leads through a jump host.
+/// <paramref name="CertificateChecked"/>: RemoteHub checked the certificate the server presents there (the control only sees
+/// 127.0.0.1 and can't check the name itself).
+/// </summary>
+public sealed record RdpRoute(Remoting.LocalForward? Forward, bool CertificateChecked)
+{
+    public static readonly RdpRoute Direct = new(null, false);
+}
+
 /// <summary>One live RDP session (one ActiveX control instance).</summary>
 public sealed partial class RdpSession : SessionBase
 {
@@ -24,6 +34,8 @@ public sealed partial class RdpSession : SessionBase
     private bool _loggedIn, _closeRequested, _connectPending, _disposed;
     private RdpOptions _opt = new();
     private CredentialSet _cred = new();
+    private RdpRoute _route = RdpRoute.Direct;
+    private int _routeAttempt;
 
     public RdpSession(Connection connection) : base(connection)
     {
@@ -82,6 +94,11 @@ public sealed partial class RdpSession : SessionBase
     public PasswordPromptAction PasswordPrompt => _opt.PasswordPrompt == PasswordPromptAction.Off ? PasswordPromptAction.Off : PasswordPromptAction.Clipboard;
     /// <summary>Credentials used for the current/last connect (kept in memory only).</summary>
     internal CredentialSet UsedCredentials => _cred;
+    /// <summary>
+    /// The way to the server, asked before each connect (a jump host may need a password or a certificate check). Null
+    /// result: not now – said already. Unset: directly.
+    /// </summary>
+    internal Func<Task<RdpRoute?>>? Route { get; set; }
     /// <summary>User pressed the session-switch hotkey inside the session (argument = direction reported by the control).</summary>
     public event Action<int>? FocusReleased;
 
@@ -95,8 +112,28 @@ public sealed partial class RdpSession : SessionBase
         ConnectStartedUtc = DateTime.UtcNow;
         _remoteW = _remoteH = 0;
         Title = Connection.Name;
-        _connectPending = true;
         SetState(SessionState.Connecting, "Connecting…");
+        if (Route is { } route) { _ = ConnectThroughAsync(route); return; }
+        _connectPending = true;
+        if (_host.IsCreated && _host.IsHandleCreated) ConnectNow();
+    }
+
+    private async Task ConnectThroughAsync(Func<Task<RdpRoute?>> route)
+    {
+        var attempt = ++_routeAttempt;
+        RdpRoute? r;
+        try { r = await route(); }
+        catch (Exception ex)
+        {
+            if (attempt == _routeAttempt && !_disposed) SetState(SessionState.Failed, ex.Message);
+            return;
+        }
+        if (attempt != _routeAttempt || _disposed) { r?.Forward?.Dispose(); return; } // started again meanwhile, or closed
+        if (r is null) { SetState(SessionState.Failed, "Not connected."); return; }
+        var old = _route;
+        _route = r;
+        old.Forward?.Dispose();
+        _connectPending = true;
         if (_host.IsCreated && _host.IsHandleCreated) ConnectNow();
     }
 
@@ -133,7 +170,7 @@ public sealed partial class RdpSession : SessionBase
     private void Configure(dynamic c)
     {
         var o = _opt;
-        c.Server = Connection.Host.Trim();
+        c.Server = _route.Forward?.Host ?? Connection.Host.Trim(); // through a jump host: the local port that leads there
         c.FullScreenTitle = Connection.Name;
         c.ConnectingText = "Connecting…";
         c.UserName = _cred.Username ?? "";
@@ -147,9 +184,10 @@ public sealed partial class RdpSession : SessionBase
         c.ColorDepth = o.ColorDepth ?? 32;
 
         var a = c.AdvancedSettings9;
-        a.RDPPort = Connection.Port;
+        a.RDPPort = _route.Forward?.Port ?? Connection.Port;
         Try(() => a.EnableCredSspSupport = o.EnableNla ?? true);
-        Try(() => a.AuthenticationLevel = (uint)(o.ServerAuthentication ?? ServerAuth.Warn));
+        // Checked by RemoteHub already: the control would only see that 127.0.0.1 isn't the certificate's name.
+        Try(() => a.AuthenticationLevel = _route.CertificateChecked ? 0u : (uint)(o.ServerAuthentication ?? ServerAuth.Warn));
         Try(() => a.RedirectClipboard = o.RedirectClipboard ?? true);
         Try(() => a.RedirectDrives = o.RedirectDrives ?? false);
         Try(() => a.RedirectPrinters = o.RedirectPrinters ?? false);
@@ -287,6 +325,8 @@ public sealed partial class RdpSession : SessionBase
                 string d = c.GetErrorDescription((uint)reason, (uint)c.ExtendedDisconnectReason);
                 if (!string.IsNullOrWhiteSpace(d)) text = d;
             });
+            // Through a jump host: its answer says more than "can't connect".
+            if (_route.Forward?.TakeError() is { } why) text = why;
         }
         SetState(reason is 1 or 2 or 3 ? SessionState.Disconnected : SessionState.Failed, text);
     }
@@ -416,5 +456,6 @@ public sealed partial class RdpSession : SessionBase
         _focusTimer.Stop();
         _fitTimer.Stop();
         Try(() => _host.Dispose());
+        _route.Forward?.Dispose();
     }
 }

@@ -10,6 +10,7 @@
     <v:SessionStateToBrush x:Key="StateBrush" />
     <v:BrushTint x:Key="BrushTint" />
     <v:Base64ImageConverter x:Key="Base64Image" />
+    <v:ConcatCollections x:Key="Concat" />
     <v:TransferStateToSymbol x:Key="TransferSymbol" />
     <v:TransferStateToBrush x:Key="TransferBrush" />
     <v:BoolToChevron x:Key="ChevronSymbol" />
