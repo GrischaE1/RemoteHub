@@ -18,6 +18,7 @@ public sealed class RemotingSetupDialog : FluentWindow
 {
     private const int ClipboardSeconds = 120;
     private readonly string _connectionName, _host;
+    private readonly JumpRoute? _via;
     private readonly RadioButton _https = new() { Content = "HTTPS with a new certificate for this computer (recommended – works with IP addresses and computers outside the domain)", IsChecked = true, Margin = new Thickness(0, 0, 0, 6) };
     private readonly RadioButton _http = new() { Content = "HTTP (domain computers reached by name – Kerberos)", Margin = new Thickness(0, 0, 0, 4) };
     private readonly TextBox _allow;
@@ -31,10 +32,12 @@ public sealed class RemotingSetupDialog : FluentWindow
     /// <summary>Thumbprint of the certificate this PC now trusts (for the connection's status).</summary>
     public string? TrustedThumbprint { get; private set; }
 
-    public RemotingSetupDialog(string connectionName, string host, string? lastError, string? detectedAddress)
+    /// <param name="via">The jump host the target is reached through: only its address there is allowed, and the certificate is fetched through it.</param>
+    public RemotingSetupDialog(string connectionName, string host, string? lastError, string? detectedAddress, JumpRoute? via = null)
     {
         _connectionName = connectionName;
         _host = host;
+        _via = via;
         Title = "Set up PowerShell remoting";
         Width = 620;
         SizeToContent = SizeToContent.Height;
@@ -58,9 +61,12 @@ public sealed class RemotingSetupDialog : FluentWindow
         body.Children.Add(_http);
 
         body.Children.Add(new TextBlock { Text = "Allow connections from", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 12, 0, 4) });
-        _allow = new TextBox { Text = string.Join(", ", RemotingSetup.AllLocalAddresses(detectedAddress)), PlaceholderText = "e.g. 192.168.1.20 or 10.0.0.0/24", TextWrapping = TextWrapping.Wrap };
+        _allow = new TextBox { Text = via is null ? string.Join(", ", RemotingSetup.AllLocalAddresses(detectedAddress)) : detectedAddress ?? "", PlaceholderText = "e.g. 192.168.1.20 or 10.0.0.0/24", TextWrapping = TextWrapping.Wrap };
         body.Children.Add(_allow);
-        body.Children.Add(Muted(detectedAddress is null
+        body.Children.Add(Muted(via is not null
+            ? $"{host} is reached through {via.Name} and only sees connections from it" +
+              (detectedAddress is null ? $": enter {via.Name}'s address in that network." : $" ({detectedAddress} in that network).")
+            : detectedAddress is null
             ? "All addresses of this PC are filled in. With NAT or VPN in between, add the address the target sees, or a subnet (comma-separated)."
             : $"All addresses of this PC (it uses {detectedAddress} to reach {host}). With NAT or VPN in between, add the address the target sees, or a subnet. Only these addresses get a firewall rule.",
             0, 4, 0, 0));
@@ -156,7 +162,7 @@ public sealed class RemotingSetupDialog : FluentWindow
         _test.IsEnabled = false;
         try
         {
-            var (thumbprint, error) = await CheckAndTrustCertificate(this, _host);
+            var (thumbprint, error) = await CheckAndTrustCertificate(this, _host, _via);
             if (error is not null) { Status(error, true); return false; }
             TrustedThumbprint = thumbprint;
             return true;
@@ -169,18 +175,20 @@ public sealed class RemotingSetupDialog : FluentWindow
     /// the setup script printed, and trusts it on this PC if the user confirms. Returns the trusted thumbprint, or why not.
     /// Also used by the connection test when HTTPS fails because the certificate isn't trusted yet.
     /// </summary>
-    public static async Task<(string? Thumbprint, string? Error)> CheckAndTrustCertificate(Window owner, string host)
+    public static async Task<(string? Thumbprint, string? Error)> CheckAndTrustCertificate(Window owner, string host, JumpRoute? via = null)
     {
         System.Security.Cryptography.X509Certificates.X509Certificate2 cert;
         try
         {
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            cert = await RemotingSetup.FetchCertificateAsync(host, 5986, cts.Token);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(via is null ? 10 : 30));
+            cert = await RemotingSetup.FetchCertificateAsync(host, 5986, cts.Token, via);
         }
         catch (Exception ex)
         {
             DiagLog.Write("Remoting setup: certificate not fetched – " + ex.GetBaseException().Message);
-            return (null, $"{host} doesn't answer on port 5986 ({ex.GetBaseException().Message}). Did the script finish without errors, and is this PC's address in its list?");
+            return (null, ex is JumpHostException ? ex.Message
+                : $"{host} doesn't answer on port 5986 ({ex.GetBaseException().Message}). Did the script finish without errors, and is " +
+                  (via is null ? "this PC's address" : $"{via.Name}'s address") + " in its list?");
         }
         using (cert)
         {

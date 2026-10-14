@@ -296,6 +296,10 @@
                                             </Style>
                                         </Border.Style>
                                     </Border>
+                                    <!-- A server's share: a connector to the server above ("belongs to"), unlike items reached through it -->
+                                    <Path Data="M 3,0 V 9 H 11" Width="12" Height="18" Margin="0,0,4,0" VerticalAlignment="Top" StrokeThickness="1.2"
+                                          Stroke="{DynamicResource TextFillColorTertiaryBrush}" SnapsToDevicePixels="True"
+                                          Visibility="{Binding IsStandalone, Converter={StaticResource InvBoolToVis}}" />
                                     <Grid Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="{Binding DisplaySymbol}">
                                             <ui:SymbolIcon.Style>
@@ -320,12 +324,34 @@
                                             <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding ProtocolLabel}" Style="{StaticResource Caption}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
-                                        <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis"
-                                                   Visibility="{Binding IsStandalone, Converter={StaticResource BoolToVis}}" />
+                                        <DockPanel Visibility="{Binding IsStandalone, Converter={StaticResource BoolToVis}}">
+                                            <!-- Reached through a jump host: "via JUMP01", as on a connection -->
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                        <Setter Property="ToolTip" Value="{Binding RouteToolTip}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding RouteUsable}" Value="False">
+                                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>
-                            <HierarchicalDataTemplate DataType="{x:Type m:Connection}" ItemsSource="{Binding Shares}">
+                            <!-- A connection: its shares, then the connections and folders reached through it (a jump host) -->
+                            <HierarchicalDataTemplate DataType="{x:Type m:Connection}">
+                                <HierarchicalDataTemplate.ItemsSource>
+                                    <MultiBinding Converter="{StaticResource Concat}">
+                                        <Binding Path="Shares" />
+                                        <Binding Path="Children" />
+                                    </MultiBinding>
+                                </HierarchicalDataTemplate.ItemsSource>
                                 <Grid Margin="0,2" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
@@ -387,7 +413,23 @@
                                             </TextBlock>
                                             <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
                                         </DockPanel>
-                                        <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" />
+                                        <DockPanel>
+                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used) -->
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                        <Setter Property="ToolTip" Value="{Binding RouteToolTip}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding RouteUsable}" Value="False">
+                                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
                                         <TextBlock Text="Checking PowerShell remoting…" Style="{StaticResource Caption}" FontSize="11"
                                                    Foreground="{DynamicResource SystemAccentColorPrimaryBrush}"
                                                    Visibility="{Binding PsChecking, Converter={StaticResource BoolToVis}}" />
@@ -416,6 +458,10 @@
                                     <DataTrigger Binding="{Binding IsFolder}" Value="True">
                                         <Setter Property="Template" Value="{StaticResource FolderItemTemplate}" />
                                     </DataTrigger>
+                                    <!-- A jump host holds what is reached through it: framed like a folder -->
+                                    <DataTrigger Binding="{Binding IsJumpHost}" Value="True">
+                                        <Setter Property="Template" Value="{StaticResource FolderItemTemplate}" />
+                                    </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </TreeView.ItemContainerStyle>
@@ -439,8 +485,10 @@
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
-                                <MenuItem x:Name="CmHistory" Header="History…" Click="CmHistory_Click" Icon="{ui:SymbolIcon History24}"
-                                          ToolTip="Sessions and changes of this connection (audit log)" />
+                                <MenuItem x:Name="CmMoveUnder" Header="Move under" Icon="{ui:SymbolIcon Router24}"
+                                          ToolTip="Reach it through another connection's RemoteHub Agent (a jump host) – or directly again" />
+                                <MenuItem x:Name="CmHistory" Header="Audit log…" Click="CmHistory_Click" Icon="{ui:SymbolIcon DocumentBulletList24}"
+                                          ToolTip="The audit log of this connection: its sessions, changes and file transfers" />
                                 <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
                                 <MenuItem x:Name="CmDelete" Header="Delete" InputGestureText="Del" Click="CmDelete_Click" Icon="{ui:SymbolIcon Delete24}" />
                                 <Separator />

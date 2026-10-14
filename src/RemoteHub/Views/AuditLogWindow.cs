@@ -14,8 +14,8 @@ using DataGrid = Wpf.Ui.Controls.DataGrid;
 namespace RemoteHub.Views;
 
 /// <summary>
-/// The audit log on this PC: filter by time, kind of event, text and connection; check the hash chain; export to CSV.
-/// Opened from Settings → Data, or for one connection from its context menu (then with its connection history).
+/// The audit log on this PC: filter by time, kind of event, connection and text; check the hash chain; export to CSV.
+/// Opened from Settings → Logs, or for one connection from its context menu "Audit log…" (then with its sessions summary).
 /// </summary>
 public sealed class AuditLogWindow : FluentWindow
 {
@@ -24,6 +24,8 @@ public sealed class AuditLogWindow : FluentWindow
 
     private readonly ComboBox _period = new() { MinWidth = 150, Margin = new Thickness(0, 0, 8, 0) };
     private readonly ComboBox _category = new() { MinWidth = 220, Margin = new Thickness(0, 0, 8, 0) };
+    /// <summary>All connections, or one (type its name to jump to it).</summary>
+    private readonly ComboBox _connectionBox = new() { MinWidth = 240, Margin = new Thickness(0, 0, 8, 0), DisplayMemberPath = nameof(ConnectionChoice.Label) };
     private readonly TextBox _search = new() { PlaceholderText = "Search names, details, accounts", MinWidth = 240 };
     private readonly DataGrid _grid = new()
     {
@@ -32,16 +34,19 @@ public sealed class AuditLogWindow : FluentWindow
     };
     private readonly TextBlock _status = new() { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _summary = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Visibility = Visibility.Collapsed };
-    private readonly Border _connectionChip = new() { CornerRadius = new CornerRadius(4), Padding = new Thickness(10, 4, 4, 4), Margin = new Thickness(0, 10, 0, 0),
-                                                       HorizontalAlignment = HorizontalAlignment.Left };
     private readonly DispatcherTimer _searchDelay = new() { Interval = TimeSpan.FromMilliseconds(350) };
-    private Connection? _connection;
     private IReadOnlyList<AuditEntry> _entries = [];
     private int _refresh;
 
-    public AuditLogWindow(Connection? connection = null)
+    /// <summary>An entry of the connection filter: "relaytest  ·  LAB › NUC10" (null = all connections).</summary>
+    private sealed record ConnectionChoice(Connection? Connection, string Label);
+
+    private Connection? SelectedConnection => (_connectionBox.SelectedItem as ConnectionChoice)?.Connection;
+
+    /// <param name="connections">The connections to filter by (the navigation's).</param>
+    /// <param name="connection">Opened for one connection: it is selected in the filter.</param>
+    public AuditLogWindow(IEnumerable<Connection> connections, Connection? connection = null)
     {
-        _connection = connection;
         Title = "Audit log";
         Width = 1100; Height = 720; MinWidth = 640; MinHeight = 420;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -86,16 +91,23 @@ public sealed class AuditLogWindow : FluentWindow
         _category.Items.Add("All events");
         foreach (var (name, _) in AuditEvents.Categories) _category.Items.Add(name);
         _category.SelectedIndex = 0;
+        var choices = new List<ConnectionChoice> { new(null, "All connections") };
+        choices.AddRange(connections
+            .Select(c => new ConnectionChoice(c, TreeLayout.Containers(c).Reverse().Select(n => n.Name).ToList() is { Count: > 0 } path
+                ? $"{c.Name}  ·  {string.Join(" › ", path)}" : c.Name))
+            .OrderBy(c => c.Label, StringComparer.CurrentCultureIgnoreCase));
+        _connectionBox.ItemsSource = choices;
+        _connectionBox.SelectedItem = choices.FirstOrDefault(c => c.Connection == connection) ?? choices[0];
         filters.Children.Add(_period);
         filters.Children.Add(_category);
+        filters.Children.Add(_connectionBox);
         filters.Children.Add(_search);
         var top = new StackPanel();
         top.Children.Add(filters);
-        top.Children.Add(_connectionChip);
         top.Children.Add(_summary);
         var retention = new TextBlock
         {
-            Text = $"Entries are kept for {AuditLog.RetentionDays} days{(AppPolicy.AuditRetentionDays is null ? "" : " (set by your organization)")}. " +
+            Text = $"Entries are kept for {AuditLog.RetentionLabel(AuditLog.RetentionDays)}{(AppPolicy.AuditRetentionDays is null ? " (Settings → Logs)" : " (set by your organisation)")}. " +
                    "Stored on this PC in the encrypted database – never passwords, clipboard or file contents.",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0), Opacity = 0.75,
         };
@@ -115,9 +127,9 @@ public sealed class AuditLogWindow : FluentWindow
 
         _period.SelectionChanged += (_, _) => Refresh();
         _category.SelectionChanged += (_, _) => Refresh();
+        _connectionBox.SelectionChanged += (_, _) => Refresh();
         _search.TextChanged += (_, _) => { _searchDelay.Stop(); _searchDelay.Start(); };
         _searchDelay.Tick += (_, _) => { _searchDelay.Stop(); Refresh(); };
-        UpdateChip();
         Loaded += (_, _) => Refresh();
     }
 
@@ -130,19 +142,6 @@ public sealed class AuditLogWindow : FluentWindow
         _grid.Columns.Add(col);
     }
 
-    private void UpdateChip()
-    {
-        if (_connection is null) { _connectionChip.Visibility = Visibility.Collapsed; _summary.Visibility = Visibility.Collapsed; return; }
-        _connectionChip.SetResourceReference(Border.BackgroundProperty, "ControlFillColorDefaultBrush");
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(new TextBlock { Text = $"Connection: {_connection.Name}", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-        var clear = new Button { Icon = new SymbolIcon(SymbolRegular.Dismiss16), Padding = new Thickness(4), ToolTip = "Show all connections" };
-        clear.Click += (_, _) => { _connection = null; UpdateChip(); Refresh(); };
-        row.Children.Add(clear);
-        _connectionChip.Child = row;
-        _connectionChip.Visibility = Visibility.Visible;
-    }
-
     private DateTime? FromUtc => Periods[Math.Max(0, _period.SelectedIndex)].Days is { } d ? DateTime.UtcNow.AddDays(-d) : null;
 
     private async void Refresh()
@@ -151,7 +150,8 @@ public sealed class AuditLogWindow : FluentWindow
         var from = FromUtc;
         var events = _category.SelectedIndex > 0 ? AuditEvents.Categories[_category.SelectedIndex - 1].Events : null;
         var text = _search.Text;
-        var connection = _connection;
+        var connection = SelectedConnection;
+        if (connection is null) _summary.Visibility = Visibility.Collapsed; // the sessions summary is for one connection
         _status.Text = "Loading…";
         try
         {

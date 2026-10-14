@@ -122,6 +122,7 @@ Out of scope for v1. The design keeps it possible:
 |---|---|---|---|
 | GET | `/v1/health` | none | `{product, version, protocol, deviceId}` – nothing sensitive |
 | GET (WebSocket) | `/v1/powershell` | Basic (Windows account) | One PowerShell session. Each text message is one line of the out-of-process remoting protocol, in both directions. |
+| GET (WebSocket) | `/v1/tunnel` | Basic (Windows account, right `Tunnel`) | The device as a jump host: TCP streams from it to other devices, many in one connection (`TunnelProtocol.cs`; [jump-host-design.md](jump-host-design.md)). 404 when `TunnelEnabled` = 0. |
 
 - Status codes on `/v1/powershell`:
 

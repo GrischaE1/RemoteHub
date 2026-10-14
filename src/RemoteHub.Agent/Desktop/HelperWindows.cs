@@ -35,6 +35,13 @@ internal interface IHelperUi : IDisposable
     /// </summary>
     void SetPrivacyScreen(DesktopPrivacyScreen screen, Action<string?> done);
 
+    /// <summary>
+    /// The admin's pointer is about to go to this screen point (before each mouse event the agent injects). Over the banner,
+    /// the banner lets the admin's clicks through – it is the user's, and the admin usually can't even see it – until the
+    /// user's own mouse moves again.
+    /// </summary>
+    void AdminPointer(int x, int y) { }
+
     void CloseDialogs();
     void SetClipboard(string text);
     event Action<string>? ClipboardChanged;
@@ -252,6 +259,48 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
 
     private const int DisconnectButton = 3, HideButton = 4;
     private FluentWindow? _banner;
+
+    // 1 while the banner lets clicks through (the admin's pointer is over it, and the user's mouse hasn't moved since).
+    private int _bannerPassThrough;
+
+    /// <summary>
+    /// Input thread, before an injected mouse event. The banner is made click-through before the event goes out, so even
+    /// the first click passes; the user's own mouse makes it clickable again at once (<see cref="LocalPointerWatch"/>), so
+    /// "Disconnect" can't be kept out of the user's reach. Never waits for anything but the UI thread, which never waits
+    /// for this thread.
+    /// </summary>
+    public void AdminPointer(int x, int y)
+    {
+        if (_banner is not { Handle: var h } || h == IntPtr.Zero || !GetWindowRect(h, out var r)) return;
+        var over = x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom;
+        if (over && Volatile.Read(ref _bannerPassThrough) == 0)
+        {
+            SetClickThrough(h, true);
+            Volatile.Write(ref _bannerPassThrough, 1);
+            LocalPointerWatch.Start(() => Post(BannerClickableAgain));
+        }
+        else if (!over && Interlocked.Exchange(ref _bannerPassThrough, 0) == 1)
+        {
+            SetClickThrough(h, false);
+            LocalPointerWatch.Stop();
+        }
+    }
+
+    /// <summary>UI thread: the user's own mouse moved – the banner is theirs to click again.</summary>
+    private void BannerClickableAgain()
+    {
+        if (Interlocked.Exchange(ref _bannerPassThrough, 0) == 0) return;
+        if (_banner is { Handle: var h } && h != IntPtr.Zero) SetClickThrough(h, false);
+        LocalPointerWatch.Stop();
+    }
+
+    /// <summary>Clicks go through the (layered) window to what is below it, or not.</summary>
+    private static void SetClickThrough(IntPtr h, bool on)
+    {
+        var ex = GetWindowLongPtrW(h, -20); // GWL_EXSTYLE
+        var next = on ? ex | 0x20 : ex & ~0x20; // WS_EX_TRANSPARENT
+        if (next != ex) SetWindowLongPtrW(h, -20, next);
+    }
     private HelperInit? _bannerInit;
     private DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
 
@@ -475,6 +524,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         Post(() =>
         {
             InputBlocker.Stop();
+            LocalPointerWatch.Stop();
             foreach (var h in _windows.Keys.ToList()) DestroyWindow(h);
             PostQuitMessage(0);
         });
@@ -729,12 +779,14 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             }
             var x = (sx - w) / 2;
             var y = kind == FluentKind.Banner ? S(8) : (sy - h) / 2;
-            // POPUP | VISIBLE; TOPMOST | TOOLWINDOW (+ NOACTIVATE for the banner)
-            uint ex = 0x00000008 | 0x00000080 | (kind == FluentKind.Banner ? 0x08000000u : 0u);
+            // POPUP | VISIBLE; TOPMOST | TOOLWINDOW (+ NOACTIVATE and LAYERED for the banner: layered, it can let the admin's
+            // clicks through – see AdminPointer)
+            uint ex = 0x00000008 | 0x00000080 | (kind == FluentKind.Banner ? 0x08000000u | 0x00080000u : 0u);
             Handle = CreateWindowExW(ex, ClassName, kind == FluentKind.Banner ? "RemoteHub" : "RemoteHub – " + (Subtitle.Length > 0 ? Subtitle : "Remote access request"), 0x80000000,
                 x, y, w, h, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
             if (Handle == IntPtr.Zero) return null;
             ui.Register(this);
+            if (kind == FluentKind.Banner) SetLayeredWindowAttributes(Handle, 0, 255, 0x2); // LWA_ALPHA: fully opaque
             var round = kind == FluentKind.Banner ? 2 : 2;  // DWMWCP_ROUND
             DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
             SetBorder();
@@ -1417,6 +1469,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("user32.dll")] private static extern bool GetWindowDisplayAffinity(IntPtr hwnd, out uint affinity);
     [DllImport("user32.dll")] private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint key, byte alpha, uint flags);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll")] private static extern nint GetWindowLongPtrW(IntPtr hwnd, int index);
+    [DllImport("user32.dll")] private static extern nint SetWindowLongPtrW(IntPtr hwnd, int index, nint value);
     [DllImport("user32.dll")] private static extern IntPtr LoadCursorW(IntPtr instance, nint name);
     [DllImport("user32.dll")] private static extern IntPtr SetCursor(IntPtr cursor);
     [DllImport("user32.dll")] private static extern IntPtr SetCapture(IntPtr hwnd);

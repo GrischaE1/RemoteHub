@@ -4534,7 +4534,7 @@ P1 · How: PS U · Needs: – · Status: ○ Not automated
 2. List uninstall entries under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall` with DisplayName `RemoteHub`.
 3. In `Admin`'s session (FlaUI): start RemoteHub.
 4. Check the tree, open *Settings → Security & storage → Manage saved credentials…*, check the theme.
-5. Open *Settings → Security & storage → Open audit log…* and count entries; click *Verify integrity*.
+5. Open *Settings → Logs → Open audit log…* and count entries; click *Verify integrity*.
 
 **Expected:**
 - Exit code 0; exactly one uninstall entry `RemoteHub` with the new version.

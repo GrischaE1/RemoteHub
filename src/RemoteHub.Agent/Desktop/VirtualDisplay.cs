@@ -159,8 +159,16 @@ internal static class VirtualDisplay
                 WriteSettings(width, height);
                 if (_shownBy == 0)
                 {
-                    if (resizeOnly) return "the virtual display is off";
-                    SetEnabled(s.InstanceId, true);
+                    // Some devices can't be switched (on Hyper-V VMs pnputil answers "not supported") and stay on: then the
+                    // running driver re-reads its settings instead – the window's size – through its control pipe.
+                    if (resizeOnly)
+                    {
+                        if (!Native.IsStarted(s.InstanceId)) return "the virtual display is off";
+                        Reload();
+                    }
+                    else
+                        try { SetEnabled(s.InstanceId, true); }
+                        catch (InvalidOperationException) when (Native.IsStarted(s.InstanceId)) { Reload(); }
                 }
                 else Reload();
                 if (!resizeOnly) _shownBy++;
@@ -196,8 +204,8 @@ internal static class VirtualDisplay
 
     private static void SetEnabled(string instance, bool on)
     {
-        var exit = Pnputil($"/{(on ? "enable" : "disable")}-device \"{instance}\"");
-        if (exit != 0) throw new InvalidOperationException($"The virtual display couldn't be switched {(on ? "on" : "off")} (pnputil exit code {exit}).");
+        var exit = Pnputil($"/{(on ? "enable" : "disable")}-device \"{instance}\"", out var said);
+        if (exit != 0) throw new InvalidOperationException($"The virtual display couldn't be switched {(on ? "on" : "off")} (pnputil exit code {exit}{(said.Length > 0 ? ": " + said : "")}).");
     }
 
     /// <summary>The driver's settings: one monitor, the window's size first, a few common sizes, 60 Hz.</summary>
@@ -233,15 +241,18 @@ internal static class VirtualDisplay
         pipe.Flush();
     }
 
-    private static int Pnputil(string arguments)
+    private static int Pnputil(string arguments) => Pnputil(arguments, out _);
+
+    /// <summary>Runs pnputil; <paramref name="said"/>: its last lines (why it failed), on one line.</summary>
+    private static int Pnputil(string arguments, out string said)
     {
         using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "pnputil.exe"), arguments)
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
         })!;
-        p.StandardOutput.ReadToEnd();
-        p.StandardError.ReadToEnd();
+        var output = p.StandardOutput.ReadToEnd() + "\n" + p.StandardError.ReadToEnd();
         p.WaitForExit();
+        said = string.Join(" ", output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).TakeLast(2));
         return p.ExitCode;
     }
 
@@ -265,6 +276,10 @@ internal static class VirtualDisplay
         }
 
         public static bool Exists(string instanceId) => CM_Locate_DevNodeW(out _, instanceId, 0) == 0;
+
+        /// <summary>The device is on and its driver runs (DN_STARTED).</summary>
+        public static bool IsStarted(string instanceId) =>
+            CM_Locate_DevNodeW(out var node, instanceId, 0) == 0 && CM_Get_DevNode_Status(out var status, out _, node, 0) == 0 && (status & 0x8) != 0;
 
         /// <summary>Creates a root-enumerated device with the hardware ID; returns its instance ID.</summary>
         public static string CreateRootDevice(string inf, string hardwareId)
@@ -315,5 +330,7 @@ internal static class VirtualDisplay
         private static extern bool UpdateDriverForPlugAndPlayDevicesW(IntPtr hwnd, string hardwareId, string inf, int flags, out bool reboot);
         [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
         private static extern int CM_Locate_DevNodeW(out int devInst, string instanceId, int flags);
+        [DllImport("cfgmgr32.dll")]
+        private static extern int CM_Get_DevNode_Status(out uint status, out uint problem, int devInst, int flags);
     }
 }

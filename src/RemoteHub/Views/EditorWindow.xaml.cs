@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using RemoteHub.Data;
 using RemoteHub.Models;
 using RemoteHub.Services;
 using RemoteHub.ViewModels;
@@ -33,10 +34,12 @@ public sealed record AppSettingsHost(
 public partial class EditorWindow : FluentWindow
 {
     public const string PageAppSettings = "PageApp", PageUpdateSettings = "PageUpdates", PageDataSettings = "PageData", PageHelpSettings = "PageHelp",
-        PageRecordingSettings = "PageRecordings",
+        PageRecordingSettings = "PageRecordings", PageLogSettings = "PageLogs",
         PageDefaults = "PageDisplay";
 
     private readonly EditorViewModel _vm;
+    /// <summary>Days of each entry of <see cref="AuditRetentionBox"/>.</summary>
+    private List<int> _retentionChoices = [];
     private readonly AppData _data;
     private readonly AppSettingsHost? _host;
     private readonly Dictionary<string, (string Title, string Hint)> _pages = new();
@@ -92,7 +95,8 @@ public partial class EditorWindow : FluentWindow
             Page(PageUpdateSettings, "Updates & privacy", SymbolRegular.ArrowSync24, "Stored on this PC.");
             Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials, where the settings are kept, backup.");
             Page(PageRecordingSettings, "Recordings", SymbolRegular.Record24, "Frame rate, video size, graphics card and folder of tab recordings.");
-            Page(PageHelpSettings, "Help & about", SymbolRegular.QuestionCircle24, "Version, settings overview, diagnostic log and keyboard shortcuts.");
+            Page(PageLogSettings, "Logs", SymbolRegular.DocumentBulletList24, "Audit log, how long it keeps entries, diagnostic log.");
+            Page(PageHelpSettings, "Help & about", SymbolRegular.QuestionCircle24, "Version, settings overview and keyboard shortcuts.");
             Group("Connection defaults", new SymbolIcon(SymbolRegular.PlugConnected24) { FontSize = 18 });
             Page("PageCredentials", "Credentials", SymbolRegular.Key24, item);
             Page("PageDisplay", "Display", SymbolRegular.Desktop24, item);
@@ -275,6 +279,24 @@ public partial class EditorWindow : FluentWindow
         FolderButton.Click += (_, _) => _host?.OpenFolder();
         ExportButton.Click += (_, _) => _host?.ExportBackup();
         AuditButton.Click += (_, _) => _host?.AuditLog();
+        // How long the audit log keeps entries: the policy wins (shown, not changeable).
+        if (AppPolicy.AuditRetentionDays is { } policyDays)
+        {
+            AuditRetentionBox.ItemsSource = new[] { RetentionChoiceLabel(policyDays) };
+            AuditRetentionBox.SelectedIndex = 0;
+            AuditRetentionBox.IsEnabled = false;
+            AuditRetentionText.Text = "Set by your organisation.";
+        }
+        else
+        {
+            var days = ui.AuditRetentionDays ?? AuditLog.DefaultRetentionDays;
+            _retentionChoices = [.. AuditLog.RetentionChoices.Select(c => c.Days)];
+            if (!_retentionChoices.Contains(days)) _retentionChoices.Add(days); // set before, not one of the choices
+            AuditRetentionBox.ItemsSource = _retentionChoices.Select(RetentionChoiceLabel).ToList();
+            AuditRetentionBox.SelectedIndex = _retentionChoices.IndexOf(days);
+            AuditRetentionText.Text = "Older entries are removed the next time RemoteHub starts.";
+        }
+        static string RetentionChoiceLabel(int d) => AuditLog.RetentionLabel(d) + (d == AuditLog.DefaultRetentionDays ? " (default)" : "");
         ImportButton.Click += (_, _) =>
         {
             // Importing replaces the settings in memory, so this window (and its edits) closes first.
@@ -361,6 +383,15 @@ public partial class EditorWindow : FluentWindow
         if (AppPolicy.UpdateChannel is null && SelectedChannel != UpdateService.EffectiveChannel(ui)) ui.UpdateChannel = SelectedChannel;
         if (AppPolicy.RecordingFolder is null) ui.RecordingFolder = string.IsNullOrWhiteSpace(_recordingFolder) ? null : _recordingFolder;
         if (RecordingFpsBox.SelectedIndex >= 0) ui.RecordingFps = Recordings.FrameRates[RecordingFpsBox.SelectedIndex].Fps;
+        if (AppPolicy.AuditRetentionDays is null && AuditRetentionBox.SelectedIndex >= 0)
+        {
+            var days = _retentionChoices[AuditRetentionBox.SelectedIndex];
+            var before = AuditLog.RetentionDays;
+            ui.AuditRetentionDays = days == AuditLog.DefaultRetentionDays ? null : days;
+            AuditLog.ConfiguredRetentionDays = ui.AuditRetentionDays;
+            // Shortening it removes history, so the change itself is in the log.
+            if (days != before) AuditLog.Write(AuditEvents.AuditRetentionChanged, null, "Audit log", $"Entries kept for {AuditLog.RetentionLabel(days)} (before: {AuditLog.RetentionLabel(before)})");
+        }
         ui.RecordingUseGpu = RecordingGpuToggle.IsChecked == true;
         ui.RecordingShowDetails = RecordingDetailsToggle.IsChecked == true;
         if (RecordingResolutionBox.SelectedIndex >= 0) ui.RecordingResolution = Recordings.Resolutions[RecordingResolutionBox.SelectedIndex].Value.ToString();

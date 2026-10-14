@@ -8,19 +8,23 @@ namespace RemoteHub.Remoting.Shares;
 /// <summary>
 /// SMB 2/3 through RemoteHub's own client connection (SMBLibrary), used when Windows is already connected to the same
 /// server with another account. Each instance has its own connection and account, independent of Windows. Signs in
-/// with NTLMv2 (no Kerberos). Paths are shown as UNC paths, like with Windows' client.
+/// with NTLMv2 (no Kerberos). Paths are shown as UNC paths, like with Windows' client. Always used behind a jump host:
+/// then it connects to <paramref name="forward"/>'s local port.
 /// </summary>
 public sealed class ManagedSmbShare : ShareFileSystem
 {
     private readonly SMB2Client _client = new(30_000, true);
     private readonly ISMBFileStore _store;
+    private readonly LocalForward? _forward;
     private bool _disposed;
 
-    public ManagedSmbShare(string host, string shareName, string subFolder, CredentialSet credentials)
+    public ManagedSmbShare(string host, string shareName, string subFolder, CredentialSet credentials, LocalForward? forward = null)
     {
         Top = $@"\\{host}\{shareName}";
         Start = subFolder.Length == 0 ? Top : JoinRelative(Top, subFolder);
-        if (!_client.Connect(host, SMBTransportType.DirectTCPTransport))
+        _forward = forward;
+        Description = forward is null ? "SMB · RemoteHub client (Windows already uses another account for this server)" : "SMB · RemoteHub client";
+        if (!(forward is null ? _client.Connect(host, SMBTransportType.DirectTCPTransport) : ConnectToPort(_client, host, forward.Port)))
             throw new IOException($"{host} doesn't answer on the SMB port (445).");
         try
         {
@@ -37,8 +41,33 @@ public sealed class ManagedSmbShare : ShareFileSystem
     public override string Start { get; }
     public override string Top { get; }
     public override char Separator => '\\';
-    public override string Description => "SMB · RemoteHub client (Windows already uses another account for this server)";
+    public override string Description { get; }
     protected override StringComparison PathComparison => StringComparison.OrdinalIgnoreCase;
+
+    // SMBLibrary (1.5.8.1) connects to port 445 only; its private overload with a port is the one the public ones call.
+    private static readonly System.Reflection.MethodInfo? PortConnect = typeof(SMB2Client).GetMethod("Connect",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, [typeof(System.Net.IPAddress), typeof(SMBTransportType), typeof(int)]);
+    private static readonly System.Reflection.FieldInfo? ServerName = typeof(SMB2Client).GetField("m_serverName",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+    /// <summary>Whether this SMBLibrary can connect to another port (a test fails when an update takes it away).</summary>
+    internal static bool CanUseOtherPort => PortConnect is not null && ServerName is not null;
+
+    /// <summary>
+    /// Connects to 127.0.0.1:<paramref name="port"/> as if it were <paramref name="host"/>: the name is set first, so the
+    /// sign-in (SPN cifs/host) and the share paths (\\host\share) use it, as with a direct connection.
+    /// </summary>
+    internal static bool ConnectToPort(SMB2Client client, string host, int port)
+    {
+        if (!CanUseOtherPort) throw new ShareException("RemoteHub's SMB client can't connect through a jump host in this version.");
+        ServerName!.SetValue(client, host);
+        try { return (bool)PortConnect!.Invoke(client, [System.Net.IPAddress.Loopback, SMBTransportType.DirectTCPTransport, port])!; }
+        catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException is { } inner)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(inner);
+            throw;
+        }
+    }
 
     private static (string Domain, string User) Split(CredentialSet c, string host)
     {
@@ -153,6 +182,7 @@ public sealed class ManagedSmbShare : ShareFileSystem
         try { _store?.Disconnect(); } catch { /* connection already gone */ }
         try { _client.Logoff(); } catch { /* connection already gone */ }
         try { _client.Disconnect(); } catch { /* connection already gone */ }
+        _forward?.Dispose();
     }
 
     /// <summary>Sequential read or write over an SMB file handle, in pieces the server accepts.</summary>

@@ -341,6 +341,11 @@ public sealed partial class AgentDesktopSession : SessionBase
         var sequence = GetClipboardSequenceNumber();
         if (sequence == _clipboardHandled) return; // unchanged, or what came from the device
         _clipboardHandled = sequence;
+        // What was on the clipboard before connecting is offered too, but without a notice when it can't be: it wasn't
+        // copied for this connection (e.g. an installer copied an hour ago). Copies made while connected say why.
+        var quiet = !_clipboardSyncedSinceLive;
+        _clipboardSyncedSinceLive = true;
+        void Notice(string text) { if (!quiet) ShowNotice(text); }
         if (ClipboardOffer.Instance.OwnsClipboard) return; // what the device offered (or a paste of it fetched): not sent back
         try
         {
@@ -359,7 +364,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                 encoder.Frames.Add(BitmapFrame.Create(image));
                 using var png = new MemoryStream();
                 encoder.Save(png);
-                if (png.Length > DesktopProtocol.MaxTransferBytes) { ShowNotice("The copied image is too large for the remote desktop."); return; }
+                if (png.Length > DesktopProtocol.MaxTransferBytes) { Notice("The copied image is too large for the remote desktop."); return; }
                 OfferOrSend(ClipboardTransfer.Image(++_transferIds, png.ToArray(), png: true));
             }
             else if (Clipboard.ContainsFileDropList() && ClipboardLevel >= DesktopClipboardLevel.Files)
@@ -371,18 +376,24 @@ public sealed partial class AgentDesktopSession : SessionBase
                     {
                         if (!t.IsCompletedSuccessfully) return;
                         var (o, error) = t.Result;
-                        if (o is null) ShowNotice(error ?? "The copied files can't be sent.");
+                        if (o is null) Notice(error ?? "The copied files can't be sent.");
                         else OfferOrSend(o);
                     }, TaskScheduler.FromCurrentSynchronizationContext());
             }
             else if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList())
-                ShowNotice("Copying images and files isn't allowed on this device – only text.");
+                Notice("Copying images and files isn't allowed on this device – only text.");
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException or IOException) { /* clipboard busy */ }
     }
 
     private uint _clipboardHandled;
+    private bool _clipboardSyncedSinceLive;
     private int _transferIds;
+
+    partial void OnPhaseChanged(DesktopPhase value)
+    {
+        if (value != DesktopPhase.Live) _clipboardSyncedSinceLive = false; // the next connection starts quiet again
+    }
     private CancellationTokenSource? _sending;
 
     // ---- progress of a copy (either way), shown on the picture
@@ -1135,7 +1146,7 @@ public sealed class AgentDesktopClient : IDisposable
         {
             // 404: an agent without the remote desktop (older version), or turned off by policy – the health answer tells which.
             AgentHealth? health = null;
-            try { health = await AgentInstaller.HealthAsync(host, endpoint.Port, endpoint.Fingerprint, ct).ConfigureAwait(false); } catch { /* keep the general message */ }
+            try { health = await AgentInstaller.HealthAsync(host, endpoint, ct).ConfigureAwait(false); } catch { /* keep the general message */ }
             if (health is { Features: null })
                 throw new InvalidOperationException($"The RemoteHub Agent on {host} (version {health.Version}) doesn't have the remote desktop yet. " +
                                                     "Update it: right-click the connection → Update RemoteHub Agent.", ex);

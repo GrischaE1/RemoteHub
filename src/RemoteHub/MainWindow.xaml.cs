@@ -305,6 +305,7 @@ public partial class MainWindow : FluentWindow
         }
 
         var s = _vm.OpenSession(c);
+        s.Route = () => RdpRouteAsync(s.Connection); // asked at each connect: the connection may have moved
         var view = new SessionView(s, () => _vm.StartSession(s), () => s.Close());
         _views[s] = view;
         SessionPanel.Children.Add(view);
@@ -401,6 +402,7 @@ public partial class MainWindow : FluentWindow
                 Width = Math.Max(800, SessionPanel.ActualWidth),
                 Height = Math.Max(600, SessionPanel.ActualHeight + 80),
             };
+            WindowPlacement.CenterOn(win, this);
             win.DockRequested += () => ToggleDetach(s);
             win.Activated += (_, _) => { if (_vm.SelectedSession != s) _vm.SelectedSession = s; };
             _detached[s] = win;
@@ -588,12 +590,16 @@ public partial class MainWindow : FluentWindow
     private void RevealInTree(NodeBase node)
     {
         _vm.SearchText = "";
-        foreach (var a in node.Ancestors()) a.IsExpanded = true;
+        foreach (var a in TreeLayout.Containers(node))
+        {
+            if (a is Folder f) f.IsExpanded = true;
+            if (a is Connection jumpHost) jumpHost.IsExpanded = true;
+        }
         node.IsSelected = true;
         Dispatcher.BeginInvoke(() =>
         {
             ItemsControl parent = Tree;
-            foreach (var level in node.Ancestors().Reverse().Cast<NodeBase>().Append(node))
+            foreach (var level in TreeLayout.Containers(node).Reverse().Append(node))
             {
                 parent.UpdateLayout();
                 if (parent.ItemContainerGenerator.ContainerFromItem(level) is not TreeViewItem tvi)
@@ -655,6 +661,9 @@ public partial class MainWindow : FluentWindow
         CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault || oc.Agent is { Status: AgentStatus.Installed }));
         CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
         CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
+        CmAddShare.ToolTip = AddShareTip(n as Connection);
+        CmMoveUnder.Visibility = V(n is Connection or Folder);
+        if (n is Connection or Folder) FillMoveUnder(CmMoveUnder, n);
         CmConnectAll.Visibility = V(n is Folder);
         CmSep1.Visibility = V(n is not null);
         CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(n is not null);
@@ -692,6 +701,7 @@ public partial class MainWindow : FluentWindow
     private static MenuItem MenuEntry(string header, SymbolRegular icon, Action action, bool enabled = true, string? tip = null)
     {
         var mi = new MenuItem { Header = header, Icon = new SymbolIcon(icon), IsEnabled = enabled, ToolTip = tip };
+        ToolTipService.SetShowOnDisabled(mi, true); // a switched-off entry says why
         mi.Click += (_, _) => action();
         return mi;
     }
@@ -707,10 +717,11 @@ public partial class MainWindow : FluentWindow
         var rdp = _vm.FindSession(c);
         var agentDesktop = _vm.FindAgentDesktop(c);
         var viaAgent = AgentDesktopFor(c);
+        var jumped = c.JumpHost is not null;
         if (viaAgent)
         {
             cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
-                tip: "The device's screen through the RemoteHub Agent (no RDP needed)"));
+                tip: jumped ? $"The device's screen through the RemoteHub Agent, reached through {c.JumpHost!.Name}" : "The device's screen through the RemoteHub Agent (no RDP needed)"));
             cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop via RDP" : "Show RDP session", SymbolRegular.Desktop24, () => OpenRdp(c)));
         }
         else
@@ -738,10 +749,11 @@ public partial class MainWindow : FluentWindow
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
         if (st == PsRemotingState.Unavailable && !UsesAgent(c))
             cm.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
-        // Network shares need neither remoting nor the agent.
+        // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
         foreach (var share in c.Shares)
-            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), tip: $"{share.ProtocolLabel} · {share.Address}"));
-        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c)));
+            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), WhyNotOpen(share) is null,
+                WhyNotOpen(share) ?? $"{share.ProtocolLabel} · {share.Address}"));
+        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
         cm.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
             SymbolRegular.Shield24, () => _ = InstallAgent(c)));
     }
@@ -837,7 +849,7 @@ public partial class MainWindow : FluentWindow
     private bool PsEnabled(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).PsRemoting == true;
 
     /// <summary>The connection goes through the RemoteHub Agent instead of WinRM.</summary>
-    private bool UsesAgent(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).UseAgent == true;
+    private bool UsesAgent(Connection c) => Inheritance.UsesAgent(c, _vm.Data);
 
     /// <summary>Last check result – only if it was made the way the connection works now (agent or WinRM).</summary>
     private PsRemotingState PsState(Connection c) =>
@@ -856,6 +868,7 @@ public partial class MainWindow : FluentWindow
         var (resolved, source) = Inheritance.ResolveCredentials(c, _vm.Data);
         var cred = resolved.Clone();
         if (agent && AgentEndpointFor(c) is null) return null;
+        if (!agent && !TryRoute(c, quiet: false, out _)) return null; // WinRM through a jump host: its password now, if needed
         if (agent && cred.IsEmpty)
         {
             _ = Dialogs.Info(this, "RemoteHub Agent", $"No credentials are set for {c.Name}. The RemoteHub Agent signs in with a Windows account " +
@@ -881,21 +894,25 @@ public partial class MainWindow : FluentWindow
         return (MakeTarget(c, cred, agent)!, source);
     }
 
-    /// <summary>The target for given credentials: WinRM, or the agent with its pinned certificate.</summary>
+    /// <summary>The target for given credentials: WinRM (through the jump host, if any), or the agent with its pinned certificate.</summary>
     private PsTarget? MakeTarget(Connection c, CredentialSet cred, bool? viaAgent = null)
     {
         var agent = viaAgent ?? UsesAgent(c);
         var opt = Inheritance.ResolveOptions(c, _vm.Data);
-        if (!agent) return new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred);
+        if (!agent) return TryRoute(c, quiet: true, out var via) ? new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred, Via: via) : null;
         return AgentEndpointFor(c, quiet: true) is { } ep ? new PsTarget(c.Host.Trim(), false, cred, ep) : null;
     }
 
+    /// <summary>The device's agent – through its jump host, if it is under one (null: none, or the jump host can't be used now).</summary>
     private AgentEndpoint? AgentEndpointFor(Connection c, bool quiet = false)
     {
-        if (c.Agent is { Fingerprint.Length: > 0 } d) return new AgentEndpoint(d.Port, d.Fingerprint);
+        if (c.Agent is { Fingerprint.Length: > 0 } d) return EndpointOf(c, d, quiet);
         if (!quiet)
-            _ = Dialogs.Info(this, "RemoteHub Agent", $"{c.Name} is set to connect through the RemoteHub Agent, but no agent is installed for it yet. " +
-                                                     "Right-click the connection → Install RemoteHub Agent (or switch it back to PowerShell remoting in its settings).");
+            _ = Dialogs.Info(this, "RemoteHub Agent", c.JumpHost is { } j
+                ? $"{c.Name} is reached through {j.Name}, which only works with a RemoteHub Agent on {c.Name} – none is installed for it yet. " +
+                  "Right-click the connection → Install RemoteHub Agent… (the installer files can be saved and installed by hand)."
+                : $"{c.Name} is set to connect through the RemoteHub Agent, but no agent is installed for it yet. " +
+                  "Right-click the connection → Install RemoteHub Agent (or switch it back to PowerShell remoting in its settings).");
         return null;
     }
 
@@ -962,7 +979,7 @@ public partial class MainWindow : FluentWindow
                     "Compare its thumbprint with the one the setup script printed on the target, and trust it if they're the same?",
                     "Check the certificate…"))
                 return;
-            var (_, error) = await RemotingSetupDialog.CheckAndTrustCertificate(this, c.Host.Trim());
+            var (_, error) = await RemotingSetupDialog.CheckAndTrustCertificate(this, c.Host.Trim(), target.Via);
             if (error is null) await TestPsRemoting(c, interactive: true, credentials);
             else await Dialogs.Info(this, "PowerShell remoting", error);
             return;
@@ -986,8 +1003,13 @@ public partial class MainWindow : FluentWindow
     private async Task ShowRemotingSetup(Connection c)
     {
         var host = c.Host.Trim();
-        var local = await Task.Run(() => RemotingSetup.LocalAddressFor(host));
-        var dlg = new RemotingSetupDialog(c.Name, host, c.PsRemoting?.Message, local) { Owner = this };
+        // Behind a jump host the target sees the jump host's address in its network, not this PC's.
+        JumpRoute? via = null;
+        if (c.JumpHost is not null && (!TryRoute(c, quiet: false, out via) || via is null)) return;
+        var local = via is null
+            ? await Task.Run(() => RemotingSetup.LocalAddressFor(host))
+            : await JumpLocalAddressAsync(c, Inheritance.ResolveOptions(c, _vm.Data).PsUseSsl == true ? 5986 : 5985);
+        var dlg = new RemotingSetupDialog(c.Name, host, c.PsRemoting?.Message, local, via) { Owner = this };
         var testAgain = dlg.ShowDialog() == true;
         if (dlg.SwitchToHttps && Inheritance.ResolveOptions(c, _vm.Data).PsUseSsl != true)
         {
@@ -1012,15 +1034,19 @@ public partial class MainWindow : FluentWindow
             package = pick.FileName;
         }
 
-        // Silent install needs WinRM: offered when the connection's remoting check is on or WinRM worked before.
+        // Silent install needs WinRM: offered when the connection's remoting check is on or WinRM worked before (also through a jump host).
+        var jump = c.JumpHost;
         var remoting = PsEnabled(c) || c.PsRemoting is { ViaAgent: false, State: PsRemotingState.Available };
         var agentReachable = false;
-        if (c.Agent is { Status: AgentStatus.Installed } a)
-            try { await AgentInstaller.HealthAsync(c.Host, a.Port, a.Fingerprint, new System.Threading.CancellationTokenSource(4000).Token); agentReachable = true; }
+        if (c.Agent is { Status: AgentStatus.Installed } a && EndpointOf(c, a, quiet: jump is null) is { } endpoint)
+            try { await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(jump is null ? 4000 : 20_000).Token); agentReachable = true; }
             catch { /* offer the other ways */ }
-        var local = await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()));
+        // The firewall scope's suggestion: the address the device sees – this PC's, or the jump host's in the device's network.
+        var local = jump is null
+            ? await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()))
+            : await JumpLocalAddressAsync(c, c.Agent?.Port ?? Agent.AgentProtocol.DefaultPort);
 
-        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local) { Owner = this };
+        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, jump?.Name) { Owner = this };
         if (dlg.ShowDialog() != true || dlg.Options is not { } o) return;
 
         // The progress in a window of its own: a row per step with a check mark when it's done.
@@ -1051,8 +1077,10 @@ public partial class MainWindow : FluentWindow
         {
             try
             {
-                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
-                var health = await AgentInstaller.HealthAsync(c.Host, d.Port, d.Fingerprint, cts.Token);
+                // Through its jump host, if it has one (only with a known password – this runs in the background).
+                if (EndpointOf(c, d) is not { } endpoint) throw new InvalidOperationException("The jump host can't be used now.");
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(endpoint.Via is null ? 5 : 20));
+                var health = await AgentInstaller.HealthAsync(c.Host, endpoint, cts.Token);
                 if (c.Agent != d) return; // replaced meanwhile
                 d.Status = AgentStatus.Installed;
                 d.Version = health.Version;
@@ -1100,6 +1128,36 @@ public partial class MainWindow : FluentWindow
         {
             switch (o.Method)
             {
+                case AgentInstallMethod.SaveFiles:
+                {
+                    var pick = new Microsoft.Win32.OpenFolderDialog { Title = $"Folder for the RemoteHub Agent installer of {c.Name}" };
+                    if (pick.ShowDialog(this) != true) { report("Cancelled."); return false; }
+                    var saved = new List<string>();
+                    foreach (var file in new[] { msi, enrollmentFile }.OfType<string>())
+                    {
+                        var to = Path.Combine(pick.FolderName, Path.GetFileName(file));
+                        File.Copy(file, to, overwrite: true);
+                        saved.Add(to);
+                    }
+                    // Not installed yet: the connection keeps its current way until the agent answers (see WaitForManualInstall).
+                    if (enrollment is not null)
+                    {
+                        Finish(device, switchNow: false);
+                        _ = WaitForManualInstall(c, o.UseAgentAfterwards);
+                    }
+                    report(enrollmentFile is null
+                        ? $"Saved {AgentInstaller.PackageName} to {pick.FolderName}. On {c.Name}: run it as administrator (or deploy it with software distribution)."
+                        : $"Saved {AgentInstaller.PackageName} and {Path.GetFileName(enrollmentFile)} to {pick.FolderName}.\n\n" +
+                          $"On {c.Name}:\n  1. Copy both files into the same folder – over a secure channel: the .rhagent file contains the device key.\n" +
+                          $"  2. Run {AgentInstaller.PackageName} as administrator (or with software distribution: msiexec /i {AgentInstaller.PackageName} " +
+                          "ENROLLMENT=<path of the .rhagent file> /qn).\n" +
+                          "  3. The agent imports and deletes the .rhagent file – if it's still there, delete it.\n\n" +
+                          "Delete the files in the chosen folder once they are installed. " +
+                          "RemoteHub checks for the agent every few seconds and marks it installed as soon as it answers" +
+                          (o.UseAgentAfterwards && !UsesAgent(c) ? " – then the connection switches to it." : "."));
+                    return true;
+                }
+
                 case AgentInstallMethod.Clipboard:
                 {
                     // The .rhagent file holds this device's private key; a remote desktop tab would send it to another device.
@@ -1187,7 +1245,7 @@ public partial class MainWindow : FluentWindow
                         return false;
                     }
                     var expected = AgentInstaller.PackageVersion(msi);
-                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, device.Port, device.Fingerprint, expected, report, System.Threading.CancellationToken.None);
+                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint), expected, report, System.Threading.CancellationToken.None);
                     const string logs = "On the device, see %TEMP%\\RemoteHub-Agent-update.log of the signing-in account and the agent's log in %ProgramData%\\RemoteHub\\Agent\\logs.";
                     if (health is null)
                     {
@@ -1218,13 +1276,13 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>Checks from this PC that the agent answers with the expected certificate (network path, firewalls).</summary>
-    private static async Task ConfirmReachable(Connection c, AgentDevice device, Action<string> report)
+    private async Task ConfirmReachable(Connection c, AgentDevice device, Action<string> report)
     {
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                var h = await AgentInstaller.HealthAsync(c.Host, device.Port, device.Fingerprint, new System.Threading.CancellationTokenSource(10_000).Token);
+                var h = await AgentInstaller.HealthAsync(c.Host, EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint), new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token);
                 device.Version = h.Version;
                 report($"RemoteHub Agent {h.Version} answers on port {device.Port} with the expected certificate.");
                 return;
@@ -1579,7 +1637,7 @@ public partial class MainWindow : FluentWindow
     private void OpenAuditLog(Connection? c)
     {
         _vm.SaveNow(); // pending changes are in the log too
-        new AuditLogWindow(c) { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.Show();
+        new AuditLogWindow(_vm.AllNodes().OfType<Connection>(), c) { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.Show();
     }
     private void CmDelete_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _ = DeleteNode(n); }
 
@@ -1740,7 +1798,7 @@ public partial class MainWindow : FluentWindow
         var names = string.Join("\n", list.Take(12).Select(c => "• " + c.Name)) + (list.Count > 12 ? $"\n… and {list.Count - 12} more" : "");
         if (!await Dialogs.Confirm(this, "Delete unused connections",
                 $"Delete these {list.Count} connection(s), {MainViewModel.FilterText(_vm.UnusedDays)}?\n\n{names}\n\n" +
-                "Their saved credentials and agent pairing go with them. A backup (Settings → Backup) can bring them back.", "Delete")) return;
+                "Their saved credentials and agent pairing go with them. A backup (Settings → Security & storage → Export backup…) can bring them back.", "Delete")) return;
         foreach (var c in list)
         {
             foreach (var s in _vm.Sessions.Where(s => s.Connection == c).ToList()) s.Close();
@@ -1759,6 +1817,24 @@ public partial class MainWindow : FluentWindow
 
     private async Task DeleteNode(NodeBase n)
     {
+        if (n is Connection { Children.Count: > 0 } jumpHost)
+        {
+            // What's reached through it: kept by default – it moves next to the jump host and is reached directly.
+            var count = jumpHost.Descendants().Count();
+            var choice = await Dialogs.Ask(this, "Delete",
+                $"Delete connection \"{n.Name}\"?\n\n{count} item(s) are reached through it. Keep them (they move next to it and are " +
+                "reached directly), or delete them too?",
+                "Keep them", "Delete all");
+            if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
+            {
+                var list = _vm.ChildrenOf(n.Parent);
+                var at = list.IndexOf(n);
+                foreach (var child in jumpHost.Children.ToList()) _vm.Move(child, n.Parent, ++at);
+                _vm.Remove(n);
+            }
+            else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary) _vm.Remove(n);
+            return;
+        }
         var what = n is Folder f
             ? $"Delete folder \"{n.Name}\" and the {f.Descendants().Count()} item(s) inside it?"
             : $"Delete connection \"{n.Name}\"?";
@@ -1950,10 +2026,40 @@ public partial class MainWindow : FluentWindow
         var header = tvi.Template.FindName("PART_Header", tvi) as FrameworkElement ?? tvi;
         var y = e.GetPosition(header).Y;
         var h = Math.Max(1, header.ActualHeight);
-        DropPos pos = target is Folder
-            ? (y < h * 0.25 ? DropPos.Before : y > h * 0.75 && !((Folder)target).IsExpanded ? DropPos.After : DropPos.Into)
-            : (y < h / 2 ? DropPos.Before : DropPos.After);
+        // Folders and connections take items in their middle (a connection: as their jump host); the edges mean before/after.
+        DropPos pos = target switch
+        {
+            Folder f => y < h * 0.25 ? DropPos.Before : y > h * 0.75 && !f.IsExpanded ? DropPos.After : DropPos.Into,
+            Connection => y < h * 0.3 ? DropPos.Before : y > h * 0.7 ? DropPos.After : DropPos.Into,
+            _ => y < h / 2 ? DropPos.Before : DropPos.After,
+        };
         return (target, pos, header);
+    }
+
+    /// <summary>Where a dragged item lands: (container, index; −1 = at the end). A share never goes into a connection here.</summary>
+    private (NodeBase? Into, int Index) DropPlace(NodeBase node, NodeBase? target, DropPos pos)
+    {
+        if (target is null) return (null, -1);
+        if (pos == DropPos.Into && target is Folder or Connection && !(node is NetworkShare && target is Connection)) return (target, -1);
+        if (pos == DropPos.Into) pos = DropPos.After;
+        return (target.Parent, _vm.ChildrenOf(target.Parent).IndexOf(target) + (pos == DropPos.After ? 1 : 0));
+    }
+
+    /// <summary>Why the dragged item can't go where it is over – shown next to the pointer.</summary>
+    private ToolTip? _dropRefusal;
+
+    private void ShowDropRefusal(string? reason)
+    {
+        if (reason is null)
+        {
+            if (_dropRefusal is not null) _dropRefusal.IsOpen = false;
+            return;
+        }
+        if (_dropRefusal is { IsOpen: true } && Equals(_dropRefusal.Content, reason)) return;
+        _dropRefusal ??= new ToolTip { PlacementTarget = Tree, Placement = PlacementMode.Mouse };
+        _dropRefusal.IsOpen = false;
+        _dropRefusal.Content = reason;
+        _dropRefusal.IsOpen = true;
     }
 
     private static string[] RdpFiles(DragEventArgs e) =>
@@ -1971,38 +2077,42 @@ public partial class MainWindow : FluentWindow
         }
         else if (e.Data.GetData(NodeFormat) is NodeBase node)
         {
-            var parent = target is null ? null : pos == DropPos.Into ? target as Folder : target.Parent;
-            var ok = target != node && MainViewModel.CanMove(node, parent);
+            var (into, _) = DropPlace(node, target, pos);
+            if (pos == DropPos.Into && into != target) pos = DropPos.After;
+            var why = target == node ? null : TreeLayout.WhyNot(node, into);
+            var ok = target != node && why is null;
             e.Effects = ok ? DragDropEffects.Move : DragDropEffects.None;
             if (ok) ShowDropIndicator(header, pos); else HideDropIndicator();
+            ShowDropRefusal(why);
         }
         else e.Effects = DragDropEffects.None;
         e.Handled = true;
     }
 
-    private void Tree_DragLeave(object sender, DragEventArgs e) => HideDropIndicator();
+    private void Tree_DragLeave(object sender, DragEventArgs e)
+    {
+        HideDropIndicator();
+        ShowDropRefusal(null);
+    }
 
     private async void Tree_Drop(object sender, DragEventArgs e)
     {
         HideDropIndicator();
+        ShowDropRefusal(null);
         e.Handled = true;
         var (target, pos, _) = HitTest(e);
         var files = RdpFiles(e);
         if (files.Length > 0)
         {
-            ImportRdpFiles(files, target as Folder ?? target?.Parent, connectAfterImport: false);
+            // Into the folder or jump host under the pointer; where a connection can't go (below a jump host's child), next to it.
+            var into = target is Folder or Connection && pos == DropPos.Into ? target : target?.Parent;
+            if (into is not null && TreeLayout.WhyNot(new Connection(), into) is not null) into = into.Parent;
+            ImportRdpFiles(files, into, connectAfterImport: false);
         }
         else if (e.Data.GetData(NodeFormat) is NodeBase node && target != node)
         {
-            Folder? into;
-            var idx = -1;
-            if (target is null) into = null;
-            else if (pos == DropPos.Into && target is Folder f) into = f;
-            else
-            {
-                into = target.Parent;
-                idx = _vm.ChildrenOf(into).IndexOf(target) + (pos == DropPos.After ? 1 : 0);
-            }
+            var (into, idx) = DropPlace(node, target, pos);
+            if (TreeLayout.WhyNot(node, into) is not null) return;
             if (!await ConfirmMove(node, into)) return;
             _vm.Move(node, into, idx);
             node.IsSelected = true;
@@ -2013,10 +2123,15 @@ public partial class MainWindow : FluentWindow
     /// Moving an item into another folder (or out of one) changes the credentials it inherits – easy to do by accident
     /// when dropping just below a folder. Asks first, naming both sources.
     /// </summary>
-    private async Task<bool> ConfirmMove(NodeBase node, Folder? into)
+    private async Task<bool> ConfirmMove(NodeBase node, NodeBase? into)
     {
         if (_vm.CredentialChange(node, into) is not { } change) return true;
-        var where = into is null ? "the top level (outside all folders)" : $"folder \"{into.Name}\"";
+        var where = into switch
+        {
+            null => "the top level (outside all folders)",
+            Connection c => $"connection \"{c.Name}\" (reached through it)",
+            _ => $"folder \"{into.Name}\"",
+        };
         var inside = node is Folder ? " Items inside it that inherit credentials change too." : "";
         var text = $"Move \"{node.Name}\" to {where}?\n\nIts credentials change:\n   now: {change.From}\n   after: {change.To}\n\n" +
                    $"Remote desktop and PowerShell remoting will use the new credentials.{inside}";
@@ -2076,7 +2191,7 @@ public partial class MainWindow : FluentWindow
         if (files.Length > 0) ImportRdpFiles(files, _vm.TargetFolderForNew(), connectAfterImport: false);
     }
 
-    public void ImportRdpFiles(IEnumerable<string> files, Folder? target, bool connectAfterImport)
+    public void ImportRdpFiles(IEnumerable<string> files, NodeBase? target, bool connectAfterImport)
     {
         var errors = new List<string>();
         Connection? last = null;

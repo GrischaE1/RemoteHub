@@ -120,6 +120,7 @@ public static class Telemetry
                         connections++;
                         if (c.Agent is { Status: AgentStatus.Installed }) agents++;
                         shares += c.Shares.Count;
+                        Walk(c.Children);
                         break;
                     case NetworkShare: shares++; break;
                 }

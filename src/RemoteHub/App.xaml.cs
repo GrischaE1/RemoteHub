@@ -14,6 +14,7 @@ public partial class App : Application
     {
         base.OnStartup(e);
         StartupTiming.Mark("app");
+        Views.WindowPlacement.Install(); // popups open centred on the window they belong to, also when it is maximised
 
         _instance = SingleInstance.ClaimOrForward(e.Args);
         if (_instance is null)
@@ -96,6 +97,7 @@ public partial class App : Application
         }
 
         // In the background: the daily check and backup of the database, and the audit log's retention.
+        AuditLog.ConfiguredRetentionDays = data.Ui.AuditRetentionDays;
         _ = Task.Run(() =>
         {
             try
@@ -162,7 +164,7 @@ public partial class App : Application
             }
             if (MessageBox.Show(
                     $"RemoteHub's database can't be opened:\n{ex.Message}\n\nStart with empty settings? The unreadable database is kept in\n" +
-                    $"{LocalDb.Directory}\n\nYou can restore an exported backup via Settings → Data → Import backup.",
+                    $"{LocalDb.Directory}\n\nYou can restore an exported backup via Settings → Security & storage → Import backup…",
                     "RemoteHub", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK)
                 throw new OperationCanceledException();
             LocalDb.SetAsideAndCreateNew();

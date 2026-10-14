@@ -45,7 +45,9 @@ public partial class MainWindow
             DiagLog.Write("Startup protection: locked after a while without input");
             Data.AuditLog.Write(Data.AuditEvents.AppLocked, null, null, $"After {_vm.Data.Ui.AutoLockMinutes} min without input");
             // Not unlocked (Exit, or the window closed): RemoteHub ends – without showing anything again.
-            if (new UnlockWindow(whileRunning: true).ShowDialog() != true)
+            var unlock = new UnlockWindow(whileRunning: true);
+            WindowPlacement.CenterOn(unlock, this); // where RemoteHub was, not the middle of the screen
+            if (unlock.ShowDialog() != true)
             {
                 DiagLog.Write("Startup protection: exited while locked");
                 _forceClose = true;

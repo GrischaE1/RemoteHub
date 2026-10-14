@@ -4,6 +4,7 @@ using System.Management.Automation.Remoting;
 using System.Management.Automation.Remoting.Client;
 using System.Management.Automation.Runspaces;
 using System.Net;
+using System.Net.Http;
 using System.Net.Security;
 using System.Net.WebSockets;
 using System.Security.Cryptography.X509Certificates;
@@ -13,8 +14,11 @@ using RemoteHub.Agent;
 
 namespace RemoteHub.Remoting;
 
-/// <summary>Where the RemoteHub Agent of a device listens, and the device certificate it must present.</summary>
-public sealed record AgentEndpoint(int Port, string Fingerprint);
+/// <summary>
+/// Where the RemoteHub Agent of a device listens, and the device certificate it must present. <paramref name="Via"/>: the
+/// jump host it is reached through, if any.
+/// </summary>
+public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null);
 
 /// <summary>
 /// A PowerShell session through the RemoteHub Agent instead of WinRM. Everything above the transport – runspaces,
@@ -88,12 +92,15 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
         ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(30); // no answer to a ping: the connection is gone (VPN drop)
         ws.Options.CollectHttpResponseDetails = true;
-        ws.Options.RemoteCertificateValidationCallback = (_, cert, _, _) =>
+        RemoteCertificateValidationCallback pinned = (_, cert, _, _) =>
         {
             // The pin is the trust anchor: name and chain don't matter (devices are reached by IP or alias, certs are self-issued).
             seen = cert is null ? "" : AgentProtocol.Fingerprint(cert.GetRawCertData());
             return seen == expected;
         };
+        // Through a jump host: the socket is a stream of its tunnel; TLS to the pinned certificate runs inside it, end to end.
+        var via = info.Endpoint.Via;
+        if (via is null) ws.Options.RemoteCertificateValidationCallback = pinned;
         if (info.Credential is { } c)
         {
             var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{c.UserName}:{c.GetNetworkCredential().Password}"));
@@ -101,17 +108,42 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(info.OpenTimeout > 0 ? info.OpenTimeout : 20_000);
+        if (via is not null) timeout.CancelAfter(Math.Max(info.OpenTimeout, 0) + 30_000); // signing in at the jump host and its connect come first
         try
         {
-            ws.ConnectAsync(info.UriFor(path), timeout.Token).GetAwaiter().GetResult();
+            if (via is null) ws.ConnectAsync(info.UriFor(path), timeout.Token).GetAwaiter().GetResult();
+            else
+            {
+                // Disposed afterwards: an upgraded connection has left its pool; a refused one (401, 404) must not stay open in it.
+                using var invoker = new HttpMessageInvoker(ThroughJumpHost(via, pinned));
+                ws.ConnectAsync(info.UriFor(path), invoker, timeout.Token).GetAwaiter().GetResult();
+            }
             return ws;
         }
         catch (Exception ex)
         {
             var status = ws.HttpStatusCode;
             ws.Dispose();
-            throw new PSRemotingTransportException(AgentErrors.Explain(ex, status, seen, expected, info, desktop: path == DesktopProtocol.Path), ex);
+            if (JumpError(ex) is { } jump) throw new PSRemotingTransportException(jump.Message, jump);
+            throw new PSRemotingTransportException(AgentErrors.Explain(ex, status, seen, expected, info, path), ex);
         }
+    }
+
+    /// <summary>An HTTP handler whose connections are streams through <paramref name="via"/> (for the agent's WebSocket and health check).</summary>
+    internal static SocketsHttpHandler ThroughJumpHost(JumpRoute via, RemoteCertificateValidationCallback validate) => new()
+    {
+        ConnectCallback = async (context, token) => await JumpTunnels.OpenAsync(via, context.DnsEndPoint.Host, context.DnsEndPoint.Port, token).ConfigureAwait(false),
+        SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = validate },
+        UseProxy = false,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+    };
+
+    /// <summary>The jump host's own error somewhere inside <paramref name="ex"/> (HttpClient and ClientWebSocket wrap it).</summary>
+    internal static JumpHostException? JumpError(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+            if (ex is JumpHostException jump) return jump;
+        return null;
     }
 
     private async Task ReadLoop()
@@ -223,9 +255,16 @@ internal sealed class WebSocketLineWriter(WebSocket ws, CancellationToken ct) : 
 
 internal static class AgentErrors
 {
-    public static string Explain(Exception ex, HttpStatusCode status, string? seenFingerprint, string expected, AgentConnectionInfo info, bool desktop = false)
+    public static string Explain(Exception ex, HttpStatusCode status, string? seenFingerprint, string expected, AgentConnectionInfo info, string path = AgentProtocol.PowerShellPath)
     {
         var where = $"{info.ComputerName}:{info.Endpoint.Port}";
+        var desktop = path == DesktopProtocol.Path;
+        if (path == TunnelProtocol.Path && status is HttpStatusCode.NotFound)
+            return $"The RemoteHub Agent on {where} can't be used as a jump host: jump connections are turned off by a policy on the device " +
+                   "(TunnelEnabled), or the agent there is older than this RemoteHub – update it (right-click the connection → Update RemoteHub Agent).";
+        if (path == TunnelProtocol.Path && status is HttpStatusCode.Forbidden)
+            return $"The account may not use the RemoteHub Agent on {where} as a jump host: it must be in a group that the device's policy allows " +
+                   "for jump connections (right Tunnel – by default the administrators).";
         if (seenFingerprint is { } seen && seen != expected)
             return $"The RemoteHub Agent on {where} presented a different certificate than the one stored for this device " +
                    $"(expected …{expected[^8..]}, got …{(seen.Length >= 8 ? seen[^8..] : "none")}). The connection was stopped before " +

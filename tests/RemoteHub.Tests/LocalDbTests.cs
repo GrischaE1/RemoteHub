@@ -329,6 +329,24 @@ public class LocalDbTests : IDisposable
     }
 
     [Fact]
+    public void The_retention_setting_applies_unless_the_policy_sets_one()
+    {
+        try
+        {
+            AuditLog.ConfiguredRetentionDays = null;
+            Assert.Equal(AppPolicy.AuditRetentionDays ?? AuditLog.DefaultRetentionDays, AuditLog.RetentionDays);
+            AuditLog.ConfiguredRetentionDays = 30;
+            Assert.Equal(AppPolicy.AuditRetentionDays ?? 30, AuditLog.RetentionDays); // a policy on this PC wins
+            AuditLog.ConfiguredRetentionDays = 0;
+            Assert.Null(AuditLog.ConfiguredRetentionDays);                          // nonsense: the default
+            AuditLog.ConfiguredRetentionDays = 100_000;
+            Assert.Equal(36_500, AuditLog.ConfiguredRetentionDays);
+            Assert.Contains(AuditLog.RetentionChoices, c => c.Days == AuditLog.DefaultRetentionDays);
+        }
+        finally { AuditLog.ConfiguredRetentionDays = null; }
+    }
+
+    [Fact]
     public void A_damaged_database_is_reported_and_a_backup_restores_it()
     {
         var data = Sample();

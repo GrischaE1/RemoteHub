@@ -117,10 +117,15 @@ public static class RemotingSetup
 
     /// <summary>
     /// The certificate the target's WinRM HTTPS listener presents (public part; nothing is validated – the user compares
-    /// its thumbprint with the one the setup script printed before it is trusted).
+    /// its thumbprint with the one the setup script printed before it is trusted). <paramref name="via"/>: through that jump host.
     /// </summary>
-    public static async Task<X509Certificate2> FetchCertificateAsync(string host, int port, CancellationToken ct)
+    public static async Task<X509Certificate2> FetchCertificateAsync(string host, int port, CancellationToken ct, JumpRoute? via = null)
     {
+        if (via is not null)
+        {
+            await using var stream = await JumpTunnels.OpenAsync(via, host, port, ct);
+            return (await ServerCertificates.TlsAsync(stream, host, ct)).Certificate;
+        }
         using var tcp = new TcpClient();
         await tcp.ConnectAsync(host.Trim().Trim('[', ']'), port, ct);
         X509Certificate2? seen = null;

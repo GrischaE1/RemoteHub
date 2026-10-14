@@ -13,6 +13,8 @@ namespace RemoteHub.Remoting.Shares;
 /// <summary>
 /// WebDAV (RFC 4918) over HTTPS – or HTTP if chosen. Signs in with Basic, Digest, NTLM or Kerberos, whatever the server
 /// offers; with no account set, the Windows account is used (intranet servers). Paths are the URL's decoded path.
+/// Behind a jump host only the sockets go through it (<paramref name="via"/>): the URL, the certificate check and the
+/// sign-in keep the share's own host name.
 /// </summary>
 public sealed class WebDavShare : ShareFileSystem
 {
@@ -21,28 +23,29 @@ public sealed class WebDavShare : ShareFileSystem
     private readonly HttpClient _http;
     private readonly Uri _origin;
 
-    public WebDavShare(string host, int port, bool https, string basePath, CredentialSet credentials, string? trusted, Func<TrustRequest, bool> trust, Action<string> accepted)
+    public WebDavShare(string host, int port, bool https, string basePath, CredentialSet credentials, string? trusted, Func<TrustRequest, bool> trust, Action<string> accepted,
+        JumpRoute? via = null)
     {
         var scheme = https ? "https" : "http";
         _origin = new UriBuilder(scheme, host, port).Uri;
         var top = "/" + basePath.Trim().Replace('\\', '/').Trim('/');
         Top = Start = top;
-        var handler = new HttpClientHandler
+        RemoteCertificateValidationCallback validate = (_, cert, _, errors) =>
         {
-            PreAuthenticate = true,
-            AllowAutoRedirect = false,
-            ServerCertificateCustomValidationCallback = (_, cert, _, errors) =>
-            {
-                if (errors == SslPolicyErrors.None) return true;
-                if (cert is null) return false;
-                var fp = Fingerprints.Of(cert);
-                if (fp == trusted) return true;
-                var ok = trust(new TrustRequest(host, "certificate Windows doesn't trust", fp, $"{cert.Subject}\n{errors}"));
-                if (ok) { accepted(fp); trusted = fp; }
-                return ok;
-            },
+            if (errors == SslPolicyErrors.None) return true;
+            if (cert is null) return false;
+            var fp = Fingerprints.Of(cert);
+            if (fp == trusted) return true;
+            var ok = trust(new TrustRequest(host, "certificate Windows doesn't trust", fp, $"{cert.Subject}\n{errors}"));
+            if (ok) { accepted(fp); trusted = fp; }
+            return ok;
         };
-        if (credentials.IsEmpty) handler.UseDefaultCredentials = true;
+        var handler = via is null
+            ? new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = validate } }
+            : AgentClientTransport.ThroughJumpHost(via, validate);
+        handler.PreAuthenticate = true;
+        handler.AllowAutoRedirect = false;
+        if (credentials.IsEmpty) handler.Credentials = CredentialCache.DefaultCredentials;
         else
         {
             var user = credentials.Username!.Trim();

@@ -46,6 +46,15 @@ internal static class SessionUser
         return Path.Combine(root, DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"));
     }
 
+    /// <summary>The SID of the user signed in to this session (as LocalSystem), or null when nobody is.</summary>
+    public static string? Sid()
+    {
+        using var token = Token();
+        if (token is null) return null;
+        using var identity = new WindowsIdentity(token.DangerousGetHandle());
+        return identity.User?.Value;
+    }
+
     private static SafeAccessTokenHandle? Token()
     {
         if (!ProcessIdToSessionId((uint)Environment.ProcessId, out var session)) return null;

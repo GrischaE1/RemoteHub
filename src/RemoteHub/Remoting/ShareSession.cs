@@ -82,17 +82,20 @@ public sealed class ShareSession : SessionBase, IRemoteFiles
             }
             _fs = _paths = fs;
             _lastUse = DateTime.UtcNow;
-            Transport = fs.Description;
+            Transport = Reached(fs);
             State = SessionState.Connected;
-            StatusText = "Connected – " + fs.Description;
+            StatusText = "Connected – " + Reached(fs);
             _idle.Start();
-            Services.DiagLog.Write($"Share ({Share.ProtocolLabel}): connected ({fs.Description})");
+            Services.DiagLog.Write($"Share ({Share.ProtocolLabel}): connected ({Reached(fs)})");
             Ready?.Invoke();
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     /// <summary>A separate connection for a transfer (the caller disposes it).</summary>
     public ShareFileSystem OpenAnother() => (_open ?? throw new InvalidOperationException("Not connected."))();
+
+    /// <summary>How the share is reached, for the tab: "SFTP · OpenSSH_9.5 · via JUMP01" behind a jump host.</summary>
+    private string Reached(ShareFileSystem fs) => Connection.JumpHost is { } jump ? $"{fs.Description} · via {jump.Name}" : fs.Description;
 
     /// <summary>Runs one call at a time; opens the connection again if it was closed for being idle.</summary>
     private async Task<T> Run<T>(Func<ShareFileSystem, T> call)
@@ -115,7 +118,7 @@ public sealed class ShareSession : SessionBase, IRemoteFiles
                     throw new ShareException("The connection to the share was lost: " + Explain(ex) + " – try again to reconnect.", ex);
                 }
             });
-            if (reopened) StatusText = "Connected – " + _fs?.Description;
+            if (reopened && _fs is { } now) StatusText = "Connected – " + Reached(now);
             return result;
         }
         catch (Exception ex) when (ex is not (ShareException or OperationCanceledException)) { throw new ShareException(Explain(ex), ex); }

@@ -10,7 +10,7 @@ namespace RemoteHub.Data;
 public static class AuditEvents
 {
     public const string AppUnlocked = "app.unlocked", AppUnlockFailed = "app.unlock_failed", ProtectionChanged = "app.protection_changed",
-        AppLocked = "app.locked";
+        AppLocked = "app.locked", AuditRetentionChanged = "audit.retention_changed";
     public const string SessionConnected = "session.connected", SessionEnded = "session.ended", SessionFailed = "session.failed";
     public const string PasswordCopied = "password.copied";
     public const string DataAdded = "data.added", DataChanged = "data.changed", DataDeleted = "data.deleted";
@@ -27,6 +27,7 @@ public static class AuditEvents
         AppUnlockFailed => "Unlock failed",
         AppLocked => "RemoteHub locked",
         ProtectionChanged => "Startup protection changed",
+        AuditRetentionChanged => "Audit log retention changed",
         SessionConnected => "Connected",
         SessionEnded => "Disconnected",
         SessionFailed => "Connection failed",
@@ -52,7 +53,7 @@ public static class AuditEvents
     [
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
         ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted]),
-        ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged]),
+        ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
         ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
     ];
@@ -91,8 +92,24 @@ public static class AuditLog
 
     public const int DefaultRetentionDays = 365;
 
-    /// <summary>Days entries are kept: policy AuditRetentionDays, else 365.</summary>
-    public static int RetentionDays => AppPolicy.AuditRetentionDays ?? DefaultRetentionDays;
+    /// <summary>Days entries are kept: policy AuditRetentionDays, else the setting (Settings → Logs), else 365.</summary>
+    public static int RetentionDays => AppPolicy.AuditRetentionDays ?? ConfiguredRetentionDays ?? DefaultRetentionDays;
+
+    /// <summary>The setting <see cref="Models.UiState.AuditRetentionDays"/>, set when the settings are loaded or saved.</summary>
+    public static int? ConfiguredRetentionDays
+    {
+        get => _configured;
+        set => _configured = value is > 0 ? Math.Min(value.Value, 36_500) : null;
+    }
+    private static int? _configured;
+
+    /// <summary>The choices offered in the settings (days, label).</summary>
+    public static readonly (int Days, string Label)[] RetentionChoices =
+        [(30, "30 days"), (90, "90 days"), (180, "6 months"), (365, "1 year"), (730, "2 years"), (1825, "5 years"), (3650, "10 years")];
+
+    /// <summary>"1 year", "6 months" – or "400 days" for a period that isn't one of the choices.</summary>
+    public static string RetentionLabel(int days) =>
+        RetentionChoices.FirstOrDefault(c => c.Days == days) is { Label: { } label } ? label : $"{days} days";
 
     public static void Write(string evt, string? connectionId, string? target, string? detail)
     {

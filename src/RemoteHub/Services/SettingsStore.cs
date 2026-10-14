@@ -714,7 +714,7 @@ public static class SettingsStore
         DefaultCredentials = data.DefaultCredentials,
         DefaultCredentialId = data.DefaultCredentialId,
         SavedCredentials = data.SavedCredentials,
-        Items = data.Items,
+        Items = new(TreeLayout.Flatten(data.Items)), // items under a jump host follow it (older versions keep them)
         Tools = data.Tools,
         Ui = null!,
     }, Json);
@@ -731,6 +731,7 @@ public static class SettingsStore
         data.SavedCredentials ??= new();
         data.Tools ??= new RemoteToolSettings();
         data.Ui ??= new UiState();
+        TreeLayout.Nest(data.Items);
         RelinkParents(data.Items, null);
         MigratePasswordPrompt(data);
         return data;
@@ -758,13 +759,13 @@ public static class SettingsStore
                     n.Options.PasswordPrompt ??= v ? PasswordPromptAction.Clipboard : PasswordPromptAction.Off;
                 n.Options.CopyPasswordOnPrompt = null;
                 if (n.Options.PasswordPrompt == PasswordPromptAction.AutoType) n.Options.PasswordPrompt = PasswordPromptAction.Clipboard;
-                if (n is Folder f) Walk(f.Children);
+                if (n.Contents is { } inside) Walk(inside);
             }
         }
         Walk(data.Items);
     }
 
-    public static void RelinkParents(IEnumerable<NodeBase> items, Folder? parent)
+    public static void RelinkParents(IEnumerable<NodeBase> items, NodeBase? parent)
     {
         foreach (var n in items)
         {
@@ -774,6 +775,8 @@ public static class SettingsStore
             if (n is Folder f) RelinkParents(f.Children, f);
             if (n is Connection c)
             {
+                c.Children ??= new();
+                RelinkParents(c.Children, c);
                 c.Shares ??= new();
                 foreach (var s in c.Shares) { s.Server = c; s.Options ??= new RdpOptions(); s.Credentials ??= new CredentialSet(); }
             }

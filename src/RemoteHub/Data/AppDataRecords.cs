@@ -134,8 +134,9 @@ internal static class AppDataRecords
         }
 
         var seenNodes = new HashSet<Guid>();
-        void Walk(IList<NodeBase> items, Guid? parent)
+        void Walk(IList<NodeBase> live, Guid? parent)
         {
+            var items = TreeLayout.Flatten(live); // items under a jump host are saved next to it (older versions keep them)
             for (var i = 0; i < items.Count; i++)
             {
                 var n = items[i];

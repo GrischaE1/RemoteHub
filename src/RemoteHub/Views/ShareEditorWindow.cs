@@ -21,6 +21,10 @@ public sealed class ShareEditorWindow : FluentWindow
     private readonly ComboBox _protocol = new();
     private readonly TextBox _host = new();
     private readonly TextBox _port = new() { Width = 110 };
+    /// <summary>Below the host for a server's share: whose address it is, and how a jump host's own share is reached.</summary>
+    private readonly TextBlock _hostHint = Caption();
+    /// <summary>The protocol's default port as last filled in (replaced when the protocol changes, unless the user typed another).</summary>
+    private string _defaultPort = "";
     private readonly TextBlock _pathLabel = Label("");
     private readonly TextBox _path = new();
     private readonly ComboBox _ftpSecurity = new();
@@ -68,9 +72,10 @@ public sealed class ShareEditorWindow : FluentWindow
 
         _name.Text = share.Name;
         _protocol.SelectedIndex = (int)share.Protocol;
-        _host.Text = share.Host ?? "";
+        // Filled in, not only a placeholder: a server's share uses its address unless another is entered (saved as "the server's").
+        _host.Text = share.Host ?? server?.Host.Trim() ?? "";
         _host.PlaceholderText = server is null ? "e.g. nas or 192.168.1.10" : $"{server.Host} (the server's)";
-        _port.Text = share.Port?.ToString() ?? "";
+        _port.Text = share.Port?.ToString() ?? ""; // the default is filled in by Update()
         _path.Text = share.Path;
         _ftpSecurity.SelectedIndex = (int)share.FtpSecurity;
         _https.IsChecked = share.WebDavHttps;
@@ -106,6 +111,8 @@ public sealed class ShareEditorWindow : FluentWindow
         where.Children.Add(hostCol);
         where.Children.Add(portCol);
         body.Children.Add(where);
+        _hostHint.Margin = new Thickness(0, 0, 0, 10);
+        body.Children.Add(_hostHint);
 
         body.Children.Add(_pathLabel); body.Children.Add(Spaced(_path));
         _ftpRow.Children.Add(Label("Encryption")); _ftpRow.Children.Add(Spaced(_ftpSecurity));
@@ -164,7 +171,9 @@ public sealed class ShareEditorWindow : FluentWindow
         _inherit.Checked += (_, _) => Update();
         _saved.Checked += (_, _) => Update();
         _custom.Checked += (_, _) => Update();
+        _host.TextChanged += (_, _) => UpdateHostHint();
         Update();
+        UpdateHostHint();
         Loaded += (_, _) => { _name.Focus(); _name.SelectAll(); };
     }
 
@@ -188,7 +197,11 @@ public sealed class ShareEditorWindow : FluentWindow
         };
         _ftpRow.Visibility = p == ShareProtocol.Ftp ? Visibility.Visible : Visibility.Collapsed;
         _https.Visibility = p == ShareProtocol.WebDav ? Visibility.Visible : Visibility.Collapsed;
-        _port.PlaceholderText = NetworkShare.DefaultPort(p, Security, _https.IsChecked == true).ToString();
+        var defaultPort = NetworkShare.DefaultPort(p, Security, _https.IsChecked == true).ToString();
+        _port.PlaceholderText = defaultPort;
+        // The default shown as a value; a port the user typed stays (SMB is always 445).
+        if (p == ShareProtocol.Smb || _port.Text.Trim().Length == 0 || _port.Text.Trim() == _defaultPort) _port.Text = defaultPort;
+        _defaultPort = defaultPort;
         _port.IsEnabled = p != ShareProtocol.Smb;
         _warning.Text = (p == ShareProtocol.Ftp && Security == FtpSecurity.None) || (p == ShareProtocol.WebDav && _https.IsChecked != true)
             ? "Not encrypted: the password and every file go over the network in plain text. Use it only in a trusted network."
@@ -218,6 +231,31 @@ public sealed class ShareEditorWindow : FluentWindow
 
     private static string Short(string fp) => fp.Length > 40 ? fp[..40] + "…" : fp;
 
+    /// <summary>The host as saved: null when it is the server's (so it follows the server's address).</summary>
+    private string? HostToSave()
+    {
+        var host = _host.Text.Trim();
+        return host.Length == 0 || (_server is not null && string.Equals(host, _server.Host.Trim(), StringComparison.OrdinalIgnoreCase)) ? null : host;
+    }
+
+    private void UpdateHostHint()
+    {
+        _hostHint.FontSize = 12; // a caption; the caution below is written like the dialog's other warning
+        _hostHint.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        if (_server is null) _hostHint.Text = "";
+        else if (HostToSave() is null) _hostHint.Text = $"{_server.Name}'s address. Enter another only for a share on another device.";
+        else if (_server.Children.Count > 0)
+        {
+            // A jump host's own shares are reached like it – directly – not through it.
+            _hostHint.Text = $"Reached directly, like {_server.Name} itself. For a device reached through {_server.Name}, add the share to that " +
+                             $"device's connection, or place a share on its own below {_server.Name}.";
+            _hostHint.ClearValue(TextBlock.FontSizeProperty);
+            _hostHint.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCautionBrush");
+        }
+        else _hostHint.Text = _server.JumpHost is { } jump ? $"Another device, reached through {jump.Name} like {_server.Name}." : "";
+        _hostHint.Visibility = _hostHint.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private async void Save()
     {
         var name = _name.Text.Trim();
@@ -225,7 +263,7 @@ public sealed class ShareEditorWindow : FluentWindow
         // SMB: a pasted \\host\share\folder fills in the host as well
         if (Protocol == ShareProtocol.Smb && path.StartsWith(@"\\") && path.TrimStart('\\').Split('\\', 2) is [{ Length: > 0 } uncHost, var rest])
         {
-            if (_host.Text.Trim().Length == 0) _host.Text = uncHost;
+            if (HostToSave() is null) _host.Text = uncHost; // empty, or only the server's filled in
             path = rest;
             _path.Text = path;
         }
@@ -243,16 +281,18 @@ public sealed class ShareEditorWindow : FluentWindow
             if (!int.TryParse(_port.Text.Trim(), out var n) || n is < 1 or > 65535) { await Dialogs.Info(this, "Network share", "The port must be a number from 1 to 65535."); return; }
             port = n;
         }
+        if (port == NetworkShare.DefaultPort(Protocol, Security, _https.IsChecked == true)) port = null; // the default: follows the type
+        var host = HostToSave();
         if (Protocol == ShareProtocol.Sftp && _inherit.IsChecked != true && _custom.IsChecked == true && _user.Text.Trim().Length == 0)
         {
             await Dialogs.Info(this, "Network share", "SFTP needs a user name.");
             return;
         }
 
-        var changedTarget = _share.Protocol != Protocol || !string.Equals(_share.Host ?? "", _host.Text.Trim(), StringComparison.OrdinalIgnoreCase) || _share.Port != port;
+        var changedTarget = _share.Protocol != Protocol || !string.Equals(_share.Host ?? "", host ?? "", StringComparison.OrdinalIgnoreCase) || _share.Port != port;
         _share.Name = name;
         _share.Protocol = Protocol;
-        _share.Host = _host.Text.Trim().Length == 0 ? null : _host.Text.Trim();
+        _share.Host = host;
         _share.Port = port;
         _share.Path = path;
         _share.FtpSecurity = Security;

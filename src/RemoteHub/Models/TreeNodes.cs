@@ -26,7 +26,61 @@ public abstract partial class NodeBase : ObservableObject
     public CredentialSet Credentials { get; set; } = new();
     public RdpOptions Options { get; set; } = new();
 
-    [JsonIgnore] public Folder? Parent { get; set; }
+    /// <summary>What it is in: a folder, or the connection it is reached through (a jump host); null = top level.</summary>
+    [JsonIgnore] public NodeBase? Parent { get; set; }
+
+    /// <summary>The connection this item is reached through (directly or in folders below it), or null.</summary>
+    [JsonIgnore] public Connection? JumpHost
+    {
+        get
+        {
+            for (var p = Parent; p is not null; p = p.Parent)
+                if (p is Connection c) return c;
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Saved only: the jump host this item is directly under. Items under a jump host are saved next to it with this id
+    /// (see <see cref="Services.TreeLayout"/>), so older versions keep them – as ordinary items – instead of losing them.
+    /// </summary>
+    public Guid? JumpHostId
+    {
+        get => Parent is Connection c ? c.Id : _storedJumpHostId;
+        set => _storedJumpHostId = value;
+    }
+    private Guid? _storedJumpHostId;
+    internal void ForgetStoredJumpHost() => _storedJumpHostId = null;
+
+    /// <summary>Beside the address in the navigation: "via JUMP01", or null when it is reached directly.</summary>
+    [JsonIgnore] public string? RouteHint => JumpHost is { } j ? $"via {j.Name}" : null;
+    /// <summary>The jump host can be used: it has a RemoteHub Agent.</summary>
+    [JsonIgnore] public bool RouteUsable => JumpHost is not { } j || j.Agent is { Fingerprint.Length: > 0 };
+    [JsonIgnore] public string? RouteToolTip => JumpHost is not { } j ? null
+        : RouteUsable ? $"Reached through {j.Name} (its RemoteHub Agent is the jump host). Move it out of {j.Name} to connect directly."
+        : $"{j.Name} has no RemoteHub Agent – install it there to reach the items below it.";
+
+    /// <summary>After the tree changed (moved, renamed, agent installed): the route labels again.</summary>
+    public void RefreshRoute()
+    {
+        OnPropertyChanged(nameof(RouteHint));
+        OnPropertyChanged(nameof(RouteUsable));
+        OnPropertyChanged(nameof(RouteToolTip));
+    }
+
+    /// <summary>The items it holds (folders: their items; jump hosts: the items reached through them), or null.</summary>
+    [JsonIgnore] public virtual ObservableCollection<NodeBase>? Contents => null;
+
+    /// <summary>Everything inside it, all levels.</summary>
+    public IEnumerable<NodeBase> Descendants()
+    {
+        if (Contents is not { } items) yield break;
+        foreach (var c in items)
+        {
+            yield return c;
+            foreach (var d in c.Descendants()) yield return d;
+        }
+    }
 
     [ObservableProperty] [property: JsonIgnore] private bool _isSelected;
     /// <summary>Effective (inherited) colour tag brush for the tree; null = no tag. Computed by the view model.</summary>
@@ -35,28 +89,35 @@ public abstract partial class NodeBase : ObservableObject
     [JsonIgnore] public virtual string DisplaySymbol => Icon ?? (this is Folder ? "Folder24" : "Desktop24");
     /// <summary>For the tree: folders get a frame around themselves and their contents.</summary>
     [JsonIgnore] public bool IsFolder => this is Folder;
+    /// <summary>For the tree: something is reached through it (only a connection can be a jump host).</summary>
+    [JsonIgnore] public virtual bool IsJumpHost => false;
     partial void OnIconChanged(string? value) => OnPropertyChanged(nameof(DisplaySymbol));
 
+    /// <summary>
+    /// The folders it is in, nearest first – passing over a jump host to its folders: an item under a jump host inherits
+    /// from the jump host's folders, never from the jump host itself.
+    /// </summary>
     public IEnumerable<Folder> Ancestors()
     {
-        for (var f = Parent; f is not null; f = f.Parent) yield return f;
+        for (var p = Parent; p is not null; p = p.Parent)
+            if (p is Folder f) yield return f;
     }
 }
 
 public sealed partial class Folder : NodeBase
 {
-    public ObservableCollection<NodeBase> Children { get; set; } = new();
+    [JsonIgnore] public ObservableCollection<NodeBase> Children { get; set; } = new();
     [ObservableProperty] private bool _isExpanded = true;
 
-    public IEnumerable<NodeBase> Descendants()
+    /// <summary>The saved form of <see cref="Children"/>: items under a jump host follow it (see <see cref="Services.TreeLayout"/>).</summary>
+    [JsonPropertyName("Children")]
+    public IList<NodeBase> StoredChildren
     {
-        foreach (var c in Children)
-        {
-            yield return c;
-            if (c is Folder f)
-                foreach (var d in f.Descendants()) yield return d;
-        }
+        get => Services.TreeLayout.Flatten(Children);
+        set => Children = new(value);
     }
+
+    [JsonIgnore] public override ObservableCollection<NodeBase> Contents => Children;
 }
 
 public sealed partial class Connection : NodeBase
@@ -79,11 +140,51 @@ public sealed partial class Connection : NodeBase
     /// <summary>Agent icon in the navigation (computed from <see cref="Agent"/> and the inherited "Connect through" setting).</summary>
     [ObservableProperty] [property: JsonIgnore] private AgentMode _agentMode;
 
+    /// <summary>
+    /// Behind a jump host: the RDP certificate the user trusted for this connection (SHA-256 of it), when it isn't one this PC
+    /// trusts for the name anyway. RDP connects without asking while the server presents this one.
+    /// </summary>
+    [ObservableProperty] private string? _rdpCertificate;
+
     /// <summary>When a tab of this connection last connected (any kind: RDP, agent desktop, PowerShell, tools).</summary>
     [ObservableProperty] private DateTime? _lastConnectedUtc;
 
     /// <summary>Network shares of this server (SMB, SFTP, FTP, WebDAV), shown below it in the navigation.</summary>
     public System.Collections.ObjectModel.ObservableCollection<NetworkShare> Shares { get; set; } = new();
+
+    /// <summary>
+    /// Connections, folders and shares reached through this one – it is their jump host. Saved next to it, not inside it
+    /// (see <see cref="NodeBase.JumpHostId"/>).
+    /// </summary>
+    [JsonIgnore] public ObservableCollection<NodeBase> Children
+    {
+        get => _children;
+        set
+        {
+            _children.CollectionChanged -= ChildrenChanged;
+            _children = value;
+            _children.CollectionChanged += ChildrenChanged;
+            OnPropertyChanged(nameof(IsJumpHost));
+        }
+    }
+    private ObservableCollection<NodeBase> _children = new();
+    [JsonIgnore] public override ObservableCollection<NodeBase> Contents => Children;
+
+    /// <summary>Something is reached through it: the navigation frames it like a folder.</summary>
+    [JsonIgnore] public override bool IsJumpHost => _children.Count > 0;
+
+    private void ChildrenChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Add or System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+            or System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+            OnPropertyChanged(nameof(IsJumpHost));
+    }
+
+    public Connection() => _children.CollectionChanged += ChildrenChanged;
+
+    /// <summary>For the bar above a tab: "sql01" or "sql01 via JUMP01".</summary>
+    [JsonIgnore] public string HostWithRoute => JumpHost is { } j ? $"{Host} via {j.Name}" : Host;
+
     /// <summary>The shares below it are shown in the navigation.</summary>
     [ObservableProperty] private bool _isExpanded = true;
 
@@ -238,6 +339,8 @@ public sealed class UiState
     public bool Maximized { get; set; }
     /// <summary>With startup protection on: lock RemoteHub after this many minutes without any input on this PC (0 = never).</summary>
     public int AutoLockMinutes { get; set; }
+    /// <summary>Days the audit log keeps entries (null = the default); the policy AuditRetentionDays wins.</summary>
+    public int? AuditRetentionDays { get; set; }
     public string Theme { get; set; } = "Dark";
     /// <summary>Id of the <see cref="Services.SwitchHotkeys"/> preset used to switch sessions.</summary>
     public string SwitchKeys { get; set; } = "Less";
