@@ -5,3 +5,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
+  # NuGet packages of the app, the agent, the tests and the installers (WiX SDK). Minor and patch updates come as one
+  # pull request a week; major updates and security fixes come on their own.
+  - package-ecosystem: nuget
+    directories:
+      - /src/*
+      - /tests/*
+      - /installer
+      - /installer/*
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
