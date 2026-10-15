@@ -4,7 +4,9 @@ applyTo: "src/RemoteHub/**/*.cs,src/RemoteHub.Agent/**/*.cs,tests/RemoteHub.Test
 
 # C# and WPF
 
-- .NET 10, `Nullable` enabled, `ImplicitUsings` **disabled** – new files need their own `using` lines.
+- .NET 10, `Nullable` enabled. Usings differ per project – check the `.csproj` before flagging a missing `using`:
+  the app and `RemoteHub.Tests` disable `ImplicitUsings` but declare global usings (`<Using Include="..."/>`: `System`,
+  `System.IO`, `System.Linq` …); the agent enables `ImplicitUsings`; `RemoteHub.LabHarness` has neither.
 - File-scoped namespaces (`namespace RemoteHub.Services;`), `_camelCase` private fields, `sealed` where a class isn't
   meant to be derived from. Collection expressions (`[...]`) and target-typed `new` are used throughout.
 - Many windows and dialogs are built in code (`Views/*.cs` deriving from `Wpf.Ui.Controls.FluentWindow`) rather than
@@ -14,7 +16,10 @@ applyTo: "src/RemoteHub/**/*.cs,src/RemoteHub.Agent/**/*.cs,tests/RemoteHub.Test
 - UI work must run on the dispatcher. Background work that touches the UI after `await` or from a timer/thread is a
   bug unless it marshals back.
 - P/Invoke: check `SetLastError`, buffer sizes, handle ownership and that handles are closed on every path.
-- Logging goes through `DiagLog.Write`; messages may include `ex.Message`, never secrets, usernames or host names.
+- App logging goes through `DiagLog.Write`; messages may include `ex.Message`, never secrets, usernames or host names.
+- The agent logs through `AgentLog`. Its `Audit` entries intentionally record the account and source address and are
+  forwarded to the Windows Application log for Intune/SIEM – don't flag those identities or ask to remove that sink;
+  do flag passwords, tickets or command content in any agent log line.
 - Agent code (`src/RemoteHub.Agent`) runs as LocalSystem: anything from the wire (`AgentProtocol`, `TunnelProtocol`,
   desktop transfers) is untrusted – validate lengths, counts, paths and kinds before acting, and enforce policy
   (`AgentPolicy`, consent, view-only) there.

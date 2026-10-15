@@ -14,12 +14,15 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
   between test files. The module uses `Set-StrictMode -Version Latest` and `$ErrorActionPreference = 'Stop'`.
 - Tests must not need elevation or an interactive sign-in on the host, and must not depend on state from an earlier
   test file – every file starts from the VM's checkpoint.
-- Wait for conditions with a timeout (`Wait-LabHostFile`, the helpers' `-TimeoutSec`) instead of fixed
+- Wait for conditions with a timeout (the module's `Wait-Lab*` helpers, e.g. `Wait-LabVm`, `Wait-LabDesktop`, or a
+  helper's `-TimeoutSec`) instead of fixed
   `Start-Sleep` margins; a timeout should fail with a message saying what didn't happen.
-- Evidence (JSON, screenshots, logs) goes to `$EvidenceDir` with the test's prefix (`d-clip-...`).
+- Evidence (JSON, screenshots, logs) goes to `$EvidenceDir` with the test's ID as a lower-case prefix.
 - The lab password comes from `lab/lab.local.json` (git-ignored). It must never be hard-coded, logged, written to
   evidence or committed; `lab.local.example.json` holds only a placeholder.
 - Scripts must run on Windows PowerShell 5.1 unless they state otherwise (`shell: pwsh` in CI): no `??`, `?.`,
   ternaries or `&&` in 5.1 scripts. Write files with an explicit `-Encoding`.
+- Lab scripts are ASCII-only: 5.1 reads BOM-less UTF-8 as ANSI, so an en dash or other non-ASCII character can end a
+  string or break parsing. Use plain hyphens, and `[char]0x....` where a non-ASCII character is needed in output.
 - Build scripts (`build/`) run in CI on `windows-latest`; they should fail loudly (non-zero exit) rather than
   continue after an error.

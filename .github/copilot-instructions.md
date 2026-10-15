@@ -17,8 +17,10 @@ loaded by LogonUI. Treat every change through a security lens first.
 ## What to look for, in order
 
 1. **Secrets and privacy.** Passwords, tickets and keys must never reach logs, exception messages, telemetry, crash
-   reports, the clipboard (except `SecureClipboard`), temp files or URLs. `DiagLog` must not contain passwords,
-   usernames or host names. Secrets in memory should be wiped once used where the code already does so nearby.
+   reports, the clipboard (except `SecureClipboard`), temp files or URLs. The app's `DiagLog` must not contain
+   passwords, usernames or host names. The agent's `AgentLog` audit entries deliberately record the account and source
+   address (and go to the Windows Application log) – keep those, but never secrets or command content. Secrets in
+   memory should be wiped once used where the code already does so nearby.
 2. **Privilege boundaries.** Anything the agent receives over the network or from a session helper is untrusted:
    check paths (traversal, reparse points, names leaving their folder), sizes and limits, and that policy, consent
    and view-only checks happen on the agent side, not only in the UI. Named pipes must verify the other end.
@@ -35,6 +37,7 @@ loaded by LogonUI. Treat every change through a security lens first.
   restructuring code the PR doesn't touch.
 - Comments explain *why* or what something guarantees, in plain sentences; they don't narrate the code.
 - User-visible text and docs use British English (colour, organised) and the en dash ( – ) for asides.
+  Exception: lab PowerShell scripts stay ASCII-only (plain hyphens) – see the lab instructions.
 - The build must have no warnings (`dotnet build RemoteHub.sln`); nullable reference types are on.
 - Third-party code needs its source and license stated (AGPL-3.0 project with a CLA) and an entry in
   `THIRD-PARTY-NOTICES.md`.
