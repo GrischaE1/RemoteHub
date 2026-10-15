@@ -1293,33 +1293,58 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                 FillRect(g, 0, 0, w, h, OverlayBlack);
                 return;
             }
-            // Logo 32 eyebrow 14 heading 12 body (16 notice) 28 divider 28 footnote; on a small screen the logo shrinks so it all fits.
+            // Logo 32 eyebrow 14 heading 12 body (16 notice) 28 divider 28 footnote. On a short screen the logo shrinks; where
+            // that isn't enough, compact type and half the gaps, then no logo – the words always come first. The divider and
+            // footnote only where their row fits on one line and in the height left.
             var wide = Math.Min(w - S(2 * Pad), S(960));
             var inner = Math.Min(wide, S(640));
-            int eyebrowH = TextHeight(_eyebrow, Subtitle, wide), headingH = TextHeight(_title, Heading, wide), bodyH = TextHeight(_lead, Body, inner);
-            int noticeH = TextHeight(_font, Notice, inner), footH = Math.Max(S(16), TextHeight(_font, Footnote, wide));
-            var text = S(32) + eyebrowH + S(14) + headingH + S(12) + bodyH + (noticeH > 0 ? S(16) + noticeH : 0);
-            var foot = Footnote.Length > 0 && text + S(28 + 2 + 28) + footH + S(48) <= h - S(2 * Pad); // the divider and footnote only where they fit
-            if (foot) text += S(28 + 2 + 28) + footH;
-            var logo = Math.Clamp(h - S(2 * Pad) - text, S(48), S(220));
+            var room = h - S(2 * Pad);
+            // The eyebrow is one letter-spaced line: the spacing narrows where it wouldn't fit.
+            var extra = S(6);
+            var eyebrowText = TextWidth(_eyebrow, Subtitle);
+            var gaps = Math.Max(1, Subtitle.Length - 1);
+            extra = Math.Clamp((w - S(2 * Pad) - eyebrowText) / gaps, 0, extra);
+            var eyebrowW = eyebrowText + extra * gaps;
+            int eyebrowH = TextHeight(_eyebrow, Subtitle, int.MaxValue / 2), noticeH = TextHeight(_font, Notice, inner);
+            var footW = S(12 + 8) + TextWidth(_font, Footnote); // lock, gap, text (DrawFootnote's row)
+            var footH = Math.Max(S(16), TextHeight(_font, Footnote, footW));
+            var footFits = Footnote.Length > 0 && footW <= w - S(2 * Pad);
+            IntPtr title = _title, lead = _lead;
+            double k = 1; // the gaps' scale
+            int logo = 0, text = 0;
+            var foot = false;
+            for (var pass = 0; pass < 3; pass++)
+            {
+                (title, lead, k) = pass == 0 ? (_title, _lead, 1.0) : (_heading, _font, 0.5);
+                var minLogo = pass < 2 ? S(pass == 0 ? 48 : 32) : 0;
+                text = (minLogo > 0 ? S(32 * k) : 0) + eyebrowH + S(14 * k) + TextHeight(title, Heading, wide) + S(12 * k)
+                    + TextHeight(lead, Body, inner) + (noticeH > 0 ? S(16 * k) + noticeH : 0);
+                foot = footFits && text + S(58 * k) + S(2) + footH + minLogo <= room;
+                if (foot) text += S(58 * k) + S(2) + footH;
+                logo = minLogo > 0 ? Math.Clamp(room - text, minLogo, Math.Max(minLogo, Math.Min(S(220), wide / 2))) : 0;
+                if (text + minLogo <= room) break;
+            }
             var height = logo + text;
             var y = Math.Max(S(Pad), (h - height) / 2);
 
             FillRect(g, 0, 0, w, h, Theme.OverlayBackground);
-            DrawGlow(g, w / 2f, y + logo / 2f, Math.Max(w, h) * 0.32f);
-            DrawLogo(g, (w - logo) / 2f, y, logo);
-            if (foot) DrawFootnote(dc, g, w, y + height - footH, footH);
+            var top = y;
+            if (logo > 0)
+            {
+                DrawGlow(g, w / 2f, y + logo / 2f, Math.Max(w, h) * 0.32f);
+                DrawLogo(g, (w - logo) / 2f, y, logo);
+                y += logo + S(32 * k);
+            }
+            if (foot) DrawFootnote(dc, g, w, top + height - footH, footH);
             GdipFlush(g, 1); // GDI+ drawing first, then the text (GDI)
-            y += logo + S(32);
-            // The eyebrow is letter-spaced; DrawText centres it without the extra space, so it starts half of that further left.
-            var extra = S(6);
-            SetTextCharacterExtra(dc, extra);
-            y += TextBlock(dc, _eyebrow, Subtitle, (w - wide) / 2 - extra * (Subtitle.Length - 1) / 2, y, wide, Theme.AccentLight, center: true) + S(14);
+            SetTextCharacterExtra(dc, extra); // placed by its spaced width (DrawText would centre it without the spacing)
+            Text(dc, _eyebrow, Subtitle, (w - eyebrowW) / 2, y, eyebrowW + extra, eyebrowH, Theme.AccentLight);
             SetTextCharacterExtra(dc, 0);
-            y += TextBlock(dc, _title, Heading, (w - wide) / 2, y, wide, theme.Text, center: true) + S(12);
-            y += TextBlock(dc, _lead, Body, (w - inner) / 2, y, inner, theme.Secondary, center: true);
-            if (noticeH > 0) y += S(16) + TextBlock(dc, _font, Notice, (w - inner) / 2, y + S(16), inner, theme.Text, center: true);
-            if (foot) FillRect(g, (w - S(72)) / 2, y + S(28), S(72), S(2), Theme.Accent);
+            y += eyebrowH + S(14 * k);
+            y += TextBlock(dc, title, Heading, (w - wide) / 2, y, wide, theme.Text, center: true) + S(12 * k);
+            y += TextBlock(dc, lead, Body, (w - inner) / 2, y, inner, theme.Secondary, center: true);
+            if (noticeH > 0) y += S(16 * k) + TextBlock(dc, _font, Notice, (w - inner) / 2, y + S(16 * k), inner, theme.Text, center: true);
+            if (foot) FillRect(g, (w - S(72)) / 2, y + S(29 * k), S(72), S(2), Theme.Accent);
         }
 
         /// <summary>A soft round glow in OverlayGlow, fading out into the background at the radius.</summary>
