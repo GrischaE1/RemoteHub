@@ -151,6 +151,13 @@ internal sealed class WindowsHelperLauncher : IDesktopHelperLauncher
             try
             {
                 if (!WtsNative.SetTokenInformation(token, 12 /* TokenSessionId */, ref sessionId, sizeof(int))) throw new Win32Exception();
+                // Spike: UIAccess puts the helper's topmost windows (the privacy overlay) in the UIAccess z-band, above
+                // Start, Search and the other shell surfaces. Needs SeTcbPrivilege (the service has it), no manifest.
+                if (HelperUiAccess())
+                {
+                    var on = 1;
+                    if (!WtsNative.SetTokenInformation(token, 26 /* TokenUIAccess */, ref on, sizeof(int))) throw new Win32Exception();
+                }
 
                 var exe = Environment.ProcessPath ?? throw new InvalidOperationException("The agent's path is unknown.");
                 var (pi, stdinWrite, stdoutRead) = ChildProcess.Start(token, $"\"{exe}\" desktop", Native.CREATE_NO_WINDOW, IntPtr.Zero,
@@ -162,6 +169,17 @@ internal sealed class WindowsHelperLauncher : IDesktopHelperLauncher
                 _job = ChildProcess.RunInJob(pi);
             }
             finally { Native.CloseHandle(token); }
+        }
+
+        /// <summary>Spike switch: on unless HKLM\SOFTWARE\Policies\RemoteHub\Agent HelperUIAccess = 0 (DWORD).</summary>
+        private static bool HelperUiAccess()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(AgentPolicy.RegistryPath);
+                return key?.GetValue("HelperUIAccess") is not 0;
+            }
+            catch { return true; }
         }
 
         public void Dispose()

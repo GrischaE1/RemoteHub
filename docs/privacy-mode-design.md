@@ -202,6 +202,62 @@ This is a time-boxed test (1 day) that runs **before** Phase 1 is built. It deci
 
 Not in scope: `PromptOnSecureDesktop = 0`, which moves UAC to the normal desktop. The agent never changes security settings (same rule as for RDP settings).
 
+### 5.8 Spike: shell surfaces above the overlay (UIAccess)
+
+**Problem:** an ordinary `HWND_TOPMOST` window sits in the desktop z-band. Start, Search, Quick Settings / Action Center, Notification Center, toasts, taskbar thumbnails and the taskbar itself are drawn in the shell's own bands above it. While the admin works, those surfaces showed through the privacy screen at the device.
+
+**Rejected:** an isolated desktop (`CreateDesktop` / `SwitchDesktop`). DXGI duplication, GDI capture and `SendInput` all work only on the input desktop, and `DesktopThread` follows the input desktop. Switching away would blank the admin's picture or break their control.
+
+**Change:** the helper's token gets `TokenUIAccess = 1` (`SetTokenInformation(token, 26, 1)`) next to `TokenSessionId` in `WindowsHelperLauncher`. The service is LocalSystem with `SeTcbPrivilege`, so no manifest and no signing is needed. The overlays are created `WS_EX_TOPMOST`, so they and the banner land in `ZBID_UIACCESS` (band 2). Magnifier and the on-screen keyboard draw in the same band, above the immersive shell bands. Switch: `HKLM\SOFTWARE\Policies\RemoteHub\Agent` `HelperUIAccess` = 0 turns it off (DWORD; on when missing).
+
+**Test:** lab case D-SHELL ([D-SHELL.Tests.ps1](../lab/tests/D-SHELL.Tests.ps1)). Privacy screen Black with local input blocked, then the same run with UIAccess off and on. The admin opens each surface through RemoteHub (injected keys). The toast is raised in the user's session, and the thumbnail is opened with Win+T and arrow keys. Per surface the test measures:
+- **Console:** the share of bright pixels in the Hyper-V console screenshot below the banner strip. Covered means < 0.5 %.
+- **Picture:** the share of pixels that changed in the admin's received frame. Shown means > 0.5 %.
+
+The test also reads the window z-order, band and display affinity in the user's session. Last, the device's user clicks Disconnect with the console mouse.
+
+| Surface | W11 26H2 console, off → on | W11 26H2 admin picture (on) | Server 2025 console, off → on | Server 2025 admin picture (on) |
+|---|---|---|---|---|
+| Start (Win) | 63.9 % → 0 % — **pass** | shown 11.2 % — **pass** | 63.9 % → 0 % — **pass** | shown 14.8 % — **pass** |
+| Search (Win+S) | 75.7 % → 0 % — **pass** | shown 14.0 % — **pass** | 75.8 % → 0 % — **pass** | shown 20.3 % — **pass** |
+| Quick Settings / Action Center (Win+A) | 24.2 % → 0 % — **pass** | shown 7.1 % — **pass** | 24.2 % → 0 % — **pass** | shown 9.8 % — **pass** |
+| Notification Center (Win+N) | 16.0 % → 0 % — **pass** | shown 11.6 % — **pass** | 16.0 % → 0 % — **pass** | shown 17.8 % — **pass** |
+| Taskbar thumbnail (Win+T) | 4.1 % → 0 % — **pass** | shown 1.7 % — **pass** | 4.0 % → 0 % — **pass** | shown 2.5 % — **pass** |
+| Toast | not raised¹ → 0 % — **pass** | shown 4.6 % — **pass** | not raised¹ → 0 % — **pass** | shown 5.6 % — **pass** |
+| Task View (Win+Tab) | n/a² | n/a² | n/a² | n/a² |
+| Alt+Tab | n/a² | n/a² | n/a² | n/a² |
+
+¹ With UIAccess off, Windows didn't show the toast at all (not on the console, not in the picture). With UIAccess on it showed, and only in the admin's picture.
+² SnipGuard (`SnipGuard.cs`) drops Win+Tab and Alt+Tab while the privacy screen is up, so neither opens in either mode. The console stayed covered.
+
+Other checks, both builds, UIAccess on:
+
+| Check | W11 26H2 | Server 2025 |
+|---|---|---|
+| Helper token `TokenUIAccess` = 1 (0 with the switch off) | **pass** | **pass** |
+| Overlays read back `WDA_EXCLUDEFROMCAPTURE` (0x11), band 2 | **pass** | **pass** |
+| Banner above the overlays (z-order, band 2) | **pass** | **pass** |
+| Local Disconnect click through the input block ends the session ("The user at the device ended the session.") | **pass** | **pass** |
+| Agent log: no UIPI / access-denied / error lines | **pass** | **pass** |
+
+Not tested: Windows 10 22H2 and Windows 11 23H2/24H2. The lab has no VMs for them (only W11 26H2 and Server 2025).
+
+**Regression (UIAccess on, W11 26H2):** the helper's token now has UIAccess for every desktop connection, not only while the privacy screen is up. The suites that start the helper ran with the spike build. Each failing suite then ran again with a control build, identical except UIAccess is off. The run was stopped early, so the suites from D-CON onwards and all of Server 2025 were not run.
+
+| Suite | UIAccess on | Control (off) | Verdict |
+|---|---|---|---|
+| D-PRIV / D-HIDE | D-HIDE-01, D-HIDE-02 fail | Same two fail | Not caused by UIAccess |
+| D-BAN / D-VIEW | D-BAN-01/04/05/07, D-VIEW-02 fail (in-session OCR of the banner reads nothing) | D-BAN-07, D-VIEW-02 fail; the rest didn't run (`RhPerson` gave no answer) | 07 / VIEW-02 not caused by UIAccess; 01/04/05 not compared. D-SHELL checks the banner and Disconnect directly: pass |
+| D-CLIP | 12 of 18 fail | Cancelled | Not settled in the lab; clipboard reported working in a manual test on a device |
+| D-IN | D-IN-01 (text, one character differs), D-IN-03 (wheel) fail | Not run | Not settled in the lab; mouse wheel reported working in a manual test on a device |
+
+**Manual test (owner, 2026-10-15):** the spike build on a device. Start and the other shell surfaces stay off the device's screen while the privacy screen is on. Clipboard and mouse wheel were reported working.
+
+**Result:** the change is kept on `spike/uiaccess-overlay`, on by default. Before it ships:
+- the remaining suites on both VMs, D-CLIP and D-IN against the control build;
+- Windows 10 22H2 and Windows 11 23H2/24H2;
+- a security review, because UIAccess also lets the helper drive windows of higher integrity (it is LocalSystem already).
+
 ## 6. Phase 2 – Hide my screen (person at the device)
 
 ### 6.1 Device UI
