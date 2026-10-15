@@ -414,9 +414,11 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         {
             var w = new FluentWindow(this, Theme.Current(), FluentKind.Overlay)
             {
-                Heading = "Your IT administrator is working on this device",
-                Body = "Your screen is hidden while they work. You can end the session with \"Disconnect\" at the top of the screen.",
-                Footnote = _screen.BlockLocalInput ? "Mouse and keyboard are blocked." : "",
+                Subtitle = "PRIVACY MODE ACTIVE",
+                Heading = "Remote Support Session in Progress",
+                Body = "Your screen is temporarily hidden while an authorized administrator assists your device.",
+                Notice = _screen.BlockLocalInput ? "Mouse and keyboard are blocked." : "",
+                Footnote = "Secure, monitored session  •  Please do not power off your device",
                 Black = _screen.Style == DesktopPrivacyStyle.Black,
                 Bounds = (m.X, m.Y, m.Width, m.Height),
             };
@@ -668,6 +670,12 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     {
         public const uint Accent = 0xFF0078D4, AccentHover = 0xFF1A86D9, AccentPressed = 0xFF006CBE;
         public const uint Danger = 0xFFC42B1C, DangerHover = 0xFFD13A2B, DangerPressed = 0xFFA82418;
+        /// <summary>The lighter accent of small accent text on the dark privacy screen.</summary>
+        public const uint AccentLight = 0xFF2EA8F5;
+        /// <summary>The privacy screen: its navy background and the glow behind the logo.</summary>
+        public const uint OverlayBackground = 0xFF0B1220, OverlayGlow = 0xFF0A3066;
+        /// <summary>The app logo's tile, top left to bottom right (the dot in its middle is Accent).</summary>
+        public const uint LogoFrom = 0xFF0B63C1, LogoTo = 0xFF35B0FA;
 
         public static readonly Theme DarkTheme = new(true, 0xFF1C2230, 0xFF232A3A, 0xFF2E3850, 0xFFF3F5F9, 0xFFAAB4C5, 0xFF2E3850, 0xFF39445E, 0xFF161B26);
 
@@ -704,6 +712,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         public bool KeepOpen;
         /// <summary>Banner: the accent colour instead of red (the screen is hidden from the admin).</summary>
         public bool Accent;
+        /// <summary>Overlay: a line under the body that stands out (local input blocked).</summary>
+        public string Notice = "";
         /// <summary>Overlay: plain black instead of the message.</summary>
         public bool Black;
         /// <summary>Overlay: the monitor it covers, in screen pixels.</summary>
@@ -722,6 +732,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         private float _s = 1;
         private Action? _tick;
         private IntPtr _font, _bold, _small, _heading, _code;
+        private IntPtr _eyebrow, _title, _lead; // the privacy screen's larger type
 
         private int S(double v) => (int)Math.Round(v * _s);
 
@@ -767,7 +778,13 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             _small = Font(12, 400);
             _heading = Font(18, 600);
             _code = Font(30, 600);
-            if (kind == FluentKind.Overlay) return ShowOverlay();
+            if (kind == FluentKind.Overlay)
+            {
+                _eyebrow = Font(13, 700);
+                _title = Font(40, 600);
+                _lead = Font(20, 400);
+                return ShowOverlay();
+            }
             if (Items is { Count: > 0 }) _focusRow = 0; // the keyboard starts in the list
             int sx = GetSystemMetrics(0), sy = GetSystemMetrics(1);
             int w, h;
@@ -850,7 +867,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             KillTimer(Handle, CollapseTimer);
             DestroyWindow(Handle);
             Handle = IntPtr.Zero;
-            foreach (var f in new[] { _font, _bold, _small, _heading, _code }) if (f != IntPtr.Zero) DeleteObject(f);
+            foreach (var f in new[] { _font, _bold, _small, _heading, _code, _eyebrow, _title, _lead }) if (f != IntPtr.Zero) DeleteObject(f);
         }
 
         private IntPtr Font(int px, int weight) => CreateFontW(-S(px), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5 /* CLEARTYPE */, 0, "Segoe UI");
@@ -1268,7 +1285,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             _scroll = Math.Clamp(_scroll, 0, Math.Max(0, items.Count - MaxRows));
         }
 
-        /// <summary>The privacy screen: black, or the console's dark background with what is going on, centred.</summary>
+        /// <summary>The privacy screen: black, or a navy background with the logo in a glow and what is going on, centred.</summary>
         private void PaintOverlay(IntPtr dc, nint g, int w, int h)
         {
             if (Black)
@@ -1276,17 +1293,117 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                 FillRect(g, 0, 0, w, h, OverlayBlack);
                 return;
             }
-            FillRect(g, 0, 0, w, h, theme.Window);
-            var inner = Math.Min(w - S(2 * Pad), S(560));
-            var x = (w - inner) / 2;
-            var height = S(48) + S(20) + TextHeight(_heading, Heading, inner) + S(8) + TextHeight(_font, Body, inner)
-                + (Footnote.Length > 0 ? S(14) + TextHeight(_small, Footnote, inner) : 0);
-            var y = (h - height) / 2;
-            DrawMark(dc, g, (w - S(48)) / 2, y, S(48));
-            y += S(48) + S(20);
-            y += TextBlock(dc, _heading, Heading, x, y, inner, theme.Text, center: true) + S(8);
-            y += TextBlock(dc, _font, Body, x, y, inner, theme.Secondary, center: true);
-            if (Footnote.Length > 0) TextBlock(dc, _small, Footnote, x, y + S(14), inner, theme.Secondary, center: true);
+            // Logo 32 eyebrow 14 heading 12 body (16 notice) 28 divider 28 footnote; on a small screen the logo shrinks so it all fits.
+            var wide = Math.Min(w - S(2 * Pad), S(960));
+            var inner = Math.Min(wide, S(640));
+            int eyebrowH = TextHeight(_eyebrow, Subtitle, wide), headingH = TextHeight(_title, Heading, wide), bodyH = TextHeight(_lead, Body, inner);
+            int noticeH = TextHeight(_font, Notice, inner), footH = Math.Max(S(16), TextHeight(_font, Footnote, wide));
+            var text = S(32) + eyebrowH + S(14) + headingH + S(12) + bodyH + (noticeH > 0 ? S(16) + noticeH : 0);
+            var foot = Footnote.Length > 0 && text + S(28 + 2 + 28) + footH + S(48) <= h - S(2 * Pad); // the divider and footnote only where they fit
+            if (foot) text += S(28 + 2 + 28) + footH;
+            var logo = Math.Clamp(h - S(2 * Pad) - text, S(48), S(220));
+            var height = logo + text;
+            var y = Math.Max(S(Pad), (h - height) / 2);
+
+            FillRect(g, 0, 0, w, h, Theme.OverlayBackground);
+            DrawGlow(g, w / 2f, y + logo / 2f, Math.Max(w, h) * 0.32f);
+            DrawLogo(g, (w - logo) / 2f, y, logo);
+            if (foot) DrawFootnote(dc, g, w, y + height - footH, footH);
+            GdipFlush(g, 1); // GDI+ drawing first, then the text (GDI)
+            y += logo + S(32);
+            // The eyebrow is letter-spaced; DrawText centres it without the extra space, so it starts half of that further left.
+            var extra = S(6);
+            SetTextCharacterExtra(dc, extra);
+            y += TextBlock(dc, _eyebrow, Subtitle, (w - wide) / 2 - extra * (Subtitle.Length - 1) / 2, y, wide, Theme.AccentLight, center: true) + S(14);
+            SetTextCharacterExtra(dc, 0);
+            y += TextBlock(dc, _title, Heading, (w - wide) / 2, y, wide, theme.Text, center: true) + S(12);
+            y += TextBlock(dc, _lead, Body, (w - inner) / 2, y, inner, theme.Secondary, center: true);
+            if (noticeH > 0) y += S(16) + TextBlock(dc, _font, Notice, (w - inner) / 2, y + S(16), inner, theme.Text, center: true);
+            if (foot) FillRect(g, (w - S(72)) / 2, y + S(28), S(72), S(2), Theme.Accent);
+        }
+
+        /// <summary>A soft round glow in OverlayGlow, fading out into the background at the radius.</summary>
+        private static void DrawGlow(nint g, float cx, float cy, float radius)
+        {
+            using var path = new GdiPath();
+            GdipAddPathEllipse(path.Handle, cx - radius, cy - radius, radius * 2, radius * 2);
+            GdipCreatePathGradientFromPath(path.Handle, out var brush);
+            try
+            {
+                GdipSetPathGradientCenterColor(brush, Theme.OverlayGlow);
+                var edge = Theme.OverlayBackground & 0x00FFFFFF; // transparent
+                var count = 1;
+                GdipSetPathGradientSurroundColorsWithCount(brush, &edge, ref count);
+                GdipFillPath(g, brush, path.Handle);
+            }
+            finally { GdipDeleteBrush(brush); }
+        }
+
+        /// <summary>
+        /// The app logo, drawn to any size (proportions from the 1932 px master): a tile with a diagonal gradient, four
+        /// nodes joined to a ring with a dot in the accent colour.
+        /// </summary>
+        private static void DrawLogo(nint g, float x, float y, float size)
+        {
+            using (var tile = new GdiPath())
+            {
+                tile.RoundRect(x, y, size, size, size * 0.14f);
+                var rect = new RectF { X = x, Y = y, Width = size, Height = size };
+                GdipCreateLineBrushFromRect(ref rect, Theme.LogoFrom, Theme.LogoTo, 2 /* ForwardDiagonal */, 3 /* TileFlipXY */, out var gradient);
+                GdipFillPath(g, gradient, tile.Handle);
+                GdipDeleteBrush(gradient);
+            }
+            float cx = x + size / 2, cy = y + size / 2, near = size * 0.241f, far = size * 0.759f, node = size * 0.081f;
+            GdipCreatePen1(0xFFFFFFFF, size * 0.058f, 2, out var spoke);
+            GdipCreateSolidFill(0xFFFFFFFF, out var white);
+            try
+            {
+                foreach (var (nx, ny) in new[] { (near, near), (far, near), (near, far), (far, far) })
+                {
+                    GdipDrawLine(g, spoke, x + nx, y + ny, cx, cy);
+                    GdipFillEllipse(g, white, x + nx - node, y + ny - node, node * 2, node * 2);
+                }
+                var ring = size * 0.1656f;
+                GdipFillEllipse(g, white, cx - ring, cy - ring, ring * 2, ring * 2);
+            }
+            finally
+            {
+                GdipDeletePen(spoke);
+                GdipDeleteBrush(white);
+            }
+            var dot = size * 0.0828f;
+            GdipCreateSolidFill(Theme.Accent, out var accent);
+            GdipFillEllipse(g, accent, cx - dot, cy - dot, dot * 2, dot * 2);
+            GdipDeleteBrush(accent);
+        }
+
+        /// <summary>The footnote row, centred: a lock, then the footnote on one line.</summary>
+        private void DrawFootnote(IntPtr dc, nint g, int w, int y, int h)
+        {
+            int lockW = S(12), gap = S(8), textW = Math.Min(TextWidth(_font, Footnote) + S(4), w - S(2 * Pad) - lockW - gap);
+            var x = (w - lockW - gap - textW) / 2;
+            // Lock: a shackle (half ellipse with short legs) over a rounded body with a keyhole dot.
+            // In float units (u = one logical px), so the legs meet the arc at every scale.
+            float u = _s, lx = x, ly = y + (h - 15 * u) / 2f;
+            GdipCreatePen1(theme.Secondary, Math.Max(1.2f, u * 1.3f), 2, out var pen);
+            GdipCreateSolidFill(theme.Secondary, out var hole);
+            try
+            {
+                GdipDrawArc(g, pen, lx + 2.5f * u, ly, 7 * u, 8 * u, 180, 180);
+                GdipDrawLine(g, pen, lx + 2.5f * u, ly + 4 * u, lx + 2.5f * u, ly + 7 * u);
+                GdipDrawLine(g, pen, lx + 9.5f * u, ly + 4 * u, lx + 9.5f * u, ly + 7 * u);
+                using var body = new GdiPath();
+                body.RoundRect(lx + 0.5f * u, ly + 7 * u, 11 * u, 8 * u, 2 * u);
+                GdipDrawPath(g, pen, body.Handle);
+                GdipFillEllipse(g, hole, lx + 5 * u, ly + 10 * u, 2 * u, 2 * u);
+            }
+            finally
+            {
+                GdipDeletePen(pen);
+                GdipDeleteBrush(hole);
+            }
+            GdipFlush(g, 1);
+            Text(dc, _font, Footnote, x + lockW + gap, y, textW, h, theme.Secondary, vcenter: true);
         }
 
         private const uint OverlayBlack = 0xFF000000;
@@ -1422,6 +1539,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [StructLayout(LayoutKind.Sequential)] private struct MSG { public IntPtr hwnd; public uint message; public nint wParam, lParam; public uint time; public int x, y; }
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] private struct RectF { public float X, Y, Width, Height; }
     [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx, cy; }
     [StructLayout(LayoutKind.Sequential)] private struct TRACKMOUSEEVENT { public int cbSize; public uint dwFlags; public IntPtr hwndTrack; public uint dwHoverTime; }
     [StructLayout(LayoutKind.Sequential)] private struct PAINTSTRUCT { public IntPtr hdc; public int fErase; public RECT rcPaint; public int fRestore, fIncUpdate; public fixed byte rgbReserved[32]; }
@@ -1525,4 +1643,12 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("gdiplus.dll")] private static extern int GdipClosePathFigure(nint path);
     [DllImport("gdiplus.dll")] private static extern int GdipFillPath(nint graphics, nint brush, nint path);
     [DllImport("gdiplus.dll")] private static extern int GdipDrawPath(nint graphics, nint pen, nint path);
+    [DllImport("gdiplus.dll")] private static extern int GdipFillEllipse(nint graphics, nint brush, float x, float y, float w, float h);
+    [DllImport("gdiplus.dll")] private static extern int GdipDrawArc(nint graphics, nint pen, float x, float y, float w, float h, float start, float sweep);
+    [DllImport("gdiplus.dll")] private static extern int GdipAddPathEllipse(nint path, float x, float y, float w, float h);
+    [DllImport("gdiplus.dll")] private static extern int GdipCreatePathGradientFromPath(nint path, out nint brush);
+    [DllImport("gdiplus.dll")] private static extern int GdipSetPathGradientCenterColor(nint brush, uint argb);
+    [DllImport("gdiplus.dll")] private static extern int GdipSetPathGradientSurroundColorsWithCount(nint brush, uint* argb, ref int count);
+    [DllImport("gdiplus.dll")] private static extern int GdipCreateLineBrushFromRect(ref RectF rect, uint from, uint to, int mode, int wrap, out nint brush);
+    [DllImport("gdi32.dll")] private static extern int SetTextCharacterExtra(IntPtr hdc, int extra);
 }
