@@ -470,7 +470,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
 
     private const int TopTimer = 7;
 
-    // The Ctrl+Alt+Del screen offers only Cancel while local input is blocked (SasActions). Tried again on the timer
+    // The Ctrl+Alt+Del screen offers only Task Manager and Cancel while local input is blocked (SasActions). Tried again on the timer
     // until the session's user is signed in and their profile is loaded; once per block when it fails.
     private readonly SasActions _sasActions = new();
     private bool _sasFailed;

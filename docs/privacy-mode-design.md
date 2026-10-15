@@ -163,7 +163,7 @@ The service refuses the command when the right or policy is missing. In that cas
 - **Tagging:** every event the agent injects is tagged with `dwExtraInfo = 0x52484131` ("RHA1") in [InputInjector.cs](../src/RemoteHub.Agent/Desktop/InputInjector.cs). Injected input is not tagged today. The hooks drop every event that doesn't carry the tag. Checking only `LLKHF_INJECTED` isn't enough, because on-screen keyboards and other tools inject too.
 - **Fast callbacks:** the callback only compares a few fields and returns. Windows removes LL hooks that take longer than `LowLevelHooksTimeout`.
 - **What stays local:**
-  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely. While input is blocked, the screen it opens offers only Cancel (§5.9).
+  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely. While input is blocked, the screen it opens offers only Task Manager and Cancel (§5.9).
   - Mouse clicks inside the banner's rect, so **Disconnect** keeps working (§5.5).
 - **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are paused".
 
@@ -260,12 +260,11 @@ Not tested: Windows 10 22H2 and Windows 11 23H2/24H2. The lab has no VMs for the
 
 ### 5.9 The Ctrl+Alt+Del screen while input is blocked
 
-Ctrl+Alt+Del can't be blocked (§5.4), and the screen it opens is on the secure desktop, which the overlay doesn't cover (§5.6). What the agent controls is what that screen offers. While the privacy screen blocks the device's mouse and keyboard, it offers only **Cancel**. That covers the admin's privacy screen with "block local input" and the one automatic sign-in puts up, which always blocks input (§9.1).
+Ctrl+Alt+Del can't be blocked (§5.4), and the screen it opens is on the secure desktop, which the overlay doesn't cover (§5.6). What the agent controls is what that screen offers. While the privacy screen blocks the device's mouse and keyboard, it offers only **Task Manager** and **Cancel**. Task Manager stays on purpose: it opens behind the overlay, and with input blocked it can't be used anyway. That covers the admin's privacy screen with "block local input" and the one automatic sign-in puts up, which always blocks input (§9.1).
 
 | Hidden | Policy value | Where |
 |---|---|---|
-| Task Manager (also Ctrl+Shift+Esc) | `DisableTaskMgr` = 1 | session user: `HKU\<sid>\Software\Microsoft\Windows\CurrentVersion\Policies\System` |
-| Lock (also Win+L) | `DisableLockWorkstation` = 1 | same |
+| Lock (also Win+L) | `DisableLockWorkstation` = 1 | session user: `HKU\<sid>\Software\Microsoft\Windows\CurrentVersion\Policies\System` |
 | Change a password | `DisableChangePassword` = 1 | same |
 | Sign out | `NoLogoff` = 1 | session user: `…\Policies\Explorer` |
 | Power button | `NoClose` = 1 | same |
@@ -289,16 +288,16 @@ Not hidden: the network and accessibility buttons in the corner. Windows has no 
 
 **Timing:** the user's hive must be loaded. On the auto sign-in screen the helper starts before the profile is, so it tries again every 500 ms (the overlay's keep-on-top timer) until it can.
 
-**Lab:** D-CADHIDE ([D-CADHIDE.Tests.ps1](../lab/tests/D-CADHIDE.Tests.ps1)). Ctrl+Alt+Del is pressed at the Hyper-V console; the screen is read by OCR and the six values are read from the registry.
+**Lab:** D-CADHIDE ([D-CADHIDE.Tests.ps1](../lab/tests/D-CADHIDE.Tests.ps1)). Ctrl+Alt+Del is pressed at the Hyper-V console; the screen is read by OCR and the five values (and `DisableTaskMgr`, which must stay unset) are read from the registry.
 
 | Case | W11 26H2 | Server 2025 |
 |---|---|---|
 | 01 Control, before any connection: values not set, the screen offers Lock and Task Manager | **pass** | **pass** |
-| 02 Admin's privacy screen with input blocked: all six set, the screen offers only Cancel | **pass** | **pass** |
+| 02 Admin's privacy screen with input blocked: the five set, `DisableTaskMgr` not; the screen offers only Task Manager | **pass** | **pass** |
 | 03 Input unblocked while still connected: put back; blocked again: hidden again | **pass** | **pass** |
 | 04 Connection ends: put back as they were, no record left | **pass** | **pass** |
 | 05 Service and helper killed while hidden: put back when the service starts (log: "actions an earlier helper hid are back") | **pass** | **pass** |
-| 06 Automatic sign-in: hidden in the admin's new session, the screen offers only Cancel; put back after | **pass** | **pass** |
+| 06 Automatic sign-in: hidden in the admin's new session, the screen offers only Task Manager; put back after | **pass** | **pass** |
 
 Also seen: a helper killed on its own is started again by the service, and the new one keeps the original record and puts the values back when the connection ends.
 

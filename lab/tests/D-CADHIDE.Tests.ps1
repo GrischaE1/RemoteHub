@@ -1,5 +1,5 @@
 # D-CADHIDE - while the privacy screen blocks the device's mouse and keyboard, the Ctrl+Alt+Del screen offers only
-# Cancel: Task Manager, Lock, Switch user, Change a password, Sign out and the power button are hidden by their policy
+# Task Manager and Cancel: Lock, Switch user, Change a password, Sign out and the power button are hidden by their policy
 # values (SasActions.cs), and put back as they were when the block ends, the connection ends, or - after a helper that
 # was killed - when the service starts. The same on the privacy screen automatic sign-in puts up.
 # The agent MSI must be built with the credential provider (build-installer.ps1 -LabSigning -CredentialProvider).
@@ -39,7 +39,7 @@ BeforeAll {
     }
     # the user at the device allows the connection (the click is tried again when it missed)
     function Allow { for ($i = 0; $i -lt 3; $i++) { if ((Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60).clicked) { return }; Start-Sleep -Seconds 3 } }
-    $names = 'DisableTaskMgr', 'DisableLockWorkstation', 'DisableChangePassword', 'NoLogoff', 'NoClose', 'HideFastUserSwitching'
+    $names = 'DisableLockWorkstation', 'DisableChangePassword', 'NoLogoff', 'NoClose', 'HideFastUserSwitching'
     $actions = 'Lock', 'Switch user', 'Sign out', 'Change a password', 'Task Manager'
     # Ctrl+Alt+Del at the console, its screen read, Esc back
     function Read-CadScreen([string]$Path) {
@@ -139,9 +139,10 @@ Describe 'D-CADHIDE <VmName>' -Tag Desktop, 'D-CADHIDE' {
         $r.cadBefore.shown | Should -Contain 'Task Manager'
     }
 
-    It 'D-CADHIDE-02 privacy screen with input blocked: all six set, the Ctrl+Alt+Del screen offers none of the actions' {
+    It 'D-CADHIDE-02 privacy screen with input blocked: the five set, Task Manager not; the Ctrl+Alt+Del screen offers only Task Manager' {
         foreach ($n in $names) { $r.blocked.$n | Should -Be 1 -Because $n }
-        @($r.cadBlocked.shown) | Should -BeNullOrEmpty
+        $r.blocked.DisableTaskMgr | Should -BeNullOrEmpty
+        @($r.cadBlocked.shown) | Should -Be @('Task Manager')
     }
 
     It 'D-CADHIDE-03 input unblocked while still connected: put back; blocked again: hidden again' {
@@ -161,10 +162,11 @@ Describe 'D-CADHIDE <VmName>' -Tag Desktop, 'D-CADHIDE' {
         @($r.restartLog | Where-Object { $_ -match 'earlier helper hid are back' }).Count | Should -BeGreaterThan 0
     }
 
-    It 'D-CADHIDE-06 automatic sign-in: hidden in the admin''s new session, the Ctrl+Alt+Del screen offers none of them; put back after' {
+    It 'D-CADHIDE-06 automatic sign-in: hidden in the admin''s new session, the Ctrl+Alt+Del screen offers only Task Manager; put back after' {
         $r.autoUser | Should -Match ([regex]::Escape(($consoleAccount -split '\\')[-1]))
         foreach ($n in $names) { $r.autoBlocked.$n | Should -Be 1 -Because $n }
-        @($r.cadAuto.shown) | Should -BeNullOrEmpty
+        $r.autoBlocked.DisableTaskMgr | Should -BeNullOrEmpty
+        @($r.cadAuto.shown) | Should -Be @('Task Manager')
         foreach ($n in $names) { $r.autoEnded.$n | Should -BeNullOrEmpty -Because $n }
         @($r.autoEnded.records) | Should -BeNullOrEmpty -Because "an unloaded hive reads as no values - the records say whether they were put back (hive loaded: $($r.autoEnded.loaded))"
     }

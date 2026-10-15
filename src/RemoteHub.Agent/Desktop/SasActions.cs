@@ -4,13 +4,13 @@ namespace RemoteHub.Agent;
 
 /// <summary>
 /// While the privacy screen blocks the device's own mouse and keyboard (the admin's, and the one automatic sign-in puts
-/// up), the Ctrl+Alt+Del screen – which Windows always shows, nothing can block the keys – offers nothing but Cancel:
-/// Task Manager, Lock, Switch user, Change a password, Sign out and the power button are hidden with their policy
-/// values, and put back exactly as they were (the value, or none) when local input is free again or the helper ends.
+/// up), the Ctrl+Alt+Del screen – which Windows always shows, nothing can block the keys – offers only Task Manager and
+/// Cancel: Lock, Switch user, Change a password, Sign out and the power button are hidden with their policy values, and
+/// put back exactly as they were (the value, or none) when local input is free again or the helper ends.
 /// </summary>
 /// <remarks>
-/// <para>Per user (the session's user, HKU\&lt;sid&gt;): <c>DisableTaskMgr</c>, <c>DisableLockWorkstation</c>,
-/// <c>DisableChangePassword</c> (Policies\System), <c>NoLogoff</c>, <c>NoClose</c> (Policies\Explorer). Per machine:
+/// <para>Per user (the session's user, HKU\&lt;sid&gt;): <c>DisableLockWorkstation</c>, <c>DisableChangePassword</c>
+/// (Policies\System), <c>NoLogoff</c>, <c>NoClose</c> (Policies\Explorer). Per machine:
 /// <c>HideFastUserSwitching</c> (HKLM Policies\System) – Windows has no per-user value for Switch user.</para>
 /// <para>What was there before is kept in small files next to agent.json until it is put back: a helper that ended
 /// abruptly is made good by the next one in that session, and by the service when it starts (no helper runs then). The
@@ -22,7 +22,7 @@ internal sealed class SasActions
     private const string ExplorerKey = @"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
 
     internal static readonly (string Key, string Name)[] UserValues =
-        [(SystemKey, "DisableTaskMgr"), (SystemKey, "DisableLockWorkstation"), (SystemKey, "DisableChangePassword"), (ExplorerKey, "NoLogoff"), (ExplorerKey, "NoClose")];
+        [(SystemKey, "DisableLockWorkstation"), (SystemKey, "DisableChangePassword"), (ExplorerKey, "NoLogoff"), (ExplorerKey, "NoClose")];
     internal static readonly (string Key, string Name)[] MachineValues = [(SystemKey, "HideFastUserSwitching")];
 
     private const string MachineRecord = "sas-actions-machine.txt";
@@ -60,7 +60,7 @@ internal sealed class SasActions
         }
         Set(_machine, MachineValues, Path.Combine(_folder, MachineRecord));
         _sid = sid;
-        return "Ctrl+Alt+Del screen: Task Manager, Lock, Switch user, Change a password, Sign out and the power button hidden while the device's mouse and keyboard are blocked";
+        return "Ctrl+Alt+Del screen: Lock, Switch user, Change a password, Sign out and the power button hidden while the device's mouse and keyboard are blocked";
     }
 
     /// <summary>Puts back what was there before (the machine value once no other session hides it).</summary>
@@ -110,12 +110,12 @@ internal sealed class SasActions
             Directory.CreateDirectory(_folder);
             File.WriteAllLines(record, lines);
         }
-        foreach (var line in File.ReadAllLines(record))
+        // the values hidden now (a record from an earlier version may list more – those are only put back)
+        var recorded = File.ReadAllLines(record).Select(l => l.Split('|')).Where(p => p.Length == 3).Select(p => (p[0], p[1])).ToHashSet();
+        foreach (var (path, name) in values.Where(recorded.Contains))
         {
-            var p = line.Split('|');
-            if (p.Length != 3) continue;
-            using var key = root.CreateSubKey(p[0], writable: true);
-            key.SetValue(p[1], 1, RegistryValueKind.DWord);
+            using var key = root.CreateSubKey(path, writable: true);
+            key.SetValue(name, 1, RegistryValueKind.DWord);
         }
     }
 

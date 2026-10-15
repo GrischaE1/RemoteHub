@@ -72,20 +72,20 @@ public class SasActionsTests : IDisposable
     [Fact]
     public void Values_that_were_there_come_back_and_a_non_DWORD_is_left_alone()
     {
-        var (system, explorer) = (A.SasActions.UserValues[0].Key, A.SasActions.UserValues[3].Key);
-        SetUser(Sid1, system, "DisableTaskMgr", 0);
+        var (system, explorer) = (A.SasActions.UserValues[0].Key, A.SasActions.UserValues[2].Key);
+        SetUser(Sid1, system, "DisableLockWorkstation", 0);
         SetUser(Sid1, explorer, "NoClose", "keep", RegistryValueKind.String);
         using (var k = _machine.CreateSubKey(A.SasActions.MachineValues[0].Key)) k.SetValue("HideFastUserSwitching", 1, RegistryValueKind.DWord);
 
         var sas = New();
         sas.Hide(Sid1);
-        Assert.Equal(1, User(Sid1, system, "DisableTaskMgr"));
+        Assert.Equal(1, User(Sid1, system, "DisableLockWorkstation"));
         Assert.Equal("keep", User(Sid1, explorer, "NoClose"));
         sas.Show();
 
-        Assert.Equal(0, User(Sid1, system, "DisableTaskMgr"));
+        Assert.Equal(0, User(Sid1, system, "DisableLockWorkstation"));
         Assert.Equal("keep", User(Sid1, explorer, "NoClose"));
-        Assert.Null(User(Sid1, system, "DisableLockWorkstation"));
+        Assert.Null(User(Sid1, system, "DisableChangePassword"));
         Assert.Equal(1, Machine(A.SasActions.MachineValues[0].Key, "HideFastUserSwitching")); // it was 1 before
     }
 
@@ -105,6 +105,35 @@ public class SasActionsTests : IDisposable
         foreach (var (key, name) in A.SasActions.MachineValues) Assert.Null(Machine(key, name));
         Assert.Empty(Directory.GetFiles(_folder));
         Assert.Null(New().RestoreLeftovers()); // nothing left
+    }
+
+    [Fact]
+    public void Task_Manager_stays_on_the_screen()
+    {
+        const string system = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+        var sas = New();
+        sas.Hide(Sid1);
+        Assert.Null(User(Sid1, system, "DisableTaskMgr"));
+        sas.Show();
+        Assert.Null(User(Sid1, system, "DisableTaskMgr"));
+    }
+
+    [Fact]
+    public void A_record_from_the_version_that_hid_Task_Manager_is_put_back_but_not_set_again()
+    {
+        // 0.18.12 hid Task Manager as well and ended abruptly: its record lists DisableTaskMgr
+        const string system = @"Software\Microsoft\Windows\CurrentVersion\Policies\System";
+        SetUser(Sid1, system, "DisableTaskMgr", 1);
+        Directory.CreateDirectory(_folder);
+        File.WriteAllLines(Path.Combine(_folder, $"sas-actions-{Sid1}.txt"),
+            [$@"{system}|DisableTaskMgr|absent", $@"{system}|DisableLockWorkstation|absent"]);
+
+        var sas = New();
+        sas.Hide(Sid1);
+        Assert.Equal(1, User(Sid1, system, "DisableLockWorkstation"));
+        sas.Show();
+        Assert.Null(User(Sid1, system, "DisableTaskMgr"));
+        Assert.Null(User(Sid1, system, "DisableLockWorkstation"));
     }
 
     [Fact]
