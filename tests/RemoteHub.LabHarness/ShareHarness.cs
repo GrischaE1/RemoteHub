@@ -39,7 +39,7 @@ internal static class ShareHarness
         var asked = new List<object>();
         string? accepted = null;
         bool Trust(TrustRequest r) { asked.Add(new { r.What, r.Fingerprint }); return accept; }
-        ShareFileSystem Open() => ShareConnector.Open(share, cred, Trust, fp => { accepted = fp; share.TrustedFingerprint = fp; });
+        ShareFileSystem Open() => ShareConnector.Open(share, cred, Trust, fp => { accepted = fp; share.TrustedFingerprint = fp; }, LabJump.Route(o));
 
         var steps = new List<object>();
         var ok = true;

@@ -6,3 +6,4 @@ publish/
 TestResults/
 artifacts/
 lab/lab.local.json
+lab/lab-signing.cer

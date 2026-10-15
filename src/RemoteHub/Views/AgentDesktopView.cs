@@ -57,6 +57,10 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly StackPanel _sessionList = new();
     private readonly ComboBox _consent = new() { MinWidth = 300 };
     private readonly CheckBox _viewOnly = new() { Content = "View only – no mouse and keyboard" };
+    /// <summary>Automatic sign-in on the device's sign-in screen (only offered where the device allows it for this account).</summary>
+    private readonly CheckBox _autoSignIn = new();
+    private readonly Func<bool> _autoSignInPreferred;
+    private readonly Func<string?> _autoSignInEndAction;
     private readonly ComboBox _chooseQuality = new() { MinWidth = 300 };
     private readonly TextBox _pin = new() { PlaceholderText = "6-digit code", MaxLength = 7, Width = 180, FontSize = 18 };
     private readonly TextBlock _pinInfo = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 440, Margin = new Thickness(0, 6, 0, 0) };
@@ -66,9 +70,12 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly Action<bool> _rememberFit;
 
     public AgentDesktopView(AgentDesktopSession session, Action reconnect, Action close, Action useRdp,
-        Func<DesktopQualityPreset> defaultQuality, Action<DesktopQualityPreset, string> remember, Func<bool> fitToWindow, Action<bool> rememberFit)
+        Func<DesktopQualityPreset> defaultQuality, Action<DesktopQualityPreset, string> remember, Func<bool> fitToWindow, Action<bool> rememberFit,
+        Func<bool>? autoSignInPreferred = null, Func<string?>? autoSignInEndAction = null)
     {
         _rememberFit = rememberFit;
+        _autoSignInPreferred = autoSignInPreferred ?? (() => false);
+        _autoSignInEndAction = autoSignInEndAction ?? (() => null);
         _session = session;
         _defaultQuality = defaultQuality;
         _remember = remember;
@@ -241,6 +248,10 @@ public sealed class AgentDesktopView : Border, IRecordableView
         p.Children.Add(_chooseQuality);
         _viewOnly.Margin = new Thickness(0, 14, 0, 0);
         p.Children.Add(_viewOnly);
+        _autoSignIn.Margin = new Thickness(0, 14, 0, 0);
+        p.Children.Add(_autoSignIn);
+        _viewOnly.Checked += (_, _) => UpdateAutoSignIn();
+        _viewOnly.Unchecked += (_, _) => UpdateAutoSignIn();
         foreach (var q in DesktopQualityPreset.All) _chooseQuality.Items.Add(new ComboBoxItem { Content = q.Label, Tag = q });
 
         _connectChosen.Click += (_, _) => StartChosen();
@@ -526,7 +537,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
                 text += " – your account may not see it";
             var rb = new RadioButton { Content = text, Tag = s, GroupName = "session" + GetHashCode(), Margin = new Thickness(0, 2, 0, 2),
                 IsEnabled = Usable(s) };
-            rb.Checked += (_, _) => { UpdateConsentChoices(); UpdateSelfViewWarning(); };
+            rb.Checked += (_, _) => { UpdateConsentChoices(); UpdateSelfViewWarning(); UpdateAutoSignIn(); };
             _sessionList.Children.Add(rb);
             if (ReferenceEquals(s, preferred)) first = rb;
         }
@@ -551,6 +562,17 @@ public sealed class AgentDesktopView : Border, IRecordableView
         var preset = _defaultQuality();
         _chooseQuality.SelectedItem = _chooseQuality.Items.OfType<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, preset)) ?? _chooseQuality.Items[1];
         UpdateConsentChoices();
+        _autoSignIn.Content = $"Sign in automatically as {hello.Account}";
+        _autoSignIn.IsChecked = _autoSignInPreferred();
+        UpdateAutoSignIn();
+    }
+
+    /// <summary>Offered for the console's sign-in screen when the device allows it for this account; not in view-only.</summary>
+    private void UpdateAutoSignIn()
+    {
+        var offered = ChosenSession is { } s && _session.CanAutoSignIn(s);
+        _autoSignIn.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
+        _autoSignIn.IsEnabled = _viewOnly.IsChecked != true;
     }
 
     /// <summary>
@@ -622,7 +644,9 @@ public sealed class AgentDesktopView : Border, IRecordableView
         if (ChosenSession is not { } s || _consent.SelectedItem is not ComboBoxItem { Tag: string consent }) return;
         var quality = (_chooseQuality.SelectedItem as ComboBoxItem)?.Tag as DesktopQualityPreset ?? DesktopQualityPreset.Default;
         _remember(quality, consent);
-        _session.Choose(s, consent, _viewOnly.IsChecked == true, quality);
+        _session.Choose(s, consent, _viewOnly.IsChecked == true, quality,
+            autoSignIn: _autoSignIn.Visibility == Visibility.Visible && _autoSignIn.IsEnabled && _autoSignIn.IsChecked == true,
+            endAction: _autoSignInEndAction());
     }
 
     private void SubmitPin()

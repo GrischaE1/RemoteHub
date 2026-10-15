@@ -77,3 +77,29 @@ Describe 'A-UNINST <VmName>' -Tag Agent, 'A-UNINST' {
         $after.SoftwareSas | Should -Be $clean.SoftwareSas
     }
 }
+
+Describe 'A-UNINST auto sign-in <VmName>' -Tag Agent, 'A-UNINST' {
+    BeforeAll {
+        Reset-LabVm -Name $VmName
+        $null = Install-LabAgent -Name $VmName -AutoSignIn $true
+        $withProvider = Get-LabAgentState -Name $VmName
+        $removed = Uninstall-LabAgent -Name $VmName
+        $afterProvider = Get-LabAgentState -Name $VmName
+        @{ Installed = $withProvider; Uninstall = $removed; After = $afterProvider } |
+            ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir 'a-uninst-autosignin.json') -Encoding UTF8
+    }
+
+    It 'A-UNINST-15 after an AUTOSIGNIN=1 install: provider DLL and keys gone, the policy values the agent set and its marker removed' -Tag 'A-UNINST-15' {
+        $withProvider.AutoSignIn.Dll | Should -BeTrue
+        $withProvider.AutoSignIn.Provider | Should -BeTrue
+        $withProvider.AutoSignIn.Behavior | Should -Be 'AutoSignIn'
+        $withProvider.AutoSignIn.Marker | Should -BeTrue
+        $removed.ExitCode | Should -BeIn 0, 3010
+        $afterProvider.AutoSignIn.Dll | Should -BeFalse
+        $afterProvider.AutoSignIn.Provider | Should -BeFalse
+        $afterProvider.AutoSignIn.InprocServer | Should -BeNullOrEmpty
+        $afterProvider.AutoSignIn.Behavior | Should -BeNullOrEmpty
+        @($afterProvider.AutoSignIn.Right) | Should -BeNullOrEmpty
+        $afterProvider.AutoSignIn.Marker | Should -BeFalse
+    }
+}

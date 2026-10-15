@@ -21,16 +21,20 @@ public sealed class AgentInstallDialog : FluentWindow
     public AgentInstallOptions? Options { get; private set; }
     private readonly TextBox _label, _port, _firewall, _groups;
     private readonly RadioButton _viaRemoting, _viaAgent, _viaClipboard, _viaFiles;
-    private readonly CheckBox _newIdentity, _useAfter, _virtualDisplay;
+    private readonly CheckBox _newIdentity, _useAfter, _virtualDisplay, _autoSignIn;
+    private readonly TextBlock _autoSignInHint;
+    private readonly bool? _hadProvider;
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
 
     /// <param name="localAddress">The address the device sees connections from (this PC, or the jump host in the device's network).</param>
     /// <param name="jumpHost">The jump host the device is reached through, or null.</param>
-    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress, string? jumpHost = null)
+    /// <param name="credentialProvider">RemoteHub's agent package contains the credential provider (automatic sign-in).</param>
+    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress, string? jumpHost = null, bool credentialProvider = false)
     {
         var existing = c.Agent;
+        _hadProvider = existing?.CredentialProvider;
         var installed = existing is { Status: AgentStatus.Installed };
         Title = installed ? "Update RemoteHub Agent" : "Install RemoteHub Agent";
         Width = 640;
@@ -88,6 +92,20 @@ public sealed class AgentInstallDialog : FluentWindow
         _options.Children.Add(Muted("Without a monitor, Windows often offers only 640×480. The agent then adds a virtual monitor at the size of " +
                                     "the RemoteHub window while you're connected (open-source driver by VirtualDrivers, signed by SignPath " +
                                     "Foundation, which the device then trusts as a driver publisher). Unchecked: not installed, or removed.", 26, 2, 0, 0));
+        _autoSignIn = new CheckBox
+        {
+            Content = "Allow automatic sign-in (installs a credential provider)",
+            IsChecked = _hadProvider == true,
+            Margin = new Thickness(0, 14, 0, 0),
+            Visibility = credentialProvider ? Visibility.Visible : Visibility.Collapsed,
+        };
+        _options.Children.Add(_autoSignIn);
+        _autoSignInHint = Muted("When nobody is signed in on the device, RemoteHub can sign in with the connection's credentials (remote desktop " +
+                                "through the agent). Installs a sign-in component and allows it for the allowed accounts – a policy IT has set " +
+                                "on the device stays as it is. Anyone at the device can see the session while you work. Silent installs only; " +
+                                "unchecked after it was installed: removed.", 26, 2, 0, 0);
+        _autoSignInHint.Visibility = _autoSignIn.Visibility;
+        _options.Children.Add(_autoSignInHint);
         _options.Children.Add(new TextBlock { Text = "How", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 14, 0, 6) });
         _viaRemoting = Radio("Install silently over PowerShell remoting (WinRM) – copies both files to a temp folder, installs, deletes them",
             remotingAvailable, remotingAvailable && !(installed && agentReachable));
@@ -107,6 +125,11 @@ public sealed class AgentInstallDialog : FluentWindow
         _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = true, Margin = new Thickness(0, 12, 0, 0),
                                    Visibility = jumpHost is null ? Visibility.Visible : Visibility.Collapsed };
         _options.Children.Add(_useAfter);
+        foreach (var way in new[] { _viaRemoting, _viaAgent, _viaClipboard, _viaFiles })
+        {
+            way.Checked += (_, _) => UpdateState();
+            way.Unchecked += (_, _) => UpdateState();
+        }
 
         body.Children.Add(_error);
 
@@ -132,6 +155,8 @@ public sealed class AgentInstallDialog : FluentWindow
         // A new certificate needs the enrollment fields; a plain update keeps the device's settings.
         var fresh = _newIdentity.IsChecked == true;
         _label.IsEnabled = _port.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
+        // AUTOSIGNIN goes on msiexec's command line: only the silent ways can pass it.
+        if (_autoSignIn is not null) _autoSignIn.IsEnabled = _viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true;
     }
 
     private void Start()
@@ -145,7 +170,10 @@ public sealed class AgentInstallDialog : FluentWindow
                    : _viaFiles.IsChecked == true ? AgentInstallMethod.SaveFiles
                    : AgentInstallMethod.Clipboard;
         var options = new AgentInstallOptions(method, _newIdentity.IsChecked == true, _label.Text.Trim(), port, _firewall.Text.Trim(),
-            AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true);
+            AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true,
+            // Ticked: install and allow. Unticked: removed only if RemoteHub had installed it; otherwise left as the device has it.
+            AutoSignIn: _autoSignIn.Visibility != Visibility.Visible || !_autoSignIn.IsEnabled ? null
+                : _autoSignIn.IsChecked == true ? true : _hadProvider == true ? false : null);
 
         Options = options;
         DialogResult = true;

@@ -1,6 +1,6 @@
 # RemoteHub Test Lab – End-to-end test sheet: Windows client and desktop
 
-Status: v1 (2026-10-12), written against RemoteHub / RemoteHub Agent **0.16.5**. Scope: everything RemoteHub and the
+Status: v2 (2026-10-14), checked against RemoteHub / RemoteHub Agent **0.18.9** (jump hosts, automatic sign-in, privacy screen). Scope: everything RemoteHub and the
 agent do on a **Windows client** (Windows 10 / 11), as the managed device and as the admin's PC, run fully automated
 in the Hyper-V lab ([test-lab-spec.md](test-lab-spec.md)). Server-only cases (multi-session RDP hosts, Server 2016/19
 banner paths, domain controllers) come in a separate sheet.
@@ -40,6 +40,9 @@ A capability counts as release-ready only when both columns pass.
 | PowerShell, file transfer, registry, services, processes (agent and WinRM) | P-*, T-* | UI-TL-01…05 |
 | WinRM setup on the target | W-* | W-TRUST-01, UI-TL-06 |
 | Reconnect after a network drop (agent and RDP) | D-RES-*, P-SES-06 | UI-NET-01…02 |
+| Jump hosts: everything through another device's agent | J-* | J-11, UI-JUMP-01 |
+| Automatic sign-in on the sign-in screen (credential provider) | C-PROV-*, C-AUTO-* | UI-AG-07…08, C-POL-08 |
+| Privacy screen, hidden apps, user privacy | D-PRIV-*, D-HIDE-* | – |
 | Recording of each tab type | – | C-REC-* |
 
 ## 2. Client VMs
@@ -99,7 +102,7 @@ account is `PSAdmin`.
 |---|---|---|---|---|---|
 | A-INST-01 | Install over remoting (`InstallOverRemoting`) | msiexec exit 0/3010; fingerprint read back = pin; deviceId and port match | H | 1 | ✅ |
 | A-INST-02 | Service | `RemoteHubAgent` running, LocalSystem, Automatic (Delayed Start) | PS | 1 | ✅ |
-| A-INST-03 | Health | `/v1/health` over TLS pinned: product, version = MSI version, protocol 1, deviceId, features `powershell`,`desktop` | H | 1 | ✅ |
+| A-INST-03 | Health | `/v1/health` over TLS pinned: product, version = MSI version, protocol 1, deviceId, features `powershell`,`desktop`,`tunnel` (jump hosts are on by default) | H | 1 | ✅ |
 | A-INST-04 | Certificate | LocalMachine\My, SHA-256 = pin, key not exportable, `CN=<deviceId>, O=RemoteHub Agent`, FriendlyName "RemoteHub Agent", RSA 3072, valid 2 years, EKU server auth | PS | 1 | ✅ |
 | A-INST-05 | agent.json | deviceId, label, port, thumbprint, allowedGroups = S-1-5-32-544, virtualDisplay, logRetentionDays 30, maxSessions 20 | PS | 1 | ✅ |
 | A-INST-06 | Firewall | exactly one rule "RemoteHub Agent": inbound, allow, TCP 58732, program = RemoteHubAgent.exe, remote address = host, all profiles | PS | 1 | ✅ |
@@ -133,7 +136,7 @@ account is `PSAdmin`.
 | A-HAND-03 | No `.rhagent` and no config | install fails, nothing left (rollback runs `cleanup`) | PS | 1 | ○ | |
 | A-HAND-04 | `ENROLLMENT=<path>` property | file in another folder → used; file deleted afterwards | PS | 2 | ○ | |
 | A-HAND-05 | Enrollment format 2 / bad GUID / port 0 / empty groups | each refused with a clear message, install rolled back | PS | 2 | ○ | |
-| A-HAND-06 | Interactive install (UI, not /qn) | install dialog driven by UIA; virtual-display checkbox respected | S | 3 | ○ | |
+| A-HAND-06 | Interactive install (not /qn) | the package has no dialogs of its own: Windows Installer's progress window (/qb) in the console session, installed and enrolled; VIRTUALDISPLAY is only a property | S | 3 | ○ | |
 | A-CLIP-01 | Clipboard install from RemoteHub | **2VM**: RemoteHub puts MSI + `.rhagent` on the clipboard, pasted into the RDP session, MSI run there → connection marked installed on first health | U | 2 | ○ | 2VM |
 | A-CLIP-02 | Staging cleanup on the admin's PC | `%TEMP%\RemoteHub-Agent\<id>` gone after RemoteHub exits and after the next start (crash case) | U PS | 1 | ○ | 2VM |
 | A-CLIP-03 | Ask before sending the key through a desktop tab | agent desktop tab to another device open → RemoteHub asks before the clipboard install (was D-DESKCLIP) | U | 1 | ○ | 2VM |
@@ -158,7 +161,7 @@ account is `PSAdmin`.
 | A-SAME-01 | Reinstall the same version | through the agent → reported updated, identity kept | H | 3 | ○ |
 | A-SAME-02 | Same version with a new device certificate | "Install again with Create a new device certificate" (RemoteHub's advice on a pin mismatch) → new certificate answers, old one refused, one certificate left | H | 2 | ○ |
 | A-DOWN-01 | Downgrade | older MSI over newer → refused: "A newer version of the RemoteHub Agent is already installed.", newer still running | PS | 2 | ○ |
-| A-REPAIR-01 | `msiexec /fa` | repair succeeds, identity kept, service running | PS | 3 | ○ |
+| A-REPAIR-01 | `msiexec /fa` | repair succeeds, identity kept, service running; the enrollment step doesn't run (`NOT Installed`) | PS | 3 | ○ |
 | A-ROLLBACK-01 | First install fails after enrolling | forced failure after AgentEnroll → no rule, no certificate, no agent.json, no service | PS | 1 | ○ |
 
 ### 5.4 Uninstall
@@ -179,6 +182,7 @@ account is `PSAdmin`.
 | A-UNINST-12 | Uninstall from Settings → Apps | UIA uninstall in Admin's session → same result as A-UNINST-02…11 | S | 3 | ○ |
 | A-UNINST-13 | Uninstall while a desktop session is open | session ends, helper gone, display restored, no banner left | H S | 2 | ○ |
 | A-UNINST-14 | Reinstall after uninstall | new enrollment works, no duplicate certs or rules | H | 2 | ○ |
+| A-UNINST-15 | Uninstall after automatic sign-in | after an `AUTOSIGNIN=1` install: provider DLL and both keys gone, the `NoUserBehavior` / `Rights\AutoSignIn` values the agent set and `autosignin.policy` removed | PS | 1 | ✅ |
 
 ### 5.5 Configuration and service behaviour
 
@@ -190,7 +194,7 @@ account is `PSAdmin`.
 | A-CFG-04 | Log rotation | log files dated 31+ days old (faked names) deleted at the first write of the day; `logRetentionDays 1` respected | PS | 3 | ○ |
 | A-CFG-05 | Log content | sign-in, refusal (account, IP, reason), session start/end with PID and duration – and **never** the password or command text (search the log for the test password and a marker command) | H PS | 1 | ○ |
 | A-CFG-06 | Logs not readable by users | `normaluser` can't read the log folder | PS | 1 | ○ |
-| A-CFG-07 | No outbound traffic | during a full scenario the agent opens no outbound connection (`Get-NetTCPConnection -OwningProcess`) | PS | 1 | ○ |
+| A-CFG-07 | No outbound traffic | during a PowerShell session the agent opens no outbound connection (`Get-NetTCPConnection -OwningProcess`) – only jump connections RemoteHub asks for go out (J-* in jump-host-design §11) | PS | 1 | ✅ |
 | A-CFG-08 | Event log writes off | policy `AuditToEventLog=0` → audit only in the file | PS E | 3 | ○ |
 
 ## 6. Agent – sign-in and transport security (S)
@@ -216,7 +220,7 @@ account is `PSAdmin`.
 | S-THR-03 | Block ends | after 5 min the right password works again | H | 2 | ○ |
 | S-THR-04 | Success clears | 4 wrong, 1 right, 4 wrong → no 429 | H | 3 | ○ |
 | S-THR-05 | Restart resets | blocked, restart service → right password works | H PS | 3 | ○ |
-| S-LIM-01 | Session limit | `maxSessions 2` → 3rd session (PowerShell or desktop) 503; log line | H | 2 | ○ |
+| S-LIM-01 | Session limit | `maxSessions 2` → 3rd session (PowerShell, desktop or jump connection) 503; log line | H | 2 | ✅ |
 | S-POL-01 | Unreadable policy key | deny SYSTEM read on `HKLM\SOFTWARE\Policies\RemoteHub\Agent` → everything refused, health features `powershell` only, log "can't be read" | PS H | 1 | ○ |
 | S-POL-02 | Policy read live | change a policy value, next connection uses it without a service restart | PS H | 2 | ○ |
 | S-POL-03 | `Rights\PowerShell` | set to a group without PSAdmin → PowerShell 403, desktop still works (Rights\Desktop default) | PS H | 1 | ○ |
@@ -260,6 +264,25 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 | T-PROC-02 | End process / tree | test process tree ended completely | H PS | 2 | ✅ |
 | T-PROC-03 | Critical processes | ending lsass, csrss, winlogon, own remoting process refused | H | 1 | ✅ |
 
+### 7.1 Network shares of a connection (S-SHARE)
+
+RemoteHub's `ShareConnector` + `ShareTransfer` (harness "share") against shares the server VM offers (`Enable-LabShareServers`): SMB, SFTP on port 2222, FTP with TLS required, WebDAV over HTTP and HTTPS. Each transfer is a 3 MB file and a small one, compared by SHA-256.
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| S-SMB-01 | SMB through Windows | opens the share through Windows' client, copies both ways, hashes equal | H PS | 1 | ✅ | Server |
+| S-SMB-02 | Second account, same server | RemoteHub's own SMB client for the second account (Windows allows one account per server), writes there | H | 2 | ✅ | Server |
+| S-SMB-03 | Standard user | normaluser copies both ways on the share it may use | H PS | 2 | ✅ | Server |
+| S-SMB-04 | Wrong password | reported as such | H | 2 | ✅ | Server |
+| S-SFTP-01 | SFTP | asks about the host key once, copies both ways | H PS | 1 | ✅ | Server |
+| S-SFTP-02 | Key accepted | connects without asking again | H | 2 | ✅ | Server |
+| S-SFTP-03 | Key changed | a key that differs from the accepted one is refused when the user says no | H | 1 | ✅ | Server |
+| S-FTP-01 | FTP with TLS | asks about the self-signed certificate once, copies both ways over TLS | H PS | 2 | ✅ | Server |
+| S-FTP-02 | Certificate refused | nothing sent | H | 1 | ✅ | Server |
+| S-DAV-01 | WebDAV over HTTPS | copies both ways, Windows authentication | H PS | 2 | ✅ | Server |
+| S-DAV-02 | WebDAV over HTTP | copies both ways | H PS | 3 | ✅ | Server |
+| S-DAV-03 | WebDAV wrong password | reported as such | H | 2 | ✅ | Server |
+
 ## 8. WinRM setup script (W)
 
 The script RemoteHub generates, run in the guest by PS Direct (`Invoke-LabSetupScript`), then RemoteHub's own
@@ -294,12 +317,12 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| D-CON-01 | Hello | account, rights {control, secureDesktop, consentBypass=false}, modes Ask+Pin, sessions, max fps 60 / quality 100, timeout 30, clipboard 3, agent version | H | 1 | ○ |
+| D-CON-01 | Hello | account, rights {control, secureDesktop, consentBypass=false, privacyScreen, privacyInputBlock, autoSignIn}, modes Ask+Pin, sessions, max fps 60 / quality 100, timeout 30, clipboard 3, features (incl. `privacyScreen`, `autoSignIn` where allowed), agent version | H | 1 | ○ |
 | D-CON-02 | Session list | console first; Admin's active console, normaluser's disconnected session listed as Disconnected; session 0 never | H PS | 2 | ○ |
 | D-CON-03 | Disconnected session refused | Start on a disconnected session → Failed "can't be shown", event 2100 | H E | 2 | ○ |
 | D-CON-04 | No Start within 5 min | connection closed by the agent | H | 3 | ○ |
 | D-CON-05 | First message not Start | connection closed | H | 3 | ○ |
-| D-CON-06 | Desktop off by policy | `DesktopEnabled=0` → `/v1/desktop` 404, health features `powershell` only | PS H | 1 | ○ |
+| D-CON-06 | Desktop off by policy | `DesktopEnabled=0` → `/v1/desktop` 404, health features `powershell`,`tunnel` (no `desktop`) | PS H | 1 | ○ |
 | D-CON-07 | Rights\Desktop without PSAdmin | 403 on desktop, PowerShell still works | PS H | 1 | ○ |
 | D-CON-08 | Frames arrive | after Connected: key frame, decodes to the guest resolution, picture matches a console screenshot (≥ 95 % similar) | H C | 1 | ○ |
 | D-CON-09 | End by RemoteHub | close → event 1101 with duration, helper process gone within 5 s, banner gone | H S E | 1 | ○ |
@@ -346,7 +369,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 |---|---|---|---|---|---|
 | D-VIEW-01 | View-only by choice | mouse, keys, Ctrl+Alt+Del, clipboard dropped (marker app sees nothing); fit disabled | H S | 1 | ○ |
 | D-VIEW-02 | View-only by right | account only in `Rights\DesktopViewOnly` (`viewer`, created by the test) → Hello control=false, forced view-only even if Start asks for control | PS H S | 1 | ○ |
-| D-VIEW-03 | Key release still passes | key held down before switching to view-only is released (no stuck key) | H S | 3 | ○ |
+| D-VIEW-03 | Key release still passes | a key held down when input stops being allowed (secure desktop without the SecureDesktop right; view-only itself is fixed at Start) is released – no stuck key | H S | 3 | ○ |
 | D-RIGHT-01 | No SecureDesktop right on the lock screen | Start on a locked session → Failed, 2100 | PS H E | 1 | ○ |
 | D-RIGHT-02 | No SecureDesktop right during UAC | UAC opens while connected → no frames sent, input blocked (prompt still open after Enter) | PS H S | 1 | ○ |
 
@@ -418,7 +441,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-MON-01 | Two monitors | virtualDisplay `always` + Hyper-V display → Layout lists 2, primary first; switching monitor changes the picture | H PS | 2 | ○ | |
 | D-MON-02 | All monitors | monitor −1 → bounding box picture; mouse lands on the right monitor | H S | 2 | ○ | |
 | D-MON-03 | Monitor added / removed while connected | Layout resent, index clamped, no crash | H PS | 3 | ○ | |
-| D-VD-01 | Virtual display auto | `auto`, guest at 640×480 (basic display) → virtual monitor switched on at the window size, primary; off after disconnect | H PS | 2 | ○ | |
+| D-VD-01 | Virtual display auto | `auto`, the guest's display offers less than the window (Hyper-V video limited to 1024×768) → virtual monitor switched on at the window size, primary; off after disconnect | H PS | 2 | ○ | |
 | D-VD-02 | Virtual display off | `off` → never switched on | H PS | 3 | ○ | |
 | D-VD-03 | Two connections | second connection keeps the virtual display until the last one ends (reference count) | H PS | 3 | ○ | |
 | D-VD-04 | Resize | Fit changes → driver reloaded through its pipe, new size within 5 s | H PS | 3 | ○ | |
@@ -471,8 +494,94 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| D-AUD-01 | Event IDs | across the scenarios above, each of 1000, 1001, 1100, 1101, 1102, 1103, 2000, 2100, 2101, 2102 seen with account, source IP, session, consent mode, view-only, duration | E | 1 | ○ |
+| D-AUD-01 | Event IDs | across the scenarios above, each of 1000, 1001, 1100–1106, 1200–1202, 2000, 2100–2105, 2200 seen (the errors 3100–3102 only where a scenario forces them) with account, source IP, session, consent mode, view-only, duration (1107 is defined but never written) | E | 1 | ○ |
 | D-AUD-02 | No content | no screen content, keystrokes or clipboard text in log or events (search for marker strings typed and copied) | E | 1 | ○ |
+
+### 9.11a Privacy screen, hidden apps, user privacy
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| D-PRIV-01 | Privacy screen | right PrivacyScreen, policy `PrivacyScreen` 0 / 1 / 2 → Hello `privacyScreen` / `privacyInputBlock` and feature `privacyScreen` match; turned on → console screenshot black while frames still arrive, event 1104; refused → 2103 | PS H C E | 1 | ○ | |
+| D-PRIV-02 | Local input blocked | level 2: the device's own keyboard and mouse don't reach the session (marker app); level 1: they do | H S C | 1 | ○ | |
+| D-PRIV-03 | Not available before 2004 | on W10-1809 no `privacyScreen` feature, a request refused with 2103 | H E | 2 | ○ | 1809 |
+| D-PRIV-04 | Kept after a resume | privacy screen still on after D-RES-01 | H N | 2 | ○ | |
+| D-HIDE-01 | Hidden apps by policy | `HiddenApps` (full path and `aumid:`) → those windows never in the frames, whatever the user chooses | PS H S | 1 | ○ | |
+| D-HIDE-02 | The user hides | the user at the device hides the screen or chosen apps ("Allow and hide apps…") → event 1105 and a Privacy message; kept after a resume without a new question; cleared when another user signs in | H S E | 1 | ○ | |
+
+### 9.12 Automatic sign-in – credential provider (C-PROV)
+
+Phase 1 of [credential-provider-design.md](credential-provider-design.md) §13: the provider itself. The agent's broker owns the pipe now, so the Lab DLL run (C-PROV-03) stops the service while the test server has it. The agent MSI is built with `build-installer.ps1 -LabSigning -CredentialProvider`, and the Lab DLL and test server with `build-credential-provider.ps1 -Configuration Lab`. The full list for the finished feature is in the design's §14.
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| C-PROV-01 | Install with `AUTOSIGNIN=1` | msiexec exit 0/3010; `RemoteHubCredentialProvider.dll` in Program Files, signature valid (lab certificate trusted on the VM); both keys for CLSID `{718FFFD2-…}`, `ThreadingModel` Apartment | PS | 1 | ✅ |
+| C-PROV-02 | Inert without a ticket | with the provider registered and no sign-in pending, signing out and in again with Ctrl+Alt+Del and the password reaches the desktop | C PS | 1 | ✅ |
+| C-PROV-03 | Sign-in through the provider | Lab DLL + `RemoteHubCpTestServer.exe` (SYSTEM): client LogonUI accepted, `Result` status 0, the console account's desktop, the ticket file deleted | C PS | 1 | ✅ |
+| C-PROV-04 | Update keeps it | a rebuild of the same version (new ProductCode, a major upgrade) without `AUTOSIGNIN` → DLL and keys still there | PS | 1 | ✅ |
+| C-PROV-05 | `AUTOSIGNIN=0` removes it | DLL and both keys gone; the `NoUserBehavior` / `Rights\AutoSignIn` values the install set removed | PS | 1 | ✅ |
+| C-PROV-06 | RemoteHub's *Install credential provider* | `AgentInstaller.ChangeCredentialProvider` over the agent → installed, DLL signed, both keys; policy `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn=S-1-5-32-544` set; message "Automatic sign-in allowed on this device" | H PS | 1 | ✅ |
+| C-PROV-07 | RemoteHub's *Remove credential provider* | removed, DLL and keys gone, policy values removed again; the agent's service process is the same as before both actions and health answers with the same certificate | H PS | 1 | ✅ |
+| C-PROV-08 | Another build on the device | install refused with "a different build … Update the agent first", nothing installed | H PS | 1 | ✅ |
+| C-PROV-09 | No agent / restart needed | `ChangeCredentialProvider` without an installed agent → "isn't installed"; a 3010 exit → the "after the device restarts" message | H PS | 3 | ○ |
+
+Phases 2 and 3 (lab/tests/C-AUTO.Tests.ps1): the agent service, the provider and RemoteHub's desktop client together, signed in to the agent as the console account.
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| C-AUTO-01 | Turned off by IT | installed with `AUTOSIGNIN=1` (policy values and marker written by the agent), then `NoUserBehavior=SignInScreen` set as IT would → `Rights.AutoSignIn` false; a request → SignInFailed "turned off" | H | 1 | ✅ |
+| C-AUTO-02 | View-only | policy and right set, view-only start → SignInFailed, Windows never asked | H | 1 | ✅ |
+| C-AUTO-03 | No password sent | SignInReady, nothing sent for 30 s → SignInFailed "didn't send the sign-in in time" | H | 2 | ✅ |
+| C-AUTO-04 | Wrong password | SigningIn → SignInFailed "password was wrong"; no desktop; event 2105 | H PS E | 1 | ✅ |
+| C-AUTO-05 | Right password | after closing the failed attempt's message: SignInReady → SignedIn; the console account's desktop; event 1106, no 3101/3102 | H C PS E | 1 | ✅ |
+| C-AUTO-06 | No password in logs | the lab password in neither the agent's log files nor the Application log | PS E | 1 | ✅ |
+
+Phase 4 – after the sign-in (lab/tests/C-END, to be written):
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| C-END-01 | Covered from the start | after SignedIn: a screenshot of the console shows the privacy screen message; keys typed at the console don't reach the desktop; RemoteHub's picture shows the desktop | H C PS | 1 | ○ |
+| C-END-02 | Lock on disconnect | connection closed → the console session is locked (client) / disconnected (Server); event 1107 "locked" | H PS E | 1 | ○ |
+| C-END-03 | Sign out on disconnect | end action SignOut (connection or policy) → the session is gone; event 1107 "signed out" | H PS E | 1 | ○ |
+| C-END-04 | Policy wins | policy `AutoSignInEndAction = Lock`, RemoteHub sends SignOut → locked | H PS | 2 | ○ |
+| C-END-05 | Network drop and resume | the VM's adapter cut for 30 s → the overlay stays, the desktop is untouched; reconnected within 2 min → same session, no sign-out | H N C | 1 | ○ |
+| C-END-06 | Network drop without resume | adapter cut for 3 min → signed out after 2 min; event 1107 | H N PS E | 1 | ○ |
+| C-END-07 | Agent restart | service killed while connected → at the next start the session gets its end action (signed out when it was dropped) | H PS E | 1 | ○ |
+| C-END-08 | Disconnect on the banner after a drop | during the 2 minutes, Disconnect on the device's banner → signed out at once | H N C | 2 | ○ |
+
+More refusals and limits (lab/tests/C-AUTO2.Tests.ps1), decided by the agent before Windows is asked:
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| C-AUTO-07 | Off without the option | installed without `AUTOSIGNIN` → no `NoUserBehavior`, Hello `autoSignIn` false, no `autoSignIn` feature; a request → "turned off on this device (policy NoUserBehavior)" | H PS | 1 | ✅ |
+| C-AUTO-08 | Rights | `Rights\AutoSignIn` without the account → "may not sign in automatically on this device (right AutoSignIn)"; without SecureDesktop → "needs the rights Desktop and SecureDesktop" | PS H | 1 | ✅ |
+| C-AUTO-09 | Privacy screen required | `AutoSignInRequirePrivacyScreen=1` with `PrivacyScreen=0` → refused, the policy named | PS H | 2 | ✅ |
+| C-AUTO-10 | Session state | someone signed in on the console → "Someone is signed in on the console now"; the account has a disconnected session → "already has a session on the device" | H S | 1 | ✅ |
+| C-AUTO-11 | Rate limit | the 4th automatic sign-in of an account within 15 minutes → "Too many automatic sign-ins", event 2104 | H E | 1 | ✅ |
+| C-AUTO-12 | Provider unusable | `ExcludedCredentialProviders` lists the CLSID / InprocServer32 outside the agent folder / DLL not signed → Hello `autoSignIn` false, refused with that reason | PS H | 1 | ✅ |
+| C-AUTO-13 | IT's policy kept | `NoUserBehavior=SignInScreen` set before an `AUTOSIGNIN=1` install → left as it is (log says so), still there after the uninstall | PS | 1 | ✅ |
+
+
+### 9.13 Jump hosts (J)
+
+From [jump-host-design.md](jump-host-design.md) §11 (J0…J12 there). `lab/tests/J-JUMP.Tests.ps1` moves the VM under test behind the jump host VM (lab.json `JumpHost`: `RemoteHub-JumpHost`, private switch `RemoteHub-Jump`, 192.168.231.0/24, the test VM gets .10 + its index) at run time; the revert undoes it, the jump VM is turned off afterwards. Everything goes through RemoteHub's client code with the route set (`AgentEndpoint.Via`, `PsTarget.Via`, harness `--jump`).
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| J-00 | Isolation | this PC reaches the jump host; RDP, WinRM and the agent port of the device behind it fail directly | H | 1 | ✅ | Jump |
+| J-01 | RDP through the forwarder | the device's RDP certificate (CN = computer name) comes back through the tunnel; the full sign-in (Kerberos / NTLM, certificate warning) is UI-JUMP-01 | H | 1 | ✅ | Jump |
+| J-02 | WinRM through the forwarder | HTTPS to 127.0.0.1 with the name not checked opens a session (HTTP to 127.0.0.1 / localhost needs TrustedHosts on the admin's PC – not changed on the lab host) | H | 1 | ✅ | Jump |
+| J-03 | The agent through the jump host | health, PowerShell, files both ways, registry, services, processes, the remote desktop (picture decoded); jump host audit 1200 / 1201 with the device's address and port; the device's audit shows the jump host as the source | H PS E | 1 | ✅ | Jump |
+| J-04 | Without the agent | PowerShell over WinRM through the jump host | H | 1 | ✅ | Jump |
+| J-05 | Policy | `TunnelEnabled=0` (and no `tunnel` in health), `TunnelTargets` without the device, a port outside `TunnelPorts`, right `Tunnel` removed (PowerShell still works) – each refused with its message, audit 2200; loopback and 169.254.169.254 refused by default, a name never opens them, `127.0.0.0/8` listed does | PS H E | 1 | ✅ | Jump |
+| J-06 | Tunnel drop | the jump host's side towards this PC off for 30 s → the desktop resumes without a new question, tools connect again | H N | 1 | ✅ | Jump |
+| J-07 | Forwarder only for RemoteHub | another program on this PC connecting to the forwarder's local port gets nothing; RemoteHub's own connection works | H | 1 | ✅ | Jump |
+| J-08 | Throughput | 2 GB to the device arrive unchanged while its remote desktop keeps sending pictures | H | 2 | ✅ | Jump |
+| J-09 | Install and update through it | the scope offered is the jump host's address (`LocalAddressAsync`), install over WinRM through the jump host, firewall rule scoped to the jump host, update through the agent through it | H PS | 1 | ✅ | Jump |
+| J-10 | Shares of a device behind it | SMB, SFTP and WebDAV copy both ways | H PS | 2 | ✅ | Jump, Server |
+| J-11 | Moving in the tree | connection / folder moved between jump host, folder under it, another jump host and a plain folder → the route follows; the drops of §4.3 refused; settings inherited past the jump host | U | 2 | ○ | Jump |
+| J-12 | Older RemoteHub | an older RemoteHub opens the new database and shared file | U PS | 2 | ○ | Jump |
+| J-13 | Other refusals | a name that doesn't resolve → `dns`; a closed port → `unreachable` / `timeout`; more than `MaxTunnelStreams` → `limit` | PS H | 2 | ✅ | Jump |
+| J-14 | Limits shared with sessions | jump connections count toward `maxSessions`; an unreadable policy key → `/v1/tunnel` 404 | PS H | 3 | ✅ | Jump |
 
 ## 10. RemoteHub on a Windows client (C, R)
 
@@ -527,6 +636,7 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 | C-POL-05 | `DisableRecording` | Record button hidden in every tab type | PS U | 2 | ○ | |
 | C-POL-06 | `RecordingFolder` with `%USERPROFILE%` | recordings land there, can't be changed | PS U | 2 | ○ | |
 | C-POL-07 | HKCU vs HKLM, legacy `RdpManager` key | both read, HKLM first | PS U | 3 | ○ | |
+| C-POL-08 | `DisableAgentAutoSignIn` | the connection option "Sign in automatically when nobody is signed in" hidden and never used | PS U | 2 | ○ | |
 | C-UPD-01 | Update offered | mock announces a higher version → bar shown; lower / equal → nothing | U M | 2 | ○ | |
 | C-UPD-02 | Checksum mismatch | download deleted, not installed | U M | 1 | ○ | |
 | C-UPD-03 | Untrusted host | download URL outside GitHub / remotehub.dev → refused | U M | 1 | ○ | |
@@ -574,6 +684,9 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-AG-04 | Wrong password / not allowed | credential with wrong password → clear message; normaluser → "not allowed" message | U | 2 | ○ |
 | UI-AG-05 | Agent stopped | stop the service → tabs report the connection failure, no hang; start → reconnects on retry | U PS | 2 | ○ |
 | UI-AG-06 | Update from the UI | *Install / update RemoteHub Agent…* with the agent installed → through the agent, new version shown on the shield | U PS | 1 | ○ |
+| UI-AG-07 | Allow automatic sign-in in the install dialog | checkbox shown only when the package contains the provider, enabled only for remoting and through the agent; unticked after RemoteHub installed the provider → `AUTOSIGNIN=0`, unticked otherwise → not passed | U PS | 2 | ○ |
+| UI-AG-08 | Credential provider from the UI | context menu *Install / Remove credential provider* → audit `agent.credential_provider`; "Sign in automatically when nobody is signed in" signs in on the sign-in screen → audit `agent.auto_sign_in` | U PS | 2 | ○ |
+| UI-JUMP-01 | RDP tab through a jump host | **2VM** + jump host: connection under the jump host → RDP signs in (NTLM through the forwarder), the certificate warning names the device, not 127.0.0.1 | U | 1 | ○ |
 
 **Agent remote desktop**
 

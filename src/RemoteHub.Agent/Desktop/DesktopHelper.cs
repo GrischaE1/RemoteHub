@@ -57,10 +57,14 @@ internal enum HelperMessage : byte
 /// </param>
 /// <param name="HiddenApps">The apps the user hid with the helper before this one (<see cref="AppIds"/>): hidden from the first frame on.</param>
 /// <param name="AlwaysHidden">Apps the device's policy always hides (policy HiddenApps); the user can't show them.</param>
+/// <param name="SignedInRemotely">
+/// The session automatic sign-in created for the admin: no banner (nobody at the device owns the session, there is nothing
+/// for them to hide or end); the privacy screen says who is working.
+/// </param>
 internal sealed record HelperInit(string Account, string Device, string Consent, string Pin, int TimeoutSeconds, bool ViewOnly,
     bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text,
     bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false, string UserHidden = DesktopScreenHide.None,
-    string[]? HiddenApps = null, string[]? AlwaysHidden = null);
+    string[]? HiddenApps = null, string[]? AlwaysHidden = null, bool SignedInRemotely = false);
 
 internal sealed record HelperHiddenApps(string[] Apps);
 
@@ -92,6 +96,7 @@ internal static class DesktopHelperProgram
         using var screen = new WindowsScreen();
         using var keyboard = new WindowsInput();
         var session = new DesktopHelperSession(input, output, ui, screen, keyboard, new WindowsAppWindows());
+        ui.Noted = session.Note; // a snipping tool the privacy screen closed
         // RDP windows in this session keep drawing when minimized while the admin is here (put back when this ends);
         // tried again until someone is signed in. Disposed in reverse order: the timer first, then the setting is put back.
         using var keepRdp = new KeepRdpDrawing();
@@ -182,7 +187,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)HelperMessage.Begin when _init is not null && !_begun:
                         _begun = true;
                         ui.CloseDialogs();
-                        ui.ShowBanner(_init, () => _ = End("The user at the device ended the session.", byUser: true), HideScreen);
+                        if (_init.SignedInRemotely) ui.ShowSignedInRemotely(_init); // the admin's own session: nobody at the device to end it
+                        else ui.ShowBanner(_init, () => _ = End("The user at the device ended the session.", byUser: true), HideScreen);
                         if (_userHide != DesktopScreenHide.None || _hiddenApps.Count > 0) ui.ShowPrivacy(_privacy);
                         _ = Send(DesktopWire.Json(DesktopMessage.Privacy, _privacy, DesktopJson.Default.DesktopPrivacy));
                         if (_chosenApps.Count > 0) _ = Send(DesktopWire.Json((DesktopMessage)HelperMessage.HiddenApps, new HelperHiddenApps([.. _chosenApps]), HelperJson.Default.HelperHiddenApps));

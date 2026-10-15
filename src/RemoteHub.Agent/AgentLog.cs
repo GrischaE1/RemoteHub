@@ -80,6 +80,10 @@ public enum AuditEvent
     DesktopPrivacyScreen = 1104,
     /// <summary>The user at the device hid or showed their screen.</summary>
     DesktopUserHid = 1105,
+    /// <summary>Automatic sign-in: the account signed in on the console through the credential provider.</summary>
+    AutoSignInSucceeded = 1106,
+    /// <summary>A session created by automatic sign-in was locked or signed out.</summary>
+    AutoSignInEnded = 1107,
     /// <summary>A jump connection signed in (this device as a jump host).</summary>
     TunnelStarted = 1200,
     /// <summary>A connection through this jump host ended: where to, how long, how much.</summary>
@@ -92,9 +96,17 @@ public enum AuditEvent
     DesktopIdleEnded = 2102,
     /// <summary>A privacy screen request was refused (right, policy, Windows version) or couldn't be shown.</summary>
     DesktopPrivacyRefused = 2103,
+    /// <summary>Automatic sign-in refused before Windows was asked (policy, right, session state, rate limit, timeout …).</summary>
+    AutoSignInRefused = 2104,
+    /// <summary>Automatic sign-in: Windows refused the sign-in (wrong password, locked account …).</summary>
+    AutoSignInFailed = 2105,
     /// <summary>A connection through this jump host was refused by its policy.</summary>
     TunnelRefused = 2200,
     DesktopError = 3100,
+    /// <summary>Automatic sign-in: another account than the one asked for ended up on the console – it was signed out.</summary>
+    AutoSignInMismatch = 3101,
+    /// <summary>Automatic sign-in can't work on this device (pipe, registration or signature check failed).</summary>
+    AutoSignInUnavailable = 3102,
 }
 
 /// <summary>

@@ -268,6 +268,8 @@ public sealed class AgentDevice
     public string? Version { get; set; }
     /// <summary>The virtual display option chosen at the last install or update (null: never chosen – on).</summary>
     public bool? VirtualDisplay { get; set; }
+    /// <summary>The credential provider (automatic sign-in) as RemoteHub last installed or removed it (null: never changed from here).</summary>
+    public bool? CredentialProvider { get; set; }
 
     public AgentDevice Clone() => (AgentDevice)MemberwiseClone();
 }

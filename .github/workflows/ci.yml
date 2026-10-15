@@ -30,6 +30,12 @@ jobs:
       - name: Test
         run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
 
+      # The credential provider (C++, Visual Studio's MSBuild): build with the hardening flags, unit tests, and a
+      # minute of fuzzing the pipe message parser (credential-provider-design.md §8.1, §8.3).
+      - name: Credential provider
+        shell: pwsh
+        run: ./build/build-credential-provider.ps1 -Configuration Release -FuzzSeconds 60
+
       # Both MSIs, so a broken installer shows up here and not only when a release is tagged (also runs the agent's selftest).
       - name: Build installers
         shell: pwsh

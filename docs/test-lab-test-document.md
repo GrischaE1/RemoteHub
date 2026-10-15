@@ -248,6 +248,14 @@ These are the places where the product code behaves differently from what the sh
 | W-* / P-SES | `ParseGroups` only recognises the English group name "Administrators", so on a de-DE device ("Administratoren") the admin check fails. |
 | D-VID-09 | When the Media Foundation H.264 encoder is missing (N edition without the Media Feature Pack), the client only gets the generic "kept failing" text and no event 3100 is written. The real cause appears only in the agent log. |
 | D-RES-07 | A connection that is taken over gets no final Status, and its 1101 audit event is skipped, so the audit trail doesn't show the hand-over. |
+| S-AUTH-08 / S-AUTH-10 | Seen in lab run 20261014-214238 (W11). An expired account (Windows error 1793) and an account that must change its password (1907) both get HTTP 500, not 401. Same unmapped-error path as above. |
+| A-INST-25 | Another program listening on 58732 without exclusive use: the agent binds the same port as well, without a warning. Connections then go to one of the two at random. |
+| A-ROLLBACK-01 | With 58732 held exclusively by another program, the service reports "started", then fails to bind. The MSI and RemoteHub report a successful install, but the agent isn't running. |
+| P-SES-06 | Seen in lab run 20261014-214238. A network drop ends the PowerShell session in time (54 s), but event 1001 gives the reason "PowerShell ended", not "connection lost: …". The keep-alive timeout ends the shell first, and `Tunnel.RunAsync` then reports the shell side (`AgentHost.cs:328`). |
+| UI-TL-03 | Seen in lab run 20261015-020456. The registry tab's *New* menu shows "String value (REGSZ)…", "(REGEXPAND_SZ)" and "(REGMULTI_SZ)": WPF takes the first `_` of a `MenuItem` header as the access-key marker. `RegistryView.NewKinds` needs `__` (or `RecognizesAccessKey` off). |
+| UI-* (accessibility) | Icon-only buttons in the PowerShell tab (`PsConsoleView.HeaderButton`, e.g. "Stop the running command") have only a tooltip and no `AutomationProperties.Name`, unlike `RemoteToolChrome.Tool`. The terminal's input line and output have no name either. |
+| D-* (accessibility) | The agent's consent, PIN and banner windows (`RemoteHubAgentWindow`) expose no UI Automation elements, so screen readers can't read them. The lab reads them by OCR. |
+| S-* (audit) | IPv4 callers are logged as IPv4-mapped IPv6 (`::ffff:192.168.250.25`) in the events and the log. |
 | D-ROB-05 | Malformed Mouse/Key messages go to the helper unchecked. The helper crashes, gets restarted, and the crashes count towards "kept failing". |
 
 ### Existing tests that are not in the sheet
@@ -1979,7 +1987,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 **Expected:**
 - The session ends. Event 1001 reason: "connection lost: Message too large."
 - Health answers 200 and a new session works.
-- Note: RemoteHub's client sends fragments of 1 MiB, so it never sends such a message, and the harness has no op to send one. This case needs a new raw probe.
+- Note: RemoteHub's client sends fragments of 1 MiB, so it never sends such a message. The harness probe `big --mb 17` sends one raw message in 1 MiB frames.
 
 #### P-SES-06 · Network drop
 P2 · How: N PS E · Needs: – · Status: ○ Not automated

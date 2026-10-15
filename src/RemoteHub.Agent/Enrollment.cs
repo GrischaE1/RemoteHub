@@ -12,6 +12,7 @@ namespace RemoteHub.Agent;
 /// LocalMachine\My (key not exportable), <c>agent.json</c>, firewall rule; then deletes the file. Without a file an
 /// already enrolled agent keeps its identity (plain update).</item>
 /// <item><c>RemoteHubAgent.exe cleanup</c> – on uninstall: firewall rule, certificate and configuration are removed (logs stay).</item>
+/// <item><c>RemoteHubAgent.exe auto-sign-in on|off</c> – the policy values that allow automatic sign-in (<see cref="AutoSignInSetup"/>).</item>
 /// </list>
 /// </summary>
 public static class Enrollment
@@ -24,9 +25,10 @@ public static class Enrollment
         {
             return args[0].ToLowerInvariant() switch
             {
-                "enroll" => Enroll(args.Length > 1 ? args[1] : "", args.Skip(2).FirstOrDefault(a => a.StartsWith("virtual-display=", StringComparison.OrdinalIgnoreCase))?["virtual-display=".Length..], log),
+                "enroll" => Enroll(args.Length > 1 ? args[1] : "", Option(args, "virtual-display"), log, Option(args, "auto-sign-in")),
                 "cleanup" => Cleanup(log),
-                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> | cleanup"),
+                "auto-sign-in" => AutoSignIn(args.Length > 1 ? args[1] : "", log),
+                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> | cleanup | auto-sign-in on|off"),
             };
         }
         catch (Exception ex)
@@ -35,6 +37,30 @@ public static class Enrollment
             Console.Error.WriteLine(ex.Message);
             return 1;
         }
+    }
+
+    /// <summary>"name=value" after the command and its first argument (from the MSI); null when not given.</summary>
+    private static string? Option(string[] args, string name) =>
+        args.Skip(2).FirstOrDefault(a => a.StartsWith(name + "=", StringComparison.OrdinalIgnoreCase))?[(name.Length + 1)..];
+
+    /// <summary><c>auto-sign-in on|off</c>: allow or stop automatic sign-in for the agent's allowed groups (see <see cref="AutoSignInSetup"/>).</summary>
+    private static int AutoSignIn(string onOff, AgentLog log)
+    {
+        var result = onOff.ToLowerInvariant() switch
+        {
+            "on" => AutoSignInSetup.On(AllowedGroups()),
+            "off" => AutoSignInSetup.Off(),
+            _ => throw new ArgumentException("Use: auto-sign-in on|off"),
+        };
+        log.Write(result);
+        Console.WriteLine(result);
+        return 0;
+    }
+
+    private static IReadOnlyList<string> AllowedGroups()
+    {
+        try { return AgentConfig.Load(AgentConfig.DefaultPath).AllowedGroups; }
+        catch { return [AgentConfig.AdministratorsSid]; }
     }
 
     /// <summary>The enrollment file: given directly, or the single <c>.rhagent</c> in the folder (of the MSI).</summary>
@@ -55,6 +81,16 @@ public static class Enrollment
     }
 
     /// <param name="virtualDisplay">From the MSI (VIRTUALDISPLAY): "1" install the virtual monitor, "0" not, "" not chosen.</param>
+    /// <param name="autoSignIn">From the MSI (AUTOSIGNIN): "1" allow automatic sign-in, "0" stop it, "" leave it.</param>
+    private static int Enroll(string source, string? virtualDisplay, AgentLog log, string? autoSignIn = null)
+    {
+        var done = Enroll(source, virtualDisplay, log);
+        if (done == 0 && autoSignIn is "1" or "0")
+            try { log.Write(autoSignIn == "1" ? AutoSignInSetup.On(AllowedGroups()) : AutoSignInSetup.Off()); }
+            catch (Exception ex) { log.Write("Automatic sign-in policy not set: " + ex.Message); } // never fails the install
+        return done;
+    }
+
     private static int Enroll(string source, string? virtualDisplay, AgentLog log)
     {
         Run("sc.exe", "config RemoteHubAgent start= delayed-auto", allowFailure: true);
@@ -203,7 +239,9 @@ public static class Enrollment
             foreach (var c in Ours(store).ToList()) store.Remove(c);
         }
         try { File.Delete(AgentConfig.DefaultPath); } catch { /* not there */ }
+        try { File.Delete(Path.Combine(AgentConfig.Folder, "autosignin.json")); } catch { /* not there */ }
         SecureAttention.Remove();
+        try { log.Write(AutoSignInSetup.Off()); } catch (Exception ex) { log.Write("Automatic sign-in policy not removed: " + ex.Message); }
         try { if (VirtualDisplay.Remove() is { } removed) log.Write(removed); } catch (Exception ex) { log.Write("Virtual display not removed: " + ex.Message); } // the Ctrl+Alt+Del setting, if the agent set it
         log.Write("Uninstalled: firewall rule, certificate, configuration and Ctrl+Alt+Del setting removed");
         return 0;

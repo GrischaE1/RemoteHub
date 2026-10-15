@@ -15,11 +15,18 @@ using RemoteHub.Remoting;
 //   install --vm <Hyper-V name> --user <guest admin> --password <pw> --msi <path> --label <label> [--scope <addresses>] [--port <n>]
 //       AgentEnrollment.Create + AgentInstaller.Prepare + AgentInstaller.InstallOverRemoting. The runspace is a
 //       PowerShell Direct session instead of WinRM - everything the client does over it is the same.
-//       --keep-identity 1: no new enrollment (an update over remoting); --virtual-display 0|1 (default 1).
+//       --keep-identity 1: no new enrollment (an update over remoting); --virtual-display 0|1 (default 1);
+//       --auto-sign-in 0|1: MSI property AUTOSIGNIN (not passed without it); --groups <text>: the dialog's "Allowed accounts"
+//       (AgentInstaller.ParseGroups); --enrollment-file <path>: send that file as the enrollment instead (to break an
+//       install on purpose). --via winrm --host <address> --cert <thumbprint>: over WinRM HTTPS
+//       instead of PowerShell Direct (RemoteHub's way on a device without the agent; through the jump host with --jump).
+//   enrollment --label .. --out <file> [--port n] [--scope ..] [--groups ..]
+//       AgentEnrollment.Create as RemoteHub makes it for the clipboard / by-hand install: writes the .rhagent, answers
+//       pin and deviceId.
 //   health --host <address> --port <n> --pin <sha256>
 //       AgentInstaller.HealthAsync (TLS, certificate pinned to the fingerprint).
 //   update --host <address> --port <n> --pin <sha256> --user <guest admin> --password <pw> --msi <path>
-//          [--new-identity <label> [--scope <addresses>]] [--enrollment-file <path>] [--virtual-display 0|1] [--hold-session 1]
+//          [--new-identity <label> [--scope <addresses>]] [--enrollment-file <path>] [--virtual-display 0|1] [--hold-session 1] [--auto-sign-in 0|1]
 //       Update through the running agent, as MainWindow.RunAgentInstall (AgentInstallMethod.ThroughAgent) does it:
 //       PowerShell over the agent, AgentInstaller.StartUpdateThroughAgent, PackageVersion, WaitForRestartAsync, and the
 //       same verdict (updated / not installed / no answer). --enrollment-file sends any file as the enrollment (to
@@ -27,10 +34,19 @@ using RemoteHub.Remoting;
 //   run --host <address> --port <n> --pin <sha256> --user <account> --password <pw> --script <PowerShell>
 //       A PowerShell session through the agent (AgentConnectionInfo, as every RemoteHub tool opens it); answers the
 //       script's output as strings.
+//   credential-provider --host .. --port .. --pin .. --user .. --password .. --msi <path> --install 1|0
+//       AgentInstaller.ChangeCredentialProvider over the agent's PowerShell (RemoteHub's "Install / Remove credential provider").
+//   auto-sign-in --host .. --port .. --pin .. --user .. --password .. [--view-only 1] [--no-request 1] [--password-for-sign-in ..] [--stay s]
+//       Automatic sign-in on the console's sign-in screen through the agent desktop, as RemoteHub's desktop tab does it.
 //   share ... / share-conflict ...   network shares (see ShareHarness.cs)
 //   seed --connections n [--folders n] [--shares n] [--standalone n]   test data for the start-time test (see SeedHarness.cs)
 //   tool --op <op> --via agent|winrm ...   RemoteHub's PowerShell connection and remote tools (see LabTools.cs)
 //   probe --kind <kind> ...                raw HTTP/TLS/WebSocket checks of the agent (see LabProbes.cs)
+//   jump --kind <kind> ...                 the jump host tunnel itself (see LabJump.cs)
+// Every command that reaches a device takes --jump <address> --jump-pin .. --jump-user .. --jump-password ..: then it goes
+// through that RemoteHub Agent as a jump host, as RemoteHub does for a connection placed under one (LabJump.cs).
+//   desktop --host .. --port .. --pin .. --user .. --password .. --steps <json> [--out <folder>] [--timeout s]
+//       a scripted remote desktop viewer (see DesktopHarness.cs)
 // Answers one JSON object on stdout; exit code 0 = ok, 1 = failed (the object then has "error").
 
 var json = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -41,16 +57,21 @@ try
     object result = cmd switch
     {
         "install" => Install(opt),
+        "enrollment" => NewEnrollment(opt),
         "health" => await Health(opt),
         "cad" => await CtrlAltDel(opt),
         "copy" => await CopyFiles(opt),
         "update" => await Update(opt),
         "run" => RunOverAgent(opt),
+        "credential-provider" => CredentialProvider(opt),
+        "auto-sign-in" => await AutoSignIn(opt),
         "share" => ShareHarness.Run(opt),
         "share-conflict" => ShareHarness.Conflict(opt),
         "seed" => SeedHarness.Run(opt),
         "tool" => await LabTools.Run(opt),
         "probe" => await LabProbes.Run(opt),
+        "jump" => await LabJump.Run(opt),
+        "desktop" => await DesktopHarness.Run(opt),
         _ => throw new ArgumentException("usage: install --vm .. --user .. --password .. --msi .. --label .. [--scope ..] [--port ..] | health --host .. --port .. --pin .. | " +
                                          "cad --host .. --port .. --pin .. --user .. --password .."),
     };
@@ -72,17 +93,32 @@ static object Install(Dictionary<string, string> o)
     // exactly what MainWindow.RunAgentInstall does before installing: create the device identity, keep the pin -
     // or, for an update with the device's identity kept, no enrollment at all
     var keep = o.GetValueOrDefault("keep-identity") == "1";
-    var (enrollment, pin) = keep ? (null, null) : AgentEnrollment.Create(o["label"], port, null, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    var groups = o.TryGetValue("groups", out var g) ? AgentInstaller.ParseGroups(g) : null;
+    var (enrollment, pin) = keep ? (null, null) : AgentEnrollment.Create(o["label"], port, groups, string.IsNullOrWhiteSpace(scope) ? null : scope);
     var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
+    bool? autoSignIn = o.GetValueOrDefault("auto-sign-in") switch { "1" => true, "0" => false, _ => null };
     var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
+    if (o.TryGetValue("enrollment-file", out var forced))
+    {
+        rhagent = Path.Combine(folder, Path.GetFileName(forced));
+        File.Copy(forced, rhagent, true);
+    }
     try
     {
+        // --via winrm --host .. --cert ..: over WinRM HTTPS as RemoteHub installs on a device without the agent (through
+        // the jump host when --jump is given)
+        if (o.GetValueOrDefault("via") == "winrm")
+        {
+            using var rs = LabTools.OpenWinRm(o).GetAwaiter().GetResult();
+            var viaWinRm = AgentInstaller.InstallOverRemoting(rs, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
+            return new { deviceId = enrollment?.DeviceId ?? viaWinRm.DeviceId, label = enrollment?.DeviceLabel, pin = pin ?? viaWinRm.Fingerprint, port, scope, installed = viaWinRm, progress };
+        }
         using var local = RunspaceFactory.CreateRunspace(InitialSessionState.CreateDefault2());
         local.Open();
         var session = OpenDirectSession(local, o["vm"], o["user"], o["password"]);
         try
         {
-            var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add, virtualDisplay);
+            var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
             return new
             {
                 deviceId = enrollment?.DeviceId ?? installed.DeviceId,
@@ -107,10 +143,20 @@ static object Install(Dictionary<string, string> o)
     }
 }
 
+static object NewEnrollment(Dictionary<string, string> o)
+{
+    var port = o.TryGetValue("port", out var p) ? int.Parse(p) : AgentProtocol.DefaultPort;
+    var scope = o.GetValueOrDefault("scope");
+    var groups = o.TryGetValue("groups", out var g) ? AgentInstaller.ParseGroups(g) : null;
+    var (enrollment, pin) = AgentEnrollment.Create(o["label"], port, groups, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    File.WriteAllBytes(o["out"], enrollment.Serialize());
+    return new { file = o["out"], pin, deviceId = enrollment.DeviceId, port, groups = enrollment.AllowedGroups };
+}
+
 static async Task<object> Health(Dictionary<string, string> o)
 {
     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-    var health = await AgentInstaller.HealthAsync(o["host"], int.Parse(o["port"]), o["pin"], cts.Token);
+    var health = await AgentInstaller.HealthAsync(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]), cts.Token);
     return health;
 }
 
@@ -121,7 +167,7 @@ static async Task<object> CtrlAltDel(Dictionary<string, string> o)
     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
     var secure = new SecureString();
     foreach (var c in o["password"]) secure.AppendChar(c);
-    using var client = await AgentDesktopClient.ConnectAsync(o["host"], new AgentEndpoint(int.Parse(o["port"]), o["pin"]),
+    using var client = await AgentDesktopClient.ConnectAsync(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
         new PSCredential(o["user"], secure), cts.Token);
     var statuses = new System.Collections.Concurrent.ConcurrentQueue<string>();
     var frames = 0;
@@ -169,6 +215,52 @@ static async Task<object> CtrlAltDel(Dictionary<string, string> o)
     return new { session = console, statuses, layouts, framesAtPress, frames };
 }
 
+// Automatic sign-in as RemoteHub's desktop tab does it: the console's sign-in screen with DesktopStart.AutoSignIn, the
+// password (the one the agent sign-in used) sent once on SignInReady, then the statuses until SignedIn or SignInFailed.
+// --view-only 1 / --no-request 1 play the refusal and timeout cases; --password-for-sign-in sends another password.
+static async Task<object> AutoSignIn(Dictionary<string, string> o)
+{
+    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(150));
+    var secure = new SecureString();
+    foreach (var c in o["password"]) secure.AppendChar(c);
+    using var client = await AgentDesktopClient.ConnectAsync(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
+        new PSCredential(o["user"], secure), cts.Token);
+    var statuses = new System.Collections.Concurrent.ConcurrentQueue<DesktopStatus>();
+    var frames = 0;
+    client.Received += m =>
+    {
+        switch (DesktopWire.TypeOf(m))
+        {
+            case DesktopMessage.Status:
+                var s = JsonSerializer.Deserialize<DesktopStatus>(m.AsSpan(1), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!;
+                statuses.Enqueue(s);
+                if (s.State == DesktopStatusState.SignInReady && o.GetValueOrDefault("no-request") != "1")
+                    client.Send(DesktopWire.SignInRequest(o.GetValueOrDefault("password-for-sign-in") ?? o["password"]));
+                break;
+            case DesktopMessage.Video:
+                Interlocked.Increment(ref frames);
+                client.Send(DesktopWire.Ack(DesktopWire.ReadVideo(m).FrameId));
+                break;
+        }
+    };
+    client.Start();
+    var console = client.Hello.Sessions.FirstOrDefault(s => s.Console) ?? throw new InvalidOperationException("no console session");
+    var start = JsonSerializer.SerializeToUtf8Bytes(new DesktopStart(console.Id, DesktopConsent.Ask, o.GetValueOrDefault("view-only") == "1", 30, 60, 0, null,
+        null, AutoSignIn: true), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+    client.Send([(byte)DesktopMessage.Start, .. start]);
+    while (!statuses.Any(s => s.State is DesktopStatusState.SignedIn or DesktopStatusState.SignInFailed or DesktopStatusState.Failed or DesktopStatusState.Ended))
+        await Task.Delay(200, cts.Token);
+    await Task.Delay(TimeSpan.FromSeconds(int.TryParse(o.GetValueOrDefault("stay"), out var stay) ? stay : 8), cts.Token); // the picture follows into the new session
+    return new
+    {
+        rights = client.Hello.Rights,
+        features = client.Hello.Features,
+        session = console,
+        statuses = statuses.Select(s => $"{s.State}: {s.Message}").ToList(),
+        frames,
+    };
+}
+
 // The remote desktop of the console session, then files "copied" to it exactly like the desktop tab does
 // (ClipboardTransfer.Files + Chunks). Answers what the agent sent back (statuses, transfer results).
 static async Task<object> CopyFiles(Dictionary<string, string> o)
@@ -176,7 +268,7 @@ static async Task<object> CopyFiles(Dictionary<string, string> o)
     using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
     var secure = new SecureString();
     foreach (var c in o["password"]) secure.AppendChar(c);
-    using var client = await AgentDesktopClient.ConnectAsync(o["host"], new AgentEndpoint(int.Parse(o["port"]), o["pin"]),
+    using var client = await AgentDesktopClient.ConnectAsync(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
         new PSCredential(o["user"], secure), cts.Token);
     var messages = new System.Collections.Concurrent.ConcurrentQueue<string>();
     client.Received += m =>
@@ -237,13 +329,31 @@ static object RunOverAgent(Dictionary<string, string> o)
 {
     var secure = new SecureString();
     foreach (var c in o["password"]) secure.AppendChar(c);
-    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], new AgentEndpoint(int.Parse(o["port"]), o["pin"]),
+    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
         new PSCredential(o["user"], secure)));
     rs.Open();
     using var ps = PowerShell.Create();
     ps.Runspace = rs;
     var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();
     return new { output, errors = ps.Streams.Error.Select(e => e.ToString()).ToList() };
+}
+
+// Install / remove the credential provider over the agent's PowerShell, as MainWindow.ChangeCredentialProvider does.
+// Answers installed (true/false) and RemoteHub's message, or the reason RemoteHub would show ("failed").
+static object CredentialProvider(Dictionary<string, string> o)
+{
+    var secure = new SecureString();
+    foreach (var c in o["password"]) secure.AppendChar(c);
+    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
+        new PSCredential(o["user"], secure)));
+    rs.Open();
+    var progress = new List<string>();
+    try
+    {
+        var result = AgentInstaller.ChangeCredentialProvider(rs, o["msi"], o["install"] == "1", progress.Add);
+        return new { ok = true, installed = result.Installed, message = result.Message, progress };
+    }
+    catch (RemoteCommandException ex) { return new { ok = false, installed = (bool?)null, message = ex.Message, progress }; }
 }
 
 // Update through the running agent - the ThroughAgent branch of MainWindow.RunAgentInstall, step by step, with the
@@ -258,6 +368,8 @@ static async Task<object> Update(Dictionary<string, string> o)
     var credential = new PSCredential(o["user"], secure);
     var progress = new List<string>();
     var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
+    // AUTOSIGNIN as MainWindow.RunAgentInstall passes it (o.AutoSignIn): not given = the device keeps its choice
+    bool? autoSignIn = o.GetValueOrDefault("auto-sign-in") switch { "1" => true, "0" => false, _ => null };
 
     // "Create a new device certificate": a new identity, and RemoteHub then waits for the new fingerprint
     AgentEnrollment? enrollment = null;
@@ -278,10 +390,10 @@ static async Task<object> Update(Dictionary<string, string> o)
     int? heldPid = null;
     try
     {
-        var before = await AgentInstaller.HealthAsync(host, port, pin, CancellationToken.None);
+        var before = await AgentInstaller.HealthAsync(host, LabJump.Endpoint(o, port, pin), CancellationToken.None);
         if (o.GetValueOrDefault("hold-session") == "1")
         {
-            held = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, new AgentEndpoint(port, pin), credential));
+            held = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, LabJump.Endpoint(o, port, pin), credential));
             held.Open();
             using var ps = PowerShell.Create();
             ps.Runspace = held;
@@ -292,9 +404,9 @@ static async Task<object> Update(Dictionary<string, string> o)
         string? startError = null;
         try
         {
-            using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, new AgentEndpoint(port, pin), credential));
+            using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, LabJump.Endpoint(o, port, pin), credential));
             rs.Open();
-            AgentInstaller.StartUpdateThroughAgent(rs, msi, rhagent, progress.Add, virtualDisplay);
+            AgentInstaller.StartUpdateThroughAgent(rs, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
         }
         catch (Exception ex) { startError = ex.Message; }
 
@@ -308,7 +420,7 @@ static async Task<object> Update(Dictionary<string, string> o)
         }
         else
         {
-            health = await AgentInstaller.WaitForRestartAsync(host, port, expectedPin, expected, progress.Add, CancellationToken.None);
+            health = await AgentInstaller.WaitForRestartAsync(host, LabJump.Endpoint(o, port, expectedPin), expected, progress.Add, CancellationToken.None);
             if (health is null) { verdict = "noAnswer"; message = "The agent didn't answer again within a few minutes."; }
             else if (expected is not null && health.Version != expected) { verdict = "notInstalled"; message = $"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expected})."; }
             else { verdict = "updated"; message = $"Updated – RemoteHub Agent {health.Version} is running."; }
@@ -333,7 +445,7 @@ static async Task<object> Update(Dictionary<string, string> o)
 
         // what the agent answers now with the old and with the expected pin
         string? oldPinNow;
-        try { oldPinNow = (await AgentInstaller.HealthAsync(host, port, pin, CancellationToken.None)).Version; }
+        try { oldPinNow = (await AgentInstaller.HealthAsync(host, LabJump.Endpoint(o, port, pin), CancellationToken.None)).Version; }
         catch (Exception ex) { oldPinNow = "refused: " + ex.GetBaseException().GetType().Name; }
 
         return new

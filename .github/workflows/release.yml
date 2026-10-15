@@ -58,10 +58,32 @@ jobs:
           path: '**/test-results.trx'
           if-no-files-found: ignore
 
+      # Code signing: the repository secrets SIGNING_CERTIFICATE_PFX (the PFX, base64) and SIGNING_CERTIFICATE_PASSWORD.
+      # Without them the release is built unsigned, with a warning. The credential provider is never built unsigned
+      # (credential-provider-design.md §8.4) - build-installer.ps1 refuses that on its own.
+      - name: Import signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.SIGNING_CERTIFICATE_PFX }}
+          PFX_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:PFX) { "::warning::No signing certificate (secret SIGNING_CERTIFICATE_PFX) - this release is not signed."; exit 0 }
+          $file = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String($env:PFX))
+          try {
+            $cert = Import-PfxCertificate -FilePath $file -CertStoreLocation Cert:\CurrentUser\My `
+              -Password (ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force)
+          }
+          finally { Remove-Item $file -Force }
+          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+
       # WiX comes from NuGet (WixToolset.Sdk, pinned in the .wixproj), so no tool install is needed.
       - name: Build installer
         shell: pwsh
-        run: ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts
+        run: |
+          $sign = if ('${{ steps.signing.outputs.thumbprint }}') { @{ SigningCertificate = '${{ steps.signing.outputs.thumbprint }}' } } else { @{} }
+          ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts @sign
 
       - name: Locate MSIs
         id: msi
@@ -76,8 +98,6 @@ jobs:
           }
           "path=$msi" >> $env:GITHUB_OUTPUT
           "agent=$agent" >> $env:GITHUB_OUTPUT
-
-      # Code signing goes here once a certificate is available (see the runbook, section 07).
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3

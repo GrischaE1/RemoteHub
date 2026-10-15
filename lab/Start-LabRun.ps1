@@ -45,6 +45,26 @@ $previousMsi = $agentMsis | Select-Object -Skip 1 -First 1
 Publish-Msi $msi (Join-Path $LabRoot 'msi')
 Publish-Msi $previousMsi (Join-Path $LabRoot 'msi\previous')
 
+# RemoteHub itself (the C / R / UI cases): the package of the same version as the agent under test, the one of the
+# previous agent release, and the newest RDP Manager package (same upgrade code - C-MSI-05). By version, not by name
+# order: an old "RemoteHub 2.1.0" package would sort above 0.x.
+function Find-ClientMsi($agent) {
+    if (-not $agent) { return $null }
+    $v = $agent.Name -replace '^RemoteHub-Agent-(.+)-x64\.msi$', '$1'
+    Get-Item (Join-Path $repo "artifacts\RemoteHub-$v-x64.msi") -ErrorAction SilentlyContinue
+}
+Publish-Msi (Find-ClientMsi $msi) (Join-Path $LabRoot 'client')
+Publish-Msi (Find-ClientMsi $previousMsi) (Join-Path $LabRoot 'client\previous')
+Publish-Msi (Get-ChildItem (Join-Path $repo 'artifacts') -Filter 'RdpManager-*-x64.msi' | Sort-Object { [version]($_.Name -replace '^RdpManager-(.+)-x64\.msi$', '$1') } -Descending | Select-Object -First 1) (Join-Path $LabRoot 'client\legacy')
+
+# The credential provider's lab build and its test server (build\build-credential-provider.ps1 -Configuration Lab),
+# for the C-PROV cases.
+$cpLab = Join-Path $repo 'artifacts\credential-provider-lab'
+if (Test-Path $cpLab) {
+    robocopy $cpLab (Join-Path $LabRoot 'credential-provider') /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "robocopy of the credential provider lab build failed ($LASTEXITCODE)." }
+}
+
 $runId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runDir = Join-Path $LabRoot "results\$runId"
 Write-Host "Run $runId$(if ($msi) { ", agent $($msi.Name)" }) - queued for '$LabTask'"
