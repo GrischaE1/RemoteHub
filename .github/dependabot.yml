@@ -6,14 +6,13 @@ updates:
     schedule:
       interval: weekly
 
-  # NuGet packages of the app, the agent, the tests and the installers (WiX SDK). Minor and patch updates come as one
-  # pull request a week; major updates and security fixes come on their own.
+  # NuGet packages of the app, the agent and the tests. Minor and patch updates come as one pull request a week; major
+  # updates and security fixes come on their own. The installers' WiX versions stay manual: Dependabot doesn't read
+  # .wixproj files, and the WiX SDK and its extensions have to move together.
   - package-ecosystem: nuget
     directories:
       - /src/*
       - /tests/*
-      - /installer
-      - /installer/*
     schedule:
       interval: weekly
     groups:
