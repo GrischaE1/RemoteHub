@@ -146,7 +146,7 @@ public static class DesktopPrivacyStyle
 {
     public const string Off = "Off";
     public const string Black = "Black";
-    /// <summary>The dark background with "Your IT administrator is working on this device".</summary>
+    /// <summary>The navy background with the logo and "Remote Support Session in Progress".</summary>
     public const string Message = "Message";
 
     public static string Valid(string? style) => style is Black or Message ? style : Off;
