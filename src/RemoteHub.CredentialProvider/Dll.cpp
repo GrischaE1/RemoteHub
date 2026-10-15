@@ -8,10 +8,14 @@
 namespace
 {
     volatile long g_locks = 0;
+    volatile long g_factories = 0; // a caller holding a factory keeps the DLL loaded, also before any provider exists
 
     class ClassFactory final : public IClassFactory
     {
     public:
+        ClassFactory() { InterlockedIncrement(&g_factories); }
+        ~ClassFactory() { InterlockedDecrement(&g_factories); }
+
         IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override
         {
             if (ppv == nullptr) return E_POINTER;
@@ -66,7 +70,7 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void*)
 _Check_return_ STDAPI DllCanUnloadNow()
 {
     // Also the channel threads: they run code in this DLL until they have ended.
-    return g_locks == 0 && rhcp::LiveObjects() == 0 && rhcp::Channel::RunningThreads() == 0 ? S_OK : S_FALSE;
+    return g_locks == 0 && g_factories == 0 && rhcp::LiveObjects() == 0 && rhcp::Channel::RunningThreads() == 0 ? S_OK : S_FALSE;
 }
 
 _Check_return_ STDAPI DllGetClassObject(_In_ REFCLSID clsid, _In_ REFIID riid, _Outptr_ LPVOID* ppv)

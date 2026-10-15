@@ -93,7 +93,9 @@ public class SasActionsTests : IDisposable
     public void A_helper_that_ended_abruptly_is_made_good_by_the_next_one_and_by_the_service()
     {
         var crashed = New();
-        crashed.Hide(Sid1); // never shown again
+        crashed.Hide(Sid1); // never shown again; its process is gone:
+        foreach (var owner in Directory.GetFiles(_folder, "sas-owner-*.txt"))
+            File.Move(owner, Path.Combine(_folder, $"sas-owner-{Sid1}-2147483646-dead0000.txt"));
         var next = New();
         next.Hide(Sid1); // the record from before is the original
         next.Show();
@@ -134,6 +136,32 @@ public class SasActionsTests : IDisposable
         sas.Show();
         Assert.Null(User(Sid1, system, "DisableTaskMgr"));
         Assert.Null(User(Sid1, system, "DisableLockWorkstation"));
+    }
+
+    [Fact]
+    public void Two_connections_to_the_same_users_session_the_last_one_puts_them_back()
+    {
+        var one = New();
+        var two = New();
+        one.Hide(Sid1);
+        two.Hide(Sid1);
+        Assert.Contains("still hidden", one.Show());
+        AllHidden(Sid1); // the other connection still blocks input
+        two.Show();
+        foreach (var (key, name) in A.SasActions.UserValues) Assert.Null(User(Sid1, key, name));
+        foreach (var (key, name) in A.SasActions.MachineValues) Assert.Null(Machine(key, name));
+        Assert.Empty(Directory.GetFiles(_folder));
+    }
+
+    [Fact]
+    public void An_owner_whose_helper_is_gone_does_not_keep_them_hidden()
+    {
+        var sas = New();
+        sas.Hide(Sid1);
+        File.WriteAllText(Path.Combine(_folder, $"sas-owner-{Sid1}-2147483646-dead0000.txt"), ""); // a helper that crashed
+        sas.Show();
+        foreach (var (key, name) in A.SasActions.UserValues) Assert.Null(User(Sid1, key, name));
+        Assert.Empty(Directory.GetFiles(_folder));
     }
 
     [Fact]

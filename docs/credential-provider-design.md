@@ -400,7 +400,7 @@ Privacy mode (0.18.3) provides what v2 had to leave out: an overlay on the devic
   - **The helper keeps running** in the session for 2 minutes, with the privacy screen and the local input block as they were. It sends no frames and accepts no admin input; it only holds the overlay.
   - **No banner** (see above): the overlay stays as it is until the session is signed out or a resumed connection takes over.
   - **The resume window is 2 minutes** for this session instead of the usual 1 (`DesktopResume`), and RemoteHub keeps reconnecting for 120 s once it has seen `SignedIn`. A resumed connection of the same account (by SID) takes over the session's end action; it starts its own helper and ends the old one once the new one covers the screen, so the overlay doesn't drop in between, and work continues where it was.
-  - **If nobody resumes within 2 minutes,** the session is **signed out** (`WTSLogoffSession`), **whatever the end action** says. The Lock/SignOut setting and the device policy `AutoSignInEndAction` apply only to connections that end on purpose. Audit 1107 "… signed out (connection lost and not continued in time)".
+  - **If nobody resumes within 2 minutes,** the session is **signed out** (`WTSLogoffSession`), **whatever the end action** says. The Lock/SignOut setting and the device policy `AutoSignInEndAction` apply only to connections that end on purpose. Audit 1107 "… signed out (connection lost and not continued in time)". The overlay stays until the session is really gone: Windows signs out asynchronously, so the helper is ended only once the session no longer belongs to the account (at most 60 s). If Windows refuses the sign-out, the session is locked instead and the helper ended then. If it refuses both, the helper keeps covering and the record stays for the next start (§9.3).
   - **If the helper itself ends during the 2 minutes** (crash, a local Ctrl+Alt+Del → Sign out, the console moving to another session), the overlay is gone. The service then signs the session out at once (1107 "… (the screen cover ended after the connection dropped)"), unless the session is locked at that moment: a lock by the person at the device counts as safe and is left for the 2 minutes to run out.
   - **A drop while the helper isn't in that session** (for example while the picture is moving to the new session): nothing can cover it, so the session is signed out at once ("connection lost, nothing to cover the screen").
   - **An exception to privacy mode's rule** "everything ends with the helper" (privacy-mode-design §1.1 rule 5). The rule still holds, because the overlay ends with the helper. What's new is that the helper doesn't end with the connection for these sessions. Privacy-mode-design §14 gets a note.
@@ -409,10 +409,13 @@ Privacy mode (0.18.3) provides what v2 had to leave out: an overlay on the devic
 ### 9.3 Crash safety
 
 - Once the sign-in is confirmed (§6.3), the service records the session in `%ProgramData%\RemoteHub\Agent\autosignin.json` (`AutoSignInSessions`): session id, SID, account, end action, and whether its connection dropped (no secrets; ACL SYSTEM + Administrators, same as the rest of the folder). The entry is removed when the session gets its end action or is signed out, and marked as dropped while the 2 minutes of §9.2 run.
-- At service start (`AutoSignInSessions.Recover`), every entry left by the last run is dealt with and the file is deleted:
-  - a session marked as dropped is **signed out** (§9.2);
+- **The entry goes only once the session is secured:** the end action done, or the session not the account's any more. If Windows refuses the lock or the sign-out (a refused sign-out falls back to a lock), the entry stays for the next start. A crash before the end action leaves it there too.
+- **Saved in one step:** the file is written to `autosignin.json.tmp` and moved over the old one, one save at a time. A crash while saving leaves the previous complete file, never a truncated one.
+- At service start (`AutoSignInSessions.Recover`), every entry left by the last run is dealt with, and the file is deleted once all of them are:
+  - a session marked as dropped is **signed out** (§9.2), or locked if Windows refuses the sign-out;
   - any other session gets the end action (for example after the service was killed while connected).
   - Audit 1107 with reason "the agent restarted while it was open"; nothing is done when the session is gone or has another user now.
+  - An entry whose action Windows refused again stays in the file for the next start.
 - So if the service restarts during the 2 minutes, the session is signed out at start: the new service instance doesn't take over the old helper.
 - Uninstall (`cleanup`) deletes the file.
 

@@ -41,9 +41,22 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
     public string? EndOnPurpose(int session, AgentLog log, string why, string? action = null)
     {
         AutoSignInRecord? r;
-        lock (_lock) _records.Remove(session, out r);
+        lock (_lock) _records.TryGetValue(session, out r);
+        if (r is null) return null;
+        // The record goes only once the session is secured: a crash before, or a lock / sign-out Windows refused, leaves it
+        // for Recover at the next start.
+        action ??= r.EndAction;
+        var (done, secured) = Act(r, action, log, why);
+        if (!secured && action == AutoSignInEndActions.SignOut) (done, secured) = Act(r, AutoSignInEndActions.Lock, log, why + "; sign-out refused");
+        if (secured) Forget(session, r);
+        return done;
+    }
+
+    /// <summary>Drops the record (if it is still this one) and saves.</summary>
+    private void Forget(int session, AutoSignInRecord r)
+    {
+        lock (_lock) if (_records.TryGetValue(session, out var now) && now.Session == r.Session && now.Sid == r.Sid) _records.Remove(session);
         Save();
-        return r is null ? null : Act(r, action ?? r.EndAction, log, why);
     }
 
     /// <summary>
@@ -74,10 +87,32 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
             if (parked.Timer.IsCancellationRequested) return;
             if (!Unpark(session, parked)) return;
             var why = first == helperEnded ? "the screen cover ended after the connection dropped" : "connection lost and not continued in time";
-            lock (_lock) _records.Remove(session);
-            Save();
-            Act(parked.Entry, AutoSignInEndActions.SignOut, log, why);
+            // The cover stays until Windows has ended the session (sign-out runs asynchronously) or, if it refused, locked it.
+            var (_, secured) = Act(parked.Entry, AutoSignInEndActions.SignOut, log, why);
+            if (secured) await Ended(parked.Entry);
+            else
+            {
+                var (_, locked) = Act(parked.Entry, AutoSignInEndActions.Lock, log, why + "; sign-out refused");
+                if (!locked)
+                {
+                    log.Write($"Automatic sign-in: session {session} could be neither signed out nor locked – the screen stays covered, the next agent start tries again");
+                    return; // the helper keeps covering; the record stays for Recover
+                }
+            }
+            try { parked.Helper.Dispose(); } catch { /* already gone */ }
+            Forget(session, parked.Entry);
         });
+    }
+
+    /// <summary>How long the cover waits for a sign-out to finish before it ends anyway.</summary>
+    internal static TimeSpan SignOutWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>Until the session no longer belongs to the account (signed out), at most <see cref="SignOutWait"/>.</summary>
+    private async Task Ended(AutoSignInRecord r)
+    {
+        var until = DateTime.UtcNow + SignOutWait;
+        while (DateTime.UtcNow < until && string.Equals(sessions.UserSid(r.Session), r.Sid, StringComparison.OrdinalIgnoreCase))
+            await Task.Delay(250);
     }
 
     /// <summary>
@@ -113,9 +148,17 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
         List<AutoSignInRecord> left;
         try { left = JsonSerializer.Deserialize(File.ReadAllText(stateFile), AutoSignInJson.Default.ListAutoSignInRecord) ?? []; }
         catch (Exception ex) { log.Write($"Automatic sign-in: {stateFile} unreadable ({ex.Message}) – ignored"); left = []; }
+        // Kept for the next start when Windows refused (a sign-out falls back to a lock first).
+        var failed = new List<AutoSignInRecord>();
         foreach (var r in left)
-            Act(r, r.Dropped ? AutoSignInEndActions.SignOut : r.EndAction, log, "the agent restarted while it was open");
-        try { File.Delete(stateFile); } catch { /* gone */ }
+        {
+            var (_, secured) = Act(r, r.Dropped ? AutoSignInEndActions.SignOut : r.EndAction, log, "the agent restarted while it was open");
+            if (!secured && r.Dropped) (_, secured) = Act(r, AutoSignInEndActions.Lock, log, "the agent restarted while it was open; sign-out refused");
+            if (!secured) failed.Add(r);
+        }
+        lock (_lock) foreach (var r in failed) _records[r.Session] = r;
+        if (failed.Count == 0) { try { File.Delete(stateFile); } catch { /* gone */ } }
+        else Save();
     }
 
     private bool Unpark(int session, Parked p)
@@ -125,23 +168,25 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
             if (!_parked.TryGetValue(session, out var now) || now != p) return false;
             _parked.Remove(session);
         }
-        try { p.Helper.Dispose(); } catch { /* already gone */ }
-        return true;
+        return true; // the caller ends the helper once the session is secured
     }
 
-    /// <summary>Lock (disconnect – the lock screen on client Windows) or sign out – only while the session is still the account's.</summary>
-    private string? Act(AutoSignInRecord r, string action, AgentLog log, string why)
+    /// <summary>
+    /// Lock (disconnect – the lock screen on client Windows) or sign out – only while the session is still the account's.
+    /// Done: what happened, for the audit (null when the session isn't the account's any more); Secured: nothing is left to
+    /// do – done, or not ours any more.
+    /// </summary>
+    private (string? Done, bool Secured) Act(AutoSignInRecord r, string action, AgentLog log, string why)
     {
         if (!string.Equals(sessions.UserSid(r.Session), r.Sid, StringComparison.OrdinalIgnoreCase))
         {
             log.Write($"Automatic sign-in: session {r.Session} of {r.Account} is gone or has another user now – nothing to do ({why})");
-            return null;
+            return (null, true);
         }
-        var done = action == AutoSignInEndActions.SignOut
-            ? sessions.LogOff(r.Session) ? "signed out" : "couldn't be signed out"
-            : sessions.Disconnect(r.Session) ? "locked" : "couldn't be locked";
+        var ok = action == AutoSignInEndActions.SignOut ? sessions.LogOff(r.Session) : sessions.Disconnect(r.Session);
+        var done = action == AutoSignInEndActions.SignOut ? ok ? "signed out" : "couldn't be signed out" : ok ? "locked" : "couldn't be locked";
         log.Audit(AuditEvent.AutoSignInEnded, $"Automatic sign-in session {r.Session} of {r.Account} {done} ({why})");
-        return done;
+        return (done, ok);
     }
 
     /// <summary>Reads and drops the helper's output until it ends (nobody watches); says whether it ended by the user's Disconnect.</summary>
@@ -157,17 +202,29 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
         return false;
     }
 
+    private readonly object _saving = new();
+
+    /// <summary>
+    /// The records as they are now, replaced in one step (a temporary file moved over the old one): a crash while saving
+    /// leaves the previous complete file, never a truncated one. One save at a time, so an older snapshot can't overwrite a
+    /// newer one.
+    /// </summary>
     private void Save()
     {
         if (stateFile is null) return;
-        try
+        lock (_saving)
         {
-            List<AutoSignInRecord> all;
-            lock (_lock) all = [.. _records.Values];
-            if (all.Count == 0) { File.Delete(stateFile); return; }
-            File.WriteAllText(stateFile, JsonSerializer.Serialize(all, AutoSignInJson.Default.ListAutoSignInRecord)); // no secrets: session, SID, account, end action
+            try
+            {
+                List<AutoSignInRecord> all;
+                lock (_lock) all = [.. _records.Values];
+                if (all.Count == 0) { File.Delete(stateFile); return; }
+                var temp = stateFile + ".tmp";
+                File.WriteAllText(temp, JsonSerializer.Serialize(all, AutoSignInJson.Default.ListAutoSignInRecord)); // no secrets: session, SID, account, end action
+                File.Move(temp, stateFile, overwrite: true);
+            }
+            catch { /* best effort – the record is for crash safety only */ }
         }
-        catch { /* best effort – the record is for crash safety only */ }
     }
 }
 

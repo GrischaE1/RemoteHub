@@ -279,7 +279,8 @@ Not hidden: the network and accessibility buttons in the corner. Windows has no 
   - The overlays come down (the monitors changed and they couldn't be rebuilt).
   - The helper ends with the connection.
 - **Exactly as before:** an existing value comes back as it was, and an absent one is deleted.
-- **Switch user:** the machine-wide value comes back only when no other session still hides it. A system mutex orders the helpers and the service.
+- **Several connections:** each helper that hides them registers as an owner (`sas-owner-<sid>-<pid>-<id>.txt`). A user's values come back only when no other live owner for that user remains, and Switch user only when no live owner at all remains. An owner whose process is gone doesn't count.
+- **One at a time:** a system mutex orders the helpers and the service. If it can't be taken within 5 s, nothing is changed and the step is logged.
 - **A helper that was killed:**
   - The next helper in that session keeps the original record.
   - The service puts everything back when it starts. No helper runs then, so all records are leftovers.

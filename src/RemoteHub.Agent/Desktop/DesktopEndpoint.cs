@@ -71,7 +71,6 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         // The device allows it by policy, yet it isn't offered: say why, so the log answers "where is the option?"
         else if (policy.NoUserBehavior == NoUserBehaviors.AutoSignIn && sessions.Any(s => s.Console && s.State == DesktopSessionState.SignIn))
             o.Log.Write($"Desktop: automatic sign-in not offered to {identity.Account}: {autoSignInWhyNot}");
-        _abort = cts;
 
         try
         {
@@ -216,7 +215,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             while (true)
             {
                 var watch = Task.Delay(TimeSpan.FromSeconds(2), ct);
-                var ended = await Task.WhenAny(fromClient, fromHelper, watch);
+                var ended = await Task.WhenAny(fromClient, fromHelper, watch, _endRequested.Task);
+                if (ended == _endRequested.Task) break;
                 if (ended == fromClient)
                 {
                     if (fromClient.IsFaulted)
@@ -392,7 +392,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
 
     // ---- automatic sign-in (docs/credential-provider-design.md §6)
 
-    private CancellationTokenSource? _abort;
+    // Ends the connection from outside the main loop (the sign-in runs beside it) the same clean way as the other ends: the
+    // main loop stops and the close in its finally lets the last status reach RemoteHub. Cancelling the connection instead
+    // aborted the WebSocket, which could drop that status (seen as "connection lost" in RemoteHub).
+    private readonly TaskCompletionSource _endRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private (int Session, string EndAction)? _autoSigned; // the session automatic sign-in created, while this connection owns it
     private bool _screenByService;                         // the privacy screen is the service's (automatic sign-in), not the admin's
     private volatile bool _autoSignInPending;              // the sign-in went to Windows; its session isn't confirmed yet
@@ -519,7 +522,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     $"{(sid is null ? "no readable user" : $"user {sid}")}, not {identity.Account} ({identity.UserSid}){(sid is null ? "" : " – signed out")}");
                 _endReason = "automatic sign-in ended up with another account";
                 await Status(DesktopStatusState.Ended, "The automatic sign-in couldn't be confirmed, so it was undone. Details are in the agent's log.", ct);
-                _abort?.Cancel();
+                _endRequested.TrySetResult();
                 return;
             }
             o.Desktop.AutoSigned.Signed(console!.Value, sid!, identity.Account, endAction);

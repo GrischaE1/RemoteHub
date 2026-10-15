@@ -59,19 +59,25 @@ internal sealed class SasActions
             Set(hive, UserValues, UserRecord(sid));
         }
         Set(_machine, MachineValues, Path.Combine(_folder, MachineRecord));
+        File.WriteAllText(OwnerFile(sid), "");
         _sid = sid;
         return "Ctrl+Alt+Del screen: Lock, Switch user, Change a password, Sign out and the power button hidden while the device's mouse and keyboard are blocked";
     }
 
-    /// <summary>Puts back what was there before (the machine value once no other session hides it).</summary>
+    /// <summary>
+    /// Puts back what was there before – the user's values once no other helper for that user hides them, the machine
+    /// value once no helper at all does.
+    /// </summary>
     public string? Show()
     {
         if (_sid is not { } sid) return null;
         _sid = null;
         using var gate = Lock();
+        File.Delete(OwnerFile(sid));
+        if (LiveOwners(sid).Any()) return "Ctrl+Alt+Del screen: still hidden for another connection to this user's session";
         using (var hive = _userHive(sid))
             if (hive is not null) Restore(hive, UserRecord(sid)); // signed out meanwhile: put back by the next helper or the service
-        if (!Directory.EnumerateFiles(_folder, "sas-actions-S-*.txt").Any()) Restore(_machine, Path.Combine(_folder, MachineRecord));
+        if (!LiveOwners(null).Any()) Restore(_machine, Path.Combine(_folder, MachineRecord));
         return "Ctrl+Alt+Del screen: its actions are back";
     }
 
@@ -80,6 +86,7 @@ internal sealed class SasActions
     {
         if (!Directory.Exists(_folder)) return null;
         using var gate = Lock();
+        foreach (var owner in Directory.GetFiles(_folder, "sas-owner-*.txt")) File.Delete(owner); // their helpers are gone
         var done = false;
         foreach (var record in Directory.GetFiles(_folder, "sas-actions-S-*.txt"))
         {
@@ -92,6 +99,31 @@ internal sealed class SasActions
     }
 
     private string UserRecord(string sid) => Path.Combine(_folder, $"sas-actions-{sid}.txt");
+
+    // Who hides them now: one file per helper (and instance), named by its process – a helper that ended without
+    // putting them back no longer counts once its process is gone.
+    private readonly string _instance = Guid.NewGuid().ToString("N")[..8];
+    private string OwnerFile(string sid) => Path.Combine(_folder, $"sas-owner-{sid}-{Environment.ProcessId}-{_instance}.txt");
+
+    /// <summary>The owners whose helper still runs, for one user (or for anyone); the others are removed.</summary>
+    private IEnumerable<string> LiveOwners(string? sid)
+    {
+        var self = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
+        var live = new List<string>();
+        foreach (var file in Directory.GetFiles(_folder, sid is null ? "sas-owner-*.txt" : $"sas-owner-{sid}-*.txt"))
+        {
+            var parts = Path.GetFileNameWithoutExtension(file).Split('-');
+            var alive = parts.Length >= 3 && int.TryParse(parts[^2], out var pid) && Running(pid, self);
+            if (alive) live.Add(file); else File.Delete(file);
+        }
+        return live;
+    }
+
+    private static bool Running(int pid, string name)
+    {
+        try { using var p = System.Diagnostics.Process.GetProcessById(pid); return !p.HasExited && p.ProcessName == name; }
+        catch (ArgumentException) { return false; } // not running
+    }
 
     /// <summary>Records the values as they are (unless a record is there already: that is the original), then sets them to 1.</summary>
     private void Set(RegistryKey root, (string Key, string Name)[] values, string record)
@@ -140,24 +172,26 @@ internal sealed class SasActions
 
     private sealed class Gate : IDisposable
     {
-        private readonly Mutex? _mutex;
-        private readonly bool _held;
+        private readonly Mutex _mutex;
 
+        /// <summary>Taken, or an exception: nothing is changed without it (the caller logs it; the service puts back at its start).</summary>
         public Gate(string name)
         {
-            try
+            _mutex = new Mutex(false, name); // UnauthorizedAccessException goes to the caller
+            bool held;
+            try { held = _mutex.WaitOne(TimeSpan.FromSeconds(5)); }
+            catch (AbandonedMutexException) { held = true; } // a helper that ended holding it: ours now
+            if (!held)
             {
-                _mutex = new Mutex(false, name);
-                try { _held = _mutex.WaitOne(TimeSpan.FromSeconds(5)); }
-                catch (AbandonedMutexException) { _held = true; } // a helper that ended holding it: ours now
+                _mutex.Dispose();
+                throw new TimeoutException("another helper has held the Ctrl+Alt+Del screen's settings for 5 s");
             }
-            catch (UnauthorizedAccessException) { /* without the gate, as before it existed */ }
         }
 
         public void Dispose()
         {
-            if (_held) _mutex!.ReleaseMutex();
-            _mutex?.Dispose();
+            _mutex.ReleaseMutex();
+            _mutex.Dispose();
         }
     }
 }

@@ -155,17 +155,18 @@ internal static class LabTools
         return Open(target);
     }
 
-    // PsRemoting.Open, or - for a pinned WinRM session - the same connection info with the CA/CN checks skipped
-    private static Runspace Open(PsTarget t)
+    // PsRemoting.Open, or - for a pinned WinRM session - the same connection info with the CA/CN checks skipped; with
+    // the PowerShell tab's host for ps-host
+    private static Runspace Open(PsTarget t, System.Management.Automation.Host.PSHost? host = null)
     {
-        if (t.Agent is not null || _pinned is null) return PsRemoting.Open(t);
+        if (t.Agent is not null || _pinned is null) return PsRemoting.Open(t, host);
         // behind a jump host through a local forward, as PsRemoting.Open does it
         var forward = t.Via is { } via ? JumpForwarders.Open(via, t.Host, t.Port) : null;
         var ci = (WSManConnectionInfo)PsRemoting.ConnectionInfo(t, forward);
         ci.SkipCACheck = true;
         ci.SkipCNCheck = true;
         ci.SkipRevocationCheck = true;
-        var rs = RunspaceFactory.CreateRunspace(ci);
+        var rs = host is null ? RunspaceFactory.CreateRunspace(ci) : RunspaceFactory.CreateRunspace(host, ci);
         if (forward is not null)
             rs.StateChanged += (_, e) => { if (e.RunspaceStateInfo.State is RunspaceState.Closed or RunspaceState.Broken) forward.Dispose(); };
         try { rs.Open(); }
@@ -192,7 +193,7 @@ internal static class LabTools
     private static object PsHost(PsTarget t, Dictionary<string, string> o)
     {
         var sink = new ScriptedConsole(o.GetValueOrDefault("lines")?.Split('|') ?? [], o.GetValueOrDefault("secrets")?.Split('|') ?? []);
-        using var rs = PsRemoting.Open(t, new PsConsoleHost(sink));
+        using var rs = Open(t, new PsConsoleHost(sink)); // the same pinned path as the other operations (--via winrm --cert)
         using var ps = PowerShell.Create();
         ps.Runspace = rs;
         var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();

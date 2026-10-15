@@ -1244,6 +1244,13 @@ public sealed class AgentDesktopClient : IDisposable
     public void Send(byte[] message)
     {
         if (_out.Writer.TryWrite(message)) Interlocked.Increment(ref _queued);
+        else WipeSecret(message); // the connection is closing: never sent
+    }
+
+    /// <summary>The automatic sign-in's password: its only copy is in this frame – wiped once it is sent or dropped (design §10.2).</summary>
+    private static void WipeSecret(byte[] m)
+    {
+        if (m.Length > 0 && m[0] == (byte)DesktopMessage.SignInRequest) System.Security.Cryptography.CryptographicOperations.ZeroMemory(m);
     }
 
     private int _queued;
@@ -1260,14 +1267,19 @@ public sealed class AgentDesktopClient : IDisposable
         {
             await foreach (var m in _out.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
             {
-                await _ws.SendAsync(m, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false);
-                // The automatic sign-in's password: its only copy in this frame – wiped once sent (design §10.2).
-                if (m.Length > 0 && m[0] == (byte)DesktopMessage.SignInRequest) System.Security.Cryptography.CryptographicOperations.ZeroMemory(m);
+                try { await _ws.SendAsync(m, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false); }
+                finally { WipeSecret(m); } // also when the send failed or was cancelled
                 Interlocked.Decrement(ref _queued);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { Close("Connection lost: " + ex.GetBaseException().Message); }
         catch (OperationCanceledException) { }
+        finally
+        {
+            // Whatever is still queued will never be sent: no password stays behind in a frame.
+            _out.Writer.TryComplete();
+            while (_out.Reader.TryRead(out var left)) WipeSecret(left);
+        }
     }
 
     private async Task ReceiveLoop()

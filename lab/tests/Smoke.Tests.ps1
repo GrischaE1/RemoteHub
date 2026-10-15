@@ -101,7 +101,18 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
         Set-Content (Join-Path $EvidenceDir 'smoke-layout.txt') "keyboard layout: $layout"
         # Notepad in the user's session, typed at the console, saved with Ctrl+S to a known file
         $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("New-Item -ItemType File -Path '$file' -Force | Out-Null; notepad.exe '$file'"))
-        Start-Sleep -Seconds 5
+        # the console's keys go to the foreground window: Notepad's must exist and be in front first
+        $ready = Invoke-LabInSession -Name $VmName -ScriptBlock {
+            $wsh = New-Object -ComObject WScript.Shell
+            $until = (Get-Date).AddSeconds(60)
+            do {
+                if (@(Get-Process notepad -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0).Count -gt 0 -and $wsh.AppActivate('smoke-typed')) { 'ready'; return }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $until)
+            'timeout'
+        }
+        if ("$ready" -notmatch 'ready') { throw "Notepad with smoke-typed.txt didn't come to the front within 60 s" }
+        Start-Sleep -Milliseconds 500
         Send-LabText -Name $VmName -Text $text
         $typed = Invoke-LabInSession -Name $VmName -ScriptBlock {
             $wsh = New-Object -ComObject WScript.Shell

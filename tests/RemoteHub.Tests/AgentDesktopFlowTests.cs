@@ -53,9 +53,12 @@ public class AgentDesktopFlowTests
         public readonly ConcurrentDictionary<int, string> Sids = new();
         public readonly ConcurrentQueue<int> LogOffs = new();
         public string? UserSid(int session) => Sids.TryGetValue(session, out var sid) ? sid : null;
-        public bool LogOff(int session) { LogOffs.Enqueue(session); return true; }
+        /// <summary>Set to make Windows refuse a sign-out / a lock.</summary>
+        public volatile bool RefuseLogOff, RefuseDisconnect;
+        // A sign-out ends the session: nobody is signed in to it afterwards.
+        public bool LogOff(int session) { if (RefuseLogOff) return false; LogOffs.Enqueue(session); Sids.TryRemove(session, out _); return true; }
         public readonly ConcurrentQueue<int> Disconnects = new();
-        public bool Disconnect(int session) { Disconnects.Enqueue(session); return true; }
+        public bool Disconnect(int session) { if (RefuseDisconnect) return false; Disconnects.Enqueue(session); return true; }
         /// <summary>Set to simulate the console moving to another session (someone signs in).</summary>
         public volatile int Console = list.FirstOrDefault(s => s.Console)?.Id ?? 0;
         /// <summary>Replaced to simulate an unlock or sign-in.</summary>
@@ -1683,10 +1686,69 @@ public class AgentDesktopFlowTests
             Assert.Empty(s.LogOffs);       // still covered, waiting for a resume
             Assert.False(helper.Disposed);
             WaitFor(() => s.LogOffs.Contains(3), "sign-out after the hold");
-            Assert.True(helper.Disposed);
+            WaitFor(() => helper.Disposed, "the cover ends once the session is gone");
             Assert.Empty(s.Disconnects);   // not the end action: a drop always signs out
+            Assert.Null(auto.Owned(3));
         }
         finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Fact]
+    public void A_refused_sign_out_locks_the_session_before_the_cover_ends()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(200);
+        A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(30);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            s.RefuseLogOff = true;
+            auto.Dropped(3, helper, log);
+            WaitFor(() => s.Disconnects.Contains(3), "locked when the sign-out is refused");
+            WaitFor(() => helper.Disposed, "the cover ends once the session is locked");
+            Assert.Null(auto.Owned(3));
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(60); }
+    }
+
+    [Fact]
+    public void Neither_signed_out_nor_locked_the_cover_and_the_record_stay()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            s.RefuseLogOff = s.RefuseDisconnect = true;
+            auto.Dropped(3, helper, log);
+            Thread.Sleep(1000);
+            Assert.False(helper.Disposed);      // still covering
+            Assert.NotNull(auto.Owned(3));      // kept for the next start
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Fact]
+    public void An_end_action_Windows_refused_stays_recorded_for_the_next_start()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"rh-autosignin-{Guid.NewGuid():N}.json");
+        try
+        {
+            var s = new Sessions(new A.DesktopSessionInfo(3, @"TEST\admin", A.DesktopSessionState.Active, true, "Console"));
+            s.Sids[3] = SidOf("admin");
+            var auto = new A.AutoSignInSessions(s, file);
+            auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock);
+            s.RefuseDisconnect = true;
+            Assert.Equal("couldn't be locked", auto.EndOnPurpose(3, new A.AgentLog("", 1), "test"));
+            Assert.True(File.Exists(file));
+            Assert.False(File.Exists(file + ".tmp"));
+
+            s.RefuseDisconnect = false;
+            new A.AutoSignInSessions(s, file).Recover(new A.AgentLog("", 1)); // the next start locks it
+            Assert.Contains(3, s.Disconnects);
+            Assert.False(File.Exists(file));
+        }
+        finally { File.Delete(file); File.Delete(file + ".tmp"); }
     }
 
     [Fact]
