@@ -20,6 +20,11 @@ public enum AgentRight
     PrivacyScreen,
     /// <summary>Use this device as a jump host: connect from it to other devices (policy <c>TunnelEnabled</c>, <c>TunnelTargets</c>, <c>TunnelPorts</c>).</summary>
     Tunnel,
+    /// <summary>
+    /// Sign in automatically on the console when nobody is signed in, with the account that signed in to the agent
+    /// (policy <c>NoUserBehavior</c> = AutoSignIn must allow it too; also needs Desktop and SecureDesktop). Default: nobody.
+    /// </summary>
+    AutoSignIn,
 }
 
 /// <summary>
@@ -39,7 +44,10 @@ public enum AgentRight
 /// <item><c>TunnelTargets</c> (REG_MULTI_SZ) – where a jump connection may go: address ranges (<c>10.20.0.0/16</c>, <c>fd00::/8</c>, <c>10.1.2.3</c>) and names (<c>sql01.contoso.local</c>, <c>*.contoso.local</c>). Unset: anywhere – except this device's own loopback, link-local and multicast addresses, which only an address range naming them allows.</item>
 /// <item><c>TunnelPorts</c> (REG_MULTI_SZ) – ports a jump connection may go to: <c>3389</c>, <c>5985-5986</c>, <c>*</c>. Unset: every port.</item>
 /// <item><c>MaxTunnelStreams</c> (DWORD) – connections open at once through one jump connection (default 64).</item>
-/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel (REG_MULTI_SZ) – group SIDs or names.</item>
+/// <item><c>NoUserBehavior</c> (REG_SZ) – <c>SignInScreen</c> (default): nobody on the console shows the sign-in screen; <c>AutoSignIn</c>: the admin may sign in automatically there (right AutoSignIn).</item>
+/// <item><c>AutoSignInRequirePrivacyScreen</c> (DWORD) – 1: no automatic sign-in where the privacy screen can't be shown.</item>
+/// <item><c>AutoSignInEndAction</c> (REG_SZ) – <c>Lock</c> or <c>SignOut</c>: what happens to an automatically signed-in session when its connection ends; wins over RemoteHub's setting.</item>
+/// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (REG_MULTI_SZ) – group SIDs or names.</item>
 /// </list>
 /// </summary>
 public sealed class AgentPolicy
@@ -65,6 +73,12 @@ public sealed class AgentPolicy
     public TunnelRules Tunnel { get; init; } = TunnelRules.Any;
     /// <summary>MaxTunnelStreams: connections open at once through one jump connection.</summary>
     public int MaxTunnelStreams { get; init; } = 64;
+    /// <summary>NoUserBehavior: what the agent may do when nobody is signed in on the console (<see cref="NoUserBehaviors"/>).</summary>
+    public string NoUserBehavior { get; init; } = NoUserBehaviors.SignInScreen;
+    /// <summary>AutoSignInRequirePrivacyScreen: automatic sign-in only where the privacy screen can be shown.</summary>
+    public bool AutoSignInRequirePrivacyScreen { get; init; }
+    /// <summary>AutoSignInEndAction: Lock or SignOut, or null when the device leaves it to RemoteHub's setting.</summary>
+    public string? AutoSignInEndAction { get; init; }
     public IReadOnlyDictionary<AgentRight, IReadOnlyList<string>> Rights { get; init; } = new Dictionary<AgentRight, IReadOnlyList<string>>();
 
     /// <summary>Set when the policy key couldn't be read: then nothing is allowed (see <see cref="Load"/>).</summary>
@@ -88,6 +102,7 @@ public sealed class AgentPolicy
             [AgentRight.ConsentBypass] = [],
             [AgentRight.PrivacyScreen] = config.AllowedGroups,
             [AgentRight.Tunnel] = config.AllowedGroups,
+            [AgentRight.AutoSignIn] = [],
         },
     };
 
@@ -142,6 +157,9 @@ public sealed class AgentPolicy
             TunnelEnabled = values.Number(null, "TunnelEnabled") is not 0,
             Tunnel = TunnelRules.Parse(values.Strings(null, "TunnelTargets"), values.Strings(null, "TunnelPorts")),
             MaxTunnelStreams = values.Number(null, "MaxTunnelStreams") is { } streams and >= 1 and <= 1024 ? streams : d.MaxTunnelStreams,
+            NoUserBehavior = NoUserBehaviors.Valid(values.Strings(null, "NoUserBehavior")?.FirstOrDefault()),
+            AutoSignInRequirePrivacyScreen = values.Number(null, "AutoSignInRequirePrivacyScreen") is 1,
+            AutoSignInEndAction = AutoSignInEndActions.Valid(values.Strings(null, "AutoSignInEndAction")?.FirstOrDefault()),
             Rights = rights,
         };
     }
@@ -170,6 +188,15 @@ public sealed class AgentPolicy
             return key?.GetValue(name);
         }
     }
+}
+
+/// <summary>Policy <c>NoUserBehavior</c>. Anything else, or nothing, is <see cref="SignInScreen"/>.</summary>
+public static class NoUserBehaviors
+{
+    public const string SignInScreen = "SignInScreen";
+    public const string AutoSignIn = "AutoSignIn";
+
+    public static string Valid(string? value) => string.Equals(value?.Trim(), AutoSignIn, StringComparison.OrdinalIgnoreCase) ? AutoSignIn : SignInScreen;
 }
 
 /// <summary>Policy <c>PrivacyScreen</c>: what the admin's privacy screen may do.</summary>

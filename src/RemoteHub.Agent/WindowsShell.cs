@@ -43,7 +43,7 @@ public sealed class WindowsAuthenticator(IReadOnlyList<string> allowedGroups) : 
             if (!Native.DuplicateTokenEx(full, Native.MAXIMUM_ALLOWED, IntPtr.Zero, Native.SecurityImpersonation, Native.TokenPrimary, out var primary))
                 return AuthResult.Fail(AuthOutcome.Error, new Win32Exception(Marshal.GetLastWin32Error()).Message);
             var sids = (identity.Groups?.Select(g => g.Value) ?? []).Append(identity.User?.Value ?? "").Where(v => v.Length > 0).ToList();
-            return new AuthResult(AuthOutcome.Ok, "", new ShellIdentity(identity.Name, primary, sids));
+            return new AuthResult(AuthOutcome.Ok, "", new ShellIdentity(identity.Name, primary, sids, identity.User?.Value));
         }
         finally
         {

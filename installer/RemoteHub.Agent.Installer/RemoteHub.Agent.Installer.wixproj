@@ -7,6 +7,8 @@
     <InstallerPlatform>x64</InstallerPlatform>
     <OutputName>RemoteHub-Agent-$(ReleaseVersion)-x64</OutputName>
     <DefineConstants>Version=$(Version);AgentPublishDir=$(AgentPublishDir);IconPath=$(MSBuildThisFileDirectory)..\..\src\RemoteHub\Assets\app.ico</DefineConstants>
+    <!-- Set by build-installer.ps1 -CredentialProvider (always signed): adds AUTOSIGNIN and the provider component. -->
+    <DefineConstants Condition="'$(CredentialProviderDll)' != ''">$(DefineConstants);CredentialProviderDll=$(CredentialProviderDll)</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

@@ -282,6 +282,20 @@ public sealed partial class EditorViewModel : ObservableObject
             (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
             "RemoteHub Agent: the device's screen without RDP – for desktops where RDP is turned off. The device decides who may see or control " +
             "the screen and whether the signed-in user is asked first. RDP stays available: right-click → Remote desktop via RDP."));
+        if (!AppPolicy.AgentAutoSignInDisabled)
+            PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
+                (o, v) => o.AgentAutoSignIn = (bool?)v,
+                "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
+                "credentials. The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
+                "policy) and have the credential provider installed (right-click → Install credential provider). Anyone at the device can see the " +
+                "session while you work."));
+        if (!AppPolicy.AgentAutoSignInDisabled)
+            PsRows.Add(Row("When an automatic sign-in's connection ends", own.AgentAutoSignInEndAction, parent.AgentAutoSignInEndAction,
+                [(Agent.AutoSignInEndActions.Lock, "Lock the session"), (Agent.AutoSignInEndActions.SignOut, "Sign out – unsaved work in the session is lost")],
+                (o, v) => o.AgentAutoSignInEndAction = (string?)v,
+                "For a session RemoteHub signed in automatically: when you disconnect, it is locked (you can come back to open work) or signed " +
+                "out. A connection that drops is always signed out after 2 minutes if it isn't continued. The device's policy " +
+                "(\"AutoSignInEndAction\") may decide instead."));
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,

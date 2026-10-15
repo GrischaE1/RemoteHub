@@ -30,6 +30,24 @@ jobs:
       - name: Test
         run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
 
+      # The runner's Visual Studio comes without the Spectre-mitigated libraries, which the provider's hardening flags
+      # need (MSB8040; credential-provider-design.md §8.1): added here rather than building it without them. The
+      # provider builds with v143 (MSVC 14.44 on the image); the unversioned component is for the newer default toolset.
+      - name: Spectre-mitigated libraries
+        shell: pwsh
+        run: |
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer"
+          $vs = & "$installer\vswhere.exe" -latest -property installationPath
+          $p = Start-Process "$installer\vs_installer.exe" -Wait -PassThru -ArgumentList 'modify', '--installPath', "`"$vs`"",
+            '--add', 'Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64.Spectre', '--quiet', '--norestart', '--nocache'
+          if ($p.ExitCode -notin 0, 3010) { throw "vs_installer exited with $($p.ExitCode)" }
+
+      # The credential provider (C++, Visual Studio's MSBuild): build with the hardening flags, unit tests, and a
+      # minute of fuzzing the pipe message parser (credential-provider-design.md §8.1, §8.3).
+      - name: Credential provider
+        shell: pwsh
+        run: ./build/build-credential-provider.ps1 -Configuration Release -FuzzSeconds 60
+
       # Both MSIs, so a broken installer shows up here and not only when a release is tagged (also runs the agent's selftest).
       - name: Build installers
         shell: pwsh

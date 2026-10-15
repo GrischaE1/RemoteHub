@@ -18,6 +18,15 @@ internal interface IHelperUi : IDisposable
     /// </summary>
     void ShowBanner(HelperInit init, Action disconnect, Action<string> hide);
 
+    /// <summary>
+    /// Instead of the banner, in a session automatic sign-in created for the admin: nobody at the device owns it, so there
+    /// is nothing for them to hide or end – the privacy screen only says who is working.
+    /// </summary>
+    void ShowSignedInRemotely(HelperInit init) { }
+
+    /// <summary>What the device's windows stopped (a snipping tool), for the agent's log.</summary>
+    Action<string>? Noted { get => null; set { } }
+
     /// <summary>The banner shows what is hidden now: the user's own choice, and the admin's privacy screen.</summary>
     void ShowPrivacy(DesktopPrivacy privacy);
 
@@ -302,6 +311,15 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         if (next != ex) SetWindowLongPtrW(h, -20, next);
     }
     private HelperInit? _bannerInit;
+    private string? _signedInRemotely; // the admin's account, in a session automatic sign-in created (no banner)
+
+    public Action<string>? Noted { get; set; }
+
+    public void ShowSignedInRemotely(HelperInit init) => Post(() =>
+    {
+        _signedInRemotely = init.Account;
+        if (_overlays.Count > 0) ShowOverlays(); // the text changes
+    });
     private DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
 
     /// <summary>The banner's text and buttons for what is hidden now.</summary>
@@ -390,7 +408,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         if (error is null)
         {
             if (screen.BlockLocalInput) error = InputBlocker.Start();
-            else InputBlocker.Stop();
+            else { InputBlocker.Stop(); ShowSasActions(); }
+            if (error is null && screen.BlockLocalInput) HideSasActions();
         }
         if (error is not null) RemoveOverlays();
         done(error);
@@ -416,7 +435,9 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             {
                 Subtitle = "PRIVACY MODE ACTIVE",
                 Heading = "Remote Support Session in Progress",
-                Body = "Your screen is temporarily hidden while an authorized administrator assists your device.",
+                Body = _signedInRemotely is { } account
+                    ? $"{account} is signed in remotely. The screen stays hidden while they work."
+                    : "Your screen is temporarily hidden while an authorized administrator assists your device.",
                 Notice = _screen.BlockLocalInput ? "Mouse and keyboard are blocked." : "",
                 Footnote = "Secure, monitored session  •  Please do not power off your device",
                 Black = _screen.Style == DesktopPrivacyStyle.Black,
@@ -430,6 +451,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             _overlays.Add(w);
         }
         if (_overlays.Count == 0) return "The device has no monitor to cover.";
+        SnipGuard.Start(text => Noted?.Invoke(text)); // a snip would show what the overlay hides
         KeepOnTop();
         SetTimer(_messageWindow, TopTimer, 500, IntPtr.Zero); // other topmost windows (Task Manager) must not stay above it
         return null;
@@ -438,6 +460,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     private void RemoveOverlays()
     {
         InputBlocker.Stop();
+        ShowSasActions();
+        SnipGuard.Stop();
         KillTimer(_messageWindow, TopTimer);
         foreach (var o in _overlays) o.Destroy();
         _overlays.Clear();
@@ -445,6 +469,25 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     }
 
     private const int TopTimer = 7;
+
+    // The Ctrl+Alt+Del screen offers only Task Manager and Cancel while local input is blocked (SasActions). Tried again
+    // on the timer until the session's user is signed in and their profile is loaded; once per block when it fails.
+    private readonly SasActions _sasActions = new();
+    private bool _sasFailed;
+
+    private void HideSasActions()
+    {
+        if (_sasActions.Hidden || _sasFailed) return;
+        try { if (_sasActions.Hide() is { } done) Noted?.Invoke(done); }
+        catch (Exception ex) { _sasFailed = true; Noted?.Invoke("Ctrl+Alt+Del screen: its actions could not be hidden: " + ex.Message); }
+    }
+
+    private void ShowSasActions()
+    {
+        _sasFailed = false;
+        try { if (_sasActions.Show() is { } done) Noted?.Invoke(done); }
+        catch (Exception ex) { Noted?.Invoke("Ctrl+Alt+Del screen: its actions could not be put back (the service does at its next start): " + ex.Message); }
+    }
 
     /// <summary>The overlays on top of everything, and the banner on top of them (so "Disconnect" stays reachable).</summary>
     private void KeepOnTop()
@@ -526,6 +569,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         Post(() =>
         {
             InputBlocker.Stop();
+            ShowSasActions();
+            SnipGuard.Stop();
             LocalPointerWatch.Stop();
             foreach (var h in _windows.Keys.ToList()) DestroyWindow(h);
             PostQuitMessage(0);
@@ -608,7 +653,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                         case WM_RENDERFORMAT: ui.Render((uint)wParam); return 0;
                         case WM_RENDERALLFORMATS: return 0; // the helper ends: an offer not pasted yet is gone, nothing is fetched
                         case WM_DESTROYCLIPBOARD: ui.OfferEnded(); return 0;
-                        case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); return 0;
+                        case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); if (ui._screen.BlockLocalInput) ui.HideSasActions(); return 0;
                     }
                 if (ui._windows.TryGetValue(hwnd, out var w))
                 {

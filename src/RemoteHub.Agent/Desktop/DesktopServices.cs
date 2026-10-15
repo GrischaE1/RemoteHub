@@ -5,14 +5,25 @@ using Microsoft.Win32.SafeHandles;
 namespace RemoteHub.Agent;
 
 /// <summary>What the remote desktop needs from Windows; the service passes the real pieces, tests pass doubles.</summary>
-public sealed class DesktopServices(IDesktopSessions sessions, IDesktopHelperLauncher helpers, Func<string?>? secureAttention = null)
+public sealed class DesktopServices(IDesktopSessions sessions, IDesktopHelperLauncher helpers, Func<string?>? secureAttention = null, IAutoSignIn? autoSignIn = null)
 {
     public IDesktopSessions Sessions { get; } = sessions;
     public IDesktopHelperLauncher Helpers { get; } = helpers;
     /// <summary>Sends Ctrl+Alt+Del; null on success, otherwise why not.</summary>
     public Func<string?> SecureAttention { get; } = secureAttention ?? (() => "Ctrl+Alt+Del isn't available.");
+    /// <summary>Automatic sign-in through the credential provider; null where the agent has none (tests, no broker).</summary>
+    public IAutoSignIn? AutoSignIn { get; } = autoSignIn;
+    /// <summary>The sessions automatic sign-in created: end action, the time after a drop, crash safety.</summary>
+    public AutoSignInSessions AutoSigned { get; init; } = new(sessions);
 
-    public static DesktopServices Windows() => new(new WtsSessions(), new WindowsHelperLauncher(), RemoteHub.Agent.SecureAttention.Send);
+    public static DesktopServices Windows(IAutoSignIn? autoSignIn = null)
+    {
+        var sessions = new WtsSessions();
+        return new(sessions, new WindowsHelperLauncher(), RemoteHub.Agent.SecureAttention.Send, autoSignIn)
+        {
+            AutoSigned = new AutoSignInSessions(sessions, Path.Combine(AgentConfig.Folder, "autosignin.json")),
+        };
+    }
 }
 
 public interface IDesktopSessions
@@ -24,6 +35,15 @@ public interface IDesktopSessions
 
     /// <summary>The session has no screen right now (its RDP connection was closed). Checked every few seconds – kept cheap.</summary>
     bool IsDisconnected(int session) => List().FirstOrDefault(s => s.Id == session)?.State == DesktopSessionState.Disconnected;
+
+    /// <summary>The SID of the user signed in to the session (null: nobody, or it can't be read).</summary>
+    string? UserSid(int session) => null;
+
+    /// <summary>Signs the session out at once (automatic sign-in: the wrong account ended up there). False if it didn't work.</summary>
+    bool LogOff(int session) => false;
+
+    /// <summary>Disconnects the session – on client Windows the console then shows the lock screen. False if it didn't work.</summary>
+    bool Disconnect(int session) => false;
 }
 
 /// <summary>The desktop helper process in a session: its standard input/output carry the helper messages.</summary>
@@ -45,6 +65,23 @@ internal sealed class WtsSessions : IDesktopSessions
     public int? ConsoleSessionId() => WtsNative.WTSGetActiveConsoleSessionId() is var id && id != 0xFFFFFFFF ? (int)id : null;
 
     public bool IsDisconnected(int session) => WtsNative.ConnectState(session) == 4; // WTSDisconnected
+
+    public string? UserSid(int session)
+    {
+        // The service runs as LocalSystem, which WTSQueryUserToken needs.
+        if (!WtsNative.WTSQueryUserToken(session, out var token)) return null;
+        try
+        {
+            using var identity = new System.Security.Principal.WindowsIdentity(token);
+            return identity.User?.Value;
+        }
+        catch { return null; }
+        finally { Native.CloseHandle(token); }
+    }
+
+    public bool LogOff(int session) => WtsNative.WTSLogoffSession(IntPtr.Zero, session, false);
+
+    public bool Disconnect(int session) => WtsNative.WTSDisconnectSession(IntPtr.Zero, session, false);
 
     public IReadOnlyList<DesktopSessionInfo> List()
     {
@@ -114,6 +151,13 @@ internal sealed class WindowsHelperLauncher : IDesktopHelperLauncher
             try
             {
                 if (!WtsNative.SetTokenInformation(token, 12 /* TokenSessionId */, ref sessionId, sizeof(int))) throw new Win32Exception();
+                // Spike: UIAccess puts the helper's topmost windows (the privacy overlay) in the UIAccess z-band, above
+                // Start, Search and the other shell surfaces. Needs SeTcbPrivilege (the service has it), no manifest.
+                if (HelperUiAccess())
+                {
+                    var on = 1;
+                    if (!WtsNative.SetTokenInformation(token, 26 /* TokenUIAccess */, ref on, sizeof(int))) throw new Win32Exception();
+                }
 
                 var exe = Environment.ProcessPath ?? throw new InvalidOperationException("The agent's path is unknown.");
                 var (pi, stdinWrite, stdoutRead) = ChildProcess.Start(token, $"\"{exe}\" desktop", Native.CREATE_NO_WINDOW, IntPtr.Zero,
@@ -125,6 +169,17 @@ internal sealed class WindowsHelperLauncher : IDesktopHelperLauncher
                 _job = ChildProcess.RunInJob(pi);
             }
             finally { Native.CloseHandle(token); }
+        }
+
+        /// <summary>Spike switch: on unless HKLM\SOFTWARE\Policies\RemoteHub\Agent HelperUIAccess = 0 (DWORD).</summary>
+        private static bool HelperUiAccess()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(AgentPolicy.RegistryPath);
+                return key?.GetValue("HelperUIAccess") is not 0;
+            }
+            catch { return true; }
         }
 
         public void Dispose()
@@ -188,6 +243,9 @@ internal static class WtsNative
     [DllImport("wtsapi32.dll", SetLastError = true)]
     public static extern bool WTSQuerySessionInformationW(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
     [DllImport("wtsapi32.dll")] public static extern void WTSFreeMemory(IntPtr memory);
+    [DllImport("wtsapi32.dll", SetLastError = true)] public static extern bool WTSQueryUserToken(int session, out IntPtr token);
+    [DllImport("wtsapi32.dll", SetLastError = true)] public static extern bool WTSLogoffSession(IntPtr server, int session, bool wait);
+    [DllImport("wtsapi32.dll", SetLastError = true)] public static extern bool WTSDisconnectSession(IntPtr server, int session, bool wait);
     [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
     [DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
     [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);

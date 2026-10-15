@@ -22,6 +22,8 @@ using RemoteHub.Remoting;
 /// Ops:
 ///   test                                     PsRemoting.TestAsync (what "Test PowerShell remoting" shows)
 ///   ps --script ..                           output and errors of a script
+///   ps-host --script .. [--lines a|b] [--secrets a|b]   the script under the PowerShell tab's host (PsConsoleHost): prompts answered in order
+///   ps-big --in-mb n [--out-mb n]            an n MB argument there, n MB of output back, both checked
 ///   complete --line .. [--cursor n]          TabExpansion2 in the remote session (what Tab shows)
 ///   fs-list --path ..                        RemoteFs.ListRemote
 ///   fs-upload --files a|b --remote .. [--overwrite 1] [--cancel-after-mb n]   FileUploader.UploadAsync
@@ -54,13 +56,13 @@ internal static class LabTools
             {
                 // the certificate "Test again" shows the thumbprint of, without trusting it
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var cert = await RemotingSetup.FetchCertificateAsync(o["host"], int.Parse(o.GetValueOrDefault("port") ?? "5986"), cts.Token);
+                var cert = await RemotingSetup.FetchCertificateAsync(o["host"], int.Parse(o.GetValueOrDefault("port") ?? "5986"), cts.Token, LabJump.Route(o));
                 return new { thumbprint = cert.Thumbprint, subject = cert.Subject, notAfter = cert.NotAfter };
             }
             case "trust":
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-                var cert = await RemotingSetup.FetchCertificateAsync(o["host"], int.Parse(o.GetValueOrDefault("port") ?? "5986"), cts.Token);
+                var cert = await RemotingSetup.FetchCertificateAsync(o["host"], int.Parse(o.GetValueOrDefault("port") ?? "5986"), cts.Token, LabJump.Route(o));
                 RemotingSetup.TrustOnThisPc(cert, o["host"]);
                 return new { thumbprint = cert.Thumbprint, subject = cert.Subject, notAfter = cert.NotAfter };
             }
@@ -73,7 +75,7 @@ internal static class LabTools
             // certificate the session is pinned: the certificate the device presents (fetched the way RemoteHub fetches
             // it) must be exactly the one PowerShell Direct read from the listener; only then is the CA check skipped.
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var presented = await RemotingSetup.FetchCertificateAsync(target.Host, target.Port, cts.Token);
+            var presented = await RemotingSetup.FetchCertificateAsync(target.Host, target.Port, cts.Token, target.Via);
             if (!string.Equals(presented.Thumbprint, expectedCert, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"WinRM certificate mismatch: the device presents {presented.Thumbprint}, expected {expectedCert}.");
             _pinned = presented.Thumbprint;
@@ -103,6 +105,8 @@ internal static class LabTools
             object result = op switch
             {
                 "ps" => Ps(target, o),
+                "ps-host" => PsHost(target, o),
+                "ps-big" => PsBig(target, o),
                 "complete" => Complete(target, o),
                 "fs-upload" => await Upload(target, o),
                 "fs-download" => await Download(target, o),
@@ -130,25 +134,43 @@ internal static class LabTools
         };
         return o["via"] switch
         {
-            "agent" => new PsTarget(o["host"], true, cred, new AgentEndpoint(int.Parse(o.GetValueOrDefault("port") ?? "58732"), o["pin"])),
-            "winrm" => new PsTarget(o["host"], true, cred),
+            "agent" => new PsTarget(o["host"], true, cred, LabJump.Endpoint(o, int.Parse(o.GetValueOrDefault("port") ?? "58732"), o["pin"])),
+            "winrm" => new PsTarget(o["host"], true, cred, Via: LabJump.Route(o)),
             var v => throw new ArgumentException("--via agent|winrm, not " + v),
         };
     }
 
     private static string? _pinned;
 
-    // PsRemoting.Open, or - for a pinned WinRM session - the same connection info with the CA/CN checks skipped
-    private static Runspace Open(PsTarget t)
+    /// <summary>The WinRM runspace "install --via winrm" installs over (RemoteHub's way when the agent isn't there yet),
+    /// pinned to --cert like every WinRM op here, through the jump host when one is given.</summary>
+    internal static async Task<Runspace> OpenWinRm(Dictionary<string, string> o)
     {
-        if (t.Agent is not null || _pinned is null) return PsRemoting.Open(t);
-        var ci = (WSManConnectionInfo)PsRemoting.ConnectionInfo(t);
+        var target = Target(o);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var presented = await RemotingSetup.FetchCertificateAsync(target.Host, target.Port, cts.Token, target.Via);
+        if (!string.Equals(presented.Thumbprint, o["cert"], StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"WinRM certificate mismatch: the device presents {presented.Thumbprint}, expected {o["cert"]}.");
+        _pinned = presented.Thumbprint;
+        return Open(target);
+    }
+
+    // PsRemoting.Open, or - for a pinned WinRM session - the same connection info with the CA/CN checks skipped; with
+    // the PowerShell tab's host for ps-host
+    private static Runspace Open(PsTarget t, System.Management.Automation.Host.PSHost? host = null)
+    {
+        if (t.Agent is not null || _pinned is null) return PsRemoting.Open(t, host);
+        // behind a jump host through a local forward, as PsRemoting.Open does it
+        var forward = t.Via is { } via ? JumpForwarders.Open(via, t.Host, t.Port) : null;
+        var ci = (WSManConnectionInfo)PsRemoting.ConnectionInfo(t, forward);
         ci.SkipCACheck = true;
         ci.SkipCNCheck = true;
         ci.SkipRevocationCheck = true;
-        var rs = RunspaceFactory.CreateRunspace(ci);
+        var rs = host is null ? RunspaceFactory.CreateRunspace(ci) : RunspaceFactory.CreateRunspace(host, ci);
+        if (forward is not null)
+            rs.StateChanged += (_, e) => { if (e.RunspaceStateInfo.State is RunspaceState.Closed or RunspaceState.Broken) forward.Dispose(); };
         try { rs.Open(); }
-        catch { rs.Dispose(); throw; }
+        catch { rs.Dispose(); forward?.Dispose(); throw; }
         return rs;
     }
 
@@ -165,6 +187,65 @@ internal static class LabTools
         var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();
         return new { output, errors = ps.Streams.Error.Select(e => e.ToString()).ToList() };
     });
+
+    // The PowerShell tab's host (PsConsoleHost): Read-Host, choices and Get-Credential answered from --lines and
+    // --secrets in order, as someone typing in the console and the password dialog would.
+    private static object PsHost(PsTarget t, Dictionary<string, string> o)
+    {
+        var sink = new ScriptedConsole(o.GetValueOrDefault("lines")?.Split('|') ?? [], o.GetValueOrDefault("secrets")?.Split('|') ?? []);
+        using var rs = Open(t, new PsConsoleHost(sink)); // the same pinned path as the other operations (--via winrm --cert)
+        using var ps = PowerShell.Create();
+        ps.Runspace = rs;
+        var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();
+        return new { output, errors = ps.Streams.Error.Select(e => e.ToString()).ToList(), written = sink.Written.ToString(), secretPrompts = sink.SecretPrompts, linesLeft = sink.LinesLeft };
+    }
+
+    private sealed class ScriptedConsole(IEnumerable<string> lines, IEnumerable<string> secrets) : IConsoleSink
+    {
+        private readonly Queue<string> _lines = new(lines);
+        private readonly Queue<string> _secrets = new(secrets);
+        public readonly System.Text.StringBuilder Written = new();
+        public readonly List<string> SecretPrompts = [];
+        public int LinesLeft => _lines.Count;
+        public void Write(string text, ConsoleColor? color) { lock (Written) Written.Append(text); }
+        public string? ReadLine() => _lines.TryDequeue(out var l) ? l : null;
+        public string? ReadSecret(string caption, string message) { SecretPrompts.Add($"{caption}: {message}"); return _secrets.TryDequeue(out var s) ? s : null; }
+        public void Progress(ProgressRecord record) { }
+        public int Width => 120;
+    }
+
+    // A --in-mb argument (random text) to the device and --out-mb of output back: lengths and SHA-256 compared on both
+    // sides. Too large a message ends the session - answered as { failed: <message> }.
+    private static object PsBig(PsTarget t, Dictionary<string, string> o)
+    {
+        var inBytes = (int)(double.Parse(o["in-mb"], System.Globalization.CultureInfo.InvariantCulture) * 1024 * 1024);
+        var outBytes = (int)(double.Parse(o.GetValueOrDefault("out-mb") ?? "0", System.Globalization.CultureInfo.InvariantCulture) * 1024 * 1024);
+        var input = Convert.ToBase64String(RandomNumberGenerator.GetBytes(inBytes * 3 / 4 + 3))[..inBytes];
+        var inHash = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(input)));
+        try
+        {
+            return WithRunspace(t, rs =>
+            {
+                using var ps = PowerShell.Create();
+                ps.Runspace = rs;
+                ps.AddScript("""
+                    param([string]$s, [int]$n)
+                    $s.Length
+                    [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))).Replace('-', '')
+                    if ($n -gt 0) { 'y' * $n }
+                    """).AddParameter("s", input).AddParameter("n", outBytes);
+                var r = ps.Invoke().Select(x => x?.ToString() ?? "").ToList();
+                var back = r.Count > 2 ? r[2] : "";
+                return (object)new
+                {
+                    sentChars = input.Length, deviceChars = int.Parse(r[0]), hashEqual = r[1] == inHash,
+                    receivedChars = back.Length, receivedOk = back.Length == outBytes && back.All(c => c == 'y'),
+                    errors = ps.Streams.Error.Select(e => e.ToString()).ToList(),
+                };
+            });
+        }
+        catch (Exception ex) { return new { failed = ex.GetBaseException().Message }; }
+    }
 
     private static object Complete(PsTarget t, Dictionary<string, string> o) => WithRunspace(t, rs =>
     {

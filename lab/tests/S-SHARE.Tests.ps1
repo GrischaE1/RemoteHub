@@ -1,4 +1,4 @@
-# S-SHARE - network shares the way RemoteHub opens them (ShareConnector, ShareTransfer – no agent on the device):
+# S-SHARE - network shares the way RemoteHub opens them (ShareConnector, ShareTransfer - no agent on the device):
 # SMB through Windows' client, a second account on the same server through RemoteHub's own SMB client, SFTP with the
 # host key confirmed once, FTPS and WebDAV with a self-signed certificate. Every scenario connects, lists, uploads a
 # 3 MB and a small file (subfolder), checks the size, renames, downloads and compares SHA-256, and deletes again.

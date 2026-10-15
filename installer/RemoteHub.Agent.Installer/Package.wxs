@@ -3,7 +3,8 @@
   Per-machine MSI for the RemoteHub Agent (the same MSI for every device; the device identity comes from the
   per-device enrollment file).
 
-  Install:   msiexec /i RemoteHub-Agent-<ver>-x64.msi ENROLLMENT="C:\path\device.rhagent" [VIRTUALDISPLAY=0|1] /qn
+  Install:   msiexec /i RemoteHub-Agent-<ver>-x64.msi ENROLLMENT="C:\path\device.rhagent" [VIRTUALDISPLAY=0|1] [AUTOSIGNIN=0|1] /qn
+             (AUTOSIGNIN only in MSIs built with the credential provider, build-installer.ps1 -CredentialProvider)
              Without ENROLLMENT the .rhagent file next to the MSI is used. An already enrolled agent can be updated
              without any enrollment file.
   Uninstall: msiexec /x RemoteHub-Agent-<ver>-x64.msi /qn   (removes firewall rule, certificate and configuration)
@@ -27,6 +28,12 @@
     <Property Id="ENROLLMENT" Secure="yes" />
     <!-- Virtual monitor for devices without one: 1 install, 0 don't (removes it), empty = the device keeps its setting (default on). -->
     <Property Id="VIRTUALDISPLAY" Secure="yes" />
+<?ifdef CredentialProviderDll?>
+    <!-- Automatic sign-in (docs/credential-provider-design.md §8.4): 1 installs and registers the credential provider,
+         0 removes it, empty = an update keeps what is installed (MSI carries the feature's state over to the new
+         version). An installed agent adds or removes it later with ADDLOCAL / REMOVE=CredentialProvider. -->
+    <Property Id="AUTOSIGNIN" Secure="yes" />
+<?endif?>
 
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="RemoteHub Agent" />
@@ -39,12 +46,23 @@
         <Exclude Files="$(var.AgentPublishDir)\RemoteHubAgent.exe" />
       </Files>
     </Feature>
+<?ifdef CredentialProviderDll?>
+    <!-- Not installed by default (level above INSTALLLEVEL 1); AUTOSIGNIN=1 installs it, AUTOSIGNIN=0 rules it out even
+         when an update would carry it over. -->
+    <Feature Id="CredentialProvider" Title="Automatic sign-in (credential provider)" Level="1000" AllowAbsent="yes">
+      <ComponentRef Id="CredentialProvider" />
+      <Level Value="1" Condition="AUTOSIGNIN = &quot;1&quot;" />
+      <Level Value="0" Condition="AUTOSIGNIN = &quot;0&quot;" />
+    </Feature>
+<?endif?>
 
     <!-- Enrollment: deferred, as LocalSystem, after the files are in place and before the service starts.
          It also sets "Automatic (Delayed Start)" – MSI's own ServiceConfig table is unreliable for that. -->
     <!-- No ENROLLMENT given: the agent looks for the .rhagent file in the MSI's folder. -->
     <SetProperty Id="ENROLLMENT" Value="[OriginalDatabase]" Before="SetAgentEnroll" Sequence="execute" Condition="NOT ENROLLMENT" />
-    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <!-- auto-sign-in=[AUTOSIGNIN]: 1 also allows automatic sign-in by policy (NoUserBehavior, right AutoSignIn for the
+         allowed groups – values IT has set stay as they are), 0 removes what the agent set, empty leaves it. -->
+    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot;" Before="AgentEnroll" Sequence="execute" />
     <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
                   Execute="deferred" Impersonate="no" Return="check" />
 
@@ -61,7 +79,9 @@
 
     <InstallExecuteSequence>
       <Custom Action="AgentEnrollRollback" Before="AgentEnroll" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE~=&quot;ALL&quot;)" />
-      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+      <!-- Only when this product is installed (first install or upgrade) – not when an installed agent only adds or
+           removes a feature (credential provider), which leaves the service and its enrollment alone. -->
+      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT Installed" />
       <Custom Action="AgentCleanup" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>
@@ -89,4 +109,24 @@
       </RegistryKey>
     </Component>
   </Fragment>
+<?ifdef CredentialProviderDll?>
+
+  <!-- The credential provider, in its own feature (see above). Registered by the MSI (never by the service at runtime,
+       §8.5), with a fixed CLSID that never changes, so IT can exclude it (ExcludedCredentialProviders). -->
+  <Fragment>
+    <Component Id="CredentialProvider" Directory="INSTALLFOLDER" Bitness="always64">
+      <File Id="CredentialProviderDll" Source="$(var.CredentialProviderDll)" Name="RemoteHubCredentialProvider.dll" KeyPath="yes" />
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}" ForceDeleteOnUninstall="yes">
+        <RegistryValue Type="string" Value="RemoteHub Agent" />
+      </RegistryKey>
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Classes\CLSID\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}" ForceDeleteOnUninstall="yes">
+        <RegistryValue Type="string" Value="RemoteHub Agent" />
+        <RegistryKey Key="InprocServer32">
+          <RegistryValue Type="string" Value="[#CredentialProviderDll]" />
+          <RegistryValue Name="ThreadingModel" Type="string" Value="Apartment" />
+        </RegistryKey>
+      </RegistryKey>
+    </Component>
+  </Fragment>
+<?endif?>
 </Wix>

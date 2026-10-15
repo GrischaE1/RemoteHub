@@ -476,29 +476,41 @@
                                 <MenuItem x:Name="CmDesktopOther" Click="CmDesktopOther_Click" />
                                 <MenuItem x:Name="CmConnectAll" Header="Connect all in folder" Click="CmConnectAll_Click" Icon="{ui:SymbolIcon PlugConnected24}" />
                                 <Separator x:Name="CmPsSep" />
-                                <MenuItem x:Name="CmPs" Header="PowerShell" Click="CmPs_Click" Icon="{ui:SymbolIcon WindowConsole20}" />
-                                <MenuItem x:Name="CmSendFiles" Header="File transfer" Click="CmSendFiles_Click" Icon="{ui:SymbolIcon FolderSwap24}" />
-                                <MenuItem x:Name="CmRegistry" Header="Registry" Click="CmRegistry_Click" Icon="{ui:SymbolIcon CubeTree24}" />
-                                <MenuItem x:Name="CmServices" Header="Services" Click="CmServices_Click" Icon="{ui:SymbolIcon WrenchScrewdriver24}" />
-                                <MenuItem x:Name="CmProcesses" Header="Processes" Click="CmProcesses_Click" Icon="{ui:SymbolIcon Pulse24}" />
-                                <MenuItem x:Name="CmPsTest" Header="Test PowerShell remoting" Click="CmPsTest_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
-                                <MenuItem x:Name="CmPsSetup" Header="Set up PowerShell remoting on the target…" Click="CmPsSetup_Click" Icon="{ui:SymbolIcon Code24}" />
-                                <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
-                                <MenuItem x:Name="CmAddShare" Header="Add network share…" Click="CmAddShare_Click" Icon="{ui:SymbolIcon FolderLink24}"
-                                          ToolTip="An SMB, SFTP, FTP or WebDAV share of this server – opened in a file tab, no agent needed" />
+                                <!-- Groups open on hover: tools for the device, setting it up, and the rarer actions (more, new). -->
+                                <MenuItem x:Name="CmTools" Header="Tools" Icon="{ui:SymbolIcon Toolbox24}">
+                                    <MenuItem x:Name="CmPs" Header="PowerShell" Click="CmPs_Click" Icon="{ui:SymbolIcon WindowConsole20}" />
+                                    <MenuItem x:Name="CmSendFiles" Header="File transfer" Click="CmSendFiles_Click" Icon="{ui:SymbolIcon FolderSwap24}" />
+                                    <MenuItem x:Name="CmRegistry" Header="Registry" Click="CmRegistry_Click" Icon="{ui:SymbolIcon CubeTree24}" />
+                                    <MenuItem x:Name="CmServices" Header="Services" Click="CmServices_Click" Icon="{ui:SymbolIcon WrenchScrewdriver24}" />
+                                    <MenuItem x:Name="CmProcesses" Header="Processes" Click="CmProcesses_Click" Icon="{ui:SymbolIcon Pulse24}" />
+                                    <MenuItem x:Name="CmPsTest" Header="Test PowerShell remoting" Click="CmPsTest_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
+                                    <Separator x:Name="CmSharesSep" />
+                                    <MenuItem x:Name="CmAddShare" Header="Add network share…" Click="CmAddShare_Click" Icon="{ui:SymbolIcon FolderLink24}"
+                                              ToolTip="An SMB, SFTP, FTP or WebDAV share of this server – opened in a file tab, no agent needed" />
+                                </MenuItem>
+                                <MenuItem x:Name="CmManage" Header="RemoteHub Agent" Icon="{ui:SymbolIcon Shield24}">
+                                    <MenuItem x:Name="CmPsSetup" Header="Set up PowerShell remoting on the target…" Click="CmPsSetup_Click" Icon="{ui:SymbolIcon Code24}" />
+                                    <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
+                                    <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
+                                              ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
+                                </MenuItem>
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
                                 <MenuItem x:Name="CmMoveUnder" Header="Move under" Icon="{ui:SymbolIcon Router24}"
                                           ToolTip="Reach it through another connection's RemoteHub Agent (a jump host) – or directly again" />
-                                <MenuItem x:Name="CmHistory" Header="Audit log…" Click="CmHistory_Click" Icon="{ui:SymbolIcon DocumentBulletList24}"
-                                          ToolTip="The audit log of this connection: its sessions, changes and file transfers" />
-                                <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
                                 <MenuItem x:Name="CmDelete" Header="Delete" InputGestureText="Del" Click="CmDelete_Click" Icon="{ui:SymbolIcon Delete24}" />
+                                <MenuItem x:Name="CmMore" Header="More" Icon="{ui:SymbolIcon MoreHorizontal24}">
+                                    <MenuItem x:Name="CmHistory" Header="Audit log…" Click="CmHistory_Click" Icon="{ui:SymbolIcon DocumentBulletList24}"
+                                              ToolTip="The audit log of this connection: its sessions, changes and file transfers" />
+                                    <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
+                                </MenuItem>
                                 <Separator />
-                                <MenuItem Header="New connection here" Click="NewConnection_Click" Icon="{ui:SymbolIcon Add24}" />
-                                <MenuItem Header="New network share here" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
-                                <MenuItem Header="New folder here" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" />
+                                <MenuItem Header="New" Icon="{ui:SymbolIcon Add24}">
+                                    <MenuItem Header="Connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Add24}" />
+                                    <MenuItem Header="Network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
+                                    <MenuItem Header="Folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" />
+                                </MenuItem>
                             </ContextMenu>
                         </TreeView.ContextMenu>
                     </TreeView>

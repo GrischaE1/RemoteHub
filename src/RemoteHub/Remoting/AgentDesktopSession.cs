@@ -148,6 +148,12 @@ public sealed partial class AgentDesktopSession : SessionBase
     private CancellationTokenSource? _reconnect;
     public static readonly TimeSpan ReconnectFor = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// How long to keep trying: a session RemoteHub signed in automatically stays covered on the device for 2 minutes
+    /// after a drop (design §9.2), so RemoteHub tries that long.
+    /// </summary>
+    private TimeSpan ReconnectWindow => _endAction is not null ? TimeSpan.FromMinutes(2) : ReconnectFor;
+
     private async void Reconnect(string why)
     {
         if (Target is not { } target || _chosen is not { } chosen) return;
@@ -158,7 +164,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         StatusText = $"The connection dropped ({why}). Reconnecting…";
         ReconnectDetail = Sentence(why);
         Services.DiagLog.Write("Agent desktop: connection lost – reconnecting");
-        var until = DateTime.UtcNow + ReconnectFor;
+        var until = DateTime.UtcNow + ReconnectWindow;
         for (var attempt = 1; !cancel.IsCancellationRequested && !_closed; attempt++)
         {
             var gen = ++_generation;
@@ -183,11 +189,11 @@ public sealed partial class AgentDesktopSession : SessionBase
                 if (cancel.IsCancellationRequested || _closed) return;
                 if (DateTime.UtcNow >= until)
                 {
-                    End(SessionState.Disconnected, $"The connection dropped and couldn't be restored within {ReconnectFor.TotalSeconds:0} s: {ex.GetBaseException().Message}");
+                    End(SessionState.Disconnected, $"The connection dropped and couldn't be restored within {ReconnectWindow.TotalSeconds:0} s: {ex.GetBaseException().Message}");
                     return;
                 }
                 StatusText = $"The connection dropped ({why}). Reconnecting… (attempt {attempt + 1})";
-                ReconnectDetail = $"{Sentence(why)}\nAttempt {attempt + 1} – trying for up to {ReconnectFor.TotalSeconds:0} s.";
+                ReconnectDetail = $"{Sentence(why)}\nAttempt {attempt + 1} – trying for up to {ReconnectWindow.TotalSeconds:0} s.";
                 try { await Task.Delay(TimeSpan.FromSeconds(2), cancel.Token); } catch (OperationCanceledException) { return; }
             }
         }
@@ -210,18 +216,31 @@ public sealed partial class AgentDesktopSession : SessionBase
     }
 
     /// <summary>Starts the chosen session (after <see cref="Phase"/> = Choose).</summary>
-    public void Choose(DesktopSessionInfo session, string consent, bool viewOnly, DesktopQualityPreset quality)
+    /// <param name="autoSignIn">Sign in automatically on the device's sign-in screen (see <see cref="CanAutoSignIn"/>).</param>
+    /// <param name="endAction">Lock or SignOut when the connection ends (the device's policy may decide otherwise).</param>
+    public void Choose(DesktopSessionInfo session, string consent, bool viewOnly, DesktopQualityPreset quality, bool autoSignIn = false, string? endAction = null)
     {
         if (_client is null || Phase != DesktopPhase.Choose) return;
         ViewOnly = viewOnly || Hello?.Rights.Control == false;
         Quality = quality;
         _chosen = session;
         _chosenConsent = consent;
+        _autoSignInAsked = autoSignIn && !ViewOnly && CanAutoSignIn(session);
+        _signInSent = false;
+        _endAction = null;
         Phase = DesktopPhase.Waiting;
         StatusText = "Starting on the device…";
-        _client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, consent, ViewOnly, quality.FramesPerSecond, quality.Quality, 0, null, ViewerFeatures),
-            DesktopJson.Default.DesktopStart));
+        _client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, consent, ViewOnly, quality.FramesPerSecond, quality.Quality, 0, null, ViewerFeatures,
+            _autoSignInAsked, _autoSignInAsked ? AutoSignInEndActions.Valid(endAction) : null), DesktopJson.Default.DesktopStart));
     }
+
+    /// <summary>
+    /// The device offers automatic sign-in for this account, the session is its console showing the sign-in screen, and
+    /// this PC's policy doesn't forbid it.
+    /// </summary>
+    public bool CanAutoSignIn(DesktopSessionInfo session) =>
+        !Services.AppPolicy.AgentAutoSignInDisabled && Supports(DesktopFeatures.AutoSignIn) && Hello?.Rights.AutoSignIn == true
+        && session.Console && session.State == DesktopSessionState.SignIn;
 
     public void SendPin(string pin) =>
         _client?.Send(DesktopWire.Json(DesktopMessage.Pin, new DesktopPin(pin), DesktopJson.Default.DesktopPin));
@@ -917,12 +936,54 @@ public sealed partial class AgentDesktopSession : SessionBase
                 SyncClipboardToRemote();
                 if (wasReconnecting) ShowNotice("Reconnected.");
                 break;
+            case DesktopStatusState.SignInReady:
+                SendSignIn();
+                break;
+            case DesktopStatusState.SigningIn:
+                ShowNotice(s.Message);
+                break;
+            case DesktopStatusState.SignedIn:
+                _endAction = AutoSignInEndActions.Valid(s.EndAction) ?? AutoSignInEndActions.Lock;
+                ShowNotice(s.Message + (_endAction == AutoSignInEndActions.SignOut
+                    ? " When you disconnect, the session is signed out." : " When you disconnect, the session is locked."));
+                Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Signed in automatically on the console");
+                break;
+            case DesktopStatusState.SignInFailed:
+                ShowNotice("Automatic sign-in didn't work: " + s.Message);
+                if (_signInSent) Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Failed – " + s.Message);
+                break;
             case DesktopStatusState.Denied:
             case DesktopStatusState.Failed:
             case DesktopStatusState.Ended:
                 End(s.State == DesktopStatusState.Ended ? SessionState.Disconnected : SessionState.Failed, s.Message);
                 break;
         }
+    }
+
+    // ---- automatic sign-in: the password goes out once, only when the agent asks for it in this connection (design §10.2)
+
+    private bool _autoSignInAsked, _signInSent;
+    private string? _endAction; // what the device does with the session RemoteHub signed in when this connection ends
+
+    /// <summary>Ending this connection signs the device's session out (unsaved work there is lost) – RemoteHub asks first.</summary>
+    public bool SignsOutWhenEnded => _endAction == AutoSignInEndActions.SignOut && Phase is DesktopPhase.Live or DesktopPhase.Reconnecting;
+
+    private void SendSignIn()
+    {
+        if (!_autoSignInAsked || _signInSent || _client is null) return;
+        _signInSent = true;
+        if (Target?.Credentials.Password is not { Length: > 0 } password)
+        {
+            ShowNotice("Automatic sign-in needs a stored password for this connection – sign in on the device's screen instead.");
+            return;
+        }
+        if (password.Length > DesktopWire.MaxSignInPasswordChars)
+        {
+            ShowNotice("The password is too long for the automatic sign-in – sign in on the device's screen instead.");
+            return;
+        }
+        Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Requested");
+        _client.Send(DesktopWire.SignInRequest(password)); // the frame is wiped once sent (AgentDesktopClient.SendLoop)
     }
 
     private DispatcherTimer? _noticeTimer;
@@ -1183,6 +1244,13 @@ public sealed class AgentDesktopClient : IDisposable
     public void Send(byte[] message)
     {
         if (_out.Writer.TryWrite(message)) Interlocked.Increment(ref _queued);
+        else WipeSecret(message); // the connection is closing: never sent
+    }
+
+    /// <summary>The automatic sign-in's password: its only copy is in this frame – wiped once it is sent or dropped (design §10.2).</summary>
+    private static void WipeSecret(byte[] m)
+    {
+        if (m.Length > 0 && m[0] == (byte)DesktopMessage.SignInRequest) System.Security.Cryptography.CryptographicOperations.ZeroMemory(m);
     }
 
     private int _queued;
@@ -1199,12 +1267,19 @@ public sealed class AgentDesktopClient : IDisposable
         {
             await foreach (var m in _out.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
             {
-                await _ws.SendAsync(m, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false);
+                try { await _ws.SendAsync(m, WebSocketMessageType.Binary, true, _cts.Token).ConfigureAwait(false); }
+                finally { WipeSecret(m); } // also when the send failed or was cancelled
                 Interlocked.Decrement(ref _queued);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { Close("Connection lost: " + ex.GetBaseException().Message); }
         catch (OperationCanceledException) { }
+        finally
+        {
+            // Whatever is still queued will never be sent: no password stays behind in a frame.
+            _out.Writer.TryComplete();
+            while (_out.Reader.TryRead(out var left)) WipeSecret(left);
+        }
     }
 
     private async Task ReceiveLoop()

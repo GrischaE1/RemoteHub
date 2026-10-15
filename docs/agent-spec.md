@@ -1,6 +1,6 @@
 # RemoteHub Agent – Specification
 
-Status: Draft v2. Replaces the draft v1 "RemoteHub Device Agent – Developer Specification".
+Status: Draft v2, brought in line with the implementation of 0.18.11 (2026-10-15). Replaces the draft v1 "RemoteHub Device Agent – Developer Specification".
 Owner: Grischa Ernst
 
 Changes since v1, agreed during review:
@@ -23,7 +23,7 @@ WinRM can stay disabled on the device.
 
 ## 2. Non-goals (v1)
 
-- **No NAT traversal, relay or cloud service.** RemoteHub needs a network path to the device, for example through VPN or routing.
+- **No NAT traversal, relay or cloud service.** RemoteHub needs a network path to the device, for example through VPN or routing – or through another device's agent used as a jump host (`/v1/tunnel`, §6).
 - ~~No screen or input.~~ Changed: the agent also offers its own remote desktop for devices where RDP is off – see [agent-desktop-draft.md](agent-desktop-draft.md) and §12.
 - **No own command set.** The agent never interprets commands. It authenticates the account, starts PowerShell as that account and forwards the protocol.
 
@@ -62,14 +62,17 @@ RemoteHub (operator PC)                               Device
   - Events 4624 and 4625 are written to the Security log.
 - **UAC:** for an administrator, the agent uses the full linked token. LocalSystem is allowed to obtain it.
   - Deliberately more permissive than WinRM: WinRM gives local administrators other than the built-in Administrator only a filtered token (UAC remote restrictions) unless `LocalAccountTokenFilterPolicy=1`. The agent gives them full rights without that setting, so local accounts (LAPS) work for admin tasks out of the box.
-- **Allowed accounts:** members of local Administrators (`S-1-5-32-544`) by default, or the groups listed in `allowedGroups`.
+- **Windows' answer:** errors 1326, 1327, 1330, 1331 and 1909 (wrong password, restriction, expired password, disabled, locked out) → 401; 1385 (logon type not granted) → 403. Any other Windows error → 500 and isn't counted by the throttle (§4.3). **Finding:** that includes 1793 (account expired) and 1907 (password must be changed) – they should be refusals (401), not 500 (`WindowsShell.cs`).
+- **Allowed accounts:** each right is granted to Windows groups of the device (§7.1). Default: the groups in `allowedGroups` (local Administrators, `S-1-5-32-544`) get PowerShell, Desktop, SecureDesktop, PrivacyScreen and Tunnel; DesktopViewOnly, ConsentBypass and AutoSignIn go to nobody. The policy subkey `Rights` replaces the groups of a right. Entries are SIDs or names, resolved on the device. In RemoteHub's install dialog only the English name "Administrators" is turned into the SID (`AgentInstaller.ParseGroups`); a localized name ("Administratoren") is passed on as typed and must resolve on the device.
 - **PowerShell runs as the signed-in user,** with their profile and environment, in a job object that is killed when the session ends. Rights and auditing are the same as with PowerShell remoting, except for the UAC point above.
 - Kerberos and NTLM aren't used. Kerberos doesn't work across untrusted forests, and NTLM is deprecated by Microsoft.
 
 ### 4.3 Brute-force and limits
 
-- After 5 failed sign-ins within 5 minutes from the same source address, that address is refused for 5 minutes (HTTP 429).
-- At most `maxSessions` sessions at once (default 20), then HTTP 503.
+- After 5 failed sign-ins within 5 minutes from the same source address, that address is refused for 5 minutes (HTTP 429). Attempts still running count against the 5, so parallel requests get no more tries than sequential ones.
+- A failure is every refusal of the sign-in: wrong credentials (401) and also a right password for an account without the right (403). A 500 (Windows error the agent doesn't map) doesn't count. A successful sign-in clears the address.
+- At most 8 Windows sign-ins run at once, from all addresses together; no free slot within 30 s → HTTP 503.
+- At most `maxSessions` sessions at once (default 20) – PowerShell, desktop and tunnel together – then HTTP 503.
 
 ## 5. Deployment
 
@@ -79,9 +82,9 @@ RemoteHub (operator PC)                               Device
   - Windows service `RemoteHubAgent` running as LocalSystem, set to *Automatic (Delayed Start)*.
   - All three recovery actions set to "Restart the service".
   - Self-contained, so no .NET runtime is needed on the device.
-- **Enrollment file `<label>.rhagent`, one per device:** created by RemoteHub. Contents:
+- **Enrollment file `<label>.rhagent`, one per device:** created by RemoteHub (`AgentEnrollment.cs`, JSON, format 1). Contents:
   - the device certificate and private key, as a PFX with a random one-time password
-  - `agent.json`: device ID, label, port, allowed groups
+  - what goes into `agent.json`: device ID, label, port, allowed groups – plus the firewall scope (remote addresses) and the virtual-display choice
 
   The PFX is in the enrollment file and not in the MSI, because Windows keeps a copy of every installed MSI in `C:\Windows\Installer`. The enrollment file is a secret: it is only moved over encrypted channels and deleted after import.
 
@@ -90,8 +93,8 @@ RemoteHub (operator PC)                               Device
 1. The operator chooses **Install RemoteHub Agent** on a connection (right-click).
 2. RemoteHub creates:
    - a device ID (GUID), unrelated to the anonymous telemetry install ID
-   - an RSA key pair
-   - a certificate: CN = device ID, server authentication, valid for 2 years
+   - an RSA key pair (3072 bit)
+   - a self-signed end-entity certificate (basic constraints: no CA): CN = device ID, O = RemoteHub Agent; SAN `urn:remotehub:device:<device id>` (plus the label as DNS name when it is one); EKU server **and** client authentication; valid from 10 minutes before creation for 2 years
    - the `.rhagent` file
 3. RemoteHub stores on the connection: the device ID, the SHA-256 fingerprint, the port and the status "not installed". The status changes to "installed" after the first successful connection.
 
@@ -103,11 +106,18 @@ RemoteHub (operator PC)                               Device
   2. It runs `msiexec /i … ENROLLMENT="<path>" /qn`.
   3. It reads the agent's fingerprint back to confirm it, then deletes both files.
 - **Otherwise:** RemoteHub puts both files on the clipboard as a file list. The operator pastes them into the RDP session and runs the MSI there. The MSI picks up the `.rhagent` file next to it.
-- **First start of the agent:**
-  1. Import the PFX into `LocalMachine\My` with a non-exportable key.
-  2. Delete the PFX and the `.rhagent` file.
-  3. Write `agent.json`.
-- **Firewall:** the MSI creates an inbound rule for the agent program and its port, limited to the remote address range given in the enrollment, or Any if none is given.
+- **Save files:** the MSI and the `.rhagent` file go to a folder, for installing by hand or with software distribution.
+- MSI properties: `ENROLLMENT="<path>"` (default: the single `.rhagent` next to the MSI), `VIRTUALDISPLAY=0|1`, `AUTOSIGNIN=0|1` (only in MSIs built with the credential provider).
+- **Enrollment – done by the MSI, not at the agent's first start:** the custom action `RemoteHubAgent.exe enroll` runs deferred, as LocalSystem, after the files are in place and before the service starts:
+  1. Set the service to *Automatic (Delayed Start)*.
+  2. Import the PFX into `LocalMachine\My` with a non-exportable key (friendly name "RemoteHub Agent"); earlier agent certificates are removed.
+  3. Write `agent.json`; `%ProgramData%\RemoteHub\Agent` gets an ACL of SYSTEM and Administrators only (also as owner, also for what is already there).
+  4. Create the firewall rule (below).
+  5. Delete the `.rhagent` file (if that fails, the log says to delete it by hand).
+  6. Virtual display and automatic sign-in as chosen (their failure doesn't fail the install).
+
+  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json`, `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
+- **Firewall:** inbound rule "RemoteHub Agent" for the agent program and its port (TCP, all profiles), limited to the remote addresses given in the enrollment, or Any if none are given.
 - **Port in use:** the agent logs a clear error and doesn't start. It never moves silently to another port.
 
 ### 5.4 Certificate renewal and revocation
@@ -120,22 +130,25 @@ Out of scope for v1. The design keeps it possible:
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/v1/health` | none | `{product, version, protocol, deviceId}` – nothing sensitive |
-| GET (WebSocket) | `/v1/powershell` | Basic (Windows account) | One PowerShell session. Each text message is one line of the out-of-process remoting protocol, in both directions. |
+| GET | `/v1/health` | none | `{product, version, protocol, deviceId, features}` – nothing sensitive. `features`: `powershell` always, `desktop` when the remote desktop is on (`DesktopEnabled`), `tunnel` when `TunnelEnabled` (older agents send none = PowerShell only) |
+| GET (WebSocket) | `/v1/powershell` | Basic (Windows account, right `PowerShell`) | One PowerShell session. Each text message is one line of the out-of-process remoting protocol, in both directions. |
+| GET (WebSocket) | `/v1/desktop` | Basic (Windows account, right `Desktop` or `DesktopViewOnly`) | Remote desktop (§12, `Desktop/DesktopProtocol.cs`). 404 when `DesktopEnabled` = 0. |
 | GET (WebSocket) | `/v1/tunnel` | Basic (Windows account, right `Tunnel`) | The device as a jump host: TCP streams from it to other devices, many in one connection (`TunnelProtocol.cs`; [jump-host-design.md](jump-host-design.md)). 404 when `TunnelEnabled` = 0. |
 
-- Status codes on `/v1/powershell`:
+- Status codes on the WebSocket endpoints:
 
   | Code | Meaning |
   |---|---|
   | 400 | not a WebSocket request |
-  | 401 | wrong user name or password |
-  | 403 | account not in an allowed group, or network logon denied |
-  | 429 | too many failed sign-ins |
-  | 500 | PowerShell could not start |
-  | 503 | session limit reached |
+  | 401 | no or invalid Basic header, or Windows refused the credentials (§4.2) |
+  | 403 | account has none of the groups of the right, or network logon denied |
+  | 404 | `/v1/desktop` or `/v1/tunnel` turned off by policy |
+  | 429 | too many failed sign-ins from this address |
+  | 500 | PowerShell could not start; or a Windows sign-in error the agent doesn't map (e.g. 1793, 1907 – see the finding in §4.2) |
+  | 503 | session limit reached, or no free sign-in slot within 30 s (8 sign-ins at once) |
 
-- Messages are at most 16 MB. WebSocket keep-alive every 30 s.
+- Messages are at most 16 MB. WebSocket keep-alive: a ping every 30 s; no answer within 30 s ends the connection (and its PowerShell).
+- **Known issue:** a PowerShell session ended by the keep-alive timeout is logged as "PowerShell ended" instead of "connection lost" (`AgentHost.cs`, `Tunnel.RunAsync`).
 - Versioned through the path (`/v1`). The contract lives in `src/RemoteHub.Agent/AgentProtocol.cs`, which is compiled into both sides.
 
 ## 7. Configuration: `%ProgramData%\RemoteHub\Agent\agent.json`
@@ -163,10 +176,40 @@ the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the 
 connection that asked for it ends (and at service start). Uninstall removes device, driver package, settings and the
 publisher trust (Trusted Publishers – only if the agent added it).
 
+Other files in the same folder (SYSTEM and Administrators only): `autosignin.json` – the sessions automatic sign-in
+created (session, SID, account, end action; no secrets), so a session left open by a crash is dealt with at the next
+service start; `autosignin.policy` – which policy values `auto-sign-in on` wrote, so `off` and uninstall remove exactly
+those.
+
+### 7.1 Policies: `HKLM\SOFTWARE\Policies\RemoteHub\Agent`
+
+Read again for every connection (no restart needed); a value there wins over `agent.json`. If the key exists but can't
+be read, nothing is allowed (no right, no desktop, no tunnel) and the log says so. Invalid values keep the default.
+
+| Value | Type | Meaning (default) |
+|---|---|---|
+| `DesktopEnabled` | DWORD | 0 turns the remote desktop off (on) |
+| `AllowedConsentModes` | MULTI_SZ | any of Ask, Pin, None (Ask, Pin; None also needs `ConsentBypass`) |
+| `ConsentTimeoutSeconds` | DWORD | 5–600 (30) |
+| `MaxFramesPerSecond`, `MaxQuality` | DWORD | upper limits, 1–60 (60) and 1–100 (100) |
+| `DesktopClipboard` | DWORD | 0 off, 1 text, 2 text and images, 3 also files (3) |
+| `DesktopIdleTimeoutMinutes` | DWORD | 0–1440, 0 = never (0) |
+| `AuditToEventLog` | DWORD | 0: audit only in the log file (1) |
+| `PrivacyScreen` | DWORD | 0 not allowed, 1 allowed, 2 allowed and may block the device's mouse and keyboard (2) |
+| `HiddenApps` | MULTI_SZ | programs (full path) or Store apps (`aumid:` + AppUserModelID) never shown to an admin (none) |
+| `TunnelEnabled` | DWORD | 0: never a jump host (on) |
+| `TunnelTargets`, `TunnelPorts` | MULTI_SZ | where jump connections may go: ranges and names / ports (anywhere except the device's own loopback, link-local and multicast; every port) |
+| `MaxTunnelStreams` | DWORD | 1–1024 streams per jump connection (64) |
+| `NoUserBehavior` | SZ | `SignInScreen` or `AutoSignIn` (SignInScreen) |
+| `AutoSignInRequirePrivacyScreen` | DWORD | 1: no automatic sign-in where the privacy screen can't be shown (0) |
+| `AutoSignInEndAction` | SZ | `Lock` or `SignOut`; wins over RemoteHub's setting (unset) |
+| `Rights\<right>` | MULTI_SZ | groups for PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (§4.2) |
+
 ## 8. Logging
 
 - Daily files in `%ProgramData%\RemoteHub\Agent\logs`, kept for `logRetentionDays` days.
 - Logged: start and stop, port, certificate fingerprint, every sign-in and refusal (account, source address, reason), and session start and end (account, source, duration, PowerShell PID).
+- Audit entries (sign-in refused, session start and end, desktop, tunnel, automatic sign-in) also go to the Windows Application log, source *RemoteHub Agent*, unless the policy `AuditToEventLog` = 0.
 - Never logged: passwords and command content.
 - Nothing leaves the device. The agent sends no telemetry and no crash reports.
 
@@ -186,21 +229,23 @@ publisher trust (Trusted Publishers – only if the agent added it).
 | Part | Status |
 |---|---|
 | Custom transport in RemoteHub (`Remoting/AgentTransport.cs`) | done, tested |
-| Agent host: TLS, health, sign-in on upgrade, throttle, tunnel, log (`src/RemoteHub.Agent`) | done, tested with a test sign-in |
-| Windows sign-in and start-as-user (`WindowsShell.cs`) | written; needs a test as LocalSystem on a real device |
+| Agent host: TLS, health, sign-in on upgrade, throttle, tunnel, log (`src/RemoteHub.Agent`) | done, tested with a test sign-in and in the lab (S-AUTH, S-THR) |
+| Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); errors 1793 / 1907 give 500 (§4.2) |
 | Connection setting "Connect through: PowerShell remoting (WinRM) / RemoteHub Agent" plus device data (`AgentDevice`) | done |
 | Enrollment generator (`AgentEnrollment.cs`), `.rhagent` import (`RemoteHubAgent.exe enroll`), cleanup on uninstall | done, tested (import itself needs LocalSystem) |
 | Agent MSI: service, delayed start, recovery, firewall rule | done |
-| Right-click install / update: silent over remoting, through the agent, or clipboard (`AgentInstaller.cs`, `AgentInstallDialog.cs`) | done; end-to-end test against a remote device pending |
+| Right-click install / update: silent over remoting, through the agent, clipboard or saved files (`AgentInstaller.cs`, `AgentInstallDialog.cs`) | done; lab: A-INST, A-HAND, A-UPD, A-UPDFAIL, A-UNINST |
 | Agent MSI in the build script and release workflow; bundled in RemoteHub | done |
 | `RemoteHubAgent.exe selftest` (TLS, endpoints, sign-in refusal) – run by the build | done |
-| Remote desktop (`/v1/desktop`, helper, consent, policy, RemoteHub tab) – §12 | done, tested with a generated screen and as the current user; needs a test as LocalSystem on a real device |
+| Remote desktop (`/v1/desktop`, helper, consent, policy, RemoteHub tab) – §12 | done; lab: D-* cases on real devices |
+| Jump host (`/v1/tunnel`, policy TunnelEnabled / TunnelTargets / TunnelPorts / MaxTunnelStreams) | done; lab: J-JUMP |
+| Automatic sign-in (credential provider, `AutoSignInBroker`, `autosignin.json`, `auto-sign-in on\|off`) – [credential-provider-design.md](credential-provider-design.md) | done; lab: C-* cases |
 
 ## 12. Remote desktop
 
 Endpoint `/v1/desktop` (WebSocket, same TLS pin and sign-in). Contract: `Desktop/DesktopProtocol.cs`, compiled into both sides.
 
-- **Rights** (policy key `Rights`, group SIDs/names): `Desktop` (see and control), `DesktopViewOnly`, `SecureDesktop` (sign-in screen, lock screen, UAC), `ConsentBypass` (connect without asking). `PowerShell` defaults to `allowedGroups`. The sign-in requires `Desktop` or `DesktopViewOnly`; without `Desktop` the session is view-only, enforced in the service.
+- **Rights** (policy key `Rights`, group SIDs/names, §7.1): `Desktop` (see and control), `DesktopViewOnly`, `SecureDesktop` (sign-in screen, lock screen, UAC), `ConsentBypass` (connect without asking), `PrivacyScreen` (black out the device's screen), `AutoSignIn`. `PowerShell`, `Desktop`, `SecureDesktop`, `PrivacyScreen` and `Tunnel` default to `allowedGroups`; the others to nobody. The sign-in requires `Desktop` or `DesktopViewOnly`; without `Desktop` the session is view-only, enforced in the service.
 - **Flow:** Hello (account, rights, allowed consent modes, sessions, limits) → Start (session, consent mode, view-only, fps, quality) → Status (Starting / WaitingForUser / EnterPin / Connected / Denied / Failed / Ended) → Layout, Video, CursorShape, CursorPosition, Clipboard from the device; Ack, Mouse, Key, Clipboard, Settings, SecureAttention, KeyFrameRequest from RemoteHub.
 - **Consent** only for an active, unlocked session: Ask (timeout = deny), Pin (6 digits, generated and checked in the service, 3 attempts, compared in constant time) or None (needs `ConsentBypass` and the policy). Sign-in screen and locked sessions: no question, but `SecureDesktop` is needed. The chosen mode then applies on unlock or sign-in: the helper runs with `HoldUserDesktop` (only the secure desktop is sent; when a user's desktop appears it stops sending and accepting input and reports `UserDesktop`), and the service asks the user now signed in before the picture continues; a refusal ends the session. Consent is per user: after a helper restart or console switch, anyone but the user who allowed it is asked.
 - **Reconnect:** with Connected the agent sends a resume token (32 random bytes, in the service's memory only, single use, for the same account). Start with that token within a minute after the connection broke – or while the old one still looks alive, which it then ends – continues without a new question if the user who allowed it is still the one signed in. Ended on purpose (RemoteHub, the user, refused, idle) the token is void.
@@ -213,4 +258,5 @@ Endpoint `/v1/desktop` (WebSocket, same TLS pin and sign-in). Contract: `Desktop
 - **Picture:** DXGI Desktop Duplication (GDI fallback, initial frame by GDI), follows the input desktop; H.264 (Media Foundation, low latency, no B-frames, quality-based VBR, key frames on request; software by default, the GPU's encoder for "Smooth" above 30 fps when there is one – asynchronous, event-driven, never waiting more than a few ms, and replaced by the software encoder if it fails or stops delivering); BGRA↔NV12 BT.709 full range; ≤ 2 frames in flight; quality steps down when acks lag.
 - **Device UI:** consent, code and banner drawn in RemoteHub's dark palette (dark only for now); the banner is excluded from capture and shown on the user's desktop – not on the sign-in screen or UAC prompts, where nobody is signed in to see it or Windows shows only its own window.
 - **Audit:** start, refusal and end with account, source, session, consent mode, view-only and duration.
-- **Backlog:** automatic sign-in with stored credentials (credential provider), WebRTC transport and relay, audio, file drag and drop.
+- **Automatic sign-in** (built, [credential-provider-design.md](credential-provider-design.md)): when nobody is signed in on the console, the account that signed in to the agent can be signed in there (policy `NoUserBehavior` = AutoSignIn and right `AutoSignIn`; also needs Desktop and SecureDesktop). The service hands a single-use ticket over the pipe `RemoteHubAgent.AutoSignIn` (created before the agent listens, SYSTEM only, only LogonUI.exe as client) to the agent's credential provider. When the connection ends the session is locked or signed out (`AutoSignInEndAction`); after a dropped connection it stays covered for 2 minutes, then is signed out.
+- **Backlog:** WebRTC transport and relay, audio, file drag and drop.

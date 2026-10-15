@@ -15,7 +15,8 @@ public static class AuditEvents
     public const string PasswordCopied = "password.copied";
     public const string DataAdded = "data.added", DataChanged = "data.changed", DataDeleted = "data.deleted";
     public const string BackupExported = "backup.exported", BackupImported = "backup.imported";
-    public const string AgentInstalled = "agent.installed";
+    public const string AgentInstalled = "agent.installed", AgentCredentialProvider = "agent.credential_provider",
+        AgentAutoSignIn = "agent.auto_sign_in";
     public const string FilesTransferred = "files.transferred";
     public const string RecordingStarted = "recording.started", RecordingStopped = "recording.stopped";
     public const string StorageMigrated = "storage.migrated", StorageCheckFailed = "storage.check_failed", StorageRestored = "storage.restored",
@@ -38,6 +39,8 @@ public static class AuditEvents
         BackupExported => "Backup exported",
         BackupImported => "Backup imported",
         AgentInstalled => "Agent installed",
+        AgentCredentialProvider => "Credential provider installed or removed",
+        AgentAutoSignIn => "Automatic sign-in",
         FilesTransferred => "Files transferred",
         RecordingStarted => "Recording started",
         RecordingStopped => "Recording saved",
@@ -54,7 +57,7 @@ public static class AuditEvents
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
         ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted]),
         ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
-        ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled]),
+        ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
     ];
 }

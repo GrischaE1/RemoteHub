@@ -428,7 +428,10 @@ public partial class MainWindow : FluentWindow
     }
 
     private void Reconnect_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedSession is { } s) Restart(s); }
-    private void Disconnect_Click(object sender, RoutedEventArgs e) => _vm.SelectedSession?.Disconnect();
+    private async void Disconnect_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedSession is { } s && await ConfirmSignOut(s)) s.Disconnect();
+    }
     private void CtrlAltDel_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.SelectedSession is RdpSession r) r.SendCtrlAltDel();
@@ -445,15 +448,30 @@ public partial class MainWindow : FluentWindow
 
     private void TabClose_Click(object sender, RoutedEventArgs e)
     {
-        SessionOf(sender)?.Close();
+        if (SessionOf(sender) is { } s) CloseTab(s);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// Ending an agent desktop whose session RemoteHub signed in automatically, with the end action "sign out": unsaved
+    /// work in that session is lost – asked first (design §9.2).
+    /// </summary>
+    private async Task<bool> ConfirmSignOut(SessionBase s) =>
+        s is not AgentDesktopSession { SignsOutWhenEnded: true }
+        || await Dialogs.Confirm(this, "Sign out on the device?",
+            $"RemoteHub signed in on {s.Connection.Name} automatically. When you disconnect, that session is signed out and unsaved work in it is lost.\n\nDisconnect?",
+            "Disconnect");
+
+    private async void CloseTab(SessionBase s)
+    {
+        if (await ConfirmSignOut(s)) s.Close();
     }
 
     private void Tabs_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton == MouseButton.Middle && FindAncestor<ListBoxItem>(e.OriginalSource)?.DataContext is SessionBase s)
         {
-            s.Close();
+            CloseTab(s);
             e.Handled = true;
         }
     }
@@ -494,7 +512,7 @@ public partial class MainWindow : FluentWindow
         else if (ctrl && e.Key == Key.B) { ToggleSidebar(); e.Handled = true; }
         else if (ctrl && e.Key == Key.OemComma) { OpenSettings(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.Tab) { _vm.SelectNextSession(shift ? -1 : 1); e.Handled = true; }
-        else if (ctrl && e.Key == Key.W && _vm.SelectedSession is { } s) { s.Close(); e.Handled = true; }
+        else if (ctrl && e.Key == Key.W && _vm.SelectedSession is { } s) { CloseTab(s); e.Handled = true; }
     }
 
     private void Tree_KeyDown(object sender, KeyEventArgs e)
@@ -685,9 +703,32 @@ public partial class MainWindow : FluentWindow
         CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !UsesAgent(c!));
         CmAgent.Visibility = CmAddShare.Visibility = V(c is not null);
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
+        CmCredentialProvider.Visibility = V(c is not null && CredentialProviderOffered(c));
+        if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
+
+        // The server's own shares in Tools, as in the tab menus (filled fresh each time).
+        foreach (var old in CmTools.Items.OfType<MenuItem>().Where(i => Equals(i.Tag, "share")).ToList()) CmTools.Items.Remove(old);
+        if (c is not null)
+        {
+            var at = CmTools.Items.IndexOf(CmSharesSep) + 1;
+            foreach (var share in c.Shares)
+            {
+                var item = ShareEntry(share);
+                item.Tag = "share";
+                CmTools.Items.Insert(at++, item);
+            }
+        }
+        // A group shows only when something in it does.
+        CmSharesSep.Visibility = CmAddShare.Visibility;
+        CmTools.Visibility = V(GroupHasItems(CmTools));
+        CmManage.Visibility = V(GroupHasItems(CmManage));
+        CmMore.Visibility = V(GroupHasItems(CmMore));
     }
 
+    private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);
+
     private void CmAgent_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = InstallAgent(c); }
+    private void CmCredentialProvider_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ChangeCredentialProvider(c); }
 
     private void CmPsSetup_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ShowRemotingSetup(c); }
 
@@ -705,6 +746,9 @@ public partial class MainWindow : FluentWindow
         mi.Click += (_, _) => action();
         return mi;
     }
+
+    /// <summary>A group in a context menu: opens on hover (like "Move under"); its entries are added by the caller.</summary>
+    private static MenuItem Submenu(string header, SymbolRegular icon) => new() { Header = header, Icon = new SymbolIcon(icon) };
 
     /// <summary>Credentials already in use by a remoting tab of this connection (no second password prompt).</summary>
     private PsTarget? KnownTarget(Connection c) => _vm.Sessions.Where(x => x.Connection == c)
@@ -735,28 +779,43 @@ public partial class MainWindow : FluentWindow
         var st = PsState(c);
         var name = UsesAgent(c) ? "RemoteHub Agent" : "PowerShell remoting";
         var ps = from as PsSession;
+
+        // Groups open on hover, as in the connection tree's menu: tools for the device, and setting it up.
+        var tools = Submenu("Tools", SymbolRegular.Toolbox24);
         if (st == PsRemotingState.Available)
         {
-            cm.Items.Add(MenuEntry("PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c)));
-            cm.Items.Add(MenuEntry("File transfer", SymbolRegular.FolderSwap24, () => OpenFileTransfer(c, ps?.Location, ps?.Target ?? KnownTarget(c))));
-            cm.Items.Add(MenuEntry("Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c))));
-            cm.Items.Add(MenuEntry("Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c))));
-            cm.Items.Add(MenuEntry("Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c))));
+            tools.Items.Add(MenuEntry("PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c)));
+            tools.Items.Add(MenuEntry("File transfer", SymbolRegular.FolderSwap24, () => OpenFileTransfer(c, ps?.Location, ps?.Target ?? KnownTarget(c))));
+            tools.Items.Add(MenuEntry("Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c))));
+            tools.Items.Add(MenuEntry("Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c))));
+            tools.Items.Add(MenuEntry("Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c))));
         }
         else
-            cm.Items.Add(MenuEntry(c.PsChecking ? $"Testing {name}…" : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}",
+            tools.Items.Add(MenuEntry(c.PsChecking ? $"Testing {name}…" : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}",
                 SymbolRegular.ArrowSync24, () => _ = TestPsRemoting(c, interactive: true), !c.PsChecking,
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
-        if (st == PsRemotingState.Unavailable && !UsesAgent(c))
-            cm.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
+        tools.Items.Add(new Separator());
         // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
-        foreach (var share in c.Shares)
-            cm.Items.Add(MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), WhyNotOpen(share) is null,
-                WhyNotOpen(share) ?? $"{share.ProtocolLabel} · {share.Address}"));
-        cm.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
-        cm.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
+        foreach (var share in c.Shares) tools.Items.Add(ShareEntry(share));
+        tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
+        cm.Items.Add(tools);
+
+        var manage = Submenu("RemoteHub Agent", SymbolRegular.Shield24);
+        if (st == PsRemotingState.Unavailable && !UsesAgent(c))
+            manage.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
+        manage.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
             SymbolRegular.Shield24, () => _ = InstallAgent(c)));
+        if (CredentialProviderOffered(c))
+            manage.Items.Add(MenuEntry(CredentialProviderHeader(c), SymbolRegular.Key24, () => _ = ChangeCredentialProvider(c),
+                tip: "Lets the RemoteHub Agent sign in automatically on the device's sign-in screen"));
+        cm.Items.Add(manage);
     }
+
+
+    /// <summary>One of the server's network shares: opens it in a file tab (disabled, with the reason, where it can't).</summary>
+    private MenuItem ShareEntry(NetworkShare share) =>
+        MenuEntry($"Share {share.Name}", Enum.Parse<SymbolRegular>(share.DisplaySymbol), () => OpenShare(share), WhyNotOpen(share) is null,
+            WhyNotOpen(share) ?? $"{share.ProtocolLabel} · {share.Address}");
 
     private static void ShowMenu(ContextMenu cm, UIElement target, PlacementMode placement)
     {
@@ -774,8 +833,10 @@ public partial class MainWindow : FluentWindow
         ShowMenu(cm, AddTabButton, PlacementMode.Bottom);
     }
 
-    private void CloseGroup(SessionGroup g)
+    private async void CloseGroup(SessionGroup g)
     {
+        // An agent desktop in it that would sign the device's session out: asked first, as for a single tab.
+        if (g.Sessions.FirstOrDefault(s => s is AgentDesktopSession { SignsOutWhenEnded: true }) is { } signsOut && !await ConfirmSignOut(signsOut)) return;
         foreach (var s in g.Sessions.ToList()) s.Close();
     }
 
@@ -818,7 +879,7 @@ public partial class MainWindow : FluentWindow
         AddConnectionTools(cm, c, s);
         cm.Items.Add(new Separator());
         Add("Reconnect", SymbolRegular.ArrowClockwise24, () => Restart(s));
-        Add("Disconnect", SymbolRegular.PlugDisconnected24, s.Disconnect, s.State is SessionState.Connected or SessionState.Connecting);
+        Add("Disconnect", SymbolRegular.PlugDisconnected24, async () => { if (await ConfirmSignOut(s)) s.Disconnect(); }, s.State is SessionState.Connected or SessionState.Connecting);
         if (s is RdpSession r)
         {
             Add("Send Ctrl+Alt+Del", SymbolRegular.Keyboard24, r.SendCtrlAltDel, r.IsConnected);
@@ -1046,7 +1107,7 @@ public partial class MainWindow : FluentWindow
             ? await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()))
             : await JumpLocalAddressAsync(c, c.Agent?.Port ?? Agent.AgentProtocol.DefaultPort);
 
-        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, jump?.Name) { Owner = this };
+        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, jump?.Name, AgentInstaller.PackageHasCredentialProvider(package)) { Owner = this };
         if (dlg.ShowDialog() != true || dlg.Options is not { } o) return;
 
         // The progress in a window of its own: a row per step with a check mark when it's done.
@@ -1062,6 +1123,71 @@ public partial class MainWindow : FluentWindow
         bool ok;
         try { ok = await RunAgentInstall(c, package, o, progress.Report); }
         catch (Exception ex) { progress.Report("Failed: " + ex.Message); ok = false; }
+        progress.Finish(ok);
+    }
+
+    // RemoteHub Agent: credential provider (automatic sign-in, docs/credential-provider-design.md)
+
+    private (string Package, bool Has)? _packageHasProvider;
+
+    /// <summary>Offered for an installed agent when RemoteHub's agent package has the credential provider in it.</summary>
+    private bool CredentialProviderOffered(Connection c)
+    {
+        if (c.Agent is not { Status: AgentStatus.Installed } || AgentInstaller.FindPackage() is not { } package) return false;
+        if (_packageHasProvider is not { } known || known.Package != package)
+            _packageHasProvider = known = (package, AgentInstaller.PackageHasCredentialProvider(package));
+        return known.Has;
+    }
+
+    private static string CredentialProviderHeader(Connection c) =>
+        c.Agent?.CredentialProvider == true ? "Remove credential provider" : "Install credential provider";
+
+    /// <summary>
+    /// Right-click → Install / Remove credential provider: the agent's own MSI adds or removes its feature on the device
+    /// (never the agent at runtime, design §8.5). The agent keeps running.
+    /// </summary>
+    private async Task ChangeCredentialProvider(Connection c)
+    {
+        if (c.Agent is not { Status: AgentStatus.Installed } agent || AgentInstaller.FindPackage() is not { } package) return;
+        var install = agent.CredentialProvider != true;
+        var title = CredentialProviderHeader(c);
+        var text = install
+            ? $"Installs the RemoteHub Agent's credential provider on {c.Name} and allows automatic sign-in there for the accounts that may " +
+              "use the agent. RemoteHub can then sign in when nobody is signed in on the device.\n\nA policy IT has set on the device stays as it is. " +
+              "Security tools may report the new sign-in component.\n\nInstall it?"
+            : $"Removes the credential provider from {c.Name} and the permission RemoteHub set for automatic sign-in. The agent keeps running.\n\nRemove it?";
+        if (!await Dialogs.Confirm(this, title, text, install ? "Install" : "Remove")) return;
+
+        var progress = new AgentInstallProgressWindow(title, $"{c.Name}  ·  {c.Host}", install ? 4 : 3) { Owner = this };
+        progress.Show();
+        var ok = false;
+        try
+        {
+            var previous = KnownTarget(c) is { Agent: not null } known ? known : null;
+            if (BuildTarget(c, previous, viaAgent: true) is not { } t) progress.Report("Cancelled.");
+            else
+            {
+                progress.Report($"Connecting to {t.Target.Display}…");
+                try
+                {
+                    var result = await Task.Run(() =>
+                    {
+                        using var rs = PsRemoting.Open(t.Target);
+                        return AgentInstaller.ChangeCredentialProvider(rs, package, install, progress.Report);
+                    });
+                    agent.CredentialProvider = result.Installed;
+                    _vm.RequestSave();
+                    Data.AuditLog.Write(Data.AuditEvents.AgentCredentialProvider, c, result.Installed ? "Installed – credential provider" : "Removed – credential provider");
+                    progress.Report(result.Message);
+                    ok = true;
+                }
+                catch (Exception ex)
+                {
+                    progress.Report("Failed: " + (ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target)));
+                }
+            }
+        }
+        catch (Exception ex) { progress.Report("Failed: " + ex.Message); }
         progress.Finish(ok);
     }
 
@@ -1111,6 +1237,7 @@ public partial class MainWindow : FluentWindow
         }
         else device = c.Agent.Clone();
         device.VirtualDisplay = o.VirtualDisplay;
+        if (o.AutoSignIn is { } autoSignIn) device.CredentialProvider = autoSignIn;
 
         var (folder, msi, enrollmentFile) = AgentInstaller.Prepare(package, enrollment);
         DiagLog.Write($"RemoteHub Agent {(enrollment is null ? "update" : "install")} started ({o.Method})");
@@ -1202,7 +1329,7 @@ public partial class MainWindow : FluentWindow
                         installed = await Task.Run(() =>
                         {
                             using var rs = PsRemoting.Open(t.Target);
-                            return AgentInstaller.InstallOverRemoting(rs, msi, enrollmentFile, report, o.VirtualDisplay);
+                            return AgentInstaller.InstallOverRemoting(rs, msi, enrollmentFile, report, o.VirtualDisplay, o.AutoSignIn);
                         });
                     }
                     catch (Exception ex)
@@ -1236,7 +1363,7 @@ public partial class MainWindow : FluentWindow
                         await Task.Run(() =>
                         {
                             using var rs = PsRemoting.Open(t.Target);
-                            AgentInstaller.StartUpdateThroughAgent(rs, msi, enrollmentFile, report, o.VirtualDisplay);
+                            AgentInstaller.StartUpdateThroughAgent(rs, msi, enrollmentFile, report, o.VirtualDisplay, o.AutoSignIn);
                         });
                     }
                     catch (Exception ex)
@@ -1326,7 +1453,9 @@ public partial class MainWindow : FluentWindow
                 if (ui.AgentDesktopFitToWindow == fit) return;
                 ui.AgentDesktopFitToWindow = fit;
                 _vm.RequestSave();
-            });
+            },
+            () => Inheritance.ResolveOptions(c, _vm.Data).AgentAutoSignIn == true,
+            () => Inheritance.ResolveOptions(c, _vm.Data).AgentAutoSignInEndAction);
         view.RememberedConsent(ui.AgentDesktopConsent);
         view.UsePreferences(ui.AgentDesktopShowInfo, ui.AgentDesktopKeyCombinations, (info, keys) =>
         {

@@ -113,9 +113,11 @@ public partial class MainWindow
         {
             // Like the tree's own menu: new items go next to the share (it is selected above)
             cm.Items.Add(new Separator());
-            cm.Items.Add(MenuEntry("New connection here", SymbolRegular.Add24, () => NewConnection_Click(this, new RoutedEventArgs())));
-            cm.Items.Add(MenuEntry("New network share here", SymbolRegular.FolderLink24, () => NewShare_Click(this, new RoutedEventArgs())));
-            cm.Items.Add(MenuEntry("New folder here", SymbolRegular.FolderAdd24, () => NewFolder_Click(this, new RoutedEventArgs())));
+            var add = Submenu("New", SymbolRegular.Add24);
+            add.Items.Add(MenuEntry("Connection", SymbolRegular.Add24, () => NewConnection_Click(this, new RoutedEventArgs())));
+            add.Items.Add(MenuEntry("Network share", SymbolRegular.FolderLink24, () => NewShare_Click(this, new RoutedEventArgs())));
+            add.Items.Add(MenuEntry("Folder", SymbolRegular.FolderAdd24, () => NewFolder_Click(this, new RoutedEventArgs())));
+            cm.Items.Add(add);
         }
         cm.PlacementTarget = (UIElement)sender;
         cm.Placement = PlacementMode.MousePoint;

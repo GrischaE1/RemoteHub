@@ -20,7 +20,9 @@ public sealed record AgentInstallOptions(
     string FirewallScope,
     List<string> AllowedGroups,
     bool UseAgentAfterwards,
-    bool VirtualDisplay = true);
+    bool VirtualDisplay = true,
+    // MSI property AUTOSIGNIN: true installs the credential provider and allows automatic sign-in, false removes both, null leaves them.
+    bool? AutoSignIn = null);
 
 /// <summary>
 /// Installs or updates the RemoteHub Agent on a device:
@@ -110,9 +112,10 @@ public static class AgentInstaller
         """;
 
     private const string InstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$VirtualDisplay)
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$VirtualDisplay, [string]$AutoSignIn)
         $a = @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$Log`"", "VIRTUALDISPLAY=$VirtualDisplay")
         if ($Enrollment) { $a += "ENROLLMENT=`"$Enrollment`"" }
+        if ($AutoSignIn) { $a += "AUTOSIGNIN=$AutoSignIn" }
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
         $p.ExitCode
         """;
@@ -142,15 +145,19 @@ public static class AgentInstaller
     /// only after msiexec has ended ("start /wait": msiexec is a GUI program, which cmd wouldn't wait for otherwise).
     /// </summary>
     private const string DetachedInstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir, [string]$VirtualDisplay)
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir, [string]$VirtualDisplay, [string]$AutoSignIn)
         $m = "start `"`" /wait msiexec.exe /i `"$Msi`" /qn /norestart /l*v `"$Log`" VIRTUALDISPLAY=$VirtualDisplay"
         if ($Enrollment) { $m += " ENROLLMENT=`"$Enrollment`"" }
+        if ($AutoSignIn) { $m += " AUTOSIGNIN=$AutoSignIn" }
         $cmd = "cmd.exe /c `"$m & rd /s /q `"$Dir`"`""
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
         if ($r.ReturnValue -ne 0) { throw "Could not start the installer (WMI error $($r.ReturnValue))." }
         """;
 
     public sealed record Installed(string Fingerprint, int Port, string DeviceId, string ServiceStatus);
+
+    /// <summary>The AUTOSIGNIN value for msiexec: "1", "0", or "" (not passed: an update keeps what is installed).</summary>
+    private static string AutoSignInValue(bool? autoSignIn) => autoSignIn switch { true => "1", false => "0", null => "" };
 
     /// <summary>Uploads the staging files to a new temp folder on the device (checksum-verified). Returns that folder.</summary>
     private static string Upload(Runspace rs, string msi, string? enrollment, Action<string> progress, out string remoteMsi, out string? remoteEnrollment)
@@ -180,7 +187,9 @@ public static class AgentInstaller
 
     /// <summary>Silent install over a WinRM runspace. Throws <see cref="RemoteCommandException"/> with a readable reason.</summary>
     /// <param name="virtualDisplay">Install the virtual monitor for devices without one (MSI property VIRTUALDISPLAY).</param>
-    public static Installed InstallOverRemoting(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true)
+    /// <param name="autoSignIn">MSI property AUTOSIGNIN (the credential provider for automatic sign-in): true installs
+    /// it, false removes it, null leaves it as the device has it.</param>
+    public static Installed InstallOverRemoting(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true, bool? autoSignIn = null)
     {
         string? folder = null;
         try
@@ -188,7 +197,7 @@ public static class AgentInstaller
             folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
             var log = Path.Combine(folder, "install.log");
             progress("Installing (silent)…");
-            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("VirtualDisplay", virtualDisplay ? "1" : "0")).Last().BaseObject);
+            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn))).Last().BaseObject);
             if (exit is not (0 or 3010))
             {
                 var tail = string.Join("\n", RemoteFs.Invoke(rs, LogTailScript, ("Log", log)).Select(o => o.ToString().Trim()).Where(l => l.Length > 0));
@@ -209,12 +218,12 @@ public static class AgentInstaller
     }
 
     /// <summary>Update through the running agent: upload, then start msiexec detached (the session ends when the agent restarts).</summary>
-    public static void StartUpdateThroughAgent(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true)
+    public static void StartUpdateThroughAgent(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true, bool? autoSignIn = null)
     {
         var folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
         var log = Path.Combine(Path.GetDirectoryName(folder)!, "RemoteHub-Agent-update.log");
         progress("Starting the installer on the device…");
-        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder), ("VirtualDisplay", virtualDisplay ? "1" : "0"));
+        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn)));
     }
 
     // ------------------------------------------------------------------ health
@@ -272,20 +281,113 @@ public static class AgentInstaller
     }
 
     /// <summary>The ProductVersion of an MSI (e.g. "0.14.3" – the agent reports the same three numbers), or null.</summary>
-    public static string? PackageVersion(string msi)
+    public static string? PackageVersion(string msi) =>
+        Version.TryParse(PackageQuery(msi, "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'"), out var v)
+            ? $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}" : null;
+
+    /// <summary>The ProductCode of an MSI (each build has its own), or null.</summary>
+    public static string? PackageProductCode(string msi) =>
+        PackageQuery(msi, "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductCode'");
+
+    /// <summary>The MSI was built with the credential provider (feature CredentialProvider, build-installer.ps1 -CredentialProvider).</summary>
+    public static bool PackageHasCredentialProvider(string msi) =>
+        PackageQuery(msi, "SELECT `Feature` FROM `Feature` WHERE `Feature` = 'CredentialProvider'") is not null;
+
+    /// <summary>The first column of the first row a query on the MSI returns, or null.</summary>
+    private static string? PackageQuery(string msi, string sql)
     {
         try
         {
             dynamic installer = Activator.CreateInstance(Type.GetTypeFromProgID("WindowsInstaller.Installer", throwOnError: true)!)!;
             var db = installer.OpenDatabase(msi, 0); // read-only
-            var view = db.OpenView("SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'");
+            var view = db.OpenView(sql);
             view.Execute();
             var record = view.Fetch();
-            string? version = record?.StringData(1);
+            string? value = record?.StringData(1);
             view.Close();
-            return Version.TryParse(version, out var v) ? $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}" : null;
+            return value;
         }
         catch { return null; }
+    }
+
+    // ------------------------------------------------------------------ credential provider
+
+    /// <summary>
+    /// Adds or removes the credential provider (feature CredentialProvider) of the installed agent, as the MSI does it:
+    /// the service keeps running and keeps its enrollment. Removing works with Windows' cached copy of the package;
+    /// adding needs the package itself, and only the same build as the installed one (same ProductCode) – any other
+    /// version would be an update. Answers "installed|removed|reboot|notInstalled|otherBuild:&lt;version&gt;|failed:&lt;exit&gt;".
+    /// </summary>
+    private const string CredentialProviderScript = """
+        param([string]$Msi, [string]$ProductCode, [string]$Log, [string]$Install)
+        $product = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' }) | Select-Object -First 1
+        if (-not $product) { 'notInstalled'; return }
+        if ($Install -eq '1' -and $product.PSChildName -ne $ProductCode) { "otherBuild:$($product.DisplayVersion)"; return }
+        $a = if ($Install -eq '1') { @('/i', "`"$Msi`"", 'ADDLOCAL=CredentialProvider') } else { @('/i', $product.PSChildName, 'REMOVE=CredentialProvider') }
+        $a += @('/qn', '/norestart', '/l*v', "`"$Log`"")
+        $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
+        if ($p.ExitCode -notin 0, 3010) { "failed:$($p.ExitCode)"; return }
+        # The policy values that allow automatic sign-in for the agent's allowed groups – set or removed by the agent
+        # itself (values IT has set stay as they are). The agent's exe is next to the provider.
+        $agent = Join-Path ${env:ProgramFiles} 'RemoteHub Agent\RemoteHubAgent.exe'
+        $policy = if (Test-Path $agent) { (& $agent auto-sign-in $(if ($Install -eq '1') { 'on' } else { 'off' }) 2>&1 | Select-Object -Last 1) -as [string] } else { '' }
+        if ($p.ExitCode -eq 3010) { "reboot|$policy"; return }
+        $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}'
+        if (Test-Path $key) { "installed|$policy" } else { "removed|$policy" }
+        """;
+
+    /// <summary>The outcome of <see cref="ChangeCredentialProvider"/>: whether the provider is installed now, and what to tell the operator.</summary>
+    public sealed record CredentialProviderResult(bool Installed, string Message);
+
+    /// <summary>
+    /// Installs (<paramref name="install"/> true) or removes the credential provider on a device whose agent is
+    /// installed, over a runspace with admin rights (the agent's own PowerShell or WinRM). Throws
+    /// <see cref="RemoteCommandException"/> with a readable reason.
+    /// </summary>
+    public static CredentialProviderResult ChangeCredentialProvider(Runspace rs, string package, bool install, Action<string> progress)
+    {
+        string? folder = null;
+        string remoteMsi = "";
+        try
+        {
+            string log;
+            if (install)
+            {
+                folder = Upload(rs, package, null, progress, out remoteMsi, out _);
+                log = Path.Combine(folder, "credential-provider.log");
+            }
+            else
+            {
+                folder = RemoteFs.Invoke(rs, MakeFolderScript, ("Name", "RemoteHub-Agent-" + Guid.NewGuid().ToString("N")[..12])).Single().ToString();
+                log = Path.Combine(folder, "credential-provider.log");
+            }
+            progress(install ? "Installing the credential provider…" : "Removing the credential provider…");
+            var answer = RemoteFs.Invoke(rs, CredentialProviderScript, ("Msi", remoteMsi), ("ProductCode", PackageProductCode(package) ?? ""),
+                ("Log", log), ("Install", install ? "1" : "0")).Last().ToString();
+            var (outcome, policy) = answer.IndexOf('|') is var bar and >= 0 ? (answer[..bar], answer[(bar + 1)..].Trim()) : (answer, "");
+            var policyNote = policy.Length > 0 ? "\n" + policy : "";
+            switch (outcome)
+            {
+                case "installed": return new(true, "The credential provider is installed and registered." + policyNote);
+                case "removed": return new(false, "The credential provider is removed." + policyNote);
+                case "reboot":
+                    return new(install, (install
+                        ? "The credential provider is installed; the sign-in screen loads it after the device restarts."
+                        : "The credential provider is removed; its file goes when the device restarts (the sign-in screen still has it loaded).") + policyNote);
+                case "notInstalled": throw new RemoteCommandException("The RemoteHub Agent isn't installed on the device.");
+            }
+            if (answer.StartsWith("otherBuild:", StringComparison.Ordinal))
+                throw new RemoteCommandException($"The device runs RemoteHub Agent {answer["otherBuild:".Length..]}, a different build from this RemoteHub's " +
+                    $"({PackageVersion(package) ?? "unknown version"}). Update the agent first (Update RemoteHub Agent…), then install the credential provider.");
+            var tail = string.Join("\n", RemoteFs.Invoke(rs, LogTailScript, ("Log", log)).Select(o => o.ToString().Trim()).Where(l => l.Length > 0));
+            throw new RemoteCommandException($"The installer failed ({answer.Replace("failed:", "exit code ")}).{(tail.Length > 0 ? "\n\n" + tail : "")}");
+        }
+        finally
+        {
+            if (folder is not null)
+                try { RemoteFs.Invoke(rs, RemoveFolderScript, ("Path", folder)); } catch { /* temp folder on the device */ }
+        }
     }
 
     /// <summary>The first or last <paramref name="n"/> characters for display (ids and fingerprints from older or edited data may be shorter).</summary>

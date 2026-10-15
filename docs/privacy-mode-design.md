@@ -1,6 +1,6 @@
 # RemoteHub Agent – Privacy mode
 
-Status: Draft v1 (2026-10-13), checked against the code of 0.18.0. Phases 1, 2 and 3 are implemented (§14) with the proposals in §12 as defaults (Q2 changed: input block on by default); the lab tests §5.7 and §6.6 and the Phase 3 lab cases have not run yet.
+Status: Draft v1 (2026-10-13), checked against the code of 0.18.0. Phases 1, 2 and 3 are implemented (§14) with the proposals in §12 as defaults (Q2 changed: input block on by default); the lab tests §5.7 and §6.6 and the Phase 3 lab cases have not run yet. The snip guard (§14.2) and the corrections in §5.2, §5.4, §5.5 and §8 were brought in line with 0.18.11 (2026-10-15).
 Owner: Grischa Ernst
 
 This covers the item "privacy mode" that [agent-desktop-draft.md](agent-desktop-draft.md) §2 (decision 8) left out of v1, and Phase 2 of [credential-provider-design.md](credential-provider-design.md) §12 ("black out the physical screen and block local input").
@@ -137,8 +137,8 @@ Turning the monitor off (`SC_MONITORPOWER`) is not an option: it stops DXGI capt
   - Styles: `WS_POPUP`, `WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`, no rounded corners, no border.
   - `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`. Afterwards the helper reads it back with `GetWindowDisplayAffinity`. If it doesn't read `0x11`, the overlay is destroyed **before it is shown** and the agent reports `Screen = ""` with a reason. A window that isn't excluded would black out the admin's picture as well.
   - Build < 19041: the feature is not advertised (§2).
-- **Black:** the window is filled with `#000000`. No text, no cursor (`SetCursor(NULL)` in `WM_SETCURSOR`).
-- **Message:** a navy background (`Theme.OverlayBackground`) with a soft glow (`Theme.OverlayGlow`) behind the RemoteHub logo, and one centred block: the logo (220 px, drawn as vector shapes so it is sharp at any size; smaller on a small screen, so everything fits), the letter-spaced eyebrow "PRIVACY MODE ACTIVE" (`Theme.AccentLight`), the heading "Remote Support Session in Progress", and the body "Your screen is temporarily hidden while an authorized administrator assists your device." Below it a short accent line and, next to a lock, "Secure, monitored session • Please do not power off your device".
+- **Black:** the window is filled with `#000000`. No text; the cursor stays visible (the overlay doesn't handle `WM_SETCURSOR`, see §14).
+- **Message:** a navy background (`Theme.OverlayBackground`) with a soft glow (`Theme.OverlayGlow`) behind the RemoteHub logo, and one centred block: the logo (220 px, drawn as vector shapes so it is sharp at any size; smaller on a small screen, so everything fits), the letter-spaced eyebrow "PRIVACY MODE ACTIVE" (`Theme.AccentLight`), the heading "Remote Support Session in Progress", and the body "Your screen is temporarily hidden while an authorized administrator assists your device." In a session automatic sign-in created for the admin (no banner there), the body is "DOMAIN\user is signed in remotely. The screen stays hidden while they work." Below it a short accent line and, next to a lock, "Secure, monitored session • Please do not power off your device".
 - **Staying on top:** other topmost windows (Task Manager, a topmost app) can come above the overlay. The helper re-asserts `HWND_TOPMOST` every 500 ms and on `EVENT_SYSTEM_FOREGROUND`. The banner is re-asserted **above** the overlays (rule 2).
 - **Monitor changes:** on `WM_DISPLAYCHANGE` the overlays are rebuilt. This includes the virtual monitor ([third-party/VirtualDisplayDriver](../third-party/VirtualDisplayDriver)).
 - **The admin's picture is unchanged:** excluded windows aren't in DXGI or GDI captures. The admin sees the desktop. The local cursor shape is still sent separately, as it is today.
@@ -163,14 +163,14 @@ The service refuses the command when the right or policy is missing. In that cas
 - **Tagging:** every event the agent injects is tagged with `dwExtraInfo = 0x52484131` ("RHA1") in [InputInjector.cs](../src/RemoteHub.Agent/Desktop/InputInjector.cs). Injected input is not tagged today. The hooks drop every event that doesn't carry the tag. Checking only `LLKHF_INJECTED` isn't enough, because on-screen keyboards and other tools inject too.
 - **Fast callbacks:** the callback only compares a few fields and returns. Windows removes LL hooks that take longer than `LowLevelHooksTimeout`.
 - **What stays local:**
-  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely.
+  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely. While input is blocked, the screen it opens offers only Task Manager and Cancel (§5.9).
   - Mouse clicks inside the banner's rect, so **Disconnect** keeps working (§5.5).
-- **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are paused".
+- **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are blocked." under the body.
 
 ### 5.5 Disconnect always works
 
 - The banner stays above the overlays (§5.2) and does not collapse while the privacy screen is on. A collapsed pill is easy to miss on a black screen.
-- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor itself is not shown on a Black overlay. While input is blocked, the banner shows a hint: "Move the mouse here and click Disconnect to end".
+- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end".
 - Ctrl+Alt+Del → Lock or Sign out ends the admin's view of the user desktop, as it does today.
 
 ### 5.6 What the privacy screen does not cover
@@ -201,6 +201,108 @@ This is a time-boxed test (1 day) that runs **before** Phase 1 is built. It deci
 - **L8 fails:** that is a bug in the test build, not a reason to stop. It must be fixed before any result counts.
 
 Not in scope: `PromptOnSecureDesktop = 0`, which moves UAC to the normal desktop. The agent never changes security settings (same rule as for RDP settings).
+
+### 5.8 Spike: shell surfaces above the overlay (UIAccess)
+
+**Problem:** an ordinary `HWND_TOPMOST` window sits in the desktop z-band. Start, Search, Quick Settings / Action Center, Notification Center, toasts, taskbar thumbnails and the taskbar itself are drawn in the shell's own bands above it. While the admin works, those surfaces showed through the privacy screen at the device.
+
+**Rejected:** an isolated desktop (`CreateDesktop` / `SwitchDesktop`). DXGI duplication, GDI capture and `SendInput` all work only on the input desktop, and `DesktopThread` follows the input desktop. Switching away would blank the admin's picture or break their control.
+
+**Change:** the helper's token gets `TokenUIAccess = 1` (`SetTokenInformation(token, 26, 1)`) next to `TokenSessionId` in `WindowsHelperLauncher`. The service is LocalSystem with `SeTcbPrivilege`, so no manifest and no signing is needed. The overlays are created `WS_EX_TOPMOST`, so they and the banner land in `ZBID_UIACCESS` (band 2). Magnifier and the on-screen keyboard draw in the same band, above the immersive shell bands. Switch: `HKLM\SOFTWARE\Policies\RemoteHub\Agent` `HelperUIAccess` = 0 turns it off (DWORD; on when missing).
+
+**Test:** lab case D-SHELL ([D-SHELL.Tests.ps1](../lab/tests/D-SHELL.Tests.ps1)). Privacy screen Black with local input blocked, then the same run with UIAccess off and on. The admin opens each surface through RemoteHub (injected keys). The toast is raised in the user's session, and the thumbnail is opened with Win+T and arrow keys. Per surface the test measures:
+- **Console:** the share of bright pixels in the Hyper-V console screenshot below the banner strip. Covered means < 0.5 %.
+- **Picture:** the share of pixels that changed in the admin's received frame. Shown means > 0.5 %.
+
+The test also reads the window z-order, band and display affinity in the user's session. Last, the device's user clicks Disconnect with the console mouse.
+
+| Surface | W11 26H2 console, off → on | W11 26H2 admin picture (on) | Server 2025 console, off → on | Server 2025 admin picture (on) |
+|---|---|---|---|---|
+| Start (Win) | 63.9 % → 0 % — **pass** | shown 11.2 % — **pass** | 63.9 % → 0 % — **pass** | shown 14.8 % — **pass** |
+| Search (Win+S) | 75.7 % → 0 % — **pass** | shown 14.0 % — **pass** | 75.8 % → 0 % — **pass** | shown 20.3 % — **pass** |
+| Quick Settings / Action Center (Win+A) | 24.2 % → 0 % — **pass** | shown 7.1 % — **pass** | 24.2 % → 0 % — **pass** | shown 9.8 % — **pass** |
+| Notification Center (Win+N) | 16.0 % → 0 % — **pass** | shown 11.6 % — **pass** | 16.0 % → 0 % — **pass** | shown 17.8 % — **pass** |
+| Taskbar thumbnail (Win+T) | 4.1 % → 0 % — **pass** | shown 1.7 % — **pass** | 4.0 % → 0 % — **pass** | shown 2.5 % — **pass** |
+| Toast | not raised¹ → 0 % — **pass** | shown 4.6 % — **pass** | not raised¹ → 0 % — **pass** | shown 5.6 % — **pass** |
+| Task View (Win+Tab) | n/a² | n/a² | n/a² | n/a² |
+| Alt+Tab | n/a² | n/a² | n/a² | n/a² |
+
+¹ With UIAccess off, Windows didn't show the toast at all (not on the console, not in the picture). With UIAccess on it showed, and only in the admin's picture.
+² SnipGuard (`SnipGuard.cs`) drops Win+Tab and Alt+Tab while the privacy screen is up, so neither opens in either mode. The console stayed covered.
+
+Other checks, both builds, UIAccess on:
+
+| Check | W11 26H2 | Server 2025 |
+|---|---|---|
+| Helper token `TokenUIAccess` = 1 (0 with the switch off) | **pass** | **pass** |
+| Overlays read back `WDA_EXCLUDEFROMCAPTURE` (0x11), band 2 | **pass** | **pass** |
+| Banner above the overlays (z-order, band 2) | **pass** | **pass** |
+| Local Disconnect click through the input block ends the session ("The user at the device ended the session.") | **pass** | **pass** |
+| Agent log: no UIPI / access-denied / error lines | **pass** | **pass** |
+
+Not tested: Windows 10 22H2 and Windows 11 23H2/24H2. The lab has no VMs for them (only W11 26H2 and Server 2025).
+
+**Regression (UIAccess on, W11 26H2):** the helper's token now has UIAccess for every desktop connection, not only while the privacy screen is up. The suites that start the helper ran with the spike build. Each failing suite then ran again with a control build, identical except UIAccess is off. The run was stopped early, so the suites from D-CON onwards and all of Server 2025 were not run.
+
+| Suite | UIAccess on | Control (off) | Verdict |
+|---|---|---|---|
+| D-PRIV / D-HIDE | D-HIDE-01, D-HIDE-02 fail | Same two fail | Not caused by UIAccess |
+| D-BAN / D-VIEW | D-BAN-01/04/05/07, D-VIEW-02 fail (in-session OCR of the banner reads nothing) | D-BAN-07, D-VIEW-02 fail; the rest didn't run (`RhPerson` gave no answer) | 07 / VIEW-02 not caused by UIAccess; 01/04/05 not compared. D-SHELL checks the banner and Disconnect directly: pass |
+| D-CLIP | 12 of 18 fail | Cancelled | Not settled in the lab; clipboard reported working in a manual test on a device |
+| D-IN | D-IN-01 (text, one character differs), D-IN-03 (wheel) fail | Not run | Not settled in the lab; mouse wheel reported working in a manual test on a device |
+
+**Manual test (owner, 2026-10-15):** the spike build on a device. Start and the other shell surfaces stay off the device's screen while the privacy screen is on. Clipboard and mouse wheel were reported working.
+
+**Result:** the change is kept on `spike/uiaccess-overlay`, on by default. Before it ships:
+- the remaining suites on both VMs, D-CLIP and D-IN against the control build;
+- Windows 10 22H2 and Windows 11 23H2/24H2;
+- a security review, because UIAccess also lets the helper drive windows of higher integrity (it is LocalSystem already).
+
+### 5.9 The Ctrl+Alt+Del screen while input is blocked
+
+Ctrl+Alt+Del can't be blocked (§5.4), and the screen it opens is on the secure desktop, which the overlay doesn't cover (§5.6). What the agent controls is what that screen offers. While the privacy screen blocks the device's mouse and keyboard, it offers only **Task Manager** and **Cancel**. Task Manager stays on purpose: it opens behind the overlay, and with input blocked it can't be used anyway. That covers the admin's privacy screen with "block local input" and the one automatic sign-in puts up, which always blocks input (§9.1).
+
+| Hidden | Policy value | Where |
+|---|---|---|
+| Lock (also Win+L) | `DisableLockWorkstation` = 1 | session user: `HKU\<sid>\Software\Microsoft\Windows\CurrentVersion\Policies\System` |
+| Change a password | `DisableChangePassword` = 1 | same |
+| Sign out | `NoLogoff` = 1 | session user: `…\Policies\Explorer` |
+| Power button | `NoClose` = 1 | same |
+| Switch user | `HideFastUserSwitching` = 1 | machine: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System` (Windows has no per-user value) |
+
+Not hidden: the network and accessibility buttons in the corner. Windows has no policy for them on this screen.
+
+**Putting them back** (`SasActions.cs`, run by the helper):
+- **What gets recorded:** before setting a value, the helper writes what was there (the value, or "absent") to `sas-actions-<sid>.txt` next to agent.json. The machine value goes to `sas-actions-machine.txt`. A value that isn't a DWORD is left alone.
+- **When:**
+  - The block ends: the admin unblocks input or turns the privacy screen off.
+  - The overlays come down (the monitors changed and they couldn't be rebuilt).
+  - The helper ends with the connection.
+- **Exactly as before:** an existing value comes back as it was, and an absent one is deleted.
+- **Several connections:** each helper that hides them registers as an owner (`sas-owner-<sid>-<pid>-<id>.txt`). A user's values come back only when no other live owner for that user remains, and Switch user only when no live owner at all remains. An owner whose process is gone doesn't count.
+- **One at a time:** a system mutex orders the helpers and the service. If it can't be taken within 5 s, nothing is changed and the step is logged.
+- **Failures:** the helper registers as owner before it changes anything. If hiding fails part-way, it puts back its own part. If putting back fails, it stays the helper's job, and the next unblock or the helper's end tries again.
+- **A helper that was killed:**
+  - The next helper in that session puts its leftovers back as soon as the user's hive is loaded, even when that connection never blocks input. Anything another live helper still hides is left alone.
+  - A helper that hides them again keeps the original record.
+  - The service puts everything back when it starts. No helper runs then, so all records are leftovers.
+  - A user's hive that isn't loaded at that moment (the user signed out) keeps its record until that user's next connection.
+- **Log:** each step writes a line ("Ctrl+Alt+Del screen: …"). There is no audit event.
+
+**Timing:** the user's hive must be loaded. On the auto sign-in screen the helper starts before the profile is, so it tries again every 500 ms (the overlay's keep-on-top timer) until it can.
+
+**Lab:** D-CADHIDE ([D-CADHIDE.Tests.ps1](../lab/tests/D-CADHIDE.Tests.ps1)). Ctrl+Alt+Del is pressed at the Hyper-V console; the screen is read by OCR and the five values (and `DisableTaskMgr`, which must stay unset) are read from the registry.
+
+| Case | W11 26H2 | Server 2025 |
+|---|---|---|
+| 01 Control, before any connection: values not set, the screen offers Lock and Task Manager | **pass** | **pass** |
+| 02 Admin's privacy screen with input blocked: the five set, `DisableTaskMgr` not; the screen offers only Task Manager | **pass** | **pass** |
+| 03 Input unblocked while still connected: put back; blocked again: hidden again | **pass** | **pass** |
+| 04 Connection ends: put back as they were, no record left | **pass** | **pass** |
+| 05 Service and helper killed while hidden: put back when the service starts (log: "actions an earlier helper hid are back") | **pass** | **pass** |
+| 06 Automatic sign-in: hidden in the admin's new session, the screen offers only Task Manager; put back after | **pass** | **pass** |
+
+Also seen: a helper killed on its own is started again by the service, and the new one keeps the original record and puts the values back when the connection ends.
 
 ## 6. Phase 2 – Hide my screen (person at the device)
 
@@ -399,7 +501,7 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 | Item | Kind | Default | Meaning |
 |---|---|---|---|
 | `AgentRight.PrivacyScreen` | Right (subkey `Rights`) | `config.AllowedGroups` (same as `Desktop`) | May turn on the privacy screen (Phase 1). Also needs `Desktop` (not view-only). |
-| `PrivacyScreen` | DWORD | 1 | 0 – privacy screen off; 1 – allowed; 2 – allowed, including blocking local input |
+| `PrivacyScreen` | DWORD | 2 (see §14, Q2) | 0 – privacy screen off; 1 – allowed, local input stays usable; 2 – allowed, including blocking local input |
 | `PrivacyScreenMessage` | REG_SZ | (built-in text) | Replaces the heading on the Message overlay, e.g. "Contoso IT is working on this PC" |
 | `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. |
 
@@ -437,7 +539,7 @@ These events go through `o.Log.Audit` in the same format as the existing desktop
 | # | Question | Proposal |
 |---|---|---|
 | Q1 | Privacy screen style: black only, or also "with message"? | Both, chosen per use (menu §5.1). Default: with message. |
-| Q2 | Block local input: default on or off? | Off. It's an extra checkbox and only allowed with policy value 2. |
+| Q2 | Block local input: default on or off? | Off. It's an extra checkbox and only allowed with policy value 2. **Changed: on by default (§14, `PrivacyScreen` default 2).** |
 | Q3 | Blur: may the admin still control the device? | No, input is paused (safer: no clicking into something they can't read). |
 | Q4 | Remember the hidden apps for the next connection? | Not in v1. Later: per user, in `HKCU` of the session's user, written by the helper on their behalf. |
 | Q5 | May IT turn off the user's privacy controls by policy (kiosk or unattended support)? | No in v1. The user asked for "always". Revisit if a customer needs it. |
@@ -478,3 +580,11 @@ Where the code differs from the text above, or settles something the text left o
 - **The app list never reaches RemoteHub.** The helper sends it to the service (`HelperMessage.HiddenApps`), which keeps it for a new helper and the resume token; RemoteHub gets the count and the covered regions.
 - **Consent:** in the question the picker keeps a countdown (started again at full length): no answer in time denies, Cancel goes back to the question. The service's own last-resort timeout for Ask grew by 180 s for that.
 - **Not built yet:** the hatched fill (the agent fills with the console's dark colour; RemoteHub draws a frame and "Hidden by the user" on areas of at least 180×60), and the picker's "Hide selected" button isn't disabled while nothing changed.
+
+### 14.2 Snip guard (`SnipGuard.cs`)
+
+The overlay is kept out of every capture – also out of a screen snip – and Windows shows a snip's frozen picture full-screen above every topmost window. A snip at the device would therefore show the person there what the overlay hides. So while any privacy screen is up (the admin's, or the one automatic sign-in puts up):
+
+- **Keys dropped:** Print Screen (with any modifier), Win+Shift+S, Alt+Tab and Win+Tab (their thumbnails are drawn above the overlay, too) – both the device's own keyboard and the admin's injected keys. Only the press is dropped; its release goes through, so nothing stays held. Win+S and Shift+Tab still work.
+- **Snipping tools closed:** `SnippingTool.exe`, `ScreenClippingHost.exe` and `ScreenSketch.exe` are ended as soon as they show a window (started from the Start menu, by a timer, …). The agent's log gets "Desktop: session N: Privacy screen: ScreenClippingHost.exe was closed – a snip would show the screen at the device"; there is no audit event.
+- A low-level keyboard hook and an out-of-context WinEvent hook (`EVENT_OBJECT_SHOW`) on their own thread, like `InputBlocker`; they start with the overlays and stop when the overlays come down or the helper ends. If a hook can't be installed, that goes to the log.

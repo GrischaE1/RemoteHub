@@ -1,6 +1,7 @@
 # RemoteHub Test Lab – Specification
 
-Status: v2.1 (2026-10-11) – SMOKE passes on `TestAutomation - W11 - 26H2 - en-US`. Scope: a scripted Hyper-V lab that
+Status: v2.1 (2026-10-11) – SMOKE passes on `TestAutomation - W11 - 26H2 - en-US`; lab mechanics (UI driver, jump
+host, harness) brought in line with 0.18.11 (2026-10-15). Scope: a scripted Hyper-V lab that
 tests RemoteHub and the RemoteHub Agent end to end on several Windows versions, without anyone clicking. Not in scope:
 the RemoteHub UI itself (covered by the unit tests and by hand), building or installing VMs (they are provided, §5).
 Owner: Grischa Ernst
@@ -37,20 +38,26 @@ Host HV01 (Server 2025, Hyper-V)                                  Provided VMs (
 │  ├ lab\RemoteHub.TestLab, lab\tests\*.Tests  │               │       same lab password, patched         │
 │  ├ msi\       (the agent MSI under test)     │  TLS 58732,   │                                          │
 │  └ results\<run>\  ──▶ copied to artifacts\  │  WinRM, RDP   │                                          │
-│ tests\RemoteHub.LabTests (xUnit, C#, later)  │ ────────────▶ │                                          │
+│ harness\RemoteHub.LabHarness.exe (C#)        │ ────────────▶ │                                          │
 └──────────────────────────────────────────────┘               └──────────────────────────────────────────┘
 ```
 
 - **Control plane (host → VM, no network needed):** PowerShell Direct (`Invoke-Command -VMName`, `New-PSSession
   -VMName`, `Copy-Item -ToSession/-FromSession` for files – no Guest Service Interface needed), and the Hyper-V WMI
   provider (`root\virtualization\v2`) for the console: screenshots
-  (`Msvm_VirtualSystemManagementService.GetVirtualSystemThumbnailImage`) and keyboard input (`Msvm_Keyboard`:
-  `TypeText`, `TypeKey`, `TypeCtrlAltDel`). This is "the person at the device".
+  (`Msvm_VirtualSystemManagementService.GetVirtualSystemThumbnailImage`), keyboard input (`Msvm_Keyboard`:
+  `TypeText`, `TypeKey`, `PressKey` / `ReleaseKey`, `TypeCtrlAltDel`) and mouse input (`Msvm_SyntheticMouse`:
+  `SetAbsolutePosition`, `SetButtonState`). This is "the person at the device".
 - **Data plane (host → VM over the network):** what RemoteHub really uses – agent TLS on 58732, WinRM 5985/5986, RDP
   3389. The VM's address is read from Hyper-V (`Get-VMNetworkAdapter … .IPAddresses`), so the lab doesn't care which
   switch the VM is on, as long as the host can reach it.
-- **Two test layers:** the PowerShell module prepares and inspects the VMs (Pester); a C# project (later) drives
-  RemoteHub's own client code against them (xUnit), so the real transport, pinning and protocol are tested.
+- **Two test layers:** the PowerShell module prepares and inspects the VMs (Pester); the C# lab harness
+  (`tests\RemoteHub.LabHarness`, built to `LabRoot\harness`) drives RemoteHub's own client code against them, so the
+  real transport, pinning and protocol are tested. One command per call, JSON answer (`Invoke-LabHarness`): `install`,
+  `enrollment`, `health`, `update`, `run`, `copy`, `cad`, `credential-provider`, `auto-sign-in`, `tool`, `probe`
+  (raw requests), `share`, `seed`, `jump`, and `desktop` – a scripted remote desktop viewer (`DesktopHarness.cs`:
+  RemoteHub's desktop client, clipboard transfer and H.264 decoder run from a JSON steps file, every frame acknowledged).
+  RemoteHub's own UI, installed in the VM, is driven by UI Automation (§6.3).
 
 ## 3. Host
 
@@ -64,13 +71,22 @@ Host HV01 (Server 2025, Hyper-V)                                  Provided VMs (
 | Working folder | `D:\RemoteHubLab` (`LabRoot` in `lab.json`): `lab\` (copied from the repo before every request), `msi\` (newest `RemoteHub-Agent-*-x64.msi` from `artifacts\`), `modules\` (Pester), `queue\`, `results\<run>\` (copied back to `artifacts\lab\<run>\`) |
 | PowerShell | Windows PowerShell 5.1 (built in). The module also runs on PowerShell 7, but doesn't need it. Lab scripts stay ASCII-only: 5.1 reads BOM-less UTF-8 as ANSI, and an en dash then ends a string. |
 | Modules | `Hyper-V` (built in), `Pester` 5.7.1 in `D:\RemoteHubLab\modules\Pester\5.7.1` (the built-in Pester 3.4 is not used) |
-| .NET | .NET 10 SDK (builds RemoteHub, runs `RemoteHub.LabTests` later) |
+| .NET | .NET 10 SDK (builds RemoteHub and the lab harness) |
 | Elevated once | Only `Install-LabTask.ps1`: batch logon right, `LabRoot` ACL, register + start the task. Run it again after changing the `labop` password. |
 
 ## 4. Network
 
 The lab uses whatever network the provided VM is connected to; the host must reach the VM's IPv4 address. No switch,
 NAT or DNS is created by the lab. The VM's address is read from Hyper-V at run time (KVP), never configured.
+
+**Jump host topology** (lab.json `JumpHost`, used by J-JUMP and the jump case of UI-RDP): a provided VM
+(`RemoteHub-JumpHost`) with one adapter where the host reaches it and one on the private switch `RemoteHub-Jump`
+(`192.168.231.1/24` in its checkpoint). `Start-LabJumpHost` reverts it and installs the agent. `Move-LabVmBehindJump`
+moves the test VM's adapters onto that switch, **untagged** (an access VLAN of the VM's own network is cleared, else it
+couldn't reach the jump host), with a static address `<prefix>.<FirstTarget + VM index>`, no gateway, no DNS – so the host
+reaches it only through the jump host's agent. The old switches and VLANs are written to `LabRoot\network\<Id>.json`;
+`Reset-LabVm` puts them back (`Restore-LabVmNetwork`). `Use-LabJump` makes every harness call go through the jump host.
+The jump host is never part of a run's VM list (`-Vm JumpHost` only by name).
 
 ## 5. Provided VMs
 
@@ -123,7 +139,9 @@ Adding a VM: provide it as in §5.1, then `Start-LabRun.ps1 -Vm <Id> -Tag Smoke`
   "HostAccount": "labop",
   "VmNamePattern": "TestAutomation - * - * - *",
   "Accounts": { "AdminAccount": "PSAdmin", "UserAccount": "normaluser", "ConsoleAccount": "Admin" },
-  "Vms": []
+  "Vms": [],
+  "JumpHost": { "Name": "RemoteHub-JumpHost", "Switch": "RemoteHub-Jump", "Address": "192.168.231.1",
+                "PrefixLength": 24, "FirstTarget": 10, "AdminAccount": "Admin" }
 }
 ```
 
@@ -159,8 +177,9 @@ This is a throw-away internal lab; the password is valid nowhere else.
 |---|---|
 | Sign in at the sign-in screen | `TypeCtrlAltDel`, then `TypeText` the password via `Msvm_Keyboard` (console input – exactly like a person) |
 | Lock / unlock | lock: task in the user's session running `rundll32 user32.dll,LockWorkStation`; unlock: keyboard as above |
-| Answer the consent dialog | screenshot → find the dialog (template match, or UI Automation from a task in the user's session) → `TypeKey` Enter / Esc, or click via UI Automation |
-| Read the PIN the device shows | UI Automation from a task in the user's session (`AutomationElement` by AutomationId), or OCR on the screenshot |
+| Answer the consent dialog | `lab\guest\RhPerson.ps1` in the user's session (`Invoke-LabPerson`) finds the agent's window by its class and reads it with Windows OCR (`Windows.Media.Ocr`) – the agent draws its dialogs and banner itself, there is no UI Automation tree; the button is clicked by its label with the **console mouse** (`Send-LabMouse`), because the dialog belongs to SYSTEM and input from the user's session doesn't reach it (UIPI) |
+| Read the PIN the device shows | `RhPerson.ps1 -Do pin` (OCR of the PIN dialog) |
+| Use RemoteHub's own UI in the VM | UI Automation (`System.Windows.Automation`) through `RhPerson.ps1 -Do uia` / `Invoke-LabUi`: find by name or AutomationId, click, toggle, set text, read. No FlaUI |
 | Open a UAC prompt | task in the user's session: `Start-Process cmd -Verb RunAs` |
 | Start a second session | RDP from another lab VM (`mstsc /v:` with a saved `.rdp`, credentials via `cmdkey`), or `query session` to check |
 | Disconnect an RDP session | `tsdiscon <id>` via PS Direct |
@@ -184,7 +203,10 @@ Location `lab/RemoteHub.TestLab/` (Windows PowerShell 5.1 and 7, `Set-StrictMode
 | Config | `Get-LabConfig` (lab.json + lab.local.json), `Get-LabVm`, `Get-LabCredential` |
 | VM | `Reset-LabVm` (revert to checkpoint, start, wait), `Stop-LabVm` (turn lab VMs off), `Wait-LabVm` (heartbeat + PS Direct answers), `Restart-LabVm` (guest restart, waits for the new boot), `Get-LabVmAddress` |
 | Guest | `Invoke-LabGuest` (PS Direct, admin account by default), `Copy-LabFile` / `Get-LabFile` (PS Direct session, creating folders) |
-| Console | `Get-LabScreenshot` (PNG at the guest's resolution, reports a blank screen), `Send-LabText`, `Send-LabKey`, `Send-LabCtrlAltDel` |
+| Console | `Get-LabScreenshot` (PNG at the guest's resolution, reports a blank screen), `Send-LabText`, `Send-LabKey`, `Send-LabKeyCombo`, `Send-LabMouse`, `Send-LabCtrlAltDel` |
+| Person / UI | `Invoke-LabPerson` (RhPerson.ps1: windows, read, click, pin, clipboard, screen OCR, uia), `Get-LabOcr`, `Start-LabMarker` / `Get-LabMarker` (what reached the device), `Install-LabClient` / `Start-LabClient` / `Invoke-LabUi` (RemoteHub in the VM) |
+| Jump host | `Start-LabJumpHost`, `Stop-LabJumpHost`, `Move-LabVmBehindJump`, `Restore-LabVmNetwork`, `Use-LabJump`, `Invoke-LabJump` |
+| Desktop | `Invoke-LabDesktop` / `Start-LabDesktop` / `Receive-LabDesktop` (harness `desktop`) |
 | Sessions | `Set-LabAutoLogon`, `Clear-LabAutoLogon`, `Wait-LabDesktop` (user's explorer running + screenshot not blank), `Invoke-LabInSession`, `Lock-LabSession`, `Unlock-LabSession` |
 | RemoteHub | `Get-LabHostAddress` (host's source address towards the VM, also across a router), `Install-LabAgent` (harness: `AgentEnrollment.Create` + `AgentInstaller.Prepare` + `InstallOverRemoting` over PowerShell Direct; returns deviceId, pin, installed.*), `Get-LabAgentHealth` (harness: `HealthAsync`, TLS pinned), `Get-LabAgentState` (service, agent.json, certificate incl. key exportability, folder ACL, firewall rule, leftovers, log lines), `Uninstall-LabAgent` (msiexec /x, returns exit code + guest log path), `Save-LabAgentEvidence` |
 | RemoteHub (updates, policy) | `Get-LabAgentMsi [-Previous]` (build under test / release before it), `Update-LabAgent` (harness: `StartUpdateThroughAgent` + `WaitForRestartAsync` and RemoteHub's verdict), `Invoke-LabAgentCommand` (PowerShell through the agent), `New-LabBrokenMsi` (false launch condition / truncated), `Set-LabAgentPolicy` / `Get-LabAgentPolicy` (`HKLM\SOFTWARE\Policies\RemoteHub\Agent` and `Rights`) |
@@ -200,8 +222,7 @@ The full release test sheet for Windows clients (every case, its checks and how 
 
 Pester files in `lab/tests/*.Tests.ps1`, each with `param($VmName, $EvidenceDir)`; `Invoke-LabTests.ps1` runs every
 file once per VM. Each file: revert → set up → act → check → collect evidence. The parts that need RemoteHub's client
-code call `dotnet test tests/RemoteHub.LabTests --filter "Lab=<id>"` with the VM's address and the agent fingerprint as
-environment variables (later). Scenarios that need a VM that isn't provided yet (domain, RH-S22, RH-CLM) are skipped
+code call the lab harness (§2) with the VM's address and the agent's pin. Scenarios that need a VM that isn't provided yet (domain, RH-S22, RH-CLM) are skipped
 until it exists.
 
 | ID | Scenario | Checks |
@@ -261,7 +282,7 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
 - Every test name starts with its case ID from [test-lab-cases.md](test-lab-cases.md) and carries it as a tag
   (`-Tag A-UPD-04` runs one case). After the run `Start-LabRun.ps1` writes the PR report `report.md`
   (`New-LabReport.ps1`).
-- Requests run one after another, and so do the VMs within a run. Only the VM under test is on: a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
+- Requests run one after another, and so do the VMs within a run. Only the VM under test is on (plus the jump host while a jump case runs): a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
 - Measured: SMOKE on W11-26H2-en-US ≈ 110 s. Target: one VM × all scenarios < 30 min.
 
 ## 11. Open questions

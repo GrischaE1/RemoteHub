@@ -9,5 +9,13 @@
                  },
     "Vms":  [
 
-            ]
+            ],
+    "JumpHost":  {
+                     "Name":  "RemoteHub-JumpHost",
+                     "Switch":  "RemoteHub-Jump",
+                     "Address":  "192.168.231.1",
+                     "PrefixLength":  24,
+                     "FirstTarget":  10,
+                     "AdminAccount":  "Admin"
+                 }
 }

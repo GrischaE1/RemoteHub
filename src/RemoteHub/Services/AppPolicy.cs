@@ -19,6 +19,9 @@ public static class AppPolicy
     /// <summary>String UpdateChannel = "stable" or "beta": fixes the update channel.</summary>
     public static string? UpdateChannel => String("UpdateChannel") is { } c && UpdateService.NormalizeChannel(c) is { } n ? n : null;
 
+    /// <summary>DWORD DisableAgentAutoSignIn = 1: RemoteHub never signs in automatically through the agent (the setting is hidden).</summary>
+    public static bool AgentAutoSignInDisabled => Dword("DisableAgentAutoSignIn") == 1;
+
     /// <summary>DWORD DisableRecording = 1: tabs can't be recorded (the Record button is hidden).</summary>
     public static bool RecordingDisabled => Dword("DisableRecording") == 1;
 

@@ -61,6 +61,11 @@ public static class DesktopFeatures
     public const string UserPrivacy = "userPrivacy";
     /// <summary>The user at the device can hide chosen apps; <see cref="DesktopPrivacy.HiddenApps"/> and <see cref="DesktopPrivacy.Regions"/> say so.</summary>
     public const string HideApps = "hideApps";
+    /// <summary>
+    /// Automatic sign-in on the console when nobody is signed in (<see cref="DesktopStart.AutoSignIn"/>, then
+    /// <see cref="DesktopStatusState.SignInReady"/> and <see cref="DesktopMessage.SignInRequest"/>).
+    /// </summary>
+    public const string AutoSignIn = "autoSignIn";
 }
 
 /// <summary>What may go through the clipboard (policy <c>DesktopClipboard</c>).</summary>
@@ -114,6 +119,11 @@ public enum DesktopMessage : byte
     Pong = 29,
     /// <summary>Both ways: transfer id (4), offset (8), data – the items of the transfer one after the other.</summary>
     TransferData = 30,
+    /// <summary>
+    /// RemoteHub → agent, only after <see cref="DesktopStatusState.SignInReady"/>: the password for the automatic sign-in –
+    /// length (2, in bytes), UTF-16LE. Never JSON; the agent reads it into protected memory (<see cref="DesktopWire.SignInRequest"/>).
+    /// </summary>
+    SignInRequest = 31,
 }
 
 /// <summary>How the signed-in user of the device is involved before their screen is shown.</summary>
@@ -152,6 +162,19 @@ public static class DesktopPrivacyStyle
     public static string Valid(string? style) => style is Black or Message ? style : Off;
 }
 
+/// <summary>What happens to a session created by automatic sign-in when its connection ends on purpose (§9.2).</summary>
+public static class AutoSignInEndActions
+{
+    public const string Lock = "Lock";
+    public const string SignOut = "SignOut";
+
+    /// <summary>Lock or SignOut; anything else is null (not set).</summary>
+    public static string? Valid(string? value) =>
+        string.Equals(value?.Trim(), SignOut, StringComparison.OrdinalIgnoreCase) ? SignOut
+        : string.Equals(value?.Trim(), Lock, StringComparison.OrdinalIgnoreCase) ? Lock
+        : null;
+}
+
 /// <summary>State of a Windows session as RemoteHub shows it.</summary>
 public static class DesktopSessionState
 {
@@ -179,12 +202,23 @@ public static class DesktopStatusState
     public const string Denied = "Denied";
     public const string Ended = "Ended";
     public const string Failed = "Failed";
+
+    // Automatic sign-in (DesktopStart.AutoSignIn), while Connected to the sign-in screen. Older RemoteHub versions never ask for it.
+    /// <summary>The agent waits for <see cref="DesktopMessage.SignInRequest"/> (30 s).</summary>
+    public const string SignInReady = "SignInReady";
+    public const string SigningIn = "SigningIn";
+    /// <summary>Windows signed the account in and the agent checked it is the right one; the picture follows into the new session.</summary>
+    public const string SignedIn = "SignedIn";
+    /// <summary>No automatic sign-in; the message says why. The connection stays on the sign-in screen.</summary>
+    public const string SignInFailed = "SignInFailed";
 }
 
 /// <summary>What the signed-in admin may do on this device (view is implied by a successful sign-in).</summary>
 /// <param name="PrivacyScreen">May black out the device's screen (right PrivacyScreen, policy, Windows 10 2004 or later).</param>
 /// <param name="PrivacyInputBlock">May also block the mouse and keyboard at the device while it is blacked out (policy PrivacyScreen = 2).</param>
-public sealed record DesktopRights(bool Control, bool SecureDesktop, bool ConsentBypass, bool PrivacyScreen = false, bool PrivacyInputBlock = false);
+/// <param name="AutoSignIn">May sign in automatically on the console when nobody is signed in (right, policy, credential provider installed and signed).</param>
+public sealed record DesktopRights(bool Control, bool SecureDesktop, bool ConsentBypass, bool PrivacyScreen = false, bool PrivacyInputBlock = false,
+    bool AutoSignIn = false);
 
 /// <param name="Client">For a remote (RDP) session: the name of the PC it is connected from ("" otherwise).</param>
 public sealed record DesktopSessionInfo(int Id, string User, string State, bool Console, string Station, string Client = "");
@@ -200,11 +234,14 @@ public sealed record DesktopHello(int Protocol, string Device, string Account, D
 /// user who allowed it isn't asked again while they are still the one signed in.
 /// </param>
 /// <param name="Features">What this RemoteHub supports (<see cref="DesktopFeatures"/>; null from older versions).</param>
+/// <param name="AutoSignIn">Sign in automatically with the account that signed in to the agent – only for the console in the SignIn state, not view-only.</param>
+/// <param name="AutoSignInEndAction">Lock or SignOut when the connection ends (the device's policy wins); null: Lock.</param>
 public sealed record DesktopStart(int SessionId, string Consent, bool ViewOnly, int FramesPerSecond, int Quality, int Monitor, string? Resume = null,
-    string[]? Features = null);
+    string[]? Features = null, bool AutoSignIn = false, string? AutoSignInEndAction = null);
 
 /// <param name="Resume">With Connected: a single-use token to continue after a dropped connection (see <see cref="DesktopStart.Resume"/>).</param>
-public sealed record DesktopStatus(string State, string Message, int PinAttemptsLeft = 0, string? Resume = null);
+/// <param name="EndAction">With SignedIn: what happens to the session when the connection ends on purpose (Lock or SignOut).</param>
+public sealed record DesktopStatus(string State, string Message, int PinAttemptsLeft = 0, string? Resume = null, string? EndAction = null);
 
 /// <summary>What the device sends: frames in the last 2 s per second, the encoder's current quality, how it captures.</summary>
 /// <param name="Fit">The last resolution change for the window: asked and what the monitor runs at now ("" when none).</param>
@@ -407,6 +444,33 @@ public static class DesktopWire
     }
 
     public static long ReadPing(ReadOnlySpan<byte> m) => m.Length >= 9 ? BinaryPrimitives.ReadInt64LittleEndian(m[1..]) : throw new InvalidDataException("Short ping.");
+
+    // Sign-in request: type, length in bytes (2), the password as UTF-16LE
+    public const int SignInRequestHeaderSize = 3;
+    public const int MaxSignInPasswordChars = 256;
+
+    /// <summary>
+    /// The password as a sign-in request – into a new array the caller wipes after sending (it holds the password in
+    /// the clear). Never through a string the caller keeps.
+    /// </summary>
+    public static byte[] SignInRequest(ReadOnlySpan<char> password)
+    {
+        if (password.Length is 0 or > MaxSignInPasswordChars) throw new ArgumentException("The password is empty or too long.");
+        var m = new byte[SignInRequestHeaderSize + password.Length * 2];
+        m[0] = (byte)DesktopMessage.SignInRequest;
+        BinaryPrimitives.WriteUInt16LittleEndian(m.AsSpan(1), (ushort)(password.Length * 2));
+        for (var i = 0; i < password.Length; i++) BinaryPrimitives.WriteUInt16LittleEndian(m.AsSpan(SignInRequestHeaderSize + i * 2), password[i]);
+        return m;
+    }
+
+    /// <summary>The password bytes (UTF-16LE) of a sign-in request, or empty if it is malformed.</summary>
+    public static ReadOnlySpan<byte> ReadSignInRequest(ReadOnlySpan<byte> m)
+    {
+        if (m.Length < SignInRequestHeaderSize || m[0] != (byte)DesktopMessage.SignInRequest) return default;
+        var length = BinaryPrimitives.ReadUInt16LittleEndian(m[1..]);
+        return length is > 0 and <= MaxSignInPasswordChars * 2 && length % 2 == 0 && m.Length == SignInRequestHeaderSize + length
+            ? m.Slice(SignInRequestHeaderSize, length) : default;
+    }
 
     // Transfer data: type, id (4), offset (8), data
     public const int TransferHeaderSize = 13;

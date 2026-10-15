@@ -40,6 +40,10 @@ Describe 'A-INST <VmName>' -Tag Agent, 'A-INST' {
         $health = Get-LabAgentHealth -Name $VmName -Pin $install.pin
         $health.product | Should -Be 'RemoteHub Agent'
         $health.deviceId | Should -Be $install.deviceId
+        $health.version | Should -Be (Get-LabMsiVersion (Get-LabAgentMsi))
+        $health.protocol | Should -Be 1
+        # jump hosts are on by default (policy TunnelEnabled)
+        @($health.features) | Should -Be @('powershell', 'desktop', 'tunnel')
     }
 
     It 'A-INST-04 keeps the enrolled certificate in LocalMachine\My with a non-exportable key' -Tag 'A-INST-04' {

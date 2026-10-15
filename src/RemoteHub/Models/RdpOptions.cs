@@ -56,6 +56,13 @@ public sealed class RdpOptions
     public bool? UseAgent { get; set; }
     /// <summary>Remote desktop through RDP or the RemoteHub Agent's own screen sharing (for devices where RDP is off).</summary>
     public DesktopVia? RemoteDesktopVia { get; set; }
+    /// <summary>
+    /// Agent remote desktop on a device where nobody is signed in: sign in automatically with the connection's credentials
+    /// (the device must allow it – policy NoUserBehavior, right AutoSignIn – and have the credential provider installed).
+    /// </summary>
+    public bool? AgentAutoSignIn { get; set; }
+    /// <summary>What the device does with a session RemoteHub signed in automatically when the connection ends: "Lock" or "SignOut" (the device's policy may decide).</summary>
+    public string? AgentAutoSignInEndAction { get; set; }
 
     public static RdpOptions BuiltInDefaults() => new()
     {
@@ -80,6 +87,8 @@ public sealed class RdpOptions
         PsUseSsl = false,
         UseAgent = false,
         RemoteDesktopVia = DesktopVia.Automatic,
+        AgentAutoSignIn = false,
+        AgentAutoSignInEndAction = "Lock",
     };
 
     public RdpOptions Clone() => (RdpOptions)MemberwiseClone();

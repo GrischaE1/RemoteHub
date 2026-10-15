@@ -68,4 +68,61 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
             Unlock-LabSession -Name $VmName
         }
     }
+
+    It 'SMOKE-08 has the guest clock within 2 minutes of the host' -Tag 'SMOKE-08' {
+        $guest = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Date).ToUniversalTime() }
+        [math]::Abs(((Get-Date).ToUniversalTime() - $guest).TotalSeconds) | Should -BeLessOrEqual 120
+    }
+
+    It 'SMOKE-09 has no reboot pending and Windows Update idle (else a warning in the report)' -Tag 'SMOKE-09' {
+        $state = Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $until = (Get-Date).AddMinutes(5)
+            while (@(Get-Process TiWorker -ErrorAction SilentlyContinue).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Seconds 10 }
+            [pscustomobject]@{
+                RebootPending = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+                    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+                Busy = @(Get-Process TiWorker -ErrorAction SilentlyContinue).Count -gt 0
+            }
+        }
+        $state | ConvertTo-Json | Set-Content (Join-Path $EvidenceDir 'smoke-pending.json') -Encoding UTF8
+        # a checkpoint with an update half done makes later scenarios flaky: the report shows it as skipped with the reason
+        if ($state.RebootPending -or $state.Busy) {
+            Set-ItResult -Skipped -Because "the checkpoint has $(if ($state.RebootPending) { 'a reboot pending' } else { 'Windows Update still busy after 5 min' }) - refresh it"
+        }
+    }
+
+    It 'SMOKE-10 records the keyboard layout; console typing round-trips a-z A-Z 0-9 and !@#$%' -Tag 'SMOKE-10' {
+        $text = 'abcxyzABCXYZ0189 !@#$%'
+        $file = 'C:\ProgramData\RemoteHubLab\session\smoke-typed.txt'
+        Set-LabAutoLogon -Name $VmName -Account User
+        $layout = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
+            param($u) (Get-ItemProperty "Registry::HKEY_USERS\$((New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value)\Keyboard Layout\Preload" -ErrorAction SilentlyContinue).'1'
+        }
+        Set-Content (Join-Path $EvidenceDir 'smoke-layout.txt') "keyboard layout: $layout"
+        # Notepad in the user's session, typed at the console, saved with Ctrl+S to a known file
+        $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("New-Item -ItemType File -Path '$file' -Force | Out-Null; notepad.exe '$file'"))
+        # the console's keys go to the foreground window: Notepad's must exist and be in front first
+        $ready = Invoke-LabInSession -Name $VmName -ScriptBlock {
+            $wsh = New-Object -ComObject WScript.Shell
+            $until = (Get-Date).AddSeconds(60)
+            do {
+                if (@(Get-Process notepad -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0).Count -gt 0 -and $wsh.AppActivate('smoke-typed')) { 'ready'; return }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $until)
+            'timeout'
+        }
+        if ("$ready" -notmatch 'ready') { throw "Notepad with smoke-typed.txt didn't come to the front within 60 s" }
+        Start-Sleep -Milliseconds 500
+        Send-LabText -Name $VmName -Text $text
+        $typed = Invoke-LabInSession -Name $VmName -ScriptBlock {
+            $wsh = New-Object -ComObject WScript.Shell
+            $null = $wsh.AppActivate('Notepad'); Start-Sleep -Milliseconds 500
+            $wsh.SendKeys('^s'); Start-Sleep -Seconds 2
+            Get-Content 'C:\ProgramData\RemoteHubLab\session\smoke-typed.txt' -Raw
+        }
+        Stop-LabInSession -Name $VmName -Task $task
+        Clear-LabAutoLogon -Name $VmName
+        $layout | Should -Not -BeNullOrEmpty
+        "$typed".Trim() | Should -Be $text
+    }
 }

@@ -1,9 +1,13 @@
 namespace RemoteHub.Agent;
 
 /// <summary>An account that passed the sign-in check. Owns its Windows token (if any).</summary>
-public sealed class ShellIdentity(string account, IntPtr token = default, IReadOnlyCollection<string>? groupSids = null) : IDisposable
+public sealed class ShellIdentity(string account, IntPtr token = default, IReadOnlyCollection<string>? groupSids = null, string? userSid = null) : IDisposable
 {
+    /// <summary>The account as Windows resolved it: DOMAIN\user, or COMPUTERNAME\user for a local account.</summary>
     public string Account { get; } = account;
+
+    /// <summary>The account's own SID (null where the authenticator doesn't know it). Automatic sign-in uses exactly this account.</summary>
+    public string? UserSid { get; } = userSid;
     internal IntPtr Token { get; private set; } = token;
 
     /// <summary>SIDs of the account and all its groups (from the sign-in token).</summary>

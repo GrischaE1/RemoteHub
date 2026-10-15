@@ -65,11 +65,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         _privacyRight = control && PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off && identity.InAny(policy.Groups(AgentRight.PrivacyScreen));
         _privacyInputRight = _privacyRight && policy.PrivacyScreen == PrivacyScreenLevel.WithInputBlock;
         string[] features = PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off ? [.. Features, DesktopFeatures.PrivacyScreen] : Features;
+        var autoSignInWhyNot = AutoSignInRefusal(policy, control);
+        var autoSignInRight = autoSignInWhyNot is null;
+        if (autoSignInRight) features = [.. features, DesktopFeatures.AutoSignIn];
+        // The device allows it by policy, yet it isn't offered: say why, so the log answers "where is the option?"
+        else if (policy.NoUserBehavior == NoUserBehaviors.AutoSignIn && sessions.Any(s => s.Console && s.State == DesktopSessionState.SignIn))
+            o.Log.Write($"Desktop: automatic sign-in not offered to {identity.Account}: {autoSignInWhyNot}");
 
         try
         {
             await SendWs(DesktopWire.Json(DesktopMessage.Hello, new DesktopHello(DesktopProtocol.Version, o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName,
-                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
+                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight, autoSignInRight), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
                 policy.ConsentTimeoutSeconds, features, _clipboard, AgentHost.AgentVersion), DesktopJson.Default.DesktopHello), ct);
 
             // ---- Start
@@ -100,7 +106,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             if (resumed is not null)
             {
                 _allowedBy = resumed.AllowedBy;
-                _screen = _privacyRight && (resumed.Screen?.BlockLocalInput != true || _privacyInputRight) ? resumed.Screen : null;
+                _screen = _privacyRight && (resumed.Screen?.BlockLocalInput != true || _privacyInputRight) || resumed.ScreenByService ? resumed.Screen : null;
+                _screenByService = resumed.ScreenByService && _screen is not null;
+                // A session automatic sign-in created: this connection takes over its end action and the cover kept since the drop.
+                if (o.Desktop!.AutoSigned.Owned(session.Id) is { } owned && string.Equals(owned.Sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
+                {
+                    _autoSigned = (session.Id, owned.EndAction);
+                    _parkedHelper = o.Desktop.AutoSigned.Resumed(session.Id);
+                }
             }
 
             // The user is asked only when someone is signed in and using the session; the sign-in and lock screen show nothing
@@ -117,7 +130,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 : modes.Contains(DesktopConsent.Ask) ? DesktopConsent.Ask : modes[0];
             var consent = active && !alreadyAllowed ? start.Consent : DesktopConsent.None;
             // The admin's own signed-in session: they choose – connect right away, ask, or show a code.
-            var ownSession = active && IsSelf(session.User);
+            var ownSession = active && IsSelfSession(session);
             if (active && !alreadyAllowed && !modes.Contains(consent) && !(ownSession && consent == DesktopConsent.None))
             {
                 await Refuse($"Connecting with \"{start.Consent}\" isn't allowed on this device.");
@@ -129,7 +142,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 return;
             }
             if (consent == DesktopConsent.Pin) _pin = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
-            what = $"{(_viewOnly ? "view-only" : "control")}, session {session.Id} ({(session.User.Length > 0 ? session.User : "sign-in screen")}), " +
+            // Automatic sign-in: decided now (§6.2 checks 1–5); the sign-in itself runs once the sign-in screen is shown.
+            var autoSignInRefused = start.AutoSignIn && resumed is null ? AutoSignInStartRefusal(policy, control, session) : null;
+            var autoSignIn = start.AutoSignIn && resumed is null && autoSignInRefused is null;
+            what =$"{(_viewOnly ? "view-only" : "control")}, session {session.Id} ({(session.User.Length > 0 ? session.User : "sign-in screen")}), " +
                 (resumed is not null ? $"continued after a dropped connection (allowed by {(_allowedBy.Length > 0 ? _allowedBy : "nobody yet")})"
                 : active ? $"consent {consent}" : $"consent {consent} (on unlock or sign-in: {followUp})");
 
@@ -151,7 +167,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 OfferToViewer: start.Features?.Contains(DesktopFeatures.TransferOnPaste) == true,
                 // Continued after a dropped connection, nobody new asked: what the user hid stays hidden.
                 UserHidden: resumed is not null && consent == DesktopConsent.None ? resumed.UserHidden : DesktopScreenHide.None,
-                HiddenApps: resumed is not null && consent == DesktopConsent.None ? resumed.HiddenApps : null, AlwaysHidden: [.. policy.HiddenApps]);
+                HiddenApps: resumed is not null && consent == DesktopConsent.None ? resumed.HiddenApps : null, AlwaysHidden: [.. policy.HiddenApps],
+                SignedInRemotely: _autoSigned?.Session == session.Id); // continued in the session automatic sign-in created
             _hiddenApps = init.HiddenApps;
             _privacy = _privacy with { User = init.UserHidden };
             _settings = new DesktopSettings(init.Monitor, init.FramesPerSecond, init.Quality);
@@ -178,9 +195,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             _resume.HiddenApps = _hiddenApps;
             _resume.Screen = _screen;
             if (_screen is { } resumedScreen) await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, resumedScreen, DesktopJson.Default.DesktopPrivacyScreen), ct);
+            _resume.ScreenByService = _screenByService;
+            if (_parkedHelper is { } parked) { _parkedHelper = null; parked.Dispose(); } // the new helper covers the screen now
             await Status(DesktopStatusState.Connected, _viewOnly ? "Connected (view only)." : "Connected.", ct, resume: _resume.Token);
             o.Log.Audit(resumed is not null ? AuditEvent.DesktopResumed : AuditEvent.DesktopStarted,
                 $"Desktop session {(resumed is not null ? "continued" : "started")}: {identity.Account} from {source} – {what}");
+            if (autoSignInRefused is { } refusedWhy) await RefuseAutoSignIn(refusedWhy.Code, refusedWhy.Message, ct);
+            else if (autoSignIn)
+            {
+                var endAction = policy.AutoSignInEndAction ?? AutoSignInEndActions.Valid(start.AutoSignInEndAction) ?? AutoSignInEndActions.Lock;
+                _ = Task.Run(() => AutoSignInAsync(session.Id, endAction, ct), ct);
+            }
 
             // The helper can end without anyone wanting it: signing in switches desktops and often moves the console to a
             // new session. Then a new helper is started (in the console's current session). The connection was allowed –
@@ -190,7 +215,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             while (true)
             {
                 var watch = Task.Delay(TimeSpan.FromSeconds(2), ct);
-                var ended = await Task.WhenAny(fromClient, fromHelper, watch);
+                var ended = await Task.WhenAny(fromClient, fromHelper, watch, _endRequested.Task);
+                if (ended == _endRequested.Task) break;
                 if (ended == fromClient)
                 {
                     if (fromClient.IsFaulted)
@@ -250,7 +276,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 var now = await SessionNow(target, userDesktop, ct);
                 var signedIn = now is { State: DesktopSessionState.Active };
                 // Whoever signed in is asked – unless it is the user who allowed it, or the admin signing in with their own account.
-                var self = signedIn && !SameUser(now!.User, _allowedBy) && IsSelf(now.User);
+                var self = signedIn && !SameUser(now!.User, _allowedBy) && IsSelfSession(now);
                 if (self)
                 {
                     _allowedBy = now!.User;
@@ -279,7 +305,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 // The user who hid their screen keeps it hidden in the new helper; someone else signing in decides for themselves.
                 await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.Init, init with { Consent = mode, Pin = mode == DesktopConsent.Pin ? _pin : "",
                     Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold, Gdi = _gdi,
-                    UserHidden = ask ? DesktopScreenHide.None : _privacy.User, HiddenApps = ask ? null : _hiddenApps },
+                    UserHidden = ask ? DesktopScreenHide.None : _privacy.User, HiddenApps = ask ? null : _hiddenApps,
+                    // The session automatic sign-in created (or is creating) for this admin: no banner for anyone at the device.
+                    SignedInRemotely = signedIn && !ask && (_autoSignInPending || _autoSigned?.Session == target) && IsSelfSession(now!) },
                     HelperJson.Default.HelperInit), ct);
                 if (ask)
                 {
@@ -341,12 +369,229 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             cts.Cancel();
             if (_connected && _resume?.TakenOver != true)
                 o.Log.Audit(AuditEvent.DesktopEnded, $"Desktop session ended: {identity.Account} from {source} after {(DateTime.UtcNow - started):hh\\:mm\\:ss} – {what} ({_endReason})");
+            // A session automatic sign-in created (§9.2): ended on purpose → its end action; dropped → its screen stays covered
+            // by this helper for a while (a continued connection takes over), then it is signed out.
+            if (_autoSigned is { } mine && _resume?.TakenOver != true)
+            {
+                if (_lost && _helper is { } cover && _helperSession == mine.Session)
+                {
+                    _helper = null;
+                    o.Desktop!.AutoSigned.Dropped(mine.Session, cover, o.Log);
+                }
+                else o.Desktop!.AutoSigned.EndOnPurpose(mine.Session, o.Log, _lost ? "connection lost, nothing to cover the screen" : _endReason,
+                    _lost ? AutoSignInEndActions.SignOut : null);
+            }
+            _parkedHelper?.Dispose();
             _helper?.Dispose();
             if (_virtualShown) VirtualDisplay.Hide(); // switched off with the last connection that needed it
             // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not.
-            if (_resume is { } r) { if (_lost) r.Release(); else r.Revoke(); }
+            if (_resume is { } r) { if (_lost) r.Release(_autoSigned is not null ? AutoSignInSessions.HoldAfterDrop : null); else r.Revoke(); }
+            if (_signInRequest.Task.IsCompletedSuccessfully) _signInRequest.Task.Result.Dispose(); // sent but never used
         }
     }
+
+    // ---- automatic sign-in (docs/credential-provider-design.md §6)
+
+    // Ends the connection from outside the main loop (the sign-in runs beside it) the same clean way as the other ends: the
+    // main loop stops and the close in its finally lets the last status reach RemoteHub. Cancelling the connection instead
+    // aborted the WebSocket, which could drop that status (seen as "connection lost" in RemoteHub).
+    private readonly TaskCompletionSource _endRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private (int Session, string EndAction)? _autoSigned; // the session automatic sign-in created, while this connection owns it
+    private bool _screenByService;                         // the privacy screen is the service's (automatic sign-in), not the admin's
+    private volatile bool _autoSignInPending;              // the sign-in went to Windows; its session isn't confirmed yet
+    private IDesktopHelper? _parkedHelper;                 // the dropped connection's helper, ended once this one covers the screen
+    private volatile bool _signInReady; // a SignInRequest is expected now – at any other time it ends the connection
+    private readonly TaskCompletionSource<ProtectedSecret> _signInRequest = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Attempts per account on the whole device (§6.2 check 7); tests replace it.</summary>
+    internal static AutoSignInGate AutoSignInAttempts = new();
+
+    /// <summary>Whether this account may sign in automatically on this device at all (Hello): null = yes, else why not.</summary>
+    private string? AutoSignInRefusal(AgentPolicy p, bool control) =>
+        p.NoUserBehavior != NoUserBehaviors.AutoSignIn ? "Automatic sign-in is turned off on this device (policy NoUserBehavior)."
+        : !identity.InAny(p.Groups(AgentRight.AutoSignIn)) ? "Your account may not sign in automatically on this device (right AutoSignIn)."
+        : !control || !identity.InAny(p.Groups(AgentRight.SecureDesktop)) ? "Automatic sign-in needs the rights Desktop and SecureDesktop on this device."
+        : identity.UserSid is null ? "The account's SID is unknown."
+        : p.AutoSignInRequirePrivacyScreen && !(PrivacyScreenSupported && p.PrivacyScreen != PrivacyScreenLevel.Off)
+            ? "Automatic sign-in needs the privacy screen on this device, which isn't available (policy AutoSignInRequirePrivacyScreen)."
+        : o.Desktop?.AutoSignIn is not { } broker ? "Automatic sign-in isn't available on this device."
+        : broker.Unavailable() is { } why ? $"Automatic sign-in isn't available on this device: {why}."
+        : null;
+
+    /// <summary>§6.2 checks 1–5 for this start: null = go ahead, else the reason code and text.</summary>
+    private (string Code, string Message)? AutoSignInStartRefusal(AgentPolicy p, bool control, DesktopSessionInfo session)
+    {
+        if (AutoSignInRefusal(p, control) is { } why)
+            return (o.Desktop?.AutoSignIn?.Unavailable() is not null ? AutoSignInFailure.Unavailable : AutoSignInFailure.NotAllowed, why);
+        if (_viewOnly) return (AutoSignInFailure.NotAllowed, "Automatic sign-in isn't available in a view-only connection.");
+        return SessionRefusal(session.Id) is { } state ? (state.Code, state.Message) : null;
+    }
+
+    /// <summary>§6.2 checks 4–5: the console in the SignIn state, and no other session of this account.</summary>
+    private (string Code, string Message)? SessionRefusal(int sessionId)
+    {
+        var sessions = o.Desktop!.Sessions;
+        if (sessions.ConsoleSessionId() != sessionId) return (AutoSignInFailure.SessionState, "Automatic sign-in works only on the device's console.");
+        var list = sessions.List();
+        if (list.FirstOrDefault(s => s.Id == sessionId) is not { State: DesktopSessionState.SignIn })
+            return (AutoSignInFailure.SessionState, "Someone is signed in on the console now – automatic sign-in only works when nobody is.");
+        // On client Windows, signing in on the console would take over an RDP session of the same account.
+        if (list.Any(s => s.User.Length > 0 && string.Equals(sessions.UserSid(s.Id), identity.UserSid, StringComparison.OrdinalIgnoreCase)))
+            return (AutoSignInFailure.ExistingSession, "This account already has a session on the device – connect to that session instead.");
+        return null;
+    }
+
+    private async Task RefuseAutoSignIn(string code, string message, CancellationToken ct)
+    {
+        o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {message} ({code})");
+        await Status(DesktopStatusState.SignInFailed, message, ct);
+    }
+
+    /// <summary>
+    /// SignInReady → the password from RemoteHub (30 s) → the provider signs the account in → the new session's user is
+    /// checked against the account's SID. The picture follows the console into the new session (the main loop), where
+    /// the operator's own account is connected to without asking.
+    /// </summary>
+    private async Task AutoSignInAsync(int sessionId, string endAction, CancellationToken ct)
+    {
+        try
+        {
+            _signInReady = true;
+            await Status(DesktopStatusState.SignInReady, $"Ready to sign in as {identity.Account}.", ct);
+            ProtectedSecret secret;
+            using (var wait = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                wait.CancelAfter(TimeSpan.FromSeconds(30));
+                try { secret = await _signInRequest.Task.WaitAsync(wait.Token); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    await RefuseAutoSignIn(AutoSignInFailure.Timeout, "RemoteHub didn't send the sign-in in time.", ct);
+                    return;
+                }
+                finally { _signInReady = false; }
+            }
+
+            AutoSignInResult result;
+            using (secret)
+            {
+                if (!AutoSignInAttempts.TryBegin(identity.UserSid!))
+                {
+                    await RefuseAutoSignIn(AutoSignInFailure.RateLimit, "Too many automatic sign-ins for this account – try again in 15 minutes, or sign in at the sign-in screen.", ct);
+                    return;
+                }
+                await Status(DesktopStatusState.SigningIn, $"Signing in as {identity.Account}…", ct);
+                // §9.1: the new session starts covered – every helper started in it gets the privacy screen after Begin.
+                var p = o.CurrentPolicy();
+                if (PrivacyScreenSupported && p.PrivacyScreen != PrivacyScreenLevel.Off)
+                {
+                    // Always with the device's keyboard and mouse blocked: the session is the admin's, nobody at the device may type into it.
+                    _screen = new DesktopPrivacyScreen(DesktopPrivacyStyle.Message, BlockLocalInput: true);
+                    _screenByService = true;
+                    _resume?.Screen = _screen;
+                    _resume?.ScreenByService = true;
+                }
+                var slash = identity.Account.IndexOf('\\');
+                var (domain, user) = slash < 0 ? (Environment.MachineName, identity.Account) : (identity.Account[..slash], identity.Account[(slash + 1)..]);
+                _autoSignInPending = true;
+                result = await o.Desktop!.AutoSignIn!.SignInAsync(new AutoSignInRequest(sessionId, domain, user, identity.UserSid!, secret,
+                    () => RecheckAutoSignIn(sessionId), o.Desktop.SecureAttention), ct);
+            }
+            if (!result.Ok)
+            {
+                if (result.Code == AutoSignInFailure.Windows)
+                    o.Log.Audit(AuditEvent.AutoSignInFailed, $"Automatic sign-in failed: {identity.Account} from {source} – Windows reported 0x{result.Status:X8} (0x{result.Substatus:X8}): {result.Message}");
+                else o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {result.Message} ({result.Code})");
+                if (_screenByService) { _screen = null; _screenByService = false; _resume?.Screen = null; _resume?.ScreenByService = false; }
+                await Status(DesktopStatusState.SignInFailed, result.Message, ct);
+                return;
+            }
+
+            // §6.3: the console's new session must belong to exactly this account – otherwise it is signed out at once.
+            int? console = null;
+            string? sid = null;
+            for (var i = 0; i < 60 && sid is null; i++)
+            {
+                console = o.Desktop.Sessions.ConsoleSessionId();
+                sid = console is { } c ? o.Desktop.Sessions.UserSid(c) : null;
+                if (sid is null) await Task.Delay(500, ct);
+            }
+            if (!string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
+            {
+                if (console is { } wrong && sid is not null) o.Desktop.Sessions.LogOff(wrong);
+                o.Log.Audit(AuditEvent.AutoSignInMismatch, $"Automatic sign-in: the console session {console?.ToString() ?? "?"} has " +
+                    $"{(sid is null ? "no readable user" : $"user {sid}")}, not {identity.Account} ({identity.UserSid}){(sid is null ? "" : " – signed out")}");
+                _endReason = "automatic sign-in ended up with another account";
+                await Status(DesktopStatusState.Ended, "The automatic sign-in couldn't be confirmed, so it was undone. Details are in the agent's log.", ct);
+                _endRequested.TrySetResult();
+                return;
+            }
+            o.Desktop.AutoSigned.Signed(console!.Value, sid!, identity.Account, endAction);
+            _autoSigned = (console.Value, endAction);
+            o.Log.Audit(AuditEvent.AutoSignInSucceeded, $"Automatic sign-in: {identity.Account} from {source} signed in to console session {console} " +
+                $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")})");
+            await SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(DesktopStatusState.SignedIn, $"Signed in as {identity.Account}.", EndAction: endAction),
+                DesktopJson.Default.DesktopStatus), ct);
+        }
+        catch (OperationCanceledException) { /* the connection ended */ }
+        catch (Exception ex) when (ex is WebSocketException or IOException or ObjectDisposedException) { /* gone */ }
+        catch (Exception ex)
+        {
+            o.Log.Audit(AuditEvent.DesktopError, $"Automatic sign-in: unexpected error ({identity.Account} from {source}): {ex}");
+            try { await Status(DesktopStatusState.SignInFailed, "The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
+        }
+        finally { _autoSignInPending = false; } // confirmed (_autoSigned from now on), failed or undone
+    }
+
+    /// <summary>Right before the ticket goes out (§6.2): the policy and right still allow it, and the console is still waiting.</summary>
+    private string? RecheckAutoSignIn(int sessionId)
+    {
+        var now = o.CurrentPolicy();
+        if (now.NoUserBehavior != NoUserBehaviors.AutoSignIn || !identity.InAny(now.Groups(AgentRight.AutoSignIn)))
+            return "Automatic sign-in was turned off on this device meanwhile.";
+        return SessionRefusal(sessionId)?.Message;
+    }
+
+    /// <summary>
+    /// The sign-in request is read straight into its own pinned buffer and protected at once – never into the
+    /// message buffers every other message goes through, never into a string (§10.1). Answers a one-byte marker.
+    /// </summary>
+    private async Task<byte[]> ReceiveSignInRequest(int firstCount, bool endOfMessage, CancellationToken ct)
+    {
+        var buffer = GC.AllocateArray<byte>(DesktopWire.SignInRequestHeaderSize + DesktopWire.MaxSignInPasswordChars * 2, pinned: true);
+        try
+        {
+            var length = 0;
+            var count = firstCount;
+            while (true)
+            {
+                if (length + count > buffer.Length)
+                {
+                    ProtectedSecret.CryptographicWipe(_receive.AsSpan(0, count));
+                    throw new InvalidDataException("Sign-in request too large.");
+                }
+                _receive.AsSpan(0, count).CopyTo(buffer.AsSpan(length));
+                ProtectedSecret.CryptographicWipe(_receive.AsSpan(0, count));
+                length += count;
+                if (endOfMessage) break;
+                var r = await _ws.ReceiveAsync(_receive, ct);
+                if (r.MessageType == WebSocketMessageType.Close) throw new WebSocketException("Closed during a sign-in request.");
+                count = r.Count;
+                endOfMessage = r.EndOfMessage;
+            }
+            if (!_signInReady || _signInRequest.Task.IsCompleted) throw new InvalidDataException("A sign-in request the agent didn't ask for.");
+            var password = DesktopWire.ReadSignInRequest(buffer.AsSpan(0, length));
+            if (password.IsEmpty) throw new InvalidDataException("Malformed sign-in request.");
+            _signInRequest.TrySetResult(new ProtectedSecret(password));
+            return [(byte)DesktopMessage.SignInRequest];
+        }
+        finally { ProtectedSecret.CryptographicWipe(buffer); }
+    }
+
+    /// <summary>The session's user is this account – by SID where Windows tells it (§6.3), else by name.</summary>
+    private bool IsSelfSession(DesktopSessionInfo s) =>
+        identity.UserSid is { } mine && o.Desktop?.Sessions.UserSid(s.Id) is { } theirs
+            ? string.Equals(mine, theirs, StringComparison.OrdinalIgnoreCase)
+            : IsSelf(s.User);
 
     /// <summary>A disconnected session has no screen: the picture stands still – RemoteHub says why, and when it is back.</summary>
     private async Task PausedCheck(DesktopServices desktop, CancellationToken ct)
@@ -759,14 +1004,20 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         finally { _pipeWrite.Release(); }
     }
 
+    /// <summary>One receive buffer for the connection, pinned so a sign-in request never leaves copies behind when the GC moves it.</summary>
+    private readonly byte[] _receive = GC.AllocateArray<byte>(64 * 1024, pinned: true);
+
     private async Task<byte[]?> ReceiveWs(CancellationToken ct)
     {
-        var buffer = new byte[64 * 1024];
+        var buffer = _receive;
         using var message = new MemoryStream();
         while (true)
         {
             var r = await _ws.ReceiveAsync(buffer, ct);
             if (r.MessageType == WebSocketMessageType.Close) return null;
+            // A sign-in request goes its own way from its first byte on – never into the MemoryStream (§10.1).
+            if (message.Length == 0 && r.Count > 0 && buffer[0] == (byte)DesktopMessage.SignInRequest)
+                return await ReceiveSignInRequest(r.Count, r.EndOfMessage, ct);
             message.Write(buffer, 0, r.Count);
             if (message.Length > DesktopProtocol.MaxMessageBytes) throw new InvalidDataException("Message too large.");
             if (!r.EndOfMessage) continue;
@@ -804,13 +1055,16 @@ internal static class DesktopResume
         /// <summary>The admin's privacy screen, if it was on: on again in the continued connection.</summary>
         public DesktopPrivacyScreen? Screen { get; set; }
 
+        /// <summary>The service put the privacy screen up (automatic sign-in): it comes back whatever the account's right.</summary>
+        public bool ScreenByService { get; set; }
+
         /// <summary>The apps the user hid: still hidden in the continued connection.</summary>
         public string[]? HiddenApps { get; set; }
 
-        /// <summary>The connection broke: usable for <see cref="Window"/>.</summary>
-        public void Release()
+        /// <summary>The connection broke: usable for <see cref="Window"/> (or longer: a session automatic sign-in created).</summary>
+        public void Release(TimeSpan? window = null)
         {
-            ExpiresUtc = DateTime.UtcNow + Window;
+            ExpiresUtc = DateTime.UtcNow + (window ?? Window);
             Ended.TrySetResult();
         }
 

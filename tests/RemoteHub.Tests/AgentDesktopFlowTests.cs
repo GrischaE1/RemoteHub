@@ -40,12 +40,25 @@ public class AgentDesktopFlowTests
             };
             if (sids is null) return A.AuthResult.Fail(A.AuthOutcome.BadCredentials, "bad");
             if (!groups.Intersect(sids).Any()) return A.AuthResult.Fail(A.AuthOutcome.NotAllowed, "not allowed");
-            return new A.AuthResult(A.AuthOutcome.Ok, "", new A.ShellIdentity("TEST\\" + userName[2..], default, sids));
+            return new A.AuthResult(A.AuthOutcome.Ok, "", new A.ShellIdentity("TEST\\" + userName[2..], default, sids, SidOf(userName[2..])));
         }
     }
 
+    /// <summary>The test accounts' SIDs (automatic sign-in checks the account by SID).</summary>
+    private static string SidOf(string user) => user switch { "admin" => "S-1-5-21-7-7-7-1001", "admin2" => "S-1-5-21-7-7-7-1002", _ => "S-1-5-21-7-7-7-1003" };
+
     private sealed class Sessions(params A.DesktopSessionInfo[] list) : A.IDesktopSessions
     {
+        /// <summary>Who is signed in to a session, by SID (none: the session's name decides).</summary>
+        public readonly ConcurrentDictionary<int, string> Sids = new();
+        public readonly ConcurrentQueue<int> LogOffs = new();
+        public string? UserSid(int session) => Sids.TryGetValue(session, out var sid) ? sid : null;
+        /// <summary>Set to make Windows refuse a sign-out / a lock.</summary>
+        public volatile bool RefuseLogOff, RefuseDisconnect;
+        // A sign-out ends the session: nobody is signed in to it afterwards.
+        public bool LogOff(int session) { if (RefuseLogOff) return false; LogOffs.Enqueue(session); Sids.TryRemove(session, out _); return true; }
+        public readonly ConcurrentQueue<int> Disconnects = new();
+        public bool Disconnect(int session) { if (RefuseDisconnect) return false; Disconnects.Enqueue(session); return true; }
         /// <summary>Set to simulate the console moving to another session (someone signs in).</summary>
         public volatile int Console = list.FirstOrDefault(s => s.Console)?.Id ?? 0;
         /// <summary>Replaced to simulate an unlock or sign-in.</summary>
@@ -120,6 +133,9 @@ public class AgentDesktopFlowTests
         public void OfferHideApps(IReadOnlySet<string> hidden, IReadOnlySet<string> always, Action<IReadOnlySet<string>> chosen) => (OfferedHidden, OfferedAlways, Chosen) = (hidden, always, chosen);
         public void ShowPin(A.HelperInit init, Action denied) { Pin = init.Pin; if (!allow) Task.Run(denied); }
         public void ShowBanner(A.HelperInit init, Action disconnect, Action<string> hide) { Banner = true; Disconnect = disconnect; Hide = hide; }
+        /// <summary>The account shown instead of the banner, in a session automatic sign-in created.</summary>
+        public volatile string? SignedInRemotely;
+        public void ShowSignedInRemotely(A.HelperInit init) => SignedInRemotely = init.Account;
         /// <summary>The banner's "Hide screen" / "Show screen": plays the user at the device.</summary>
         public volatile Action<string>? Hide;
         public volatile A.DesktopPrivacy? Shown;
@@ -227,14 +243,15 @@ public class AgentDesktopFlowTests
     private static readonly A.DesktopSessionInfo LoginScreen = new(2, "", A.DesktopSessionState.SignIn, false, "Console");
 
     private static async Task<Device> StartDevice(bool allow = true, bool secureScreen = false, A.AgentPolicy? policy = null, Func<int, Screen>? screens = null,
-        Func<int, bool>? allowAt = null, Func<string?>? secureAttention = null, IReadOnlySet<string>? pickOnConsent = null)
+        Func<int, bool>? allowAt = null, Func<string?>? secureAttention = null, IReadOnlySet<string>? pickOnConsent = null,
+        A.IAutoSignIn? autoSignIn = null, A.DesktopSessionInfo[]? sessionList = null)
     {
         var cert = SelfSigned();
         var input = new Input();
         var uis = 0;
         var apps = new Apps();
         var helpers = new InProcessHelpers(() => new Ui(allowAt?.Invoke(Interlocked.Increment(ref uis)) ?? allow) { PickOnConsent = pickOnConsent }, screens ?? (_ => new Screen(secureScreen)), input, apps);
-        var sessions = new Sessions(ActiveUser, LoginScreen);
+        var sessions = new Sessions(sessionList ?? [ActiveUser, LoginScreen]);
         var config = new A.AgentConfig { DeviceId = "dev", DeviceLabel = "Device 1", ListenPort = 0 };
         policy ??= new A.AgentPolicy
         {
@@ -251,7 +268,7 @@ public class AgentDesktopFlowTests
         var audits = new ConcurrentQueue<A.AuditEvent>();
         log.Audited += (id, _) => audits.Enqueue(id);
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new Auth(), null!, log, IPAddress.Loopback,
-            new A.DesktopServices(sessions, helpers, secureAttention ?? (() => null)), () => policy));
+            new A.DesktopServices(sessions, helpers, secureAttention ?? (() => null), autoSignIn), () => policy));
         await app.StartAsync();
         return new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Apps = apps, Sessions = sessions, Audits = audits };
     }
@@ -317,8 +334,8 @@ public class AgentDesktopFlowTests
             }
         }
 
-        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null) =>
-            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features), DesktopJson.Default.DesktopStart));
+        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
+            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
 
         public void Dispose() => Client.Dispose();
     }
@@ -1399,6 +1416,486 @@ public class AgentDesktopFlowTests
     {
         (int, int)[] modes = [(800, 600), (1024, 768), (1280, 720), (1600, 900), (1920, 1080)];
         Assert.Equal((ew, eh), A.DisplayModes.Choose(modes, w, h));
+    }
+
+    // ---- automatic sign-in (docs/credential-provider-design.md §6)
+
+    /// <summary>Stands in for the credential provider broker; <see cref="Answer"/> plays Windows (and may sign someone in).</summary>
+    private sealed class FakeAutoSignIn : A.IAutoSignIn
+    {
+        public volatile string? Why;
+        public volatile string? Password;
+        public volatile A.AutoSignInRequest? Request;
+        public int Calls;
+        public Func<A.AutoSignInRequest, A.AutoSignInResult>? Answer;
+        public string? Unavailable() => Why;
+        public Task<A.AutoSignInResult> SignInAsync(A.AutoSignInRequest r, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            Request = r;
+            r.Password.Reveal(p => Password = System.Text.Encoding.Unicode.GetString(p));
+            return Task.FromResult(r.Recheck() is { } changed ? A.AutoSignInResult.Failed(A.AutoSignInFailure.SessionChanged, changed)
+                : Answer?.Invoke(r) ?? new A.AutoSignInResult(true, "", "Signed in."));
+        }
+    }
+
+    private static readonly A.DesktopSessionInfo ConsoleSignIn = new(2, "", A.DesktopSessionState.SignIn, true, "Console");
+
+    private static A.AgentPolicy AutoSignInPolicy(bool right = true, string behavior = A.NoUserBehaviors.AutoSignIn) => new()
+    {
+        NoUserBehavior = behavior,
+        Rights = new Dictionary<A.AgentRight, IReadOnlyList<string>>
+        {
+            [A.AgentRight.PowerShell] = [Admins],
+            [A.AgentRight.Desktop] = [Admins],
+            [A.AgentRight.DesktopViewOnly] = [Users],
+            [A.AgentRight.SecureDesktop] = [Admins],
+            [A.AgentRight.AutoSignIn] = right ? [Admins] : [],
+        },
+    };
+
+    /// <summary>Windows signs the asked account in: the console moves to a new session of that user.</summary>
+    private static Func<A.AutoSignInRequest, A.AutoSignInResult> SignsIn(Sessions sessions, string sid, string user = @"TEST\admin") => r =>
+    {
+        sessions.Sids[3] = sid;
+        sessions.Current = [new A.DesktopSessionInfo(3, user, A.DesktopSessionState.Active, true, "Console")];
+        sessions.Console = 3;
+        return new A.AutoSignInResult(true, "", "Signed in.");
+    };
+
+    [Fact]
+    public async Task Automatic_sign_in_is_offered_only_with_policy_right_and_a_working_provider()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        async Task<bool> Offered(A.AgentPolicy policy, A.IAutoSignIn? broker)
+        {
+            await using var d = await StartDevice(policy: policy, autoSignIn: broker, sessionList: [ConsoleSignIn]);
+            using var v = await Connect(d);
+            Assert.Equal(v.Client.Hello.Rights.AutoSignIn, v.Client.Hello.Features?.Contains(DesktopFeatures.AutoSignIn) == true);
+            return v.Client.Hello.Rights.AutoSignIn;
+        }
+        Assert.True(await Offered(AutoSignInPolicy(), new FakeAutoSignIn()));
+        Assert.False(await Offered(AutoSignInPolicy(), null));                                         // no provider on the device
+        Assert.False(await Offered(AutoSignInPolicy(), new FakeAutoSignIn { Why = "not signed" }));   // provider not usable
+        Assert.False(await Offered(AutoSignInPolicy(right: false), new FakeAutoSignIn()));             // nobody has the right (default)
+        Assert.False(await Offered(AutoSignInPolicy(behavior: A.NoUserBehaviors.SignInScreen), new FakeAutoSignIn())); // policy off
+    }
+
+    [Fact]
+    public async Task Automatic_sign_in_sends_the_password_when_asked_and_continues_in_the_new_session_without_asking()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        broker.Answer = SignsIn(d.Sessions, SidOf("admin"));
+        using var v = await Connect(d);
+
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        Assert.Equal(DesktopStatusState.SignInReady, v.Next(DesktopStatusState.SignInReady).State);
+        var request = DesktopWire.SignInRequest("pw");
+        v.Client.Send(request);
+        Assert.Equal(DesktopStatusState.SignedIn, v.Next(DesktopStatusState.SignedIn).State);
+
+        Assert.Equal("pw", broker.Password);
+        Assert.Equal(("TEST", "admin", SidOf("admin"), ConsoleSignIn.Id), (broker.Request!.Domain, broker.Request.User, broker.Request.Sid, broker.Request.Session));
+        Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        // The picture follows into the new session – the operator's own account: nobody is asked.
+        WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
+        Assert.All(d.Helpers.Uis, u => Assert.Equal(0, u.Asked));
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    [Fact]
+    public async Task Automatic_sign_in_is_refused_in_view_only_and_when_the_account_has_a_session()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        var rdp = new A.DesktopSessionInfo(5, @"TEST\admin", A.DesktopSessionState.Disconnected, false, "RDP-Tcp#1");
+        await using (var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn]))
+        using (var v = await Connect(d))
+        {
+            v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, viewOnly: true, autoSignIn: true);
+            Assert.Contains("view-only", v.Next(DesktopStatusState.SignInFailed).Message);
+        }
+        await using (var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn, rdp]))
+        using (var v = await Connect(d))
+        {
+            d.Sessions.Sids[5] = SidOf("admin");
+            v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+            Assert.Contains("already has a session", v.Next(DesktopStatusState.SignInFailed).Message);
+            Assert.Contains(A.AuditEvent.AutoSignInRefused, d.Audits);
+        }
+        Assert.Equal(0, broker.Calls);
+    }
+
+    [Fact]
+    public async Task A_sign_in_request_nobody_asked_for_ends_the_connection()
+    {
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: new FakeAutoSignIn(), sessionList: [ConsoleSignIn]);
+        using var v = await Connect(d);
+        var closed = new TaskCompletionSource();
+        v.Client.Closed += _ => closed.TrySetResult();
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask); // no automatic sign-in asked for
+        v.Next(DesktopStatusState.Connected);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.True(await Task.WhenAny(closed.Task, Task.Delay(15000)) == closed.Task, "the connection should end");
+    }
+
+    [Fact]
+    public async Task Another_account_on_the_console_after_the_sign_in_is_signed_out_at_once()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        broker.Answer = SignsIn(d.Sessions, "S-1-5-21-9-9-9-500", @"TEST\someone");
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.Equal(DesktopStatusState.Ended, v.Next(DesktopStatusState.Ended).State);
+        WaitFor(() => d.Sessions.LogOffs.Contains(3), "the wrong session signed out");
+        Assert.Contains(A.AuditEvent.AutoSignInMismatch, d.Audits);
+    }
+
+    [Fact]
+    public async Task Windows_refusing_the_sign_in_is_reported_and_the_sign_in_screen_stays()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn { Answer = _ => new A.AutoSignInResult(false, A.AutoSignInFailure.Windows, A.AutoSignInStatus.Describe(unchecked((int)0xC000006D), 0), unchecked((int)0xC000006D)) };
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn]);
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("old password"));
+        Assert.Contains("password was wrong", v.Next(DesktopStatusState.SignInFailed).Message);
+        Assert.Contains(A.AuditEvent.AutoSignInFailed, d.Audits);
+        Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
+    }
+
+    // ---- phase 4: after the sign-in (design §9)
+
+    private static A.AgentPolicy WithEndAction(A.AgentPolicy p, string? endAction) => new()
+    {
+        NoUserBehavior = p.NoUserBehavior, Rights = p.Rights, AutoSignInEndAction = endAction, PrivacyScreen = A.PrivacyScreenLevel.WithInputBlock,
+    };
+
+    private static async Task<(Device D, Viewer V, FakeAutoSignIn Broker)> SignedIn(A.AgentPolicy policy, string? endAction = null)
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        var d = await StartDevice(policy: policy, autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        broker.Answer = SignsIn(d.Sessions, SidOf("admin"));
+        var v = await Connect(d);
+        v.Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(ConsoleSignIn.Id, DesktopConsent.Ask, false, 30, 60, 0, null, null, true, endAction),
+            DesktopJson.Default.DesktopStart));
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        return (d, v, broker);
+    }
+
+    [Fact]
+    public async Task The_new_session_starts_behind_the_privacy_screen_with_local_input_blocked()
+    {
+        if (!A.DesktopEndpoint.PrivacyScreenSupported) return; // Windows 10 2004 and later
+        var (d, v, _) = await SignedIn(AutoSignInPolicy());
+        await using var _d = d;
+        using var _v = v;
+        var signed = v.Next(DesktopStatusState.SignedIn);
+        Assert.Equal(A.AutoSignInEndActions.Lock, signed.EndAction); // nothing chosen: lock
+        WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
+        var helperInNewSession = d.Helpers.SessionIds.IndexOf(3);
+        WaitFor(() => d.Helpers.Uis.Count > helperInNewSession && !d.Helpers.Uis[helperInNewSession].Screens.IsEmpty, "the privacy screen in the new session");
+        Assert.True(d.Helpers.Uis[helperInNewSession].Screens.TryPeek(out var screen));
+        Assert.Equal((A.DesktopPrivacyStyle.Message, true), (screen!.Style, screen.BlockLocalInput));
+        Assert.True(d.Helpers.Uis.Take(helperInNewSession).All(u => u.Screens.IsEmpty)); // the sign-in screen itself isn't covered
+        // The admin's own session: no banner ("Hide screen", "Disconnect") for whoever stands at the device.
+        var ui = d.Helpers.Uis[helperInNewSession];
+        Assert.NotNull(ui.SignedInRemotely);
+        Assert.False(ui.Banner);
+    }
+
+    [Theory]
+    [InlineData(0x2C, false, false, false, true)]  // Print Screen
+    [InlineData(0x2C, false, true, false, true)]   // with a modifier, too
+    [InlineData(0x53, true, true, false, true)]    // Win+Shift+S
+    [InlineData(0x53, true, false, false, false)]  // Win+S: search
+    [InlineData(0x53, false, true, false, false)]  // Shift+S: a capital S
+    [InlineData(0x09, false, false, true, true)]   // Alt+Tab
+    [InlineData(0x09, true, false, false, true)]   // Win+Tab: Task view
+    [InlineData(0x09, false, true, false, false)]  // Shift+Tab
+    [InlineData(0x09, false, false, false, false)] // Tab
+    public void The_privacy_screen_drops_the_snip_and_switcher_keys(int vk, bool win, bool shift, bool alt, bool dropped) =>
+        Assert.Equal(dropped, A.SnipGuard.IsSnipKey(vk, win, shift, alt));
+
+    [Theory]
+    [InlineData(@"C:\Windows\SystemApps\MicrosoftWindows.Client.Core_cw5n1h2txyewy\ScreenClippingHost.exe", true)]
+    [InlineData(@"C:\Program Files\WindowsApps\Microsoft.ScreenSketch_11.2409.25.0_x64__8wekyb3d8bbwe\SnippingTool\SnippingTool.exe", true)]
+    [InlineData(@"C:\Windows\System32\SnippingTool.exe", true)]
+    [InlineData(@"C:\Windows\explorer.exe", false)]
+    public void The_privacy_screen_knows_the_snipping_tools(string path, bool snip) => Assert.Equal(snip, A.SnipGuard.IsSnipProgram(path));
+
+    [Theory]
+    [InlineData(null, null, false)]                                        // nothing chosen: lock
+    [InlineData(null, A.AutoSignInEndActions.SignOut, true)]               // RemoteHub's setting
+    [InlineData(A.AutoSignInEndActions.Lock, A.AutoSignInEndActions.SignOut, false)] // the device's policy wins
+    public async Task Ending_the_connection_on_purpose_locks_or_signs_out_the_session(string? policyAction, string? connectionAction, bool signsOut)
+    {
+        var (d, v, _) = await SignedIn(WithEndAction(AutoSignInPolicy(), policyAction), connectionAction);
+        await using var _d = d;
+        v.Next(DesktopStatusState.SignedIn);
+        WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
+        v.Dispose(); // RemoteHub closes the tab
+        WaitFor(() => (signsOut ? d.Sessions.LogOffs : d.Sessions.Disconnects).Contains(3), signsOut ? "sign-out" : "lock");
+        Assert.Empty(signsOut ? d.Sessions.Disconnects : d.Sessions.LogOffs);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
+    }
+
+    /// <summary>A helper whose output the test controls (it plays the helper left covering the screen after a drop).</summary>
+    private sealed class CoverHelper : A.IDesktopHelper
+    {
+        private readonly AnonymousPipeServerStream _out = new(PipeDirection.Out);
+        public readonly AnonymousPipeClientStream Reader;
+        public volatile bool Disposed;
+        public CoverHelper() => Reader = new AnonymousPipeClientStream(PipeDirection.In, _out.ClientSafePipeHandle);
+        public Stream Input => Stream.Null;
+        public Stream Output => Reader;
+        public int ProcessId => 0;
+        public void End(bool byUser) => A.DesktopWire.WriteFramedAsync(_out, A.DesktopWire.Json((A.DesktopMessage)A.HelperMessage.End, new A.HelperEnd("x", byUser), A.HelperJson.Default.HelperEnd), CancellationToken.None).Wait();
+        public void Dispose() { Disposed = true; _out.Dispose(); }
+    }
+
+    private static (Sessions S, A.AutoSignInSessions Auto, A.AgentLog Log) AutoSignedSession(string state = A.DesktopSessionState.Active)
+    {
+        var s = new Sessions(new A.DesktopSessionInfo(3, @"TEST\admin", state, true, "Console"));
+        s.Sids[3] = SidOf("admin");
+        var auto = new A.AutoSignInSessions(s);
+        auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock);
+        return (s, auto, new A.AgentLog("", 1));
+    }
+
+    [Fact]
+    public void A_dropped_connection_keeps_the_screen_covered_then_signs_out_even_with_lock_chosen()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(400);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            auto.Dropped(3, helper, log);
+            Thread.Sleep(150);
+            Assert.Empty(s.LogOffs);       // still covered, waiting for a resume
+            Assert.False(helper.Disposed);
+            WaitFor(() => s.LogOffs.Contains(3), "sign-out after the hold");
+            WaitFor(() => helper.Disposed, "the cover ends once the session is gone");
+            Assert.Empty(s.Disconnects);   // not the end action: a drop always signs out
+            Assert.Null(auto.Owned(3));
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Fact]
+    public void A_refused_sign_out_locks_the_session_before_the_cover_ends()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(200);
+        A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(30);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            s.RefuseLogOff = true;
+            auto.Dropped(3, helper, log);
+            WaitFor(() => s.Disconnects.Contains(3), "locked when the sign-out is refused");
+            WaitFor(() => helper.Disposed, "the cover ends once the session is locked");
+            Assert.Null(auto.Owned(3));
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(60); }
+    }
+
+    [Fact]
+    public void Neither_signed_out_nor_locked_the_cover_and_the_record_stay()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            s.RefuseLogOff = s.RefuseDisconnect = true;
+            auto.Dropped(3, helper, log);
+            Thread.Sleep(1000);
+            Assert.False(helper.Disposed);      // still covering
+            Assert.NotNull(auto.Owned(3));      // kept for the next start
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Fact]
+    public void An_end_action_Windows_refused_stays_recorded_for_the_next_start()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"rh-autosignin-{Guid.NewGuid():N}.json");
+        try
+        {
+            var s = new Sessions(new A.DesktopSessionInfo(3, @"TEST\admin", A.DesktopSessionState.Active, true, "Console"));
+            s.Sids[3] = SidOf("admin");
+            var auto = new A.AutoSignInSessions(s, file);
+            auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock);
+            s.RefuseDisconnect = true;
+            Assert.Equal("couldn't be locked", auto.EndOnPurpose(3, new A.AgentLog("", 1), "test"));
+            Assert.True(File.Exists(file));
+            Assert.False(File.Exists(file + ".tmp"));
+
+            s.RefuseDisconnect = false;
+            new A.AutoSignInSessions(s, file).Recover(new A.AgentLog("", 1)); // the next start locks it
+            Assert.Contains(3, s.Disconnects);
+            Assert.False(File.Exists(file));
+        }
+        finally { File.Delete(file); File.Delete(file + ".tmp"); }
+    }
+
+    [Fact]
+    public void A_resume_within_the_hold_keeps_the_session()
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(300);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession();
+            var helper = new CoverHelper();
+            auto.Dropped(3, helper, log);
+            Assert.Same(helper, auto.Resumed(3));          // handed back to end once the new helper covers the screen
+            Assert.Equal(A.AutoSignInEndActions.Lock, auto.Owned(3)?.EndAction); // the new connection owns the end action
+            Thread.Sleep(600);
+            Assert.Empty(s.LogOffs);
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Theory]
+    [InlineData(true, A.DesktopSessionState.Active, true)]    // Disconnect on the device's banner: signed out at once
+    [InlineData(false, A.DesktopSessionState.Active, true)]   // the cover crashed on an open desktop: signed out at once
+    [InlineData(false, A.DesktopSessionState.Locked, false)]  // locked at the device (Ctrl+Alt+Del → Lock): safe, the hold runs out
+    public void When_the_cover_ends_during_the_hold(bool byUser, string state, bool signedOutAtOnce)
+    {
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromSeconds(30);
+        try
+        {
+            var (s, auto, log) = AutoSignedSession(state);
+            var helper = new CoverHelper();
+            auto.Dropped(3, helper, log);
+            helper.End(byUser);
+            if (signedOutAtOnce) WaitFor(() => s.LogOffs.Contains(3), "sign-out at once");
+            else { Thread.Sleep(500); Assert.Empty(s.LogOffs); }
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
+    }
+
+    [Fact]
+    public void After_a_restart_left_sessions_get_their_end_action_and_dropped_ones_are_signed_out()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"rh-autosignin-{Guid.NewGuid():N}.json");
+        try
+        {
+            var s = new Sessions(new A.DesktopSessionInfo(3, @"TEST\admin", A.DesktopSessionState.Active, true, "Console"),
+                new A.DesktopSessionInfo(4, @"TEST\admin2", A.DesktopSessionState.Active, false, "RDP"),
+                new A.DesktopSessionInfo(5, @"TEST\other", A.DesktopSessionState.Active, false, "RDP"));
+            s.Sids[3] = SidOf("admin");
+            s.Sids[4] = SidOf("admin2");
+            s.Sids[5] = "S-1-5-21-9-9-9-500"; // session 5 belongs to someone else now
+            var before = new A.AutoSignInSessions(s, file);
+            before.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock);
+            before.Signed(4, SidOf("admin2"), @"TEST\admin2", A.AutoSignInEndActions.Lock);
+            before.Signed(5, SidOf("viewer"), @"TEST\viewer", A.AutoSignInEndActions.SignOut);
+            before.Dropped(4, new CoverHelper(), new A.AgentLog("", 1)); // the agent "crashes" during the hold
+            Assert.True(File.Exists(file));
+
+            new A.AutoSignInSessions(s, file).Recover(new A.AgentLog("", 1)); // the next start
+            Assert.Contains(3, s.Disconnects);  // its end action: lock
+            Assert.Contains(4, s.LogOffs);      // dropped: signed out
+            Assert.DoesNotContain(5, s.LogOffs); // not the account's any more: left alone
+            Assert.False(File.Exists(file));
+        }
+        finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void Automatic_sign_in_attempts_are_limited_per_account()
+    {
+        var now = new DateTime(2026, 10, 14, 12, 0, 0, DateTimeKind.Utc);
+        var gate = new A.AutoSignInGate(clock: () => now);
+        Assert.True(gate.TryBegin("S-1"));
+        Assert.True(gate.TryBegin("S-1"));
+        Assert.True(gate.TryBegin("S-1"));
+        Assert.False(gate.TryBegin("S-1"));
+        Assert.True(gate.TryBegin("S-2"));   // another account (also behind the same jump host) isn't blocked
+        now = now.AddMinutes(15);
+        Assert.True(gate.TryBegin("S-1"));
+    }
+
+    [Fact]
+    public void Automatic_sign_in_policy_values()
+    {
+        var config = new A.AgentConfig { AllowedGroups = [Admins] };
+        var d = A.AgentPolicy.From(config, null);
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, d.NoUserBehavior);
+        Assert.Empty(d.Groups(A.AgentRight.AutoSignIn));  // nobody by default
+        Assert.False(d.AutoSignInRequirePrivacyScreen);
+        var p = A.AgentPolicy.From(config, new Values(new()
+        {
+            ["NoUserBehavior"] = new[] { "autosignin" },
+            ["AutoSignInRequirePrivacyScreen"] = 1,
+            [@"Rights\AutoSignIn"] = new[] { Admins },
+        }));
+        Assert.Equal(A.NoUserBehaviors.AutoSignIn, p.NoUserBehavior);
+        Assert.True(p.AutoSignInRequirePrivacyScreen);
+        Assert.Equal([Admins], p.Groups(A.AgentRight.AutoSignIn));
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, A.AgentPolicy.From(config, new Values(new() { ["NoUserBehavior"] = new[] { "anything" } })).NoUserBehavior);
+        Assert.Empty(A.AgentPolicy.Refused("x").Groups(A.AgentRight.AutoSignIn));
+    }
+
+    [Fact]
+    public void Pipe_messages_match_the_credential_provider()
+    {
+        // The same bytes as the provider's Wire.h: version 1, type, payload length, payload.
+        var nonce = Enumerable.Range(0, 16).Select(i => (byte)(0xA0 + i)).ToArray();
+        var pending = A.AutoSignInWire.WritePending(nonce, 0x01020304);
+        Assert.Equal(new byte[] { 1, A.AutoSignInWire.Pending, 20, 0 }, pending[..4]);
+        Assert.Equal(nonce, pending[4..20]);
+        Assert.Equal(new byte[] { 4, 3, 2, 1 }, pending[20..]);
+
+        var ticket = new byte[A.AutoSignInWire.MaxMessageBytes];
+        var n = A.AutoSignInWire.WriteTicket(ticket, nonce, "D", "u", "S", System.Text.Encoding.Unicode.GetBytes("pw"));
+        Assert.Equal(new byte[] { 1, A.AutoSignInWire.Ticket, (byte)(n - 4), 0 }, ticket[..4]);
+        Assert.Equal(new byte[] { 1, 0, (byte)'D', 0, 1, 0, (byte)'u', 0, 1, 0, (byte)'S', 0, 2, 0, (byte)'p', 0, (byte)'w', 0 }, ticket[20..n]);
+        Assert.Throws<ArgumentException>(() => A.AutoSignInWire.WriteTicket(ticket, nonce, "D", "", "S", "pw"u8));
+
+        // A Claim and a Result from the provider, as its Wire.cpp writes them.
+        var claim = new byte[] { 1, A.AutoSignInWire.Claim, 20, 0 }.Concat(nonce).Concat(new byte[] { 4, 3, 2, 1 }).ToArray();
+        Assert.True(A.AutoSignInWire.IsClaim(claim, nonce, 0x01020304));
+        Assert.False(A.AutoSignInWire.IsClaim(claim, nonce, 7));
+        Assert.False(A.AutoSignInWire.IsClaim(claim[..^1], nonce, 0x01020304));
+        var result = new byte[] { 1, A.AutoSignInWire.Result, 24, 0 }.Concat(nonce).Concat(new byte[] { 0x6D, 0, 0, 0xC0, 0x6A, 0, 0, 0xC0 }).ToArray();
+        Assert.Equal((unchecked((int)0xC000006D), unchecked((int)0xC000006A)), A.AutoSignInWire.ReadResult(result, nonce));
+        Assert.Null(A.AutoSignInWire.ReadResult(result, new byte[16]));
+    }
+
+    [Fact]
+    public void The_sign_in_request_carries_the_password_as_utf16_and_rejects_malformed_ones()
+    {
+        var m = DesktopWire.SignInRequest("pä");
+        Assert.Equal((byte)DesktopMessage.SignInRequest, m[0]);
+        Assert.Equal("pä", System.Text.Encoding.Unicode.GetString(A.DesktopWire.ReadSignInRequest(m)));
+        Assert.True(A.DesktopWire.ReadSignInRequest(m[..^1]).IsEmpty);
+        Assert.Throws<ArgumentException>(() => DesktopWire.SignInRequest(""));
+        Assert.Throws<ArgumentException>(() => DesktopWire.SignInRequest(new string('x', 257)));
+    }
+
+    [Fact]
+    public void A_protected_secret_gives_its_clear_text_only_inside_the_callback()
+    {
+        using var s = new A.ProtectedSecret("secret"u8);
+        string? seen = null;
+        s.Reveal(p => seen = System.Text.Encoding.UTF8.GetString(p));
+        Assert.Equal("secret", seen);
+        s.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => s.Reveal(_ => { }));
     }
 
     private sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues
