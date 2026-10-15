@@ -565,17 +565,24 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-HIDE-02 | The user hides | the user at the device hides the screen or chosen apps ("Allow and hide apps…") → event 1105 and a Privacy message; kept after a resume without a new question; cleared when another user signs in | H S E | 1 | ✅ | |
 | D-HIDE-03 | Policy apps aren't the user's | today policy `HiddenApps` count as user-hidden: the first Privacy message has hiddenApps=1, the banner "1 app hidden", 1105 "the user … hides 1 app(s)" – product finding | PS H S E | 3 | ◐ | |
 
-### 9.11b Shell surfaces over the privacy screen (in development)
+### 9.11b Shell surfaces and the Ctrl+Alt+Del screen over the privacy screen
 
-In development (another branch, spike/uiaccess-overlay): the helper's token gets UIAccess (policy `HelperUIAccess`, DWORD, on unless 0) so the overlays sit above Start, Search and the other shell surfaces. `lab/tests/D-SHELL.Tests.ps1`; no design section yet (`privacy-mode-design.md` "Spike: UIAccess overlay" is referenced but missing). Not part of the release gate until merged.
+The helper's token gets UIAccess (policy `HelperUIAccess`, DWORD, on unless 0), so the overlays sit above Start, Search and the other shell surfaces ([privacy-mode-design.md](privacy-mode-design.md) §5.8, `lab/tests/D-SHELL.Tests.ps1`). While local input is blocked, the Ctrl+Alt+Del screen offers only Task Manager and Cancel, and its other actions come back afterwards (§5.9, `lab/tests/D-CADHIDE.Tests.ps1`; the MSI must be built with the credential provider). Both ran on W11 26H2 and Server 2025.
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| D-SHELL-01 | Helper token UIAccess switch | helper token TokenUIAccess 1 by default, 0 with `HelperUIAccess`=0 | PS H | 2 | ○ |
-| D-SHELL-02 | Shell surfaces stay covered | with UIAccess and `PrivacyScreen`=2: Start, Search, Quick Settings, Notification Center, a toast, a taskbar thumbnail → the console below the banner strip < 0.5 % bright (Alt+Tab / Task View are dropped by SnipGuard, D-PRIV-05) | H C S | 1 | ○ |
-| D-SHELL-03 | Overlays still excluded from capture | overlays keep `WDA_EXCLUDEFROMCAPTURE` (0x11) with UIAccess | H S | 1 | ○ |
-| D-SHELL-04 | Banner above the overlays | the banner's z-order above the overlays | S | 2 | ○ |
-| D-SHELL-05 | Disconnect still works | the device's user ends the session with *Disconnect* through the input block → Ended "The user at the device ended the session." | H S | 1 | ○ |
+| D-SHELL-01 | Helper token UIAccess switch | helper token TokenUIAccess 1 by default, 0 with `HelperUIAccess`=0 | PS H | 2 | ✅ |
+| D-SHELL-02 | Shell surfaces stay covered | with UIAccess and `PrivacyScreen`=2: Start, Search, Quick Settings, Notification Center, a toast, a taskbar thumbnail → the console below the banner strip < 0.5 % bright (Alt+Tab / Task View are dropped by SnipGuard, D-PRIV-05) | H C S | 1 | ✅ |
+| D-SHELL-03 | Overlays still excluded from capture | overlays keep `WDA_EXCLUDEFROMCAPTURE` (0x11) with UIAccess | H S | 1 | ✅ |
+| D-SHELL-04 | Banner above the overlays | the banner's z-order above the overlays | S | 2 | ✅ |
+| D-SHELL-05 | Disconnect still works | the device's user ends the session with *Disconnect* through the input block → Ended "The user at the device ended the session." | H S | 1 | ✅ |
+| D-SHELL-06 | The admin still sees them | with UIAccess: Start, Search, Quick Settings, Notification Center, the thumbnail and the toast are in the admin's picture (> 0.5 % of the pixels changed) | H | 1 | ✅ |
+| D-CADHIDE-01 | Control | before any connection: none of the values set; Ctrl+Alt+Del at the console offers Lock and Task Manager | PS C | 2 | ✅ |
+| D-CADHIDE-02 | Hidden while input is blocked | privacy screen with input blocked: `DisableLockWorkstation`, `DisableChangePassword`, `NoLogoff`, `NoClose` (session user) and `HideFastUserSwitching` (machine) = 1, `DisableTaskMgr` not set; the Ctrl+Alt+Del screen offers only Task Manager | PS C | 1 | ✅ |
+| D-CADHIDE-03 | Unblocked while connected | input unblocked → put back; blocked again → hidden again | PS | 1 | ✅ |
+| D-CADHIDE-04 | Put back at the end | the connection ends → the values as before, no `sas-actions-*.txt` left | PS | 1 | ✅ |
+| D-CADHIDE-05 | Put back after a crash | service and helper killed while hidden → still hidden; the service's start puts them back, log "actions an earlier helper hid are back" | PS H | 1 | ✅ |
+| D-CADHIDE-06 | Automatic sign-in | in the admin's new session (input always blocked) → hidden, Ctrl+Alt+Del offers only Task Manager; put back when the connection ends | PS C H | 1 | ✅ |
 
 ### 9.12 Automatic sign-in – credential provider (C-PROV)
 
