@@ -769,22 +769,26 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
 
         private uint _timerMs;
 
-        /// <summary>Null when the window is up; for an overlay, why it couldn't be shown (then nothing is shown).</summary>
-        public string? Show()
+        /// <summary>The scale (1 = 96 DPI) and the fonts at it; Show uses the system's, a test lays out at any (Destroy frees them).</summary>
+        internal void UseScale(float scale)
         {
-            _s = Math.Max(1, GetDpiForSystem() / 96f);
+            _s = scale;
             _font = Font(14, 400);
             _bold = Font(14, 600);
             _small = Font(12, 400);
             _heading = Font(18, 600);
             _code = Font(30, 600);
-            if (kind == FluentKind.Overlay)
-            {
-                _eyebrow = Font(13, 700);
-                _title = Font(40, 600);
-                _lead = Font(20, 400);
-                return ShowOverlay();
-            }
+            if (kind != FluentKind.Overlay) return;
+            _eyebrow = Font(13, 700);
+            _title = Font(40, 600);
+            _lead = Font(20, 400);
+        }
+
+        /// <summary>Null when the window is up; for an overlay, why it couldn't be shown (then nothing is shown).</summary>
+        public string? Show()
+        {
+            UseScale(Math.Max(1, GetDpiForSystem() / 96f));
+            if (kind == FluentKind.Overlay) return ShowOverlay();
             if (Items is { Count: > 0 }) _focusRow = 0; // the keyboard starts in the list
             int sx = GetSystemMetrics(0), sy = GetSystemMetrics(1);
             int w, h;
@@ -862,12 +866,16 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
 
         public void Destroy()
         {
-            if (Handle == IntPtr.Zero) return;
-            KillTimer(Handle, 1);
-            KillTimer(Handle, CollapseTimer);
-            DestroyWindow(Handle);
-            Handle = IntPtr.Zero;
+            if (Handle != IntPtr.Zero)
+            {
+                KillTimer(Handle, 1);
+                KillTimer(Handle, CollapseTimer);
+                DestroyWindow(Handle);
+                Handle = IntPtr.Zero;
+            }
+            // The fonts also without a window (one that couldn't be created, or a test's layout).
             foreach (var f in new[] { _font, _bold, _small, _heading, _code, _eyebrow, _title, _lead }) if (f != IntPtr.Zero) DeleteObject(f);
+            _font = _bold = _small = _heading = _code = _eyebrow = _title = _lead = IntPtr.Zero;
         }
 
         private IntPtr Font(int px, int weight) => CreateFontW(-S(px), 0, 0, 0, weight, 0, 0, 0, 1, 0, 0, 5 /* CLEARTYPE */, 0, "Segoe UI");
@@ -1293,6 +1301,33 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                 FillRect(g, 0, 0, w, h, OverlayBlack);
                 return;
             }
+            var l = Layout(w, h);
+            FillRect(g, 0, 0, w, h, Theme.OverlayBackground);
+            if (l.Logo.Bottom > l.Logo.Top)
+            {
+                var size = l.Logo.Bottom - l.Logo.Top;
+                DrawGlow(g, w / 2f, l.Logo.Top + size / 2f, Math.Max(w, h) * 0.32f);
+                DrawLogo(g, (w - size) / 2f, l.Logo.Top, size);
+            }
+            if (l.ShowsFootnote) DrawFootnote(dc, g, w, l.Footnote.Top, l.Footnote.Bottom - l.Footnote.Top);
+            GdipFlush(g, 1); // GDI+ drawing first, then the text (GDI)
+            SetTextCharacterExtra(dc, l.Spacing); // placed by its spaced width (DrawText would centre it without the spacing)
+            Text(dc, _eyebrow, Subtitle, (w - l.EyebrowWidth) / 2, l.Eyebrow.Top, l.EyebrowWidth + l.Spacing, l.Eyebrow.Bottom - l.Eyebrow.Top, Theme.AccentLight);
+            SetTextCharacterExtra(dc, 0);
+            TextBlock(dc, l.Compact ? _heading : _title, Heading, (w - l.Wide) / 2, l.Heading.Top, l.Wide, theme.Text, center: true);
+            TextBlock(dc, l.Compact ? _font : _lead, Body, (w - l.Inner) / 2, l.Body.Top, l.Inner, theme.Secondary, center: true);
+            if (l.Notice.Bottom > l.Notice.Top) TextBlock(dc, _font, Notice, (w - l.Inner) / 2, l.Notice.Top, l.Inner, theme.Text, center: true);
+            if (l.ShowsFootnote) FillRect(g, (w - S(72)) / 2, l.Divider, S(72), S(2), Theme.Accent);
+        }
+
+        /// <summary>Where the privacy screen's parts go on a monitor of w×h pixels: rows as (top, bottom), empty when left out.</summary>
+        internal sealed record OverlayLayout(bool Compact, bool ShowsFootnote, int Wide, int Inner, int Spacing, int EyebrowWidth, int FootnoteWidth,
+            (int Top, int Bottom) Logo, (int Top, int Bottom) Eyebrow, (int Top, int Bottom) Heading, (int Top, int Bottom) Body,
+            (int Top, int Bottom) Notice, int Divider, (int Top, int Bottom) Footnote);
+
+        /// <summary>The privacy screen's layout (needs the fonts: Show or UseScale).</summary>
+        internal OverlayLayout Layout(int w, int h)
+        {
             // Logo 32 eyebrow 14 heading 12 body (16 notice) 28 divider 28 footnote. On a short screen the logo shrinks; where
             // that isn't enough, compact type and half the gaps, then no logo – the words always come first. The divider and
             // footnote only where their row fits on one line and in the height left.
@@ -1313,7 +1348,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             double k = 1; // the gaps' scale
             int logo = 0, text = 0;
             var foot = false;
-            for (var pass = 0; pass < 3; pass++)
+            var pass = 0;
+            for (; pass < 3; pass++)
             {
                 (title, lead, k) = pass == 0 ? (_title, _lead, 1.0) : (_heading, _font, 0.5);
                 var minLogo = pass < 2 ? S(pass == 0 ? 48 : 32) : 0;
@@ -1326,25 +1362,22 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             }
             var height = logo + text;
             var y = Math.Max(S(Pad), (h - height) / 2);
-
-            FillRect(g, 0, 0, w, h, Theme.OverlayBackground);
             var top = y;
-            if (logo > 0)
+            (int, int) Row(int gapBefore, int rowHeight)
             {
-                DrawGlow(g, w / 2f, y + logo / 2f, Math.Max(w, h) * 0.32f);
-                DrawLogo(g, (w - logo) / 2f, y, logo);
-                y += logo + S(32 * k);
+                y += gapBefore;
+                var row = (y, y + rowHeight);
+                y += rowHeight;
+                return row;
             }
-            if (foot) DrawFootnote(dc, g, w, top + height - footH, footH);
-            GdipFlush(g, 1); // GDI+ drawing first, then the text (GDI)
-            SetTextCharacterExtra(dc, extra); // placed by its spaced width (DrawText would centre it without the spacing)
-            Text(dc, _eyebrow, Subtitle, (w - eyebrowW) / 2, y, eyebrowW + extra, eyebrowH, Theme.AccentLight);
-            SetTextCharacterExtra(dc, 0);
-            y += eyebrowH + S(14 * k);
-            y += TextBlock(dc, title, Heading, (w - wide) / 2, y, wide, theme.Text, center: true) + S(12 * k);
-            y += TextBlock(dc, lead, Body, (w - inner) / 2, y, inner, theme.Secondary, center: true);
-            if (noticeH > 0) y += S(16 * k) + TextBlock(dc, _font, Notice, (w - inner) / 2, y + S(16 * k), inner, theme.Text, center: true);
-            if (foot) FillRect(g, (w - S(72)) / 2, y + S(29 * k), S(72), S(2), Theme.Accent);
+            var logoRow = Row(0, logo);
+            var eyebrowRow = Row(logo > 0 ? S(32 * k) : 0, eyebrowH);
+            var headingRow = Row(S(14 * k), TextHeight(title, Heading, wide));
+            var bodyRow = Row(S(12 * k), TextHeight(lead, Body, inner));
+            var noticeRow = noticeH > 0 ? Row(S(16 * k), noticeH) : (y, y);
+            var divider = y + S(29 * k);
+            var footRow = foot ? (top + height - footH, top + height) : (y, y);
+            return new(pass > 0, foot, wide, inner, extra, eyebrowW, footW, logoRow, eyebrowRow, headingRow, bodyRow, noticeRow, divider, footRow);
         }
 
         /// <summary>A soft round glow in OverlayGlow, fading out into the background at the radius.</summary>
