@@ -100,10 +100,17 @@ internal static class DesktopHelperProgram
         // RDP windows in this session keep drawing when minimized while the admin is here (put back when this ends);
         // tried again until someone is signed in. Disposed in reverse order: the timer first, then the setting is put back.
         using var keepRdp = new KeepRdpDrawing();
+        // Ctrl+Alt+Del screen actions an earlier helper in this session hid and couldn't put back (it was killed): put
+        // back once the user's hive is loaded, also when this connection never blocks input (SasActions).
+        var leftovers = new SasActions();
+        var reconciled = false;
         using var tryRdp = new Timer(_ =>
         {
             try { if (keepRdp.Apply() is { } done) session.Note(done); }
             catch (Exception ex) { session.Note("RDP minimize setting not changed: " + ex.Message); keepRdp.Dispose(); }
+            if (reconciled) return;
+            try { reconciled = leftovers.TryReconcile(out var back); if (back is not null) session.Note(back); }
+            catch (Exception ex) { reconciled = true; session.Note("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
         }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5));
         session.RunAsync(CancellationToken.None).GetAwaiter().GetResult();
         return 0;

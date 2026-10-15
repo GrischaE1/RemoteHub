@@ -281,8 +281,10 @@ Not hidden: the network and accessibility buttons in the corner. Windows has no 
 - **Exactly as before:** an existing value comes back as it was, and an absent one is deleted.
 - **Several connections:** each helper that hides them registers as an owner (`sas-owner-<sid>-<pid>-<id>.txt`). A user's values come back only when no other live owner for that user remains, and Switch user only when no live owner at all remains. An owner whose process is gone doesn't count.
 - **One at a time:** a system mutex orders the helpers and the service. If it can't be taken within 5 s, nothing is changed and the step is logged.
+- **Failures:** the helper registers as owner before it changes anything. If hiding fails part-way, it puts back its own part. If putting back fails, it stays the helper's job, and the next unblock or the helper's end tries again.
 - **A helper that was killed:**
-  - The next helper in that session keeps the original record.
+  - The next helper in that session puts its leftovers back as soon as the user's hive is loaded, even when that connection never blocks input. Anything another live helper still hides is left alone.
+  - A helper that hides them again keeps the original record.
   - The service puts everything back when it starts. No helper runs then, so all records are leftovers.
   - A user's hive that isn't loaded at that moment (the user signed out) keeps its record until that user's next connection.
 - **Log:** each step writes a line ("Ctrl+Alt+Del screen: …"). There is no audit event.

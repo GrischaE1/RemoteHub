@@ -139,6 +139,64 @@ public class SasActionsTests : IDisposable
     }
 
     [Fact]
+    public void A_new_helper_puts_back_what_a_killed_one_left_also_without_blocking_input()
+    {
+        var killed = New();
+        killed.Hide(Sid1);
+        var live = New();
+        live.Hide(Sid2); // another session still hides Switch user
+        foreach (var owner in Directory.GetFiles(_folder, $"sas-owner-{Sid1}-*.txt"))
+            File.Move(owner, Path.Combine(_folder, $"sas-owner-{Sid1}-2147483646-dead0000.txt"));
+
+        Assert.True(New().TryReconcile(out var note, Sid1)); // the next connection to Sid1's session, input not blocked
+        Assert.NotNull(note);
+        foreach (var (key, name) in A.SasActions.UserValues) Assert.Null(User(Sid1, key, name));
+        foreach (var (key, name) in A.SasActions.MachineValues) Assert.Equal(1, Machine(key, name)); // still needed by Sid2
+        AllHidden(Sid2);
+
+        Assert.True(New().TryReconcile(out var again, Sid1));
+        Assert.Null(again); // nothing left
+    }
+
+    [Fact]
+    public void Reconcile_waits_for_the_hive_and_leaves_what_a_live_helper_owns()
+    {
+        var sas = New();
+        sas.Hide(Sid1);
+        Assert.True(New().TryReconcile(out var note, Sid1));
+        Assert.Null(note);
+        AllHidden(Sid1); // its owner still runs
+
+        var noHive = new A.SasActions(_folder, _ => null, _machine);
+        Assert.False(noHive.TryReconcile(out _, Sid1)); // not loaded yet: try again later
+    }
+
+    [Fact]
+    public void A_failed_hide_rolls_back_and_a_failed_show_can_be_tried_again()
+    {
+        // the machine key can't be written: Hide fails after the user's values were set
+        var broken = Registry.CurrentUser.CreateSubKey(_root + @"\broken");
+        broken.Dispose();
+        var sas = new A.SasActions(_folder, sid => Registry.CurrentUser.CreateSubKey($@"{_root}\{sid}", writable: true), broken);
+        Assert.ThrowsAny<Exception>(() => sas.Hide(Sid1));
+        Assert.False(sas.Hidden);
+        foreach (var (key, name) in A.SasActions.UserValues) Assert.Null(User(Sid1, key, name)); // rolled back
+        Assert.Empty(Directory.GetFiles(_folder, "sas-owner-*.txt"));
+
+        // the user's hive can't be opened while putting back: Show fails, stays this helper's, and works the second time
+        var fail = false;
+        var flaky = new A.SasActions(_folder, sid => fail ? throw new IOException("hive busy") : Registry.CurrentUser.CreateSubKey($@"{_root}\{sid}", writable: true), _machine);
+        flaky.Hide(Sid1);
+        fail = true;
+        Assert.ThrowsAny<Exception>(() => flaky.Show());
+        Assert.True(flaky.Hidden);
+        fail = false;
+        Assert.NotNull(flaky.Show());
+        Assert.False(flaky.Hidden);
+        foreach (var (key, name) in A.SasActions.UserValues) Assert.Null(User(Sid1, key, name));
+    }
+
+    [Fact]
     public void Two_connections_to_the_same_users_session_the_last_one_puts_them_back()
     {
         var one = New();

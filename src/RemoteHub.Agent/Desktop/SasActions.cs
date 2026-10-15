@@ -53,32 +53,69 @@ internal sealed class SasActions
         sid ??= SessionUser.Sid();
         if (sid is null) return null;
         using var gate = Lock();
-        using (var hive = _userHive(sid))
-        {
-            if (hive is null) return null;
-            Set(hive, UserValues, UserRecord(sid));
-        }
-        Set(_machine, MachineValues, Path.Combine(_folder, MachineRecord));
+        using var hive = _userHive(sid);
+        if (hive is null) return null;
+        // Owner first: whatever is changed below can be put back by Show (this helper) or by anyone else once it is gone.
+        Directory.CreateDirectory(_folder);
         File.WriteAllText(OwnerFile(sid), "");
         _sid = sid;
+        try
+        {
+            Set(hive, UserValues, UserRecord(sid));
+            Set(_machine, MachineValues, Path.Combine(_folder, MachineRecord));
+        }
+        catch
+        {
+            try { Release(sid); _sid = null; } catch { /* Show tries again; the service at its next start */ }
+            throw;
+        }
         return "Ctrl+Alt+Del screen: Lock, Switch user, Change a password, Sign out and the power button hidden while the device's mouse and keyboard are blocked";
     }
 
     /// <summary>
     /// Puts back what was there before – the user's values once no other helper for that user hides them, the machine
-    /// value once no helper at all does.
+    /// value once no helper at all does. When it fails, it stays this helper's to put back: the next call tries again.
     /// </summary>
     public string? Show()
     {
         if (_sid is not { } sid) return null;
-        _sid = null;
         using var gate = Lock();
+        var back = Release(sid);
+        _sid = null;
+        return back ? "Ctrl+Alt+Del screen: its actions are back" : "Ctrl+Alt+Del screen: still hidden for another connection to this user's session";
+    }
+
+    /// <summary>
+    /// Under the gate: this helper no longer owns them; puts back what nobody else needs. False while another live
+    /// helper hides them for this user. A hive that isn't loaded keeps its record for later.
+    /// </summary>
+    private bool Release(string sid)
+    {
         File.Delete(OwnerFile(sid));
-        if (LiveOwners(sid).Any()) return "Ctrl+Alt+Del screen: still hidden for another connection to this user's session";
+        if (LiveOwners(sid).Any()) return false;
         using (var hive = _userHive(sid))
-            if (hive is not null) Restore(hive, UserRecord(sid)); // signed out meanwhile: put back by the next helper or the service
+            if (hive is not null) Restore(hive, UserRecord(sid));
         if (!LiveOwners(null).Any()) Restore(_machine, Path.Combine(_folder, MachineRecord));
-        return "Ctrl+Alt+Del screen: its actions are back";
+        return true;
+    }
+
+    /// <summary>
+    /// Helper start: puts back what a helper that ended abruptly left hidden for this session's user – unless another
+    /// live helper still hides it – also when this connection never blocks input. False until the user is signed in and
+    /// their hive loaded (try again); <paramref name="note"/> says what was done, for the log.
+    /// </summary>
+    public bool TryReconcile(out string? note, string? sid = null)
+    {
+        note = null;
+        sid ??= SessionUser.Sid();
+        if (sid is null) return false;
+        using var gate = Lock();
+        using var hive = _userHive(sid);
+        if (hive is null) return false;
+        var done = !LiveOwners(sid).Any() && Restore(hive, UserRecord(sid));
+        done |= !LiveOwners(null).Any() && Restore(_machine, Path.Combine(_folder, MachineRecord));
+        if (done) note = "Ctrl+Alt+Del screen: actions an earlier helper hid are back";
+        return true;
     }
 
     /// <summary>Service start (no helper runs): puts back whatever a helper left hidden. Null when there was nothing.</summary>
@@ -110,6 +147,7 @@ internal sealed class SasActions
     {
         var self = System.Diagnostics.Process.GetCurrentProcess().ProcessName;
         var live = new List<string>();
+        if (!Directory.Exists(_folder)) return live;
         foreach (var file in Directory.GetFiles(_folder, sid is null ? "sas-owner-*.txt" : $"sas-owner-{sid}-*.txt"))
         {
             var parts = Path.GetFileNameWithoutExtension(file).Split('-');
