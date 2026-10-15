@@ -324,11 +324,19 @@ switch ($Do) {
                         [RhNative]::keybd_event(0x1B, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x1B, 0, 2, [IntPtr]::Zero)
                         break
                     }
+                    if (-not $item.Current.IsEnabled) {
+                        # switched off: say so, with its tooltip (RemoteHub's menus say there why an entry is off)
+                        $result.error = "menu entry '$entry' is disabled"
+                        $result.help = $item.Current.HelpText
+                        [RhNative]::keybd_event(0x1B, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x1B, 0, 2, [IntPtr]::Zero)
+                        break
+                    }
                     $o = $null
                     if ($item.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$o) -and $entry -ne ($action.Substring(5) -split '>')[-1]) { $o.Expand() }
                     elseif ($item.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$o)) { $o.Invoke() }
                     else { $r = $item.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
                     $result.value = $item.Current.Name
+                    $result.help = $item.Current.HelpText
                 }
             }
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }

@@ -179,6 +179,7 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $p.metadata.connected | Should -BeFalse
             $p.metadata.reason | Should -Be 'policy'
             $p.disabled.connected | Should -BeFalse
+            $p.disabled.message | Should -Match 'TunnelEnabled' -Because '/v1/tunnel answers 404: turned off by a policy on the device'
             @($p.disabledHealth.features) | Should -Not -Contain 'tunnel'
             $p.targets.connected | Should -BeFalse
             $p.targets.reason | Should -Be 'policy'
@@ -187,6 +188,7 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $p.portOther.message | Should -Match 'TunnelPorts'
             $p.portAllowed.connected | Should -BeTrue
             $p.noRight.connected | Should -BeFalse
+            $p.noRight.message | Should -Match 'right Tunnel' -Because '403: may not use it as a jump host'
             @($p.noRightPs.output)[0] | Should -Not -BeNullOrEmpty -Because 'PowerShell on the jump host still works without the right Tunnel'
             $p.nameToLoopback.connected | Should -BeFalse -Because 'a name never opens a special address'
             $p.loopbackListed.connected | Should -BeTrue
@@ -361,13 +363,18 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
                 $sh.smb = Invoke-LabShare @('--protocol', 'smb', '--host', $target, '--path', 'rhshare', '--user', $vm.AdminAccount)
                 $sh.sftp = Invoke-LabShare @('--protocol', 'sftp', '--host', $target, '--port', '2222', '--user', $vm.AdminAccount, '--accept', '1')
                 $sh.dav = Invoke-LabShare @('--protocol', 'webdav', '--host', $target, '--path', '/dav', '--user', $vm.AdminAccount, '--accept', '1')
-                Save 'shares' @{ Servers = $servers; Shares = $sh }
+                # FTP can't go through a jump host (its data connections go to addresses the server announces)
+                $ftp = try { Invoke-LabShare @('--protocol', 'ftp', '--host', $target, '--user', $vm.AdminAccount, '--ftp-security', 'explicit', '--accept', '1') } catch { [pscustomobject]@{ ok = $false; error = "$_" } }
+                Save 'shares' @{ Servers = $servers; Shares = $sh; Ftp = $ftp }
             }
         }
 
-        It 'J-10 SMB, SFTP and WebDAV shares of a device behind the jump host copy both ways' -Tag 'J-10' {
+        It 'J-10 SMB (RemoteHub''s own client), SFTP and WebDAV shares of a device behind the jump host copy both ways; FTP is refused' -Tag 'J-10' {
             if (-not $isServer) { Set-ItResult -Skipped -Because 'the share servers are set up on Windows Server VMs only (as in S-SHARE)'; return }
             foreach ($k in $sh.Keys) { $sh[$k].ok | Should -BeTrue -Because $k }
+            $sh.smb.description | Should -Match 'RemoteHub client' -Because 'SMB behind a jump host always uses RemoteHub''s own client'
+            $ftp.ok | Should -BeFalse
+            ($ftp | ConvertTo-Json -Depth 5) | Should -Match 'FTP can''t go through a jump host'
         }
     }
 }

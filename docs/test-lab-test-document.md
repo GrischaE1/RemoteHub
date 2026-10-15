@@ -149,36 +149,56 @@ Each automated case was checked against its expected result. **Gap** lists what 
 
 ### Not automated yet, by priority
 
-<details><summary><b>P1</b>: 118 cases</summary>
+Regenerated 2026-10-15 from the sheet: ○ = planned, no test yet.
 
-- **Agent install, update, uninstall (A)** (11): A-INST-11, A-INST-16, A-INST-22, A-HAND-01, A-HAND-03, A-CLIP-02, A-CLIP-03, A-ROLLBACK-01, A-CFG-05, A-CFG-06, A-CFG-07
-- **Agent sign-in and transport security (S)** (12): S-TLS-01, S-TLS-02, S-TLS-03, S-TLS-04, S-AUTH-01, S-AUTH-04, S-AUTH-06, S-AUTH-09, S-THR-01, S-THR-02, S-POL-01, S-POL-03
-- **Agent remote desktop (D)** (54): D-CON-01, D-CON-06, D-CON-07, D-CON-08, D-CON-09, D-ASK-01, D-ASK-02, D-ASK-03, D-ASK-04, D-ASK-06, D-PIN-01, D-PIN-02, D-NONE-01, D-NONE-02, D-NONE-03, D-BAN-01, D-BAN-05, D-VIEW-01, D-VIEW-02, D-RIGHT-01, D-RIGHT-02, D-LOCK-01, D-LOCK-02, D-LOCK-03, D-LOCK-05, D-SIGNIN-01, D-SIGNIN-02, D-SIGNIN-03, D-UAC-01, D-FUS-02, D-SAS-01, D-SAS-06, D-SAS-07, D-SAS-08, D-IN-01, D-IN-03, D-CLIP-01, D-CLIP-02, D-CLIP-05, D-CLIP-06, D-CLIP-08, D-CLIP-09, D-CLIP-11, D-CLIP-12, D-CLIP-14, D-CLIP-15, D-CLIP-17, D-RES-01, D-RES-02, D-RES-03, D-RES-05, D-RES-06, D-AUD-01, D-AUD-02
-- **RemoteHub client, RDP, UI end to end (C, R, UI)** (41): C-MSI-01, C-MSI-02, C-MSI-04, C-DB-01, C-DB-02, C-DB-03, C-DB-05, C-LOCK-01, C-AUD-02, C-BAK-01, C-POL-01, C-POL-02, C-UPD-02, C-UPD-03, C-TEL-01, R-RDP-01, R-AGENT-01, UI-AG-01, UI-AG-02, UI-AG-03, UI-AG-06, UI-AD-01, UI-AD-02, UI-AD-05, UI-AD-06, UI-AD-07, UI-CP-01, UI-CP-02, UI-CP-04, UI-CP-05, UI-CP-08, UI-CP-09, UI-SAS-01, UI-SAS-02, UI-SAS-03, UI-SAS-04, UI-SAS-06, UI-SAS-07, UI-TL-01, UI-TL-02, UI-NET-01
+<details><summary><b>P1</b>: 3 cases</summary>
 
-</details>
-
-<details><summary><b>P2</b>: 126 cases</summary>
-
-- **Lab self-check (SMOKE)** (2): SMOKE-08, SMOKE-10
-- **Agent install, update, uninstall (A)** (23): A-INST-10, A-INST-12, A-INST-13, A-INST-14, A-INST-15, A-INST-17, A-INST-19, A-INST-20, A-INST-23, A-INST-24, A-INST-25, A-INST-26, A-HAND-02, A-HAND-04, A-HAND-05, A-CLIP-01, A-UPD-09, A-UPDFAIL-03, A-UNINST-11, A-UNINST-13, A-UNINST-14, A-CFG-01, A-CFG-03
-- **Agent sign-in and transport security (S)** (7): S-AUTH-02, S-AUTH-05, S-AUTH-07, S-AUTH-08, S-THR-03, S-LIM-01, S-POL-02
-- **Agent PowerShell and remote tools (P, T)** (4): P-SES-04, P-SES-06, P-CLM-01, T-FS-04
-- **WinRM setup script (W)** (3): W-HTTPS-06, W-HTTP-01, W-TRUST-01
-- **Agent remote desktop (D)** (44): D-CON-02, D-CON-03, D-CON-10, D-ASK-05, D-PIN-04, D-NONE-04, D-MODES-02, D-BAN-02, D-BAN-03, D-BAN-06, D-LOCK-04, D-SIGNIN-04, D-FUS-01, D-DISC-01, D-RDPSES-01, D-SAS-02, D-SAS-03, D-SAS-04, D-SAS-09, D-IN-02, D-IN-04, D-IN-05, D-IN-07, D-VID-01, D-VID-02, D-VID-05, D-VID-07, D-VID-08, D-VID-09, D-VID-10, D-FIT-01, D-FIT-03, D-MON-01, D-MON-02, D-VD-01, D-CLIP-04, D-CLIP-07, D-CLIP-10, D-CLIP-13, D-IDLE-01, D-RES-04, D-ROB-01, D-ROB-03, D-ROB-05
-- **RemoteHub client, RDP, UI end to end (C, R, UI)** (43): C-MSI-03, C-MSI-05, C-MSI-06, C-MSI-07, C-DB-04, C-LOCK-02, C-LOCK-04, C-SHARE-01, C-SHARE-02, C-SHARE-03, C-AUD-01, C-AUD-04, C-BAK-02, C-POL-03, C-POL-04, C-POL-05, C-POL-06, C-UPD-01, C-UPD-04, C-TEL-02, C-CRASH-01, R-RDP-02, R-RDP-04, R-RDP-05, R-RDP-08, R-AGENT-02, UI-AG-04, UI-AG-05, UI-AD-03, UI-AD-04, UI-AD-08, UI-CP-03, UI-CP-06, UI-CP-07, UI-CP-10, UI-SAS-05, UI-TL-03, UI-TL-04, UI-TL-05, UI-TL-06, UI-NET-02, C-REC-01, C-REC-04
+- **Agent remote desktop (D)** (3): D-SHELL-02, D-SHELL-03, D-SHELL-05
 
 </details>
 
-<details><summary><b>P3</b>: 67 cases</summary>
+<details><summary><b>P2</b>: 2 cases</summary>
 
-- **Lab self-check (SMOKE)** (1): SMOKE-09
-- **Agent install, update, uninstall (A)** (8): A-INST-18, A-INST-21, A-HAND-06, A-REPAIR-01, A-UNINST-12, A-CFG-02, A-CFG-04, A-CFG-08
-- **Agent sign-in and transport security (S)** (4): S-AUTH-03, S-AUTH-10, S-THR-04, S-THR-05
-- **Agent PowerShell and remote tools (P, T)** (5): P-SES-05, P-SES-08, T-FS-09, T-FS-10, T-REG-03
-- **WinRM setup script (W)** (1): W-NONADMIN-01
-- **Agent remote desktop (D)** (30): D-CON-04, D-CON-05, D-ASK-07, D-PIN-03, D-PIN-05, D-MODES-01, D-BAN-04, D-BAN-07, D-VIEW-03, D-SAS-05, D-SAS-10, D-SAS-11, D-IN-06, D-VID-03, D-VID-04, D-VID-06, D-FIT-02, D-MON-03, D-VD-02, D-VD-03, D-VD-04, D-CLIP-03, D-CLIP-16, D-CLIP-18, D-IDLE-02, D-IDLE-03, D-RES-07, D-ROB-02, D-ROB-04, D-ROB-06
-- **RemoteHub client, RDP, UI end to end (C, R, UI)** (18): C-MSI-08, C-LOCK-03, C-AUD-03, C-BAK-03, C-POL-07, C-UPD-05, C-CRASH-02, R-RDP-03, R-RDP-06, R-RDP-07, R-RDP-09, R-AGENT-03, UI-CP-11, UI-CP-12, C-REC-02, C-REC-03, C-REC-05, C-REC-06
+- **Agent remote desktop (D)** (2): D-SHELL-01, D-SHELL-04
+
+</details>
+
+### Written, not yet run in the lab
+
+◐ = the test exists but has not run in the lab yet.
+
+<details><summary><b>P1</b>: 37 cases</summary>
+
+- **Agent install, update, uninstall (A)** (3): A-INST-27, A-CLIP-02, A-CLIP-03
+- **Agent remote desktop (D)** (3): D-BAN-10, D-RES-10, D-PRIV-05
+- **Automatic sign-in (C-PROV, C-AUTO, C-END)** (2): C-END-09, C-END-15
+- **RemoteHub client, RDP, UI end to end (C, R, UI)** (29): C-DB-01, C-DB-02, C-DB-03, C-DB-05, C-LOCK-01, C-AUD-02, C-BAK-01, C-UPD-06, R-RDP-01, UI-AG-06, UI-JUMP-01, UI-AD-01, UI-AD-02, UI-AD-05, UI-AD-06, UI-AD-07, UI-CP-01, UI-CP-02, UI-CP-04, UI-CP-05, UI-CP-08, UI-CP-09, UI-SAS-01, UI-SAS-02, UI-SAS-03, UI-SAS-04, UI-SAS-06, UI-SAS-07, UI-NET-01
+
+</details>
+
+<details><summary><b>P2</b>: 83 cases</summary>
+
+- **Agent install, update, uninstall (A)** (2): A-HAND-07, A-CLIP-01
+- **Agent sign-in and transport security (S)** (1): S-THR-06
+- **Agent remote desktop (D)** (5): D-ASK-09, D-MODES-03, D-IN-08, D-IN-09, D-PRIV-06
+- **Automatic sign-in (C-PROV, C-AUTO, C-END)** (8): C-END-10, C-END-12, C-AUTO-14, C-AUTO-15, C-AUTO-16, C-AUTO-18, C-AUTO-19, C-AUTO-20
+- **Jump hosts (J)** (11): J-11, J-12, J-16, J-17, J-18, J-19, J-21, J-22, J-25, J-26, J-27
+- **Network shares (S-SMB/SFTP/FTP/DAV/SHR)** (7): S-SMB-06, S-SFTP-04, S-SFTP-05, S-SHR-01, S-SHR-02, S-SHR-04, S-SHR-06
+- **RemoteHub client, RDP, UI end to end (C, R, UI)** (49): C-DB-04, C-DB-06, C-DB-10, C-LOCK-02, C-LOCK-04, C-LOCK-05, C-LOCK-07, C-SHARE-01, C-SHARE-02, C-SHARE-03, C-SHARE-04, C-SHARE-05, C-AUD-01, C-AUD-04, C-AUD-05, C-AUD-06, C-BAK-02, C-UPD-08, C-TEL-03, R-RDP-02, R-RDP-04, R-RDP-05, R-RDP-08, R-RDP-11, R-AGENT-02, UI-AG-04, UI-AG-07, UI-AG-08, UI-AG-09, UI-AG-10, UI-AG-11, UI-AG-13, UI-AG-15, UI-JUMP-02, UI-AD-03, UI-AD-04, UI-AD-08, UI-AD-09, UI-CP-03, UI-CP-06, UI-CP-07, UI-CP-10, UI-SAS-05, UI-TL-08, UI-NET-02, UI-NET-03, C-REC-01, C-REC-04, C-REC-09
+
+</details>
+
+<details><summary><b>P3</b>: 103 cases</summary>
+
+- **Agent install, update, uninstall (A)** (2): A-INST-28, A-UNINST-16
+- **Agent sign-in and transport security (S)** (1): S-THR-07
+- **Agent PowerShell and remote tools (P, T)** (1): P-SES-10
+- **WinRM setup script (W)** (1): W-NAME-01
+- **Agent remote desktop (D)** (26): D-CON-11, D-ASK-08, D-PIN-06, D-NONE-05, D-MODES-04, D-BAN-08, D-BAN-09, D-SIGNIN-05, D-SAS-12, D-VID-11, D-VID-12, D-VID-13, D-FIT-04, D-VD-05, D-CLIP-19, D-CLIP-20, D-CLIP-21, D-CLIP-22, D-IDLE-04, D-RES-08, D-RES-09, D-ROB-07, D-ROB-08, D-PRIV-07, D-PRIV-08, D-HIDE-03
+- **Automatic sign-in (C-PROV, C-AUTO, C-END)** (5): C-END-11, C-END-13, C-END-14, C-AUTO-17, C-AUTO-21
+- **Jump hosts (J)** (7): J-15, J-20, J-23, J-24, J-28, J-29, J-30
+- **Network shares (S-SMB/SFTP/FTP/DAV/SHR)** (8): S-SMB-05, S-SMB-07, S-SMB-08, S-FTP-03, S-FTP-04, S-DAV-04, S-SHR-03, S-SHR-05
+- **RemoteHub client, RDP, UI end to end (C, R, UI)** (52): C-MSI-09, C-DB-07, C-DB-08, C-DB-09, C-DB-11, C-DB-12, C-DB-13, C-LOCK-03, C-LOCK-06, C-LOCK-08, C-LOCK-09, C-LOCK-10, C-SHARE-06, C-SHARE-07, C-AUD-03, C-AUD-07, C-AUD-08, C-BAK-03, C-BAK-04, C-POL-09, C-UPD-07, C-UPD-09, C-UPD-10, C-CRASH-03, C-CRASH-04, R-RDP-03, R-RDP-06, R-RDP-07, R-RDP-09, R-RDP-10, R-RDP-12, R-RDP-13, R-AGENT-03, UI-AG-12, UI-AG-14, UI-AG-16, UI-AD-10, UI-CP-11, UI-CP-12, UI-CP-13, UI-CP-14, UI-CP-15, UI-TL-07, UI-TL-09, C-REC-02, C-REC-03, C-REC-05, C-REC-06, C-REC-07, C-REC-08, C-REC-10, C-REC-11
 
 </details>
 
@@ -191,7 +211,7 @@ These are the places where the product code behaves differently from what the sh
 | ID | Note |
 |---|---|
 | SMOKE-10 | the lab report (`New-LabReport.ps1`) has no layout field yet; this case needs it added. |
-| A-INST-16 | `ParseGroups` maps only the English word "Administrators" (any case) to `S-1-5-32-544`. A typed "Administratoren" is stored as typed (a name), not as the SID. The harness `install` command has no option for groups yet. |
+| A-INST-16 | `ParseGroups` maps only the English word "Administrators" (any case) to `S-1-5-32-544`. A typed "Administratoren" is stored as typed (a name), not as the SID. |
 | A-INST-25 | the service is `Vital="yes"` with `Start="install"`, so a service that doesn't start fails the whole install (rollback). Expect the "install fails" branch. |
 | A-HAND-06 | the MSI has no custom dialog and no virtual-display checkbox (only the `VIRTUALDISPLAY` property); the UI is the standard Windows Installer progress UI. The checkbox exists only in RemoteHub's install dialog. |
 | A-UPDFAIL-01 | the broken package has the version of the build under test (newer than the installed one), not the installed version. The verdict takes about 4.5 min (90 s down window plus 3 min up window). |
@@ -220,8 +240,6 @@ These are the places where the product code behaves differently from what the sh
 | D-RES-07 | the sheet expects A to end with "continued in a new connection". The code keeps that only as an internal end reason: A gets no final Status, and the 1101 event (where the reason would be logged) is skipped for a taken-over connection. |
 | D-ROB-05 | a Start with broken JSON goes to the general error path: Status `Failed` "The remote desktop failed on the device. Details are in the agent's log." and one event 3100 per attempt (not a crash loop, but 3100 does appear). Malformed Mouse/Key messages are passed to the helper unchecked; the helper then ends and is restarted ("reconnecting…"), counting towards "kept failing". |
 | C-MSI-05 | the MSI has the same upgrade code, but RDP Manager 2.x versions are higher than 0.x and `MajorUpgrade` refuses a downgrade ("A newer version of RemoteHub is already installed."). The README says to uninstall 2.x first. A direct upgrade only works from an RDP Manager build numbered below the RemoteHub version. The folder copy happens on the first start (`SettingsStore.MigrateFolder`), only if `%APPDATA%\RemoteHub` doesn't exist yet. |
-| C-DB-05 | the damaged database is kept as `remotehub.db.damaged-<stamp>` (with `-wal`/`-shm`), not `.unreadable-<stamp>`. The `.unreadable-<stamp>` copy is only made when the settings can't be read for another reason (e.g. an unreadable `settings.dat`). |
-| C-AUD-01 | there is no separate "copy password" command; passwords are only copied by the Windows password-prompt helper. |
 | C-POL-07 | only `SettingsFolder` is read from the legacy `Policies\RdpManager` key (`SettingsStore.PolicyFolder`). All other policies (`AppPolicy`: telemetry, updates, channel, recording, audit retention) read only `Policies\RemoteHub`, HKLM first, then HKCU. |
 | C-UPD-03 | only `remotehub.dev` (and subdomains) or release assets of `GrischaE1/RemoteHub` on `github.com` / `api.github.com` are allowed, over HTTPS. Other GitHub paths are refused too. After redirects the final host must be `github.com`, `githubusercontent.com` or `remotehub.dev`. |
 | C-CRASH-01 | RemoteHub has no built-in switch to force a crash; the lab needs its own trigger (e.g. a test build hook). An "unexpected error" that RemoteHub survives ("RemoteHub – unexpected error" message box) is recorded the same way, at most three per session. |
@@ -230,7 +248,6 @@ These are the places where the product code behaves differently from what the sh
 | UI-AG-02 | *Test RemoteHub Agent* is only in the menu while the connection uses the agent and the last result isn't "available"; after a successful test the menu shows the tools instead. |
 | UI-AD-07 | view-only is chosen on the connect page before connecting; there is no toggle while connected. |
 | C-REC-01 | the agent desktop tab is called "Desktop (agent)" in the file name. |
-| C-REC-06 | the `S-` prefix clashes with section 6 (S = agent sign-in and transport security). Suggested new prefix **F-**: |
 
 </details>
 
@@ -241,7 +258,6 @@ These are the places where the product code behaves differently from what the sh
 | A-UPDFAIL-04 | An update with an unreadable (truncated) MSI: `PackageVersion` comes back null, so RemoteHub reports "Updated – RemoteHub Agent <old version>" instead of a failure. The test is expected to fail until this is fixed. |
 | A-UPDFAIL-02 | Seen in lab runs 20261012-214723 (W11) and 20261012-231526 (both VMs). An upgrade from 0.17.2 to 0.18.0 whose enrollment step fails ends with MSI 1603, and the device is left with **no agent**: the product is not registered, the install folder and service are gone, but `agent.json`, the certificate and the firewall rule are still there. The MSI rollback should have restored 0.17.2. The test now saves the whole verbose MSI log so the rollback can be traced. |
 | A-SAME-02 | Seen in lab runs 20261012-214723 and 20261012-231526 on both VMs. Installing the same version again with "Create a new device certificate": `agent.json` points to the new certificate, but for over 3 minutes the agent keeps answering with the old certificate and never with the new one. RemoteHub reports "didn't answer again". The service seems to keep running without picking up the new identity. |
-| T-FS-03 | Seen in lab run 20261013-054640 (Server 2025, over WinRM HTTPS). Uploading a 200 MB incompressible file fails after 34 MB with Windows' "The total data received from the remote client exceeded the allowed maximum. The allowed maximum is 52428800." WinRM limits each remote command to 50 MB, and the uploader appears to send a whole file through one command. The compressible file passed only because it shrank to 1%. Through the agent the same upload passes. |
 | W-* (note) | On Windows clients the default execution policy is Restricted, so the generated setup script can't run as a .ps1 file until the admin allows scripts for that window (`Set-ExecutionPolicy -Scope Process Bypass`). The lab does that now. Consider adding that line to the instructions RemoteHub shows. |
 | S-AUTH-08 | Windows error 1907 (password must be changed) has no mapping in the agent's sign-in code and comes back as HTTP 500 instead of a clear refusal. |
 | T-FS-09 | A cancelled upload can leave a `.remotehub-part` file on the device. |
@@ -252,8 +268,22 @@ These are the places where the product code behaves differently from what the sh
 | A-INST-25 | Another program listening on 58732 without exclusive use: the agent binds the same port as well, without a warning. Connections then go to one of the two at random. |
 | A-ROLLBACK-01 | With 58732 held exclusively by another program, the service reports "started", then fails to bind. The MSI and RemoteHub report a successful install, but the agent isn't running. |
 | P-SES-06 | Seen in lab run 20261014-214238. A network drop ends the PowerShell session in time (54 s), but event 1001 gives the reason "PowerShell ended", not "connection lost: …". The keep-alive timeout ends the shell first, and `Tunnel.RunAsync` then reports the shell side (`AgentHost.cs:328`). |
-| UI-TL-03 | Seen in lab run 20261015-020456. The registry tab's *New* menu shows "String value (REGSZ)…", "(REGEXPAND_SZ)" and "(REGMULTI_SZ)": WPF takes the first `_` of a `MenuItem` header as the access-key marker. `RegistryView.NewKinds` needs `__` (or `RecognizesAccessKey` off). |
 | UI-* (accessibility) | Icon-only buttons in the PowerShell tab (`PsConsoleView.HeaderButton`, e.g. "Stop the running command") have only a tooltip and no `AutomationProperties.Name`, unlike `RemoteToolChrome.Tool`. The terminal's input line and output have no name either. |
+| C-REC-06 | Code review (0.18.11). On a Windows N edition without the Media Feature Pack `mfplat.dll` is missing: `MFStartup` throws `DllNotFoundException`, which `Mp4Writer.Create` doesn't catch (only `InvalidOperationException`), so the recording stops with "Unable to load DLL 'mfplat.dll' …" instead of the H.264 / Media Feature Pack message (`SessionRecorder.cs:349, 366, 387, 562`). |
+| C-DB-13 / C-LOCK-09 | Code review (0.18.11). Two messages point to menu entries that don't exist: "You can restore an exported backup via Menu → Import." (`App.xaml.cs:94`) and "Export a backup first (Menu → Export backup)" (`StartupProtectionWindow.cs:118`). Import and export are under Settings → Security & storage, as the other database message already says (`App.xaml.cs:167`). |
+| A-INST-28 | Code review (0.18.11). `AUTOSIGNIN=1` on an agent package built without the credential provider still writes `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn` ("Automatic sign-in allowed on this device …"): `auto-sign-in=[AUTOSIGNIN]` sits outside the `CredentialProviderDll` condition in `Package.wxs:65`. |
+| C-TEL-03 | Code review (0.18.11). Telemetry must be fully off under the `DisableTelemetry` policy, but only the Settings switch deletes `install-id` (C-TEL-02); with the policy it stays on disk (`Telemetry.cs:146-148`, `EditorWindow.xaml.cs:401`). Decided 2026-10-15: product bug. |
+| C-END-05 / C-END-15 / D-RES-10 | Seen in lab run 20261015-072527 (W11), root cause from the code. When the agent notices a lost connection first (keep-alive 30 s, or TCP giving up on unacknowledged frames), the pending `ReceiveAsync` throws an `OperationCanceledException`, so the client loop ends *cancelled*, not *faulted*. `DesktopEndpoint.cs:220-230` only checks `IsFaulted`: `_lost` stays false, the reason stays "closed by RemoteHub", the resume token is revoked instead of kept, and a session automatic sign-in created gets its end action at once ("Automatic sign-in session 7 … locked (closed by RemoteHub)") instead of the cover for 2 minutes. Affects every agent desktop connection whose drop the agent notices first – short cuts only work because RemoteHub resumes before the agent notices. Fix: treat `fromClient.IsCanceled` (not on purpose) as lost. P-SES-06 is the same pattern in `AgentHost.cs:327-329`. |
+| UI-TL-03 | Seen in lab run 20261015-020456. The registry tab's *New* menu shows "String value (REGSZ)…", "(REGEXPAND_SZ)", "(REGMULTI_SZ)": WPF takes the first `_` of a `MenuItem` header as the access-key marker (`RegistryView.NewKinds` needs `__`). Also: a path typed into the address box isn't found when the key was created after the parent was loaded ("Key not found" until Refresh) – `Navigate` doesn't reload the cached children. |
+| D-HIDE-03 | Code review (0.18.11). Apps hidden by the policy `HiddenApps` are counted as hidden by the user: the first Privacy message has hiddenApps=1, the banner says "1 app hidden" and event 1105 claims "the user … hides 1 app(s)" (`DesktopHelper.cs:177-179`, `DesktopEndpoint.cs:762-763`). |
+| C-END-14 | Code review (0.18.11). The cover the service puts up after an automatic sign-in is audited as 1104 "<admin> … turned the privacy screen on …" although the admin didn't (`DesktopEndpoint.cs:768-771`). |
+| UI-CP-13 | Code review (0.18.11). With `DesktopClipboard=2` (text and images) a file copy is refused with "Copying images and files isn't allowed on this device – only text.", which is wrong for that level; the agent's own text is "Copying files isn't allowed on this device." (`AgentDesktopSession.cs:402-403`). |
+| C-AUTO-15 | Code review (0.18.11), while writing the test. If someone signs in at the console while an automatic sign-in waits, the broker uses the LogonUI client it already holds (`WaitForClient`) and only re-checks after the provider's Claim (`AutoSignInBroker.cs:221`); that LogonUI is gone, so the result is NoProvider "The connection to the credential provider broke …" instead of SessionChanged "Someone is signed in on the console now". No ticket goes out, but reason and code are wrong. Fix: run the session check before calling the broker. |
+| C-AUTO-20 | Code review (0.18.11). Windows reports a disabled account to LogonUI as 0xC000006E with substatus 0xC0000072; `AutoSignInStatus.Describe` (`AutoSignIn.cs:211`) matches 0xC000006E first and says "can't sign in this way (it may need a smart card …)". Only the 0xC0000064 substatus is handled; an expired account (0xC0000193) is likely affected the same way. |
+| C-AUTO-16 | Code review (0.18.11). `CheckInstallation` ignores the provider key's `Disabled` value: Hello offers automatic sign-in and the operator waits about 23 s for "The device's sign-in screen didn't load the RemoteHub credential provider." |
+| S-SMB-08 | Code review (0.18.11). The remote-UAC hint for local administrators is only added when listing the share fails; access denied by the share's own permissions fails earlier in `WindowsSmbShare.Acquire` (`WNetAddConnection2`, error 5) and shows "\\host\share: Access is denied." without the hint. |
+| UI-AG-12 | Code review (0.18.11). The notice "Automatic sign-in needs a stored password for this connection …" can't be reached: without a stored password RemoteHub asks for one first (`BuildTarget`, `PasswordDialog` refuses an empty one), and a typed password works as well – the text should not say "stored". A password over 256 characters can't sign in to the agent either. |
+| UI-AG-07 | Code review (0.18.11). The install dialog still says "Anyone at the device can see the session while you work" next to "Allow automatic sign-in"; with the cover after an automatic sign-in that is no longer true in most cases. |
 | D-* (accessibility) | The agent's consent, PIN and banner windows (`RemoteHubAgentWindow`) expose no UI Automation elements, so screen readers can't read them. The lab reads them by OCR. |
 | S-* (audit) | IPv4 callers are logged as IPv4-mapped IPv6 (`::ffff:192.168.250.25`) in the events and the log. |
 | D-ROB-05 | Malformed Mouse/Key messages go to the helper unchecked. The helper crashes, gets restarted, and the crashes count towards "kept failing". |
@@ -408,7 +438,7 @@ P1 · How: S C · Needs: – · Status: ✅ Automated – `Smoke.Tests.ps1`
 - After the unlock, no `LogonUI.exe` in normaluser's session and the screenshot is not blank, within 60 s.
 
 #### SMOKE-08 · Clock
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `Smoke.Tests.ps1`
 
 **Preconditions:** VM reverted (the checkpoint may be weeks old; Hyper-V time sync should correct the clock).
 
@@ -422,7 +452,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - On failure the report shows both times and the difference.
 
 #### SMOKE-09 · No pending reboot / update
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `Smoke.Tests.ps1`
 
 **Preconditions:** VM reverted.
 
@@ -437,7 +467,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 - Otherwise the run continues and the report shows a warning (not a failure).
 
 #### SMOKE-10 · Keyboard layout known
-P2 · How: S C · Needs: – · Status: ○ Not automated
+P2 · How: S C · Needs: – · Status: ✅ Automated – `Smoke.Tests.ps1`
 
 **Preconditions:** normaluser signed in by auto-logon.
 
@@ -571,7 +601,7 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1`
 - No rule for Users (`S-1-5-32-545`), Authenticated Users (`S-1-5-11`) or Everyone (`S-1-1-0`).
 
 #### A-INST-08 · No secrets left
-P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1` (partly)
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1`
 
 **Preconditions:** agent installed as in A-INST-01.
 
@@ -601,7 +631,7 @@ P2 · How: PS E · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1`
 Gap: the sheet asks for the start line; the test checks the enroll line. Not checked: "RemoteHub Agent <version> starting on port 58732 (device <deviceId>, certificate <SHA-256>)".
 
 #### A-INST-10 · Recovery actions
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** agent installed (A-INST-01).
 
@@ -617,7 +647,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Health answers with the same device ID.
 
 #### A-INST-11 · Service survives a reboot
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** agent installed (A-INST-01), pin known.
 
@@ -631,7 +661,7 @@ P1 · How: PS H · Needs: – · Status: ○ Not automated
 - Service `Running`, the certificate SHA-256 is unchanged.
 
 #### A-INST-12 · Nothing extracted
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** agent installed and the service started at least once.
 
@@ -645,7 +675,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Every non-Windows module of the agent process is loaded from `C:\Program Files\RemoteHub Agent`.
 
 #### A-INST-13 · Firewall scope Any
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -660,7 +690,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Health answers.
 
 #### A-INST-14 · Firewall scope list
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -674,7 +704,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Health answers from the host.
 
 #### A-INST-15 · Other port
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -689,7 +719,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Health on 58800 answers; a connection to 58732 fails.
 
 #### A-INST-16 · Allowed groups by name
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent. For the second part a de-DE VM.
 
@@ -706,7 +736,7 @@ P1 · How: H PS · Needs: – · Status: ○ Not automated
 Note: `ParseGroups` maps only the English word "Administrators" (any case) to `S-1-5-32-544`. A typed "Administratoren" is stored as typed (a name), not as the SID. The harness `install` command has no option for groups yet.
 
 #### A-INST-17 · Custom allowed group
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted. Local group "RH Operators" created with member normaluser; PSAdmin not a member.
 
@@ -720,7 +750,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - PSAdmin is refused with HTTP 403 ("not a member of an allowed group").
 
 #### A-INST-18 · Label with spaces / umlauts
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -734,7 +764,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - `deviceLabel` = "Büro PC 7" in `agent.json` and in the desktop Hello.
 
 #### A-INST-19 · Virtual display off at install
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -749,7 +779,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - No certificate with thumbprint `3CF8CF26D8BA266C3A483AB7D26D4A818E317D76` in TrustedPublisher; no `virtual-display.txt`.
 
 #### A-INST-20 · Virtual display on at install
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent, SignPath certificate not in TrustedPublisher.
 
@@ -766,7 +796,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Log: "Virtual display installed (device …, driver package oem….inf, publisher trusted) – switched on only while a connection needs it".
 
 #### A-INST-21 · Trust already present
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted. The SignPath certificate (thumbprint `3CF8…7D76`) imported into LocalMachine\TrustedPublisher before the install.
 
@@ -781,7 +811,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 - After the uninstall the certificate is still in TrustedPublisher.
 
 #### A-INST-22 · SoftwareSASGeneration set
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted; `SoftwareSASGeneration` not set under `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`.
 
@@ -796,7 +826,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - Log: "Ctrl+Alt+Del: allowed services to send it (SoftwareSASGeneration = 1)".
 
 #### A-INST-23 · SAS policy respected
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** VM reverted; `SoftwareSASGeneration` = 0 set before the install (simulated policy), no `sas.agent`.
 
@@ -810,7 +840,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 - The agent answers that Ctrl+Alt+Del is blocked: "Ctrl+Alt+Del from software is turned off by a policy on this device." (see D-SAS-04).
 
 #### A-INST-24 · selftest on the device
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** agent installed (A-INST-01).
 
@@ -824,7 +854,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - No new log line, no new certificate, `agent.json` unchanged (the self-test uses 127.0.0.1 and a throw-away certificate).
 
 #### A-INST-25 · Port in use
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted. Another process listens on TCP 58732 in the guest (for example a `System.Net.Sockets.TcpListener` in a background job).
 
@@ -839,7 +869,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 Note: the service is `Vital="yes"` with `Start="install"`, so a service that doesn't start fails the whole install (rollback). Expect the "install fails" branch.
 
 #### A-INST-26 · Install log for failures
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent.
 
@@ -854,7 +884,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 ### 5.2 Other install paths
 
 #### A-HAND-01 · MSI by hand next to the `.rhagent`
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Preconditions:** VM reverted. Enrollment and pin created on the host (`AgentEnrollment.Create`). `Admin` signed in at the console.
 
@@ -868,7 +898,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Health answers with the enrolled device ID within 10 s of the service start (one poll interval).
 
 #### A-HAND-02 · Two `.rhagent` files in the folder
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Preconditions:** VM reverted. Two valid `.rhagent` files and the MSI in one folder.
 
@@ -882,7 +912,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - No product, service, rule, certificate or `agent.json`; both `.rhagent` files still there.
 
 #### A-HAND-03 · No `.rhagent` and no config
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Preconditions:** VM reverted. MSI alone in a folder; no `agent.json`.
 
@@ -896,7 +926,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - No product, service, rule, `O=RemoteHub Agent` certificate or `agent.json` (rollback runs `RemoteHubAgent.exe cleanup`).
 
 #### A-HAND-04 · `ENROLLMENT=<path>` property
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Preconditions:** VM reverted. MSI in one folder, `.rhagent` in another (for example `C:\Enroll\dev.rhagent`).
 
@@ -909,7 +939,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - `C:\Enroll\dev.rhagent` is deleted.
 
 #### A-HAND-05 · Enrollment format 2 / bad GUID / port 0 / empty groups
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Preconditions:** VM reverted. Four `.rhagent` files made from a valid one, each with one field changed.
 
@@ -922,7 +952,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - The log shows: "Enrollment format 2 is not supported by this agent version." / "The enrollment has no valid device ID." / "Port 0 is not valid." / "No allowed groups – nobody could connect."
 
 #### A-HAND-06 · Interactive install (UI, not /qn)
-P3 · How: S · Needs: – · Status: ○ Not automated
+P3 · How: S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** VM reverted. MSI and `.rhagent` in one folder; Admin signed in.
 
@@ -938,7 +968,7 @@ P3 · How: S · Needs: – · Status: ○ Not automated
 Note: the MSI has no custom dialog and no virtual-display checkbox (only the `VIRTUALDISPLAY` property); the UI is the standard Windows Installer progress UI. The checkbox exists only in RemoteHub's install dialog.
 
 #### A-CLIP-01 · Clipboard install from RemoteHub
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** two VMs: RemoteHub on the admin VM, device VM reverted. RDP connection with clipboard redirection.
 
@@ -953,7 +983,7 @@ P2 · How: U · Needs: 2VM · Status: ○ Not automated
 - After the install the connection is marked installed on the first health answer (`WaitForManualInstall`, audit "Installed – answered as RemoteHub Agent <ver>").
 
 #### A-CLIP-02 · Staging cleanup on the admin's PC
-P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** A-CLIP-01 done up to the clipboard copy.
 
@@ -967,7 +997,7 @@ P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - It is gone after a normal exit and after the next start following a crash (`CleanTemp(TimeSpan.Zero)`).
 
 #### A-CLIP-03 · Ask before sending the key through a desktop tab
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RemoteHub with an agent desktop tab open to device B that sends the clipboard.
 
@@ -984,7 +1014,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 Common setup for A-UPD, A-SAME and A-DOWN: `A-UPD.Tests.ps1`. Each context reverts the VM and installs an agent. "Update through the agent" is the harness `update` command, which mirrors the ThroughAgent branch of `MainWindow.RunAgentInstall`: health with the old pin, PowerShell session through the agent as PSAdmin, `AgentInstaller.StartUpdateThroughAgent` (upload to `%TEMP%\RemoteHub-Agent-<12 hex>`, then `cmd /c start "" /wait msiexec ... /l*v %TEMP%\RemoteHub-Agent-update.log ... & rd /s /q <folder>` started through WMI), `PackageVersion(msi)`, `WaitForRestartAsync` (wait up to 90 s for the agent to go away, then up to 3 min for an answer with the expected version), and the same verdict: `updated`, `notInstalled`, `noAnswer` or `failed`. It also reports what the old pin answers afterwards (`oldPinNow`).
 
 #### A-UPD-01 · Update through the agent (`StartUpdateThroughAgent`)
-P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P1 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed with `Install-LabAgent -Msi <previous>`; policy `ConsentTimeoutSeconds` = 45 set (for A-UPD-06).
 
@@ -1004,7 +1034,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 Gap: "down within 90 s" is not asserted. `WaitForRestartAsync` moves on after 90 s even if the agent never went down.
 
 #### A-UPD-02 · Temp folder removed
-P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** update from A-UPD-01 started.
 
@@ -1017,7 +1047,7 @@ P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) �
 - The update log still exists and matches `completed successfully` or `success or error status: 0`.
 
 #### A-UPD-03 · Identity kept
-P1 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** A-UPD-01 done; `$before` and `$after` read.
 
@@ -1032,7 +1062,7 @@ P1 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) �
 - Service still delayed-auto (`DelayedAutostart` = 1).
 
 #### A-UPD-04 · New device certificate on update
-P1 · How: H PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed.
 
@@ -1048,7 +1078,7 @@ P1 · How: H PS · Needs: – · Status: ✅ Automated (new, first run pending) 
 - Exactly 1 agent certificate, exactly 1 firewall rule, no leftovers.
 
 #### A-UPD-05 · Update over remoting
-P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed.
 
@@ -1063,7 +1093,7 @@ P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 - `certificateThumbprint` unchanged; exactly 1 agent certificate.
 
 #### A-UPD-06 · Update keeps policies and logs
-P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** A-UPD-01 done; `ConsentTimeoutSeconds` = 45 was set under `HKLM\SOFTWARE\Policies\RemoteHub\Agent` before the update.
 
@@ -1077,7 +1107,7 @@ P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) �
 - The log contains "RemoteHub Agent <new version> starting".
 
 #### A-UPD-07 · Update with virtual display change
-P3 · How: H PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** same context as A-UPD-05 (previous release installed with `VIRTUALDISPLAY=1`, update over remoting with `VIRTUALDISPLAY=0`).
 
@@ -1092,7 +1122,7 @@ P3 · How: H PS · Needs: – · Status: ✅ Automated (new, first run pending) 
 Gap: "empty keeps it" is not tested. Note: RemoteHub always passes `VIRTUALDISPLAY=1` or `0` (`InstallScript` / `DetachedInstallScript`), never empty. "Empty" only happens with a hand-run msiexec.
 
 #### A-UPD-08 · Update during an open PowerShell session
-P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** A-UPD-01 run with `-HoldSession`.
 
@@ -1106,7 +1136,7 @@ P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 - The new session returns a PID > 0 that differs from `heldPid`.
 
 #### A-UPD-09 · Update during an open desktop session
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** previous release installed; normaluser signed in at the console.
 
@@ -1121,7 +1151,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - The new desktop session connects and frames arrive.
 
 #### A-UPDFAIL-01 · Broken MSI through the agent
-P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPDFAIL.Tests.ps1`
+P1 · How: H · Needs: – · Status: ✅ Automated – `A-UPDFAIL.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed. The host makes a copy of the MSI under test with a `LaunchCondition` row `LabNeverTrue = 1` / "Lab: this package is broken on purpose." (`New-LabBrokenMsi -Kind LaunchCondition`).
 
@@ -1138,7 +1168,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 Note: the broken package has the version of the build under test (newer than the installed one), not the installed version. The verdict takes about 4.5 min (90 s down window plus 3 min up window).
 
 #### A-UPDFAIL-02 · Upgrade that fails in enroll
-P1 · How: PS H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPDFAIL.Tests.ps1`
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `A-UPDFAIL.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed. Damaged enrollment file `damaged.rhagent` with the content `{ "format": 1, "this is": "not an enrollment" }`.
 
@@ -1155,7 +1185,7 @@ P1 · How: PS H · Needs: – · Status: ✅ Automated (new, first run pending) 
 Gap: the test does not check the enroll error text ("enroll failed: The enrollment has no valid device ID.") in the agent log or the MSI log.
 
 #### A-UPDFAIL-03 · Update that never comes back
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** previous release installed.
 
@@ -1170,7 +1200,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 Note: `WaitForRestartAsync` waits up to 90 s for the agent to go down and then up to 3 min for it to come back. The time limit is 3 min after the agent went away, not 3 min in total. Because the service is Vital, a service that doesn't start rolls the upgrade back, so the old agent may come back. The verdict may then be `notInstalled`, not `noAnswer`.
 
 #### A-UPDFAIL-04 · File that isn't a package
-P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPDFAIL.Tests.ps1`
+P1 · How: H · Needs: – · Status: ✅ Automated – `A-UPDFAIL.Tests.ps1`
 
 **Preconditions:** VM reverted; previous release installed. The host makes `truncated\RemoteHub-Agent-x64.msi`: the first 64 KB of the MSI under test (`New-LabBrokenMsi -Kind Truncated`).
 
@@ -1185,7 +1215,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 Note: in the current code `AgentInstaller.PackageVersion` returns null for an unreadable file. With no expected version, `WaitForRestartAsync` returns the first answer after the 90 s window. Both `MainWindow.RunAgentInstall` and the harness then report "Updated – RemoteHub Agent <old> is running.", so this test will probably fail until RemoteHub treats a package without a readable version as failed. The sheet's "reported as failed" is not checked as such; the test only asserts "not updated".
 
 #### A-SAME-01 · Reinstall the same version
-P3 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P3 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** VM reverted; MSI under test installed. `MajorUpgrade AllowSameVersionUpgrades="yes"`.
 
@@ -1201,7 +1231,7 @@ P3 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 Gap: the expected version equals the running version, so `updated` doesn't prove a reinstall happened. The test doesn't check a restart (for example a new agent PID or a second "starting" log line).
 
 #### A-SAME-02 · Same version with a new device certificate
-P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** same context as A-SAME-01, after its update.
 
@@ -1215,7 +1245,7 @@ P2 · How: H · Needs: – · Status: ✅ Automated (new, first run pending) –
 - Certificate SHA-256 = new pin; exactly 1 agent certificate.
 
 #### A-DOWN-01 · Downgrade
-P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) – `A-UPD.Tests.ps1`
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 
 **Preconditions:** VM reverted; MSI under test installed.
 
@@ -1231,7 +1261,7 @@ P2 · How: PS · Needs: – · Status: ✅ Automated (new, first run pending) �
 - Product version still the version under test; health `version` = version under test; `deviceId` unchanged.
 
 #### A-REPAIR-01 · `msiexec /fa`
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** agent installed (A-INST-01); state and pin read.
 
@@ -1246,7 +1276,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 - The agent log has "Update without enrollment file: keeping the existing device identity" (enroll runs on repair and finds no `.rhagent` next to the cached MSI).
 
 #### A-ROLLBACK-01 · First install fails after enrolling
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** VM reverted, no agent. A way to fail after `AgentEnroll`: block TCP 58732 so the Vital service fails at `StartServices`, or use a test copy of the MSI with a failing custom action after `AgentEnroll`.
 
@@ -1385,7 +1415,7 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `A-UNINST.Tests.ps1`
 Gap: only the "agent set it" branch is tested. The "kept when a policy set it" branch (value set before the install, no marker) is not covered here (see A-INST-23).
 
 #### A-UNINST-11 · Virtual display removed
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** agent installed with `VIRTUALDISPLAY=1` (A-INST-20); SignPath trust added by the agent.
 
@@ -1400,7 +1430,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - Agent log: "Virtual display removed" without "(… not removed)".
 
 #### A-UNINST-12 · Uninstall from Settings → Apps
-P3 · How: S · Needs: – · Status: ○ Not automated
+P3 · How: S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** agent installed; Admin signed in at the console.
 
@@ -1414,7 +1444,7 @@ P3 · How: S · Needs: – · Status: ○ Not automated
 - Only "Uninstall" is offered (the MSI sets `ARPNOMODIFY` = 1, no "Modify").
 
 #### A-UNINST-13 · Uninstall while a desktop session is open
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 
 **Preconditions:** agent installed; normaluser signed in; desktop session open through the harness.
 
@@ -1427,7 +1457,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - No `RemoteHubAgent.exe` helper left; the virtual display (if it was on) is gone and the resolution is as before; no banner window left.
 
 #### A-UNINST-14 · Reinstall after uninstall
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 
 **Preconditions:** A-UNINST run finished (agent removed).
 
@@ -1442,7 +1472,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 ### 5.5 Configuration and service behaviour
 
 #### A-CFG-01 · Invalid agent.json (port 0, empty groups, maxSessions 0, virtualDisplay `x`)
-P2 · How: PS E · Needs: – · Status: ○ Not automated
+P2 · How: PS E · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed; service stopped.
 
@@ -1458,7 +1488,7 @@ P2 · How: PS E · Needs: – · Status: ○ Not automated
 - No start line with default values.
 
 #### A-CFG-02 · agent.json with comments / trailing commas
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed.
 
@@ -1471,7 +1501,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 - Service `Running`, health answers (the config reader skips comments and allows trailing commas).
 
 #### A-CFG-03 · Certificate missing / key missing
-P2 · How: PS E · Needs: – · Status: ○ Not automated
+P2 · How: PS E · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed.
 
@@ -1485,7 +1515,7 @@ P2 · How: PS E · Needs: – · Status: ○ Not automated
 - The log has "RemoteHub Agent could not start: Certificate <thumbprint> with private key not found in LocalMachine\My."
 
 #### A-CFG-04 · Log rotation
-P3 · How: PS · Needs: – · Status: ○ Not automated
+P3 · How: PS · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed.
 
@@ -1500,7 +1530,7 @@ P3 · How: PS · Needs: – · Status: ○ Not automated
 Note: `AgentLog.Clean` deletes by file LastWriteTime, not by the date in the name. Faked names alone are not enough; the test must set LastWriteTime.
 
 #### A-CFG-05 · Log content
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed; pin known.
 
@@ -1514,7 +1544,7 @@ P1 · How: H PS · Needs: – · Status: ○ Not automated
 - The log contains neither the password nor `RH-MARKER-7f3a`.
 
 #### A-CFG-06 · Logs not readable by users
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed; normaluser signed in.
 
@@ -1525,7 +1555,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - Both fail with access denied (folder ACL only SYSTEM and Administrators, see A-INST-07).
 
 #### A-CFG-07 · No outbound traffic
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed.
 
@@ -1537,7 +1567,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - None: every agent connection has local port 58732 (inbound only). Loopback connections to its own helper processes, if any, are listed and allowed by name.
 
 #### A-CFG-08 · Event log writes off
-P3 · How: PS E · Needs: – · Status: ○ Not automated
+P3 · How: PS E · Needs: – · Status: ✅ Automated – `A-CFG.Tests.ps1`
 
 **Preconditions:** agent installed.
 
@@ -1558,7 +1588,7 @@ operator account is `PSAdmin` with the lab password. "Event" means the Applicati
 "Agent log" means `%ProgramData%\RemoteHub\Agent\logs\agent-<yyyyMMdd>.log`.
 
 #### S-TLS-01 · TLS versions
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed and healthy.
 
@@ -1574,7 +1604,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - TLS 1.1 and TLS 1.0: handshake fails (`handshake = false`). Kestrel allows only `Tls12 | Tls13`.
 
 #### S-TLS-02 · No plain HTTP
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed and healthy.
 
@@ -1587,7 +1617,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - The HTTPS control request answers 200.
 
 #### S-TLS-03 · Pin mismatch
-P1 · How: H PS E · Needs: – · Status: ○ Not automated
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. Note the time and the current Security log and agent log size.
 
@@ -1603,7 +1633,7 @@ P1 · How: H PS E · Needs: – · Status: ○ Not automated
 - No "Refused …" and no "Session started" line in the agent log, and no event 2000.
 
 #### S-TLS-04 · Health reveals nothing
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1618,7 +1648,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - No `Server` header in the response (`AddServerHeader = false`).
 
 #### S-AUTH-01 · Wrong password
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. No failed sign-ins from the host in the last 5 minutes.
 
@@ -1633,7 +1663,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - The password does not appear in the agent log or the event.
 
 #### S-AUTH-02 · Missing / malformed Basic header
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. No failed sign-ins from the host in the last 5 minutes.
 
@@ -1650,7 +1680,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - The final sign-in with the right password succeeds.
 
 #### S-AUTH-03 · Not a WebSocket request
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1663,7 +1693,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - No 4624 or 4625 for this request: the agent checks the request type before the sign-in.
 
 #### S-AUTH-04 · Standard user
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed with the default allowed group S-1-5-32-544. `normaluser` is not an administrator.
 
@@ -1677,7 +1707,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - No powershell.exe started for normaluser.
 
 #### S-AUTH-05 · User name formats
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1693,7 +1723,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Note: the code does not translate `user@<computer>` to a local account. For a local account on a workgroup VM Windows will most likely refuse it (401).
 
 #### S-AUTH-06 · Deny network logon
-P1 · How: H PS · Needs: – · Status: ○ Not automated
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. In the guest, PSAdmin is given "Deny access to this computer from the network" (`SeDenyNetworkLogonRight`) with secedit.
 
@@ -1708,7 +1738,7 @@ P1 · How: H PS · Needs: – · Status: ○ Not automated
 - No session started, no powershell.exe for PSAdmin.
 
 #### S-AUTH-07 · Account lockout
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. In the guest: `net accounts /lockoutthreshold:3`.
 
@@ -1723,7 +1753,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Event 2000 with Windows' message for error 1909.
 
 #### S-AUTH-08 · Disabled / expired account
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. The test creates a local account `rhdisabled` in Administrators with the lab password.
 
@@ -1740,7 +1770,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Note: only errors 1326, 1327, 1330, 1331, 1909 (→ 401) and 1385 (→ 403) are mapped. "User must change password at next logon" (error 1907, e.g. `PasswordExpired = 1`) is not mapped and gives HTTP 500 "could not start PowerShell". The case must create a real 1330 or the code must map 1907.
 
 #### S-AUTH-09 · Non-RID-500 admin gets a full token
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. The test creates `lapsadmin` in Administrators. `LocalAccountTokenFilterPolicy` is not set in the guest.
 
@@ -1755,7 +1785,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - The HKLM key is created. The agent uses the account's full linked token.
 
 #### S-AUTH-10 · Empty password account
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Preconditions:** Agent installed. The test creates `rhblank` in Administrators with an empty password. "Limit local account use of blank passwords to console logon only" stays at its default (on).
 
@@ -1768,7 +1798,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Event 2000 "Refused .\rhblank from `<host>`: …".
 
 #### S-THR-01 · Throttle
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. No failed sign-ins from the host in the last 5 minutes.
 
@@ -1784,7 +1814,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - No 4624 or 4625 for attempt 6: it never reaches Windows.
 
 #### S-THR-02 · Parallel attempts
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. No failed sign-ins from the host in the last 5 minutes. Note the Security log position.
 
@@ -1797,7 +1827,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - 4625 count for PSAdmin ≤ 5. Running attempts count against the limit.
 
 #### S-THR-03 · Block ends
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** The host is blocked as in S-THR-01. Note the time of the 5th failure.
 
@@ -1811,7 +1841,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Step 3: the session opens.
 
 #### S-THR-04 · Success clears
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. No failed sign-ins from the host in the last 5 minutes.
 
@@ -1825,7 +1855,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Step 2: session opens. A successful sign-in clears the failure count.
 
 #### S-THR-05 · Restart resets
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** The host is blocked as in S-THR-01.
 
@@ -1838,7 +1868,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - The session opens. The failure count is kept in memory only.
 
 #### S-LIM-01 · Session limit
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. In the guest, `maxSessions` in agent.json is set to 2 and the service is restarted.
 
@@ -1854,7 +1884,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Agent log: "Refused `<computer>`\PSAdmin from `<host>`: session limit (2) reached". This is a log line, not an event.
 
 #### S-POL-01 · Unreadable policy key
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. In the guest, `HKLM\SOFTWARE\Policies\RemoteHub\Agent` exists with a Deny ACE for SYSTEM on read.
 
@@ -1871,7 +1901,7 @@ P1 · How: PS H · Needs: – · Status: ○ Not automated
 - Agent log: "The policy (SOFTWARE\Policies\RemoteHub\Agent) can't be read – access refused: …". The line is written on connections, not on health.
 
 #### S-POL-02 · Policy read live
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed, no policy key.
 
@@ -1889,7 +1919,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 - Step 5: back to the step 1 results. No service restart was needed.
 
 #### S-POL-03 · `Rights\PowerShell`
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 
 **Preconditions:** Agent installed. The test creates an empty local group "RH Nobody". `Rights\PowerShell` = "RH Nobody". `Rights\Desktop` not set.
 
@@ -1960,7 +1990,7 @@ P1 · How: H PS E · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 - Event 1001: "Session ended: `<COMPUTER>`\PSAdmin from `<host>` after `<hh:mm:ss>` (closed by RemoteHub)".
 
 #### P-SES-04 · Large arguments
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `P-SES2.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1975,7 +2005,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - No errors. The session stays usable for a following command.
 
 #### P-SES-05 · Message > 16 MiB
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES2.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -1990,7 +2020,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Note: RemoteHub's client sends fragments of 1 MiB, so it never sends such a message. The harness probe `big --mb 17` sends one raw message in 1 MiB frames.
 
 #### P-SES-06 · Network drop
-P2 · How: N PS E · Needs: – · Status: ○ Not automated
+P2 · How: N PS E · Needs: – · Status: ✅ Automated – `P-SES2.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -2022,7 +2052,7 @@ P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 - Agent log: "… session limit (20) reached".
 
 #### P-SES-08 · Read-Host / Get-Credential prompts
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES2.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -2051,7 +2081,7 @@ P3 · How: H · Needs: – · Status: ✅ Automated – `P-SES.Tests.ps1`
 - Step 3: matches include `C:\Windows`.
 
 #### P-CLM-01 · Constrained Language Mode
-P2 · How: H · Needs: CLM · Status: ○ Not automated
+P2 · How: H · Needs: CLM · Status: ✅ Automated – `P-SES2.Tests.ps1`
 
 **Preconditions:** CLM VM (WDAC policy forcing Constrained Language Mode). Agent installed.
 
@@ -2115,7 +2145,7 @@ P1 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 - No `.remotehub-part` file.
 
 #### T-FS-04 · Upload folder tree
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS2.Tests.ps1`
 
 **Preconditions:** Common. On the host, a folder `tree` with nested folders, names like `Ünïcödé 文件`, and one file whose target path is longer than 260 characters. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2189,7 +2219,7 @@ P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 - Step 4: refused with "Refusing to delete a drive root: C:\". Nothing is deleted.
 
 #### T-FS-09 · Locked file
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS2.Tests.ps1`
 
 **Preconditions:** Common. In the guest, `C:\LabT\lock\small.txt` (100 KB) and `big.bin` (5 MB), each held open with `FileShare.None` by a PowerShell Direct session. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2205,7 +2235,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Note: for files over 1 MiB the script deletes the original before the rename. When that delete fails, `Drop` does not remove the part file (its stream is already closed). By the code, `big.bin.remotehub-part` is left behind.
 
 #### T-FS-10 · Defender real-time on
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `T-TOOLS2.Tests.ps1`
 
 **Preconditions:** Common. In the guest, `Get-MpComputerStatus` shows real-time protection on. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2250,7 +2280,7 @@ P2 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS.Tests.ps1`
 - After step 4 the values are gone.
 
 #### T-REG-03 · Key rename keeps ACL
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `T-TOOLS2.Tests.ps1`
 
 **Preconditions:** Common. In the guest, `HKLM\SOFTWARE\RemoteHubLab\AclKey` with an extra ACE (normaluser full control). SDDL recorded. Runs twice: over the agent and over WinRM HTTPS (after W-HTTPS-01).
 
@@ -2471,7 +2501,7 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 - All `WINRM-HTTP-In-TCP*` rules are disabled.
 
 #### W-HTTPS-06 · Reject from elsewhere
-P2 · How: N · Needs: – · Status: ○ Not automated
+P2 · How: N · Needs: – · Status: ✅ Automated – `W-SETUP2.Tests.ps1`
 
 **Preconditions:** W-HTTPS-01 done with only the host's address allowed. A second source address (second NIC on the host or another lab VM).
 
@@ -2570,7 +2600,7 @@ P2 · How: PS · Needs: – · Status: ✅ Automated – `W-SETUP.Tests.ps1`
 - The script from step 3 has no "LocalAccountTokenFilterPolicy = 1" step.
 
 #### W-NONADMIN-01 · Non-RID-500 admin over WinRM without LATFP
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `W-SETUP2.Tests.ps1`
 
 **Preconditions:** Script run with `--local-admins 0`, certificate trusted (W-HTTPS-04). The test creates `lapsadmin` in Administrators.
 
@@ -2584,7 +2614,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Note: WinRM's default endpoint refuses a filtered admin token. So the result is "access denied", not a session with a filtered token.
 
 #### W-HTTP-01 · HTTP + Kerberos by name
-P2 · How: H PS · Needs: Domain · Status: ○ Not automated
+P2 · How: H PS · Needs: Domain · Status: ✅ Automated – `W-SETUP2.Tests.ps1`
 
 **Preconditions:** Domain VM joined to `lab.test`. Script built with `--https 0` for the VM's name.
 
@@ -2600,7 +2630,7 @@ P2 · How: H PS · Needs: Domain · Status: ○ Not automated
 - Note: harness `--via winrm` always uses HTTPS 5986, so an HTTP option is needed. The domain VM is not provided yet.
 
 #### W-TRUST-01 · Trust prompt on the admin's PC
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** 2VM: RemoteHub runs in the client VM, the device is `Server-2025-en-US` with the script from W-HTTPS-01 run. The connection uses WinRM.
 
@@ -2627,7 +2657,7 @@ Shared terms for this section:
 ### 9.1 Connect, Hello, sessions
 
 #### D-CON-01 · Hello
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** default policy; Admin at the console.
 
@@ -2644,7 +2674,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - `features` = allMonitors, stats, ping, resume, transfer, transferReceipt, transferOnPaste; `version` = the installed agent version (same as health).
 
 #### D-CON-02 · Session list
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** Admin at the console; normaluser has a disconnected session (sign normaluser in with Switch user, then switch back to Admin at the console).
 
@@ -2659,7 +2689,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - No entry with `id` 0.
 
 #### D-CON-03 · Disconnected session refused
-P2 · How: H E · Needs: – · Status: ○ Not automated
+P2 · How: H E · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** as D-CON-02 (normaluser's session disconnected).
 
@@ -2674,7 +2704,7 @@ P2 · How: H E · Needs: – · Status: ○ Not automated
 - No helper process started; no event 1100.
 
 #### D-CON-04 · No Start within 5 min
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** default.
 
@@ -2687,7 +2717,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - No Status, no helper process, no event 1100/1101.
 
 #### D-CON-05 · First message not Start
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** default.
 
@@ -2701,7 +2731,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - No helper process, no event 1100.
 
 #### D-CON-06 · Desktop off by policy
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** `Set-LabAgentPolicy DesktopEnabled=0` (DWORD).
 
@@ -2716,7 +2746,7 @@ P1 · How: PS H · Needs: – · Status: ○ Not automated
 - PowerShell through the agent still works.
 
 #### D-CON-07 · Rights\Desktop without PSAdmin
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** `Set-LabAgentPolicy` `Rights\Desktop` = a group PSAdmin is not in (e.g. `S-1-5-32-551`); DesktopViewOnly empty.
 
@@ -2731,7 +2761,7 @@ P1 · How: PS H · Needs: – · Status: ○ Not automated
 - Event 2000 "Refused `<user>` from `<host IP>`: …".
 
 #### D-CON-08 · Frames arrive
-P1 · How: H C · Needs: – · Status: ○ Not automated
+P1 · How: H C · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** PSAdmin signed in at the console (`Set-LabAutoLogon -Account Admin`), so the own session needs no question.
 
@@ -2747,7 +2777,7 @@ P1 · How: H C · Needs: – · Status: ○ Not automated
 - Picture ≥ 95 % similar to the console screenshot (banner area excluded, see D-BAN-02).
 
 #### D-CON-09 · End by RemoteHub
-P1 · How: H S E · Needs: – · Status: ○ Not automated
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** connected as in D-CON-08; note the helper PID (`RemoteHubAgent.exe desktop`).
 
@@ -2763,7 +2793,7 @@ P1 · How: H S E · Needs: – · Status: ○ Not automated
 - No banner window left.
 
 #### D-CON-10 · Helper runs as SYSTEM in the session
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Preconditions:** connected to normaluser's console session (after Allow, see D-ASK-01).
 
@@ -2780,7 +2810,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 ### 9.2 Consent
 
 #### D-ASK-01 · Ask → Allow
-P1 · How: H S E · Needs: – · Status: ○ Not automated
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser signed in at the console (`Set-LabAutoLogon -Account User`); default policy.
 
@@ -2800,7 +2830,7 @@ P1 · How: H S E · Needs: – · Status: ○ Not automated
 Note: the consent, PIN and banner windows are custom-drawn Win32 popups of the SYSTEM helper. UI Automation sees only the window (title, bounds), not the text, the PIN or the buttons, and UIPI blocks clicks sent from a task running as normaluser. Text and PIN need OCR on the console screenshot; buttons need a click at their position via the console mouse (Hyper-V `Msvm_SyntheticMouse`, not in the lab spec yet); Esc works through the console keyboard. The heading shows the full account (`<VM>\PSAdmin`), not just "PSAdmin".
 
 #### D-ASK-02 · Ask → Deny
-P1 · How: H S E · Needs: – · Status: ○ Not automated
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-ASK-01.
 
@@ -2816,7 +2846,7 @@ P1 · How: H S E · Needs: – · Status: ○ Not automated
 - No event 1100; helper gone, no banner.
 
 #### D-ASK-03 · Ask → no answer
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-ASK-01.
 
@@ -2833,7 +2863,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 Note: the dialog's own countdown answers "deny", so the Status text is "The user at the device didn't allow it." "No answer in time." comes only from the service's fallback at ConsentTimeoutSeconds + 10 s, when the helper sends no answer at all.
 
 #### D-ASK-04 · Esc / close = deny, Enter never allows
-P1 · How: H S C · Needs: – · Status: ○ Not automated
+P1 · How: H S C · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-ASK-01.
 
@@ -2849,7 +2879,7 @@ P1 · How: H S C · Needs: – · Status: ○ Not automated
 - After Esc: Status `Denied` "The user at the device didn't allow it."; event 2100.
 
 #### D-ASK-05 · Timeout policy
-P2 · How: PS H S · Needs: – · Status: ○ Not automated
+P2 · How: PS H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser at the console.
 
@@ -2863,7 +2893,7 @@ P2 · How: PS H S · Needs: – · Status: ○ Not automated
 - Values 4 and 601: Hello shows 30; footnote starts at 30 s.
 
 #### D-ASK-06 · No input before consent
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser at the console; marker app (counts mouse and key input) running in normaluser's session.
 
@@ -2878,7 +2908,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - No Ctrl+Alt+Del screen appeared.
 
 #### D-ASK-07 · View-only text
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser at the console.
 
@@ -2891,7 +2921,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - Heading "`<acct>` wants to see your screen" ("control" does not appear).
 
 #### D-PIN-01 · PIN right
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser at the console.
 
@@ -2909,7 +2939,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 Note: the lab spec says the PIN is read by AutomationId; the code has no UIA element for it (painted text), so only OCR works.
 
 #### D-PIN-02 · PIN wrong ×3
-P1 · How: H S E · Needs: – · Status: ○ Not automated
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-PIN-01.
 
@@ -2924,7 +2954,7 @@ P1 · How: H S E · Needs: – · Status: ○ Not automated
 - Event 2100 ending in "consent Pin: The code was entered wrong too often."
 
 #### D-PIN-03 · PIN with spaces / dash
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-PIN-01.
 
@@ -2937,7 +2967,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - Both runs: Status `Connected` (non-digits are stripped before the compare).
 
 #### D-PIN-04 · PIN dialog Deny
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-PIN-01.
 
@@ -2949,7 +2979,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - Status `Denied` "The user at the device refused."; event 2100.
 
 #### D-PIN-05 · PIN timeout
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** as D-PIN-01.
 
@@ -2962,7 +2992,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - PIN dialog gone; event 2100.
 
 #### D-NONE-01 · None refused by default
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** default policy; normaluser at the console.
 
@@ -2977,7 +3007,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - Event 2100; no dialog, no helper.
 
 #### D-NONE-02 · None with policy only
-P1 · How: PS H · Needs: – · Status: ○ Not automated
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** `AllowedConsentModes` = Ask, Pin, None (REG_MULTI_SZ); `Rights\ConsentBypass` empty; normaluser at the console.
 
@@ -2990,7 +3020,7 @@ P1 · How: PS H · Needs: – · Status: ○ Not automated
 - Status `Failed` "Connecting with "None" isn't allowed on this device."; event 2100.
 
 #### D-NONE-03 · None with policy + right
-P1 · How: PS H S · Needs: – · Status: ○ Not automated
+P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** `AllowedConsentModes` incl. None; `Rights\ConsentBypass` = `S-1-5-32-544`; normaluser at the console.
 
@@ -3006,7 +3036,7 @@ P1 · How: PS H S · Needs: – · Status: ○ Not automated
 - Event 1100 with "consent None".
 
 #### D-NONE-04 · Own session
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** PSAdmin signed in at the console (`Set-LabAutoLogon -Account Admin`); default policy (None not allowed).
 
@@ -3021,7 +3051,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 Note: the sheet expects event 1102 "own account". For a Start on the own session the code writes 1100 with "consent None"; 1102 "… signed in … with their own account – continued without asking" is written only when the admin signs in with the own account during a running session (D-SIGNIN-02, D-SAS-07).
 
 #### D-MODES-01 · Policy as REG_SZ list / invalid list
-P3 · How: PS H · Needs: – · Status: ○ Not automated
+P3 · How: PS H · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** normaluser at the console.
 
@@ -3034,7 +3064,7 @@ P3 · How: PS H · Needs: – · Status: ○ Not automated
 - "Foo": Hello `consentModes` = ["Ask", "Pin"] (defaults).
 
 #### D-MODES-02 · Only Pin allowed
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 
 **Preconditions:** `AllowedConsentModes` = Pin; normaluser at the console.
 
@@ -3049,7 +3079,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 ### 9.3 Banner and user at the device
 
 #### D-BAN-01 · Banner shown
-P1 · How: S C · Needs: – · Status: ○ Not automated
+P1 · How: S C · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** connected to normaluser's session after Allow (D-ASK-01).
 
@@ -3064,7 +3094,7 @@ P1 · How: S C · Needs: – · Status: ○ Not automated
 Note: UIA does not expose the text or the Disconnect button (see D-ASK-01 note); the checks are window bounds/style plus OCR.
 
 #### D-BAN-02 · Banner not in the picture
-P2 · How: H C · Needs: – · Status: ○ Not automated
+P2 · How: H C · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** as D-BAN-01; Windows build ≥ 19041.
 
@@ -3077,7 +3107,7 @@ P2 · How: H C · Needs: – · Status: ○ Not automated
 - Screenshot shows the banner; the decoded frame shows the desktop behind it (no banner, not black).
 
 #### D-BAN-03 · Banner in the picture on 1809
-P2 · How: H · Needs: 1809 · Status: ○ Not automated
+P2 · How: H · Needs: 1809 · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** W10-1809 VM (build 17763); connected after Allow.
 
@@ -3089,7 +3119,7 @@ P2 · How: H · Needs: 1809 · Status: ○ Not automated
 - The banner is visible in the frame, not a black rectangle.
 
 #### D-BAN-04 · Collapse to pill
-P3 · How: S · Needs: – · Status: ○ Not automated
+P3 · How: S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** as D-BAN-01; mouse not over the banner.
 
@@ -3104,7 +3134,7 @@ P3 · How: S · Needs: – · Status: ○ Not automated
 - Hover: full banner again; about 3 s after leaving: pill again.
 
 #### D-BAN-05 · Disconnect by the user
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** as D-BAN-01; harness keeps the `resume` token.
 
@@ -3119,7 +3149,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - The resume Start gets `WaitingForUser` again (token void).
 
 #### D-BAN-06 · Can't be closed otherwise
-P2 · How: S · Needs: – · Status: ○ Not automated
+P2 · How: S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** as D-BAN-01.
 
@@ -3134,7 +3164,7 @@ P2 · How: S · Needs: – · Status: ○ Not automated
 - Session still `Connected` (no `Ended`).
 
 #### D-BAN-07 · View-only text
-P3 · How: S · Needs: – · Status: ○ Not automated
+P3 · How: S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** connected view-only to normaluser's session after Allow.
 
@@ -3147,7 +3177,7 @@ P3 · How: S · Needs: – · Status: ○ Not automated
 ### 9.4 View-only and rights
 
 #### D-VIEW-01 · View-only by choice
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** normaluser at the console; marker app running; note the guest resolution.
 
@@ -3164,7 +3194,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Resolution unchanged; Stats `fit` empty.
 
 #### D-VIEW-02 · View-only by right
-P1 · How: PS H S · Needs: – · Status: ○ Not automated
+P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** local account `viewer` (lab password, standard user) created by the test; `Rights\DesktopViewOnly` = viewer; normaluser at the console.
 
@@ -3179,7 +3209,7 @@ P1 · How: PS H S · Needs: – · Status: ○ Not automated
 - Marker app saw no input; event 1100 "view-only, …".
 
 #### D-VIEW-03 · Key release still passes
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** `Rights\SecureDesktop` = a group PSAdmin is not in; connected with control to normaluser's session after Allow; marker app focused.
 
@@ -3195,7 +3225,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 Note: view-only can't be switched on during a session (it is fixed at Start, and the service drops all keys in view-only). The code only lets the release of a held key through when input becomes not allowed on the current desktop (secure desktop without the right, or a held user desktop); the case is written for that.
 
 #### D-RIGHT-01 · No SecureDesktop right on the lock screen
-P1 · How: PS H E · Needs: – · Status: ○ Not automated
+P1 · How: PS H E · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** `Rights\SecureDesktop` = a group PSAdmin is not in; normaluser at the console, locked (`Lock-LabSession`).
 
@@ -3209,7 +3239,7 @@ P1 · How: PS H E · Needs: – · Status: ○ Not automated
 - Event 2100.
 
 #### D-RIGHT-02 · No SecureDesktop right during UAC
-P1 · How: PS H S · Needs: – · Status: ○ Not automated
+P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
 **Preconditions:** as D-VIEW-03 (no SecureDesktop right, connected with control after Allow).
 
@@ -3227,7 +3257,7 @@ P1 · How: PS H S · Needs: – · Status: ○ Not automated
 ### 9.5 Secure desktop, sign-in, lock, user switch
 
 #### D-LOCK-01 · Connect to a locked session
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** normaluser at the console, locked; default rights.
 
@@ -3244,7 +3274,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 Note: on Windows 11 / Server 2025 the "Press Ctrl+Alt+Delete" lock screen runs on the Default desktop; the helper then sends no frames until Ctrl+Alt+Del brings up the sign-in screen (D-LOCK-05). On those builds "lock screen in the picture" holds only after Ctrl+Alt+Del.
 
 #### D-LOCK-02 · User unlocks while connected
-P1 · How: H S C E · Needs: – · Status: ○ Not automated
+P1 · How: H S C E · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected to normaluser's locked session as in D-LOCK-01.
 
@@ -3261,7 +3291,7 @@ P1 · How: H S C E · Needs: – · Status: ○ Not automated
 - Event 1102 "Desktop: `<VM>\normaluser` in session `<id>` allowed the remote desktop of `<acct>` from `<host IP>` (Ask)".
 
 #### D-LOCK-03 · User unlocks and refuses
-P1 · How: H S C E · Needs: – · Status: ○ Not automated
+P1 · How: H S C E · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** as D-LOCK-02.
 
@@ -3276,7 +3306,7 @@ P1 · How: H S C E · Needs: – · Status: ○ Not automated
 - Event 1101 with "(`<VM>\normaluser` didn't allow it (…))".
 
 #### D-LOCK-04 · Lock while connected (Win+L by the user)
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected to normaluser's session after Allow.
 
@@ -3289,7 +3319,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - Frames show the lock screen.
 
 #### D-LOCK-05 · Win11 lock screen on the Default desktop
-P1 · How: H C · Needs: – · Status: ○ Not automated
+P1 · How: H C · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** Server 2025 / Windows 11 VM; connected to normaluser's locked session (D-LOCK-01).
 
@@ -3304,7 +3334,7 @@ P1 · How: H C · Needs: – · Status: ○ Not automated
 - After Ctrl+Alt+Del: frames show the sign-in screen (Layout `secureDesktop: true`).
 
 #### D-SIGNIN-01 · Nobody signed in
-P1 · How: H C · Needs: – · Status: ○ Not automated
+P1 · How: H C · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** console signed out (`logoff` of Admin's session via PS Direct); `Get-LabScreenshot` shows the sign-in screen.
 
@@ -3318,7 +3348,7 @@ P1 · How: H C · Needs: – · Status: ○ Not automated
 - Frames show the sign-in screen.
 
 #### D-SIGNIN-02 · Admin signs in through the picture
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** nobody signed in (D-SIGNIN-01); harness client signs in to the agent as Admin.
 
@@ -3335,7 +3365,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 Note: "no consent" applies only when the account that signs in is the one connected to the agent. If the harness connects as PSAdmin and types Admin's password, Admin is asked.
 
 #### D-SIGNIN-03 · Someone else signs in at the console
-P1 · How: H C S · Needs: – · Status: ○ Not automated
+P1 · How: H C S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** nobody signed in; harness client connected as PSAdmin (D-SIGNIN-01).
 
@@ -3351,7 +3381,7 @@ P1 · How: H C S · Needs: – · Status: ○ Not automated
 - After Allow: `Connected` "`<VM>\normaluser` allowed access."; event 1102.
 
 #### D-SIGNIN-04 · Sign out while connected
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected to normaluser's console session after Allow.
 
@@ -3364,7 +3394,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - Frames then show the sign-in screen; connection stays.
 
 #### D-UAC-01 · UAC with SecureDesktop
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** default rights; connected with control to normaluser's session after Allow.
 
@@ -3385,7 +3415,7 @@ P – · How: – · Needs: – · Status: see D-RIGHT-02
 Covered by D-RIGHT-02 (no separate steps).
 
 #### D-FUS-01 · Fast user switching
-P2 · How: H S C · Needs: – · Status: ○ Not automated
+P2 · How: H S C · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected to normaluser's console session after Allow.
 
@@ -3401,7 +3431,7 @@ P2 · How: H S C · Needs: – · Status: ○ Not automated
 - After Allow: `Connected` "`<VM>\Admin` allowed access."; event 1102.
 
 #### D-FUS-02 · Different user = new consent after helper restart
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** as D-FUS-01.
 
@@ -3415,7 +3445,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Status `Denied` "The user at the device didn't allow it."; event 2101 for `<VM>\Admin`.
 
 #### D-DISC-01 · Session disconnected while connected
-P2 · How: H PS · Needs: 2VM (or host mstsc) · Status: ○ Not automated
+P2 · How: H PS · Needs: 2VM (or host mstsc) · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** normaluser has an RDP session (from a second VM or host mstsc); harness client connected to it after Allow.
 
@@ -3432,7 +3462,7 @@ P2 · How: H PS · Needs: 2VM (or host mstsc) · Status: ○ Not automated
 Note: for the console session `tsdiscon` moves the console to a new session; the service then follows the console (sign-in screen) right after the Paused status. The Paused/"has a screen again" pair is only stable for an RDP session.
 
 #### D-RDPSES-01 · Connect to a user's RDP session
-P2 · How: H · Needs: 2VM (or host mstsc) · Status: ○ Not automated
+P2 · How: H · Needs: 2VM (or host mstsc) · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** normaluser signed in by RDP from the second VM (client name known).
 
@@ -3448,7 +3478,7 @@ P2 · How: H · Needs: 2VM (or host mstsc) · Status: ○ Not automated
 ### 9.6 Ctrl+Alt+Del
 
 #### D-SAS-01 · Console session
-P1 · How: H E · Needs: – · Status: ○ Not automated
+P1 · How: H E · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** PSAdmin at the console (own session) or normaluser after Allow. Harness `cad` covers the flow (`--consent None` on the own session).
 
@@ -3462,7 +3492,7 @@ P1 · How: H E · Needs: – · Status: ○ Not automated
 - Agent log: "Desktop: Ctrl+Alt+Del for `<acct>` in session `<id>` by the service: sent (SoftwareSASGeneration = 1, console session `<id>`, last error …)".
 
 #### D-SAS-02 · RDP session
-P2 · How: H · Needs: 2VM (or host mstsc) · Status: ○ Not automated
+P2 · How: H · Needs: 2VM (or host mstsc) · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected to normaluser's RDP session (D-RDPSES-01); Admin at the console.
 
@@ -3476,7 +3506,7 @@ P2 · How: H · Needs: 2VM (or host mstsc) · Status: ○ Not automated
 - Agent log: "… in session `<rdp id>` by the helper: sent …".
 
 #### D-SAS-03 · Without SecureDesktop right
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** `Rights\SecureDesktop` = a group PSAdmin is not in; connected with control to normaluser's session after Allow.
 
@@ -3489,7 +3519,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 - No security screen.
 
 #### D-SAS-04 · Policy 0
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\SoftwareSASGeneration` = 0 and `C:\ProgramData\RemoteHub\Agent\sas.agent` deleted; connected to the console session.
 
@@ -3504,7 +3534,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 Note: the agent writes the `sas.agent` marker at start and then treats the value as its own; with the marker present `Ensure()` sets the value back to 1 on the next Ctrl+Alt+Del. The test must delete the marker (or set the value before installing).
 
 #### D-SAS-05 · Policy 3 (services + ease of access)
-P3 · How: PS H · Needs: – · Status: ○ Not automated
+P3 · How: PS H · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** `SoftwareSASGeneration` = 3 and `sas.agent` deleted (see D-SAS-04); connected to the console session.
 
@@ -3516,7 +3546,7 @@ P3 · How: PS H · Needs: – · Status: ○ Not automated
 - Security screen in the frames; no refusal Status; the value is still 3.
 
 #### D-SAS-06 · On the lock screen
-P1 · How: H S C · Needs: – · Status: ○ Not automated
+P1 · How: H S C · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** normaluser at the console, locked; harness client connected (D-LOCK-01).
 
@@ -3531,7 +3561,7 @@ P1 · How: H S C · Needs: – · Status: ○ Not automated
 - Then as D-LOCK-02 (`WaitingForUser`, Allow → `Connected`, event 1102).
 
 #### D-SAS-07 · On the sign-in screen (nobody signed in)
-P1 · How: H C · Needs: – · Status: ○ Not automated
+P1 · How: H C · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** nobody signed in; harness client (PSAdmin) connected to the console (D-SIGNIN-01).
 
@@ -3545,7 +3575,7 @@ P1 · How: H C · Needs: – · Status: ○ Not automated
 - Event 1102 "… signed in to session `<id>` with their own account – continued without asking".
 
 #### D-SAS-08 · On the desktop
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** connected with control to normaluser's session after Allow.
 
@@ -3559,7 +3589,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - After Esc: desktop again (Layout `secureDesktop: false`); connection stays, no new question.
 
 #### D-SAS-09 · Lock through Ctrl+Alt+Del
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** as D-SAS-08.
 
@@ -3572,7 +3602,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - Session locked; connection stays; frames show the lock screen.
 
 #### D-SAS-10 · Task Manager through Ctrl+Alt+Del
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** as D-SAS-08.
 
@@ -3585,7 +3615,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Taskmgr.exe runs in normaluser's session; frames show it.
 
 #### D-SAS-11 · Repeated presses
-P3 · How: H E · Needs: – · Status: ○ Not automated
+P3 · How: H E · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 
 **Preconditions:** as D-SAS-08 (or own console session).
 
@@ -3600,7 +3630,7 @@ P3 · How: H E · Needs: – · Status: ○ Not automated
 ### 9.7 Input
 
 #### D-IN-01 · Keyboard by scan code
-P1 · How: H S · Needs: de-DE (second run) · Status: ○ Not automated
+P1 · How: H S · Needs: de-DE (second run) · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** connected with control after Allow; marker app (text box, logs characters) focused in normaluser's session; en-US VM, then de-DE VM.
 
@@ -3614,7 +3644,7 @@ P1 · How: H S · Needs: de-DE (second run) · Status: ○ Not automated
 - de-DE: "yzöä@" (the device's layout applies).
 
 #### D-IN-02 · Extended keys
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** as D-IN-01; marker app logs virtual-key codes.
 
@@ -3626,7 +3656,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - VK_UP/DOWN/LEFT/RIGHT, VK_HOME, VK_END, VK_DELETE, VK_RCONTROL and Enter with the extended bit, in order, each down and up.
 
 #### D-IN-03 · Mouse
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** as D-IN-01; marker app full screen, logs screen coordinates and buttons.
 
@@ -3640,7 +3670,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - All 5 buttons down and up in order; wheel and horizontal wheel with the sent delta.
 
 #### D-IN-04 · Win key combos
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** connected with control after Allow; two windows open in the session.
 
@@ -3652,7 +3682,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - Run dialog opens; Alt+Tab switches the foreground window.
 
 #### D-IN-05 · No stuck keys
-P2 · How: H S N · Needs: – · Status: ○ Not automated
+P2 · How: H S N · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** as D-IN-01.
 
@@ -3666,7 +3696,7 @@ P2 · How: H S N · Needs: – · Status: ○ Not automated
 - Shift and the left button are up after the helper ended.
 
 #### D-IN-06 · Input flood
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** as D-IN-01.
 
@@ -3679,7 +3709,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - All 50 key pairs arrive in order (mouse moves may be dropped when the helper's queue of 256 is full).
 
 #### D-IN-07 · DPI 150 %
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
 **Preconditions:** normaluser's display scale set to 150 % (sign out/in); connected after Allow.
 
@@ -3692,7 +3722,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 ### 9.8 Picture, encoder, resolution, monitors
 
 #### D-VID-01 · Presets
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** connected (own session); a moving marker window keeps the screen changing.
 
@@ -3706,7 +3736,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Stats `quality` 60 when quality 60 is used.
 
 #### D-VID-02 · Policy limits
-P2 · How: PS H · Needs: – · Status: ○ Not automated
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** `MaxFramesPerSecond=10`, `MaxQuality=40`; moving marker window.
 
@@ -3720,7 +3750,7 @@ P2 · How: PS H · Needs: – · Status: ○ Not automated
 - Stats `framesPerSecond` ≤ 10 and `quality` ≤ 40, before and after Settings.
 
 #### D-VID-03 · Changes only
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** connected; still desktop.
 
@@ -3733,7 +3763,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - Moving marker: frames keep arriving.
 
 #### D-VID-04 · Key frame request
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** connected; moving marker window.
 
@@ -3746,7 +3776,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - The next frame has the key-frame flag.
 
 #### D-VID-05 · Slow network
-P2 · How: H N · Needs: – · Status: ○ Not automated
+P2 · How: H N · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** connected; moving marker window; VM network limited to 1 Mbit/s (`Set-VMNetworkAdapter -MaximumBandwidth`).
 
@@ -3761,7 +3791,7 @@ P2 · How: H N · Needs: – · Status: ○ Not automated
 - Input still works.
 
 #### D-VID-06 · Capture method
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** connected with control after Allow.
 
@@ -3774,7 +3804,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Secure desktop: `capture` "GDI".
 
 #### D-VID-07 · No GPU encoder on a VM
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** normal lab VM without GPU-P.
 
@@ -3785,7 +3815,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - Frames arrive; Stats `capture` without ", GPU encoder"; no Failed/Ended status.
 
 #### D-VID-08 · GPU encoder
-P2 · How: H · Needs: GPU-P · Status: ○ Not automated
+P2 · How: H · Needs: GPU-P · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** VM with a GPU-P adapter.
 
@@ -3800,7 +3830,7 @@ P2 · How: H · Needs: GPU-P · Status: ○ Not automated
 Note: there is no hook to force a GPU encoder failure; the software fallback can only be checked by switching to ≤ 30 fps or on a GPU whose encoder fails by itself.
 
 #### D-VID-09 · N edition
-P2 · How: H E · Needs: N · Status: ○ Not automated
+P2 · How: H E · Needs: N · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** Windows N VM without the Media Feature Pack; own session.
 
@@ -3816,7 +3846,7 @@ P2 · How: H E · Needs: N · Status: ○ Not automated
 Note: the sheet expects event 3100 and a clear error in RemoteHub. The code ends the helper with that text in the agent log only; RemoteHub gets the generic "kept failing" text and no 3100 event is written.
 
 #### D-VID-10 · Dark display
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** `powercfg /change monitor-timeout-ac 1` in the guest; wait 70 s until the console screenshot is black.
 
@@ -3830,7 +3860,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - If dark for 3 s, the agent log has "no picture for 3 s (…)" with the wake result.
 
 #### D-FIT-01 · Fit to window
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** own session at 1024×768 (or any size ≠ 1600×900). Harness `cad --nocad 1 --fit 1600x900` covers steps 1–2.
 
@@ -3845,7 +3875,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - After the close: original resolution.
 
 #### D-FIT-02 · Unsupported size
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** as D-FIT-01.
 
@@ -3858,7 +3888,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 - Resolution = what `fit` says.
 
 #### D-FIT-03 · Restore after a crash
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** fitted to 1600×900 as in D-FIT-01.
 
@@ -3874,7 +3904,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 Note: the service resends the Fit settings to the restarted helper, so while connected the resolution is fitted again a few seconds after the kill.
 
 #### D-MON-01 · Two monitors
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** installed with the virtual display; agent.json `"virtualDisplay": "always"`, service restarted.
 
@@ -3891,7 +3921,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 Note: with "always" the virtual monitor is only requested when a Fit size is sent (or the picture stays black); a plain Start does not switch it on.
 
 #### D-MON-02 · All monitors
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** two monitors as in D-MON-01; marker app on the second monitor.
 
@@ -3906,7 +3936,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - The click lands on the marker app on the second monitor.
 
 #### D-MON-03 · Monitor added / removed while connected
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** two monitors, monitor 1 shown.
 
@@ -3920,7 +3950,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Layout with 2 monitors again; no Failed/Ended.
 
 #### D-VD-01 · Virtual display auto
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** installed with the virtual display; `virtualDisplay` "auto"; guest display at 640×480.
 
@@ -3936,7 +3966,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 Note: "auto" asks for the virtual monitor only when the display's largest offered mode is smaller than the window (capped at 1280×720), or when the picture stays black. A Hyper-V display set to 640×480 still offers larger modes, so the condition is not met by the resolution alone.
 
 #### D-VD-02 · Virtual display off
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** installed with the virtual display; `virtualDisplay` "off".
 
@@ -3948,7 +3978,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Device stays disabled; no "virtual monitor" log line.
 
 #### D-VD-03 · Two connections
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** as D-MON-01 ("always").
 
@@ -3962,7 +3992,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - After B closes: switched off.
 
 #### D-VD-04 · Resize
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Preconditions:** virtual monitor on at 1600×900 (D-MON-01).
 
@@ -3976,7 +4006,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 ### 9.9 Clipboard
 
 #### D-CLIP-01 · Text to the device
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** connected with control to normaluser's session after Allow.
 
@@ -3988,7 +4018,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - normaluser's clipboard has exactly that text.
 
 #### D-CLIP-02 · Text from the device
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4001,7 +4031,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Clipboard message with the same text, both times (1,000,000 chars complete).
 
 #### D-CLIP-03 · No echo
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4013,7 +4043,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - No Clipboard message comes back.
 
 #### D-CLIP-04 · Image both ways
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4031,7 +4061,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 Note: the sheet says both arrive as PNG + CF_DIB and the device always sends PNG. The code puts a BMP only as CF_DIB, and sends BMP when the copying program offers no "PNG" format.
 
 #### D-CLIP-05 · Files to the device
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** normaluser at the console with an Explorer window on an empty folder, focused; harness `copy --consent Ask --offer 30 --ctrlv 3` (after Allow) is the base; 3 files + a folder with 2 files on the host.
 
@@ -4048,7 +4078,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Files land in the clipboard folder (owner normaluser) and in the Explorer folder; SHA-256 equal.
 
 #### D-CLIP-06 · Files from the device
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01; Start with `features: ["transferOnPaste"]`; files of known hashes in normaluser's profile.
 
@@ -4063,7 +4093,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - After the request the data comes; hashes equal.
 
 #### D-CLIP-07 · Paste on demand
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-05; clipboard history on in normaluser's session.
 
@@ -4079,7 +4109,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - TransferRequest only after the paste.
 
 #### D-CLIP-08 · Limits
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4095,7 +4125,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 Note: the text from the device differs from the sheet's "Too much at once".
 
 #### D-CLIP-09 · Path escape
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4111,7 +4141,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - No file outside the clipboard folder.
 
 #### D-CLIP-10 · Reparse points
-P2 · How: H S · Needs: – · Status: ○ Not automated
+P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-06; a folder in normaluser's profile with a junction and a symlink to `C:\Windows`.
 
@@ -4123,7 +4153,7 @@ P2 · How: H S · Needs: – · Status: ○ Not automated
 - The junction and symlink (and anything below them) are not in the items.
 
 #### D-CLIP-11 · Out of order / incomplete
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01.
 
@@ -4139,7 +4169,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 Note: a short transfer gets no "incomplete" message; it stays open until cancelled or the connection ends, then its folder is removed. "The copied items are incomplete." is only for items without a path.
 
 #### D-CLIP-12 · Files read with the user's rights
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-06; `C:\LabPrivate\secret.txt` readable only by Admin (folder listable by Users).
 
@@ -4152,7 +4182,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - TransferEnd `ok: false` "The copied files can't be read on the device: …" (access denied); no content bytes arrive.
 
 #### D-CLIP-13 · Nobody signed in
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** nobody signed in; harness client connected to the sign-in screen (D-SIGNIN-01), no `features`.
 
@@ -4164,7 +4194,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 - TransferEnd `ok: false` "The device can't take the copied files: Nobody is signed in on the device."
 
 #### D-CLIP-14 · Policy levels
-P1 · How: PS H S · Needs: – · Status: ○ Not automated
+P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** normaluser at the console; one run per `DesktopClipboard` value 0, 1, 2, 3.
 
@@ -4180,7 +4210,7 @@ P1 · How: PS H S · Needs: – · Status: ○ Not automated
 - 2: text and image; files refused as above. 3: everything.
 
 #### D-CLIP-15 · View-only has no clipboard
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** view-only connection to normaluser's session after Allow.
 
@@ -4193,7 +4223,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - TransferEnd `ok: false` "Copying images isn't allowed on this device."
 
 #### D-CLIP-16 · Newer copy cancels
-P3 · How: H S · Needs: – · Status: ○ Not automated
+P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-06 without `features` (data starts at once); a 90 MB file in the session.
 
@@ -4207,7 +4237,7 @@ P3 · How: H S · Needs: – · Status: ○ Not automated
 - Second transfer arrives complete.
 
 #### D-CLIP-17 · Abort leaves nothing
-P1 · How: H S N · Needs: – · Status: ○ Not automated
+P1 · How: H S N · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01; a 90 MB file on the host.
 
@@ -4220,7 +4250,7 @@ P1 · How: H S N · Needs: – · Status: ○ Not automated
 - No transfer folder with partial files on the device; nothing partial on the harness side.
 
 #### D-CLIP-18 · Old folders purged
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 
 **Preconditions:** as D-CLIP-01; PS Direct creates `…\RemoteHub Clipboard\20200101-000000-000` with creation time yesterday.
 
@@ -4234,7 +4264,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 ### 9.10 Idle, reconnect, robustness
 
 #### D-IDLE-01 · Idle timeout
-P2 · How: PS H E · Needs: – · Status: ○ Not automated
+P2 · How: PS H E · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** `DesktopIdleTimeoutMinutes=1`; own session.
 
@@ -4249,7 +4279,7 @@ P2 · How: PS H E · Needs: – · Status: ○ Not automated
 - Event 2102 "Desktop: the session of `<acct>` from `<host IP>` ended after 1 minute(s) without input (policy)"; event 1101 with "(no mouse or keyboard input for 1 minute(s))".
 
 #### D-IDLE-02 · Input resets
-P3 · How: PS H · Needs: – · Status: ○ Not automated
+P3 · How: PS H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-IDLE-01.
 
@@ -4260,7 +4290,7 @@ P3 · How: PS H · Needs: – · Status: ○ Not automated
 - No warning, no `Ended`.
 
 #### D-IDLE-03 · View-only counts
-P3 · How: PS H · Needs: – · Status: ○ Not automated
+P3 · How: PS H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-IDLE-01; view-only Start.
 
@@ -4271,7 +4301,7 @@ P3 · How: PS H · Needs: – · Status: ○ Not automated
 - `Ended` after about 60 s (view-only input never counts); event 2102.
 
 #### D-RES-01 · Resume after a drop
-P1 · How: H N S E · Needs: – · Status: ○ Not automated
+P1 · How: H N S E · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected to normaluser's session after Allow; token kept.
 
@@ -4286,7 +4316,7 @@ P1 · How: H N S E · Needs: – · Status: ○ Not automated
 - If the agent had not noticed the drop yet, the old connection is taken over and gets no 1101; otherwise it has 1101 "(connection lost…)".
 
 #### D-RES-02 · Token single use
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-RES-01 after a successful resume.
 
@@ -4298,7 +4328,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - `WaitingForUser` (normal consent).
 
 #### D-RES-03 · Token from another account
-P1 · How: H · Needs: – · Status: ○ Not automated
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** local admin `lapsadmin` created by the test; PSAdmin connected after Allow; PSAdmin's connection aborted (TCP).
 
@@ -4312,7 +4342,7 @@ P1 · How: H · Needs: – · Status: ○ Not automated
 - PSAdmin: resumes without a question; event 1103.
 
 #### D-RES-04 · Token after 1 min
-P2 · How: H N · Needs: – · Status: ○ Not automated
+P2 · How: H N · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-RES-01.
 
@@ -4327,7 +4357,7 @@ P2 · How: H N · Needs: – · Status: ○ Not automated
 Note: the harness must drop the connection without a WebSocket close frame; a normal close counts as a deliberate end and voids the token at once.
 
 #### D-RES-05 · Token void after deliberate end
-P1 · How: H S · Needs: – · Status: ○ Not automated
+P1 · How: H S · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-RES-01; one run per end.
 
@@ -4339,7 +4369,7 @@ P1 · How: H S · Needs: – · Status: ○ Not automated
 - Every run: `WaitingForUser` (normal consent).
 
 #### D-RES-06 · Different user signed in meanwhile
-P1 · How: H S C · Needs: – · Status: ○ Not automated
+P1 · How: H S C · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected to normaluser's console session after Allow.
 
@@ -4352,7 +4382,7 @@ P1 · How: H S C · Needs: – · Status: ○ Not automated
 - `WaitingForUser` "Waiting for `<VM>\Admin` to allow access…".
 
 #### D-RES-07 · Old connection still alive
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connection A connected after Allow, kept open.
 
@@ -4366,7 +4396,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 Note: the sheet expects A to end with "continued in a new connection". The code keeps that only as an internal end reason: A gets no final Status, and the 1101 event (where the reason would be logged) is skipped for a taken-over connection.
 
 #### D-ROB-01 · Helper killed
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected to normaluser's session after Allow.
 
@@ -4379,7 +4409,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - New helper PID; frames continue; no `WaitingForUser`.
 
 #### D-ROB-02 · Helper keeps failing
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** as D-ROB-01.
 
@@ -4392,7 +4422,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Event 1101 with "(the device's screen kept failing)".
 
 #### D-ROB-03 · Service restart while connected
-P2 · How: H PS · Needs: – · Status: ○ Not automated
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected with Fit 1600×900 (D-FIT-01).
 
@@ -4405,7 +4435,7 @@ P2 · How: H PS · Needs: – · Status: ○ Not automated
 - Event 1101 with "(connection lost)".
 
 #### D-ROB-04 · 8 h soak
-P3 · How: H PS · Needs: – · Status: ○ Not automated
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected (own session); moving marker window.
 
@@ -4418,7 +4448,7 @@ P3 · How: H PS · Needs: – · Status: ○ Not automated
 - Agent service working set grows < 50 MB.
 
 #### D-ROB-05 · Fuzzed messages
-P2 · How: H · Needs: – · Status: ○ Not automated
+P2 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** default.
 
@@ -4434,7 +4464,7 @@ P2 · How: H · Needs: – · Status: ○ Not automated
 Note: a Start with broken JSON goes to the general error path: Status `Failed` "The remote desktop failed on the device. Details are in the agent's log." and one event 3100 per attempt (not a crash loop, but 3100 does appear). Malformed Mouse/Key messages are passed to the helper unchecked; the helper then ends and is restarted ("reconnecting…"), counting towards "kept failing".
 
 #### D-ROB-06 · Ping
-P3 · How: H · Needs: – · Status: ○ Not automated
+P3 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 
 **Preconditions:** connected (or waiting for consent).
 
@@ -4448,7 +4478,7 @@ P3 · How: H · Needs: – · Status: ○ Not automated
 ### 9.11 Audit
 
 #### D-AUD-01 · Event IDs
-P1 · How: E · Needs: – · Status: ○ Not automated
+P1 · How: E · Needs: – · Status: ✅ Automated – `D-ZAUDIT.Tests.ps1`
 
 **Preconditions:** run after the D scenarios (and one PowerShell session and one wrong password for 1000/1001/2000).
 
@@ -4462,7 +4492,7 @@ P1 · How: E · Needs: – · Status: ○ Not automated
 - 1xxx Information, 2xxx Warning.
 
 #### D-AUD-02 · No content
-P1 · How: E · Needs: – · Status: ○ Not automated
+P1 · How: E · Needs: – · Status: ✅ Automated – `D-ZAUDIT.Tests.ps1`
 
 **Preconditions:** marker strings typed (D-IN-01), copied (D-CLIP-01/02) and shown on screen during the run.
 
@@ -4483,7 +4513,7 @@ Unless a case says otherwise, "the MSI" is `RemoteHub-<version>-x64.msi` under t
 ### 10.1 Installer
 
 #### C-MSI-01 · Silent install
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** Fresh client VM from the newest checkpoint, no RemoteHub installed. The MSI and the agent MSI of the same build are copied to the guest.
 
@@ -4501,7 +4531,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - `Agent\RemoteHub-Agent-x64.msi` exists and its SHA-256 equals the agent MSI under test.
 
 #### C-MSI-02 · Starts without .NET installed
-P1 · How: U · Needs: – · Status: ○ Not automated
+P1 · How: U · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** C-MSI-01 done on a VM without any .NET desktop runtime (`dotnet --list-runtimes` fails or lists no `Microsoft.WindowsDesktop.App`).
 
@@ -4516,7 +4546,7 @@ P1 · How: U · Needs: – · Status: ○ Not automated
 - No .NET runtime download prompt and no other window appears (the MSI is self-contained).
 
 #### C-MSI-03 · .rdp association
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** C-MSI-01 done.
 
@@ -4533,7 +4563,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - `HKCR\.rdp` still points to mstsc's ProgId (`RDP.File`); no `UserChoice` set by the install.
 
 #### C-MSI-04 · Upgrade from the previous release
-P1 · How: PS U · Needs: – · Status: ○ Not automated
+P1 · How: PS U · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** Previous release MSI installed. As `Admin`: one folder, two connections, one saved credential with the test password, one setting changed (e.g. theme Light); RemoteHub closed. Audit entry count noted.
 
@@ -4550,7 +4580,7 @@ P1 · How: PS U · Needs: – · Status: ○ Not automated
 - Audit entry count ≥ the noted count; *Verify integrity* shows "Audit log intact".
 
 #### C-MSI-05 · Upgrade from RDP Manager 2.x
-P2 · How: PS U · Needs: – · Status: ○ Not automated
+P2 · How: PS U · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** An RDP Manager 2.x build installed with settings in `%APPDATA%\RdpManager` (connections, `local.json`).
 
@@ -4569,7 +4599,7 @@ P2 · How: PS U · Needs: – · Status: ○ Not automated
 Note: the MSI has the same upgrade code, but RDP Manager 2.x versions are higher than 0.x and `MajorUpgrade` refuses a downgrade ("A newer version of RemoteHub is already installed."). The README says to uninstall 2.x first. A direct upgrade only works from an RDP Manager build numbered below the RemoteHub version. The folder copy happens on the first start (`SettingsStore.MigrateFolder`), only if `%APPDATA%\RemoteHub` doesn't exist yet.
 
 #### C-MSI-06 · Downgrade
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** MSI under test installed.
 
@@ -4585,7 +4615,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - `RemoteHub.exe` still has the version under test.
 
 #### C-MSI-07 · Uninstall
-P2 · How: PS · Needs: – · Status: ○ Not automated
+P2 · How: PS · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** MSI installed; RemoteHub was started once as `Admin` with one connection saved.
 
@@ -4601,7 +4631,7 @@ P2 · How: PS · Needs: – · Status: ○ Not automated
 - User data stays: `%APPDATA%\RemoteHub` (settings folder) and `%LOCALAPPDATA%\RemoteHub` (`remotehub.db`, `db.key`, `backup\`, `install-id`); `Videos\RemoteHub` if recordings exist. Nothing else is left.
 
 #### C-MSI-08 · Install as standard user
-P3 · How: S · Needs: – · Status: ○ Not automated
+P3 · How: S · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 
 **Preconditions:** No RemoteHub installed. MSI copied to `C:\lab` (readable by everyone). `normaluser` signed in.
 
@@ -4618,7 +4648,7 @@ P3 · How: S · Needs: – · Status: ○ Not automated
 ### 10.2 Storage, protection, audit
 
 #### C-DB-01 · New database
-P1 · How: U PS · Needs: – · Status: ○ Not automated
+P1 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** RemoteHub installed, `Admin` never started it (no `%LOCALAPPDATA%\RemoteHub`).
 
@@ -4636,7 +4666,7 @@ P1 · How: U PS · Needs: – · Status: ○ Not automated
 - The lab password is found in no file.
 
 #### C-DB-02 · Other Windows user
-P1 · How: PS · Needs: – · Status: ○ Not automated
+P1 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** C-DB-01 done (`Admin` has a database).
 
@@ -4650,7 +4680,7 @@ P1 · How: PS · Needs: – · Status: ○ Not automated
 - RemoteHub shows "RemoteHub's database can't be opened: The database key can't be read with this Windows account. …"; no connection of `Admin` is shown.
 
 #### C-DB-03 · Migration from settings.dat
-P1 · How: PS U · Needs: – · Status: ○ Not automated
+P1 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** A 0.13 `settings.dat` made as `Admin` (folders, connections, saved credentials) placed in `%APPDATA%\RemoteHub`; no `%LOCALAPPDATA%\RemoteHub\remotehub.db`. The same data exported by the harness as JSON for comparison.
 
@@ -4666,7 +4696,7 @@ P1 · How: PS U · Needs: – · Status: ○ Not automated
 - Audit entry "Settings moved to the database": "<n> folders and connections, <m> saved credentials moved from settings.dat to the encrypted database."
 
 #### C-DB-04 · Daily backup
-P2 · How: PS U · Needs: – · Status: ○ Not automated
+P2 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** `Admin` has a database (C-DB-01); `backup\` empty.
 
@@ -4682,7 +4712,7 @@ P2 · How: PS U · Needs: – · Status: ○ Not automated
 - One new file per moved day; never more than 7 files; the oldest are removed first.
 
 #### C-DB-05 · Corrupt database
-P1 · How: PS U · Needs: – · Status: ○ Not automated
+P1 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** `Admin` has a database with at least one backup (C-DB-04) and one connection added after the backup.
 
@@ -4702,7 +4732,7 @@ P1 · How: PS U · Needs: – · Status: ○ Not automated
 Note: the damaged database is kept as `remotehub.db.damaged-<stamp>` (with `-wal`/`-shm`), not `.unreadable-<stamp>`. The `.unreadable-<stamp>` copy is only made when the settings can't be read for another reason (e.g. an unreadable `settings.dat`).
 
 #### C-LOCK-01 · Startup password
-P1 · How: U PS · Needs: – · Status: ○ Not automated
+P1 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** `Admin` has a database with one connection. PS Direct copies `db.key` to `C:\lab\db.key.old`.
 
@@ -4721,7 +4751,7 @@ P1 · How: U PS · Needs: – · Status: ○ Not automated
 - `lock.json` exists; `db.key` starts with `RHDK` + 0x02; the old key opens nothing (`DatabaseUnreadableException`).
 
 #### C-LOCK-02 · Auto-lock
-P2 · How: U · Needs: – · Status: ○ Not automated
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** C-LOCK-01 done. An RDP or PowerShell tab is open and connected.
 
@@ -4738,7 +4768,7 @@ P2 · How: U · Needs: – · Status: ○ Not automated
 - After unlock the main window is back with the tab still connected; audit "RemoteHub locked" ("After 5 min without input").
 
 #### C-LOCK-03 · Windows Hello PIN
-P3 · How: U S · Needs: vTPM · Status: ○ Not automated
+P3 · How: U S · Needs: vTPM · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** VM with vTPM; `Admin` has a Windows Hello PIN.
 
@@ -4753,7 +4783,7 @@ P3 · How: U S · Needs: vTPM · Status: ○ Not automated
 - After the PIN the main window opens; audit "RemoteHub unlocked" ("With Windows Hello").
 
 #### C-LOCK-04 · Turn off
-P2 · How: U PS · Needs: – · Status: ○ Not automated
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** C-LOCK-01 done; `backup\` has files; PS Direct copies `db.key` to `C:\lab\db.key.locked`.
 
@@ -4770,7 +4800,7 @@ P2 · How: U PS · Needs: – · Status: ○ Not automated
 - The copied old key opens nothing.
 
 #### C-SHARE-01 · Shared folder on SMB
-P2 · How: U · Needs: SMB · Status: ○ Not automated
+P2 · How: U · Needs: SMB · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** Host share `\\<host>\rhsettings` writable by `Admin`.
 
@@ -4786,7 +4816,7 @@ P2 · How: U · Needs: SMB · Status: ○ Not automated
 - `%APPDATA%\RemoteHub\keys.dat` exists.
 
 #### C-SHARE-02 · Sync conflict
-P2 · How: U · Needs: SMB, 2VM · Status: ○ Not automated
+P2 · How: U · Needs: SMB, 2VM · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** Two client VMs use the same shared folder (C-SHARE-01 on both).
 
@@ -4803,7 +4833,7 @@ P2 · How: U · Needs: SMB, 2VM · Status: ○ Not automated
 - The file is never overwritten before the choice.
 
 #### C-SHARE-03 · Share unavailable at start
-P2 · How: U N · Needs: SMB · Status: ○ Not automated
+P2 · How: U N · Needs: SMB · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** C-SHARE-01 done; SHA-256 of `RemoteHub.settings` noted.
 
@@ -4819,7 +4849,7 @@ P2 · How: U N · Needs: SMB · Status: ○ Not automated
 - The shared file's SHA-256 is unchanged.
 
 #### C-AUD-01 · Audit entries
-P2 · How: U · Needs: – · Status: ○ Not automated
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** RemoteHub as `Admin` with one connection that has a stored password; a device for connect/transfer.
 
@@ -4837,7 +4867,7 @@ P2 · How: U · Needs: – · Status: ○ Not automated
 Note: there is no separate "copy password" command; passwords are only copied by the Windows password-prompt helper.
 
 #### C-AUD-02 · Append-only
-P1 · How: PS U · Needs: – · Status: ○ Not automated
+P1 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** Database with audit entries younger than the retention period; RemoteHub closed.
 
@@ -4853,7 +4883,7 @@ P1 · How: PS U · Needs: – · Status: ○ Not automated
 - *Verify integrity* shows "Audit log changed": "Entry <n> (<time>) was changed after it was written."
 
 #### C-AUD-03 · Retention policy
-P3 · How: PS U · Needs: – · Status: ○ Not automated
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** Database with audit entries older than 2 days (clock moved back while writing them, or harness inserts).
 
@@ -4868,7 +4898,7 @@ P3 · How: PS U · Needs: – · Status: ○ Not automated
 - No entry older than 1 day is left; newer entries stay.
 
 #### C-AUD-04 · CSV export
-P2 · How: U · Needs: – · Status: ○ Not automated
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** RemoteHub as `Admin`.
 
@@ -4883,7 +4913,7 @@ P2 · How: U · Needs: – · Status: ○ Not automated
 - Status line "<n> entries exported to C:\lab\audit.csv".
 
 #### C-BAK-01 · Backup round trip
-P1 · How: U · Needs: – · Status: ○ Not automated
+P1 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** `Admin` has folders, connections and a saved credential with a password.
 
@@ -4899,7 +4929,7 @@ P1 · How: U · Needs: – · Status: ○ Not automated
 - *Replace everything*: the data equals `Admin`'s; audit "Backup imported" ("Added as a folder" / "Replaced all settings").
 
 #### C-BAK-02 · Wrong backup password
-P2 · How: U · Needs: – · Status: ○ Not automated
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** `C:\lab\rh.rhbackup` from C-BAK-01.
 
@@ -4913,7 +4943,7 @@ P2 · How: U · Needs: – · Status: ○ Not automated
 - Nothing imported; no "Backup imported" audit entry.
 
 #### C-BAK-03 · Old `.rdpmbackup`
-P3 · How: U · Needs: – · Status: ○ Not automated
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
 
 **Preconditions:** A `.rdpmbackup` made with RDP Manager, its password known.
 
@@ -4932,7 +4962,7 @@ The mock (M) is a small HTTPS server on the host with a lab root certificate tru
 RemoteHub must be a Release build (Debug builds never send telemetry).
 
 #### C-POL-01 · `DisableTelemetry`
-P1 · How: PS U M · Needs: – · Status: ○ Not automated
+P1 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; telemetry on in RemoteHub (default).
 
@@ -4947,7 +4977,7 @@ P1 · How: PS U M · Needs: – · Status: ○ Not automated
 - The usage data toggle is off and disabled; text "Turned off by your organisation."
 
 #### C-POL-02 · `DisableUpdateCheck`
-P1 · How: PS U M · Needs: – · Status: ○ Not automated
+P1 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running.
 
@@ -4962,7 +4992,7 @@ P1 · How: PS U M · Needs: – · Status: ○ Not automated
 - Update check toggle and *Check for updates now* disabled; "Some of these settings are managed by your organisation."
 
 #### C-POL-03 · `UpdateChannel`
-P2 · How: PS U M · Needs: – · Status: ○ Not automated
+P2 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; RemoteHub 0.x (default channel Beta).
 
@@ -4978,7 +5008,7 @@ P2 · How: PS U M · Needs: – · Status: ○ Not automated
 - GA (stable) is selected, both channel buttons disabled; "Some of these settings are managed by your organisation."
 
 #### C-POL-04 · `SettingsFolder`
-P2 · How: PS U · Needs: SMB · Status: ○ Not automated
+P2 · How: PS U · Needs: SMB · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Host share `\\<host>\rhsettings`.
 
@@ -4994,7 +5024,7 @@ P2 · How: PS U · Needs: SMB · Status: ○ Not automated
 - Overview "Stored": "Shared folder (set by your IT policy)".
 
 #### C-POL-05 · `DisableRecording`
-P2 · How: PS U · Needs: – · Status: ○ Not automated
+P2 · How: PS U · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** A connection with RDP and PowerShell (agent or WinRM) available.
 
@@ -5009,7 +5039,7 @@ P2 · How: PS U · Needs: – · Status: ○ Not automated
 - Settings: "Recording is turned off by your organisation."; all recording controls disabled.
 
 #### C-POL-06 · `RecordingFolder` with `%USERPROFILE%`
-P2 · How: PS U · Needs: – · Status: ○ Not automated
+P2 · How: PS U · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** A connection with a PowerShell tab available.
 
@@ -5024,7 +5054,7 @@ P2 · How: PS U · Needs: – · Status: ○ Not automated
 - The MP4 is in `C:\Users\Admin\LabRecordings`.
 
 #### C-POL-07 · HKCU vs HKLM, legacy `RdpManager` key
-P3 · How: PS U · Needs: – · Status: ○ Not automated
+P3 · How: PS U · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; host share available.
 
@@ -5042,7 +5072,7 @@ P3 · How: PS U · Needs: – · Status: ○ Not automated
 Note: only `SettingsFolder` is read from the legacy `Policies\RdpManager` key (`SettingsStore.PolicyFolder`). All other policies (`AppPolicy`: telemetry, updates, channel, recording, audit retention) read only `Policies\RemoteHub`, HKLM first, then HKCU.
 
 #### C-UPD-01 · Update offered
-P2 · How: U M · Needs: – · Status: ○ Not automated
+P2 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock answers `/latest` with JSON `{version, notes, download{name,url,sha256,size}}`.
 
@@ -5057,7 +5087,7 @@ P2 · How: U M · Needs: – · Status: ○ Not automated
 - Steps 3 and 4: no bar.
 
 #### C-UPD-02 · Checksum mismatch
-P1 · How: U M · Needs: – · Status: ○ Not automated
+P1 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock offers a higher version with a wrong `sha256` (correct size), download from an allowed URL served by the mock.
 
@@ -5072,7 +5102,7 @@ P1 · How: U M · Needs: – · Status: ○ Not automated
 - No `.msi` and no `.partial` file left; no msiexec started; version unchanged.
 
 #### C-UPD-03 · Untrusted host
-P1 · How: U M · Needs: – · Status: ○ Not automated
+P1 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock offers a higher version with `download.url` = `https://evil.lab/RemoteHub.msi`; second run `https://github.com/someone/other/releases/download/v1/x.msi`; third run `http://update.remotehub.dev/x.msi`.
 
@@ -5088,7 +5118,7 @@ P1 · How: U M · Needs: – · Status: ○ Not automated
 Note: only `remotehub.dev` (and subdomains) or release assets of `GrischaE1/RemoteHub` on `github.com` / `api.github.com` are allowed, over HTTPS. Other GitHub paths are refused too. After redirects the final host must be `github.com`, `githubusercontent.com` or `remotehub.dev`.
 
 #### C-UPD-04 · Install
-P2 · How: U C M · Needs: – · Status: ○ Not automated
+P2 · How: U C M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock offers the next build's MSI with the right SHA-256 and size. An RDP tab is open.
 
@@ -5105,7 +5135,7 @@ P2 · How: U C M · Needs: – · Status: ○ Not automated
 - RemoteHub starts again from Program Files with the new version.
 
 #### C-UPD-05 · Mandatory / skip
-P3 · How: U M · Needs: – · Status: ○ Not automated
+P3 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock offers a higher version.
 
@@ -5119,7 +5149,7 @@ P3 · How: U M · Needs: – · Status: ○ Not automated
 - Steps 2 and 3: the update window opens by itself with "This update is required – this version is no longer supported."; no *Skip this version* button.
 
 #### C-TEL-01 · Telemetry content
-P1 · How: U M · Needs: – · Status: ○ Not automated
+P1 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; telemetry on; no policy.
 
@@ -5135,7 +5165,7 @@ P1 · How: U M · Needs: – · Status: ○ Not automated
 - `installId` = the GUID in `install-id`; no host name, user name or address in the body.
 
 #### C-TEL-02 · Off deletes install ID
-P2 · How: U PS · Needs: – · Status: ○ Not automated
+P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** `install-id` exists (C-TEL-01).
 
@@ -5149,7 +5179,7 @@ P2 · How: U PS · Needs: – · Status: ○ Not automated
 - After step 3 a new, different GUID.
 
 #### C-CRASH-01 · .NET crash
-P2 · How: U M · Needs: – · Status: ○ Not automated
+P2 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; telemetry on. A way to throw an unhandled exception in RemoteHub (see Note), with a message containing the user name, computer name, `C:\Users\Admin\x.txt` and `10.0.0.5`.
 
@@ -5168,7 +5198,7 @@ P2 · How: U M · Needs: – · Status: ○ Not automated
 Note: RemoteHub has no built-in switch to force a crash; the lab needs its own trigger (e.g. a test build hook). An "unexpected error" that RemoteHub survives ("RemoteHub – unexpected error" message box) is recorded the same way, at most three per session.
 
 #### C-CRASH-02 · Unexpected exit
-P3 · How: U M · Needs: – · Status: ○ Not automated
+P3 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 
 **Preconditions:** Mock running; telemetry on.
 
@@ -5187,7 +5217,7 @@ P3 · How: U M · Needs: – · Status: ○ Not automated
 RemoteHub runs in the client VM (`Admin`'s session, FlaUI); the device is `Server-2025-en-US` unless noted.
 
 #### R-RDP-01 · Connect with saved credentials
-P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Connection `Device` to the device's address with a saved credential `PSAdmin` + lab password. NLA delegation for the device allowed (or a domain).
 
@@ -5202,7 +5232,7 @@ P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - `query session` lists a new Active RDP session for `PSAdmin`.
 
 #### R-RDP-02 · Local account `.\user`
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Credential with user `.\PSAdmin` (or ticked "Local account on the target computer (.\user)").
 
@@ -5214,7 +5244,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - Signed in as `<DEVICE>\PSAdmin` (local account of the device).
 
 #### R-RDP-03 · NTLM saved-credential policy message
-P3 · How: U · Needs: 2VM · Status: ○ Not automated
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Non-domain device; on the client no "Allow delegating saved credentials with NTLM-only server authentication" policy; NLA on.
 
@@ -5228,7 +5258,7 @@ P3 · How: U · Needs: 2VM · Status: ○ Not automated
 Note: RemoteHub shows Windows' own text (`GetErrorDescription`) in the tab. It has no extra explanation of the NTLM delegation policy in the app; that explanation is only in the README.
 
 #### R-RDP-04 · Password prompt helper
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Device with "Always prompt for password upon connection" set; connection with stored password; *When Windows asks for the password* = "Copy to clipboard (cleared after 30 s)" (default).
 
@@ -5244,7 +5274,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - Audit "Password copied" ("For the Windows password prompt (cleared after 30 s)").
 
 #### R-RDP-05 · Clipboard / drive redirection
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Connection with "Clipboard (copy & paste)" = Yes, "Local drives" = No.
 
@@ -5259,7 +5289,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - `\\tsclient\C` is missing with drives off and present with drives on.
 
 #### R-RDP-06 · Dynamic resolution
-P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** "Resize behaviour" = "Dynamic resolution" (default).
 
@@ -5272,7 +5302,7 @@ P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - The device session's resolution follows the tab's client size (width even, height as the tab).
 
 #### R-RDP-07 · Ctrl+Alt+Del, full screen, detach/dock
-P3 · How: U · Needs: 2VM · Status: ○ Not automated
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected.
 
@@ -5289,7 +5319,7 @@ P3 · How: U · Needs: 2VM · Status: ○ Not automated
 - The frame lights up in the session colour with "Keyboard → remote session".
 
 #### R-RDP-08 · .rdp import/export
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Working connection `Device` with drives and clipboard redirection on.
 
@@ -5306,7 +5336,7 @@ P2 · How: U · Needs: 2VM · Status: ○ Not automated
 Note: the password in the `.rdp` is DPAPI-protected for the exporting Windows user (like mstsc), so `normaluser` can't read it and Windows asks for it. The risks dialog is shown only when a `.rdp` file is opened (argument / file association) and creates a new entry, not for import through *New* or drag and drop.
 
 #### R-RDP-09 · Single instance
-P3 · How: U · Needs: 2VM · Status: ○ Not automated
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RemoteHub running with connection `Device`; `C:\lab\device.rdp` for the same host and port.
 
@@ -5320,7 +5350,7 @@ P3 · How: U · Needs: 2VM · Status: ○ Not automated
 - No new entry; the existing `Device` entry connects.
 
 #### R-AGENT-01 · Full agent flow from the UI
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Device with WinRM working for the connection (remoting check passed); no agent on the device.
 
@@ -5337,7 +5367,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 - The agent desktop tab "Desktop (agent)" shows the device screen.
 
 #### R-AGENT-02 · Automatic → agent desktop
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent installed (R-AGENT-01); "Remote desktop through" = "Automatic – the agent if installed, otherwise RDP".
 
@@ -5351,7 +5381,7 @@ P2 · How: U · Needs: 2VM · Status: ○ Not automated
 - *Use RDP instead* opens an RDP tab to the same device.
 
 #### R-AGENT-03 · Own RDP session warning
-P3 · How: U · Needs: 2VM · Status: ○ Not automated
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent installed; an RDP tab from this RemoteHub to the device is connected.
 
@@ -5373,7 +5403,7 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 **Agent connection**
 
 #### UI-AG-01 · Install from the UI
-P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Connection to the device with WinRM working (remoting check passed); no agent on the device.
 
@@ -5390,7 +5420,7 @@ P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - Service `RemoteHubAgent` running; audit "Agent installed" with detail "Installed – Remoting".
 
 #### UI-AG-02 · Test RemoteHub Agent
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Agent installed; connection set to "Connect through" = "RemoteHub Agent"; remoting status reset (not yet tested).
 
@@ -5404,7 +5434,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 Note: *Test RemoteHub Agent* is only in the menu while the connection uses the agent and the last result isn't "available"; after a successful test the menu shows the tools instead.
 
 #### UI-AG-03 · Wrong pin
-P1 · How: U PS E · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS E · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Agent installed and pinned. The device re-enrolled with another certificate (install again from a second RemoteHub / harness with a new identity).
 
@@ -5420,7 +5450,7 @@ P1 · How: U PS E · Needs: 2VM · Status: ○ Not automated
 - No new 4625 / 4624 for the account and no sign-in line in the agent log.
 
 #### UI-AG-04 · Wrong password / not allowed
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent installed.
 
@@ -5435,7 +5465,7 @@ P2 · How: U · Needs: 2VM · Status: ○ Not automated
 - `normaluser`: "The account is not allowed to use the RemoteHub Agent on <host>:58732: it must be an administrator there …"
 
 #### UI-AG-05 · Agent stopped
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Agent installed; connection uses the agent.
 
@@ -5450,7 +5480,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - After the start the tab connects.
 
 #### UI-AG-06 · Update from the UI
-P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Previous agent version installed (`Get-LabAgentMsi -Previous`); RemoteHub ships the new agent MSI.
 
@@ -5467,7 +5497,7 @@ P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
 **Agent remote desktop**
 
 #### UI-AD-01 · Open
-P1 · How: U C · Needs: 2VM · Status: ○ Not automated
+P1 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent installed; `normaluser` signed in on the device console.
 
@@ -5484,7 +5514,7 @@ P1 · How: U C · Needs: 2VM · Status: ○ Not automated
 - The tab picture matches the console screenshot (similarity above the threshold).
 
 #### UI-AD-02 · Control
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** UI-AD-01 connected; Notepad open on the device (task in the user's session).
 
@@ -5498,7 +5528,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Notepad on the device holds exactly the typed text, also the German characters.
 
 #### UI-AD-03 · Monitor / All monitors / Fit to window
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Device with two monitors (or a virtual second display); agent desktop connected.
 
@@ -5514,7 +5544,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - After disconnect the original resolution is back.
 
 #### UI-AD-04 · Key combinations
-P2 · How: U S · Needs: 2VM · Status: ○ Not automated
+P2 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected; "Key combinations" on (default).
 
@@ -5528,7 +5558,7 @@ P2 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Win+L locks the client VM, the device stays unlocked.
 
 #### UI-AD-05 · Ask
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** `normaluser` signed in on the device; connect as `PSAdmin`.
 
@@ -5543,7 +5573,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Deny: the tab ends with the refusal reason (e.g. "The user at the device refused."); agent audit 2101 / 2100 on the device.
 
 #### UI-AD-06 · Show them a code
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** `normaluser` signed in on the device.
 
@@ -5558,7 +5588,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Wrong code: "<n> attempt(s) left." counts down; after the third the connection is refused.
 
 #### UI-AD-07 · View-only
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Notepad open on the device.
 
@@ -5575,7 +5605,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 Note: view-only is chosen on the connect page before connecting; there is no toggle while connected.
 
 #### UI-AD-08 · Use RDP instead
-P2 · How: U · Needs: 2VM · Status: ○ Not automated
+P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop tab open (connect page or connected).
 
@@ -5589,7 +5619,7 @@ P2 · How: U · Needs: 2VM · Status: ○ Not automated
 **Copy and paste**
 
 #### UI-CP-01 · Text admin → device (agent)
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected; Notepad open on both sides.
 
@@ -5602,7 +5632,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Same text on the device, line breaks and Unicode intact.
 
 #### UI-CP-02 · Text device → admin (agent)
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** As UI-CP-01.
 
@@ -5615,7 +5645,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Same text on the admin's PC.
 
 #### UI-CP-03 · Image both ways (agent)
-P2 · How: U S · Needs: 2VM · Status: ○ Not automated
+P2 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected; Paint on both sides.
 
@@ -5629,7 +5659,7 @@ P2 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Notices "Copied the image from the device – paste it here." / "Pasted the image from the device." as applicable.
 
 #### UI-CP-04 · Files admin → device (agent)
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** `C:\lab\clip` with 3 files and a folder with files (a few MB) on the admin's PC.
 
@@ -5644,7 +5674,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - All files and the folder arrive; hashes equal the source.
 
 #### UI-CP-05 · Files device → admin (agent)
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Test files on the device.
 
@@ -5657,7 +5687,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Files arrive; hashes equal; notice "Copied <n> files from the device – paste them here." before pasting.
 
 #### UI-CP-06 · Too much
-P2 · How: U S · Needs: 2VM · Status: ○ Not automated
+P2 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** A 101 MB file on the admin's PC.
 
@@ -5671,7 +5701,7 @@ P2 · How: U S · Needs: 2VM · Status: ○ Not automated
 - No file (and no partial file) on the device.
 
 #### UI-CP-07 · Policy text only
-P2 · How: U S PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U S PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** PS Direct on the device: `HKLM\SOFTWARE\Policies\RemoteHub\Agent` DWORD `DesktopClipboard` = 1.
 
@@ -5686,7 +5716,7 @@ P2 · How: U S PS · Needs: 2VM · Status: ○ Not automated
 - Files are refused: "Copying images and files isn't allowed on this device – only text."
 
 #### UI-CP-08 · Copy on the lock screen
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected to `normaluser`'s session.
 
@@ -5701,7 +5731,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - After unlock and consent: copy and paste works again.
 
 #### UI-CP-09 · Text both ways (RDP)
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected, clipboard redirection on.
 
@@ -5713,7 +5743,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Same text both ways (Unicode, multi-line).
 
 #### UI-CP-10 · Files both ways (RDP)
-P2 · How: U S · Needs: 2VM · Status: ○ Not automated
+P2 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected, clipboard redirection on.
 
@@ -5726,7 +5756,7 @@ P2 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Files arrive both ways; hashes equal.
 
 #### UI-CP-11 · Image both ways (RDP)
-P3 · How: U S · Needs: 2VM · Status: ○ Not automated
+P3 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected.
 
@@ -5739,7 +5769,7 @@ P3 · How: U S · Needs: 2VM · Status: ○ Not automated
 - Pixels equal both ways.
 
 #### UI-CP-12 · Across sessions
-P3 · How: U S · Needs: 2VM · Status: ○ Not automated
+P3 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab to device A and agent desktop tab to device B (both connected).
 
@@ -5754,7 +5784,7 @@ P3 · How: U S · Needs: 2VM · Status: ○ Not automated
 **Ctrl+Alt+Del**
 
 #### UI-SAS-01 · Agent tab, desktop
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected to an unlocked session.
 
@@ -5768,7 +5798,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 - After Esc the desktop is back.
 
 #### UI-SAS-02 · Agent tab, **lock screen**
-P1 · How: U S C · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected to `normaluser`'s session as `PSAdmin`.
 
@@ -5784,7 +5814,7 @@ P1 · How: U S C · Needs: 2VM · Status: ○ Not automated
 - As `PSAdmin` the picture holds until the user allows; as `normaluser` it continues without asking.
 
 #### UI-SAS-03 · Agent tab, sign-in screen
-P1 · How: U C · Needs: 2VM · Status: ○ Not automated
+P1 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Nobody signed in on the device (sign-in screen).
 
@@ -5799,7 +5829,7 @@ P1 · How: U C · Needs: 2VM · Status: ○ Not automated
 - `PSAdmin` signs in; the tab shows the desktop (own account – nobody asked).
 
 #### UI-SAS-04 · Agent tab, UAC
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected to `normaluser`'s session; `SecureDesktop` right for `PSAdmin` (default for Administrators).
 
@@ -5814,7 +5844,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 - After the credentials an elevated `cmd.exe` runs.
 
 #### UI-SAS-05 · Physical Ctrl+Alt+Del stays local
-P2 · How: U C · Needs: 2VM · Status: ○ Not automated
+P2 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop tab has keyboard focus.
 
@@ -5828,7 +5858,7 @@ P2 · How: U C · Needs: 2VM · Status: ○ Not automated
 - The device shows nothing new (no security screen).
 
 #### UI-SAS-06 · RDP tab, desktop
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected.
 
@@ -5840,7 +5870,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 - The RDP session shows its security screen in the tab.
 
 #### UI-SAS-07 · RDP tab, **lock screen**
-P1 · How: U S · Needs: 2VM · Status: ○ Not automated
+P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected as `PSAdmin`.
 
@@ -5856,7 +5886,7 @@ P1 · How: U S · Needs: 2VM · Status: ○ Not automated
 **Tools and network**
 
 #### UI-TL-01 · PowerShell tab
-P1 · How: U · Needs: 2VM · Status: ○ Not automated
+P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Connection works over the agent; a second connection works over WinRM HTTPS ("Use HTTPS" on).
 
@@ -5872,7 +5902,7 @@ P1 · How: U · Needs: 2VM · Status: ○ Not automated
 - `exit` closes the tab. Same over WinRM HTTPS.
 
 #### UI-TL-02 · File transfer tab
-P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** `C:\lab\up` with a folder of files on the admin's PC.
 
@@ -5888,7 +5918,7 @@ P1 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - The download back matches too.
 
 #### UI-TL-03 · Registry tab
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** PS Direct created `HKLM\SOFTWARE\RemoteHubLab` on the device.
 
@@ -5903,7 +5933,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - After delete `reg query` finds no `LabValue`.
 
 #### UI-TL-04 · Services tab
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Spooler running on the device.
 
@@ -5917,7 +5947,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - Status `Stopped` after step 2, `Running` after step 4; the tab shows the same.
 
 #### UI-TL-05 · Processes tab
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** `notepad.exe` running on the device.
 
@@ -5932,7 +5962,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - lsass: "lsass.exe is a critical Windows process and can't be ended from here."; lsass still runs.
 
 #### UI-TL-06 · Set up PowerShell remoting
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** WinRM off on the device; connection with "Use HTTPS" off.
 
@@ -5947,7 +5977,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - After *Test again* the connection switches to HTTPS and shows "PowerShell remoting works (…)."
 
 #### UI-NET-01 · Agent tab reconnect
-P1 · How: U N · Needs: 2VM · Status: ○ Not automated
+P1 · How: U N · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Agent desktop connected to `normaluser`'s session as `PSAdmin` (user allowed it).
 
@@ -5962,7 +5992,7 @@ P1 · How: U N · Needs: 2VM · Status: ○ Not automated
 - No new consent window; agent audit 1103 on the device.
 
 #### UI-NET-02 · RDP auto-reconnect
-P2 · How: U N · Needs: 2VM · Status: ○ Not automated
+P2 · How: U N · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
 
 **Preconditions:** RDP tab connected.
 
@@ -5977,7 +6007,7 @@ P2 · How: U N · Needs: 2VM · Status: ○ Not automated
 ### 10.6 Recordings
 
 #### C-REC-01 · Record each tab type
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** Connection `Device` with RDP and the agent available; recording notice not yet accepted.
 
@@ -5996,7 +6026,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 Note: the agent desktop tab is called "Desktop (agent)" in the file name.
 
 #### C-REC-02 · Settings
-P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** A connected tab.
 
@@ -6009,7 +6039,7 @@ P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - 1920 × 1080, 30 fps.
 
 #### C-REC-03 · GPU capture
-P3 · How: U · Needs: 2VM · Status: ○ Not automated
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** GPU capture on (C-REC-02); one Win11 and one Win10 client VM.
 
@@ -6024,7 +6054,7 @@ P3 · How: U · Needs: 2VM · Status: ○ Not automated
 - Both files play.
 
 #### C-REC-04 · Unexpected stop
-P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** A connected tab.
 
@@ -6037,7 +6067,7 @@ P2 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - The MP4 opens and plays; duration > 0 (fragmented MP4).
 
 #### C-REC-05 · Stop time
-P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** A PowerShell tab showing a clock (`while(1){Get-Date; sleep 1}`).
 
@@ -6049,7 +6079,7 @@ P3 · How: U PS · Needs: 2VM · Status: ○ Not automated
 - Duration ≤ the time between start and stop click; the last frame doesn't show a time after the stop.
 
 #### C-REC-06 · N edition
-P3 · How: U · Needs: N · Status: ○ Not automated
+P3 · How: U · Needs: N · Status: ◐ Written, not yet run in the lab – `C-REC.Tests.ps1`
 
 **Preconditions:** Client VM `W11-26H2-N-en-US` without Media Feature Pack.
 
@@ -6062,7 +6092,7 @@ P3 · How: U · Needs: N · Status: ○ Not automated
 - "Recording stopped": "The recording of <connection> · <tab> stopped: The H.264 video encoder is not available on this PC (Windows N editions need the Media Feature Pack) …"
 - No crash; RemoteHub keeps running.
 
-## 10.7 Network shares (existing tests, not yet in the sheet)
+### 10.7 Network shares
 
 These cases exist as `lab\tests\S-SHARE.Tests.ps1` but are not in the sheet yet.
 
@@ -6257,3 +6287,1365 @@ P2 · How: H PS · Needs: Server VM · Status: ✅ Automated – `S-SHARE.Tests.
 **Expected:**
 - `ok` = false.
 - The `connect` error contains "password" ("The user name or password is incorrect.").
+
+## 11. Cases added or changed since v2 (from the sheet)
+
+Generated on 2026-10-15 from `test-lab-cases.md` for every case that has no section above yet: the expected result is the sheet's, the steps are in the test named in the status (or still to be written). Checked against RemoteHub / RemoteHub Agent 0.18.11.
+
+### 5.1 First install
+
+#### A-INST-27 · Folder made before the install
+P1 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- normaluser creates `%ProgramData%\RemoteHub\Agent\logs\x.log` (and a subfolder) before the install → afterwards every entry owned by Administrators, only inherited ACEs (SYSTEM, Administrators), normaluser can neither read nor write
+
+#### A-INST-28 · `AUTOSIGNIN=1` on a package without the provider
+P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- install succeeds without DLL and CLSID keys; Hello `autoSignIn` false. Today `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn` are still written ("Automatic sign-in allowed on this device for Administrators.") – product gap: `auto-sign-in=[AUTOSIGNIN]` outside the `CredentialProviderDll` condition
+
+### 5.2 Other install paths
+
+#### A-HAND-07 · Provider added or removed on an installed agent
+P2 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- `msiexec /i <msi> ADDLOCAL=CredentialProvider` / `/i {ProductCode} REMOVE=CredentialProvider` → 0/3010, DLL and both keys added / removed; same service PID, agent.json unchanged, no new enroll line; the policy values are not touched (only RemoteHub's `auto-sign-in on/off` sets them)
+
+### 5.4 Uninstall
+
+#### A-UNINST-15 · Uninstall after automatic sign-in
+P1 · How: PS · Needs: – · Status: ✅ Automated – `A-UNINST.Tests.ps1`
+
+**Expected:**
+- after an `AUTOSIGNIN=1` install: provider DLL and both keys gone, the `NoUserBehavior` / `Rights\AutoSignIn` values the agent set and `autosignin.policy` removed
+- Steps: see the test (`lab/tests/A-UNINST.Tests.ps1`).
+
+#### A-UNINST-16 · Values IT changed after the agent wrote them
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- after an `AUTOSIGNIN=1` install IT edits `Rights\AutoSignIn` → uninstall (or `AUTOSIGNIN=0`) leaves that value, removes only the unchanged ones, deletes the marker
+
+### 5.5 Configuration and service behaviour
+
+#### S-THR-06 · What counts toward the block
+P2 · How: H E · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- 5 refused sign-ins with the right password from one address (normaluser 403, a deny-network-logon account) block it, the 6th gets 429; unmapped Windows errors (HTTP 500) don't count
+
+#### S-THR-07 · Shared sign-in slots
+P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- at most 8 Windows sign-ins at once across all addresses; no slot within 30 s → 503 (needs ≥ 2 source addresses)
+
+#### P-SES-10 · PowerShell can't start
+P3 · How: H PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- e.g. an IFEO `Debugger` on powershell.exe pointing to a missing file → 500, log "Could not start PowerShell for <acct>: …", no event 1000, the session slot released
+
+### 7.1 Network shares of a connection (S-SHARE)
+
+#### S-SMB-05 · No account → Windows account
+P3 · How: H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- SMB without credentials connects as the signed-in Windows user; description "SMB · Windows · your Windows account", tab source "your Windows account (no account set)"
+
+#### S-SMB-06 · Windows connection lifetime
+P2 · How: H PS · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- no drive letter; two tabs on one share → one connection; closing the last tab removes it (`net use` empty); a connection that existed before is used and stays; RemoteHub exiting removes its own
+
+#### S-SMB-07 · Port / name rules
+P3 · How: H U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- port ≠ 445 → "SMB always uses port 445 – remove the port from the share."; empty share name → "The share has no share name – edit it and enter the name …"; a pasted `\\host\share\folder` fills in host and path in the editor
+
+#### S-SMB-08 · Access denied for a local admin
+P3 · How: H PS · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- a share allowing only Administrators, opened as a local admin → Windows' message plus "… A local administrator signing in over the network gets no administrator rights there (Windows' remote UAC) …"
+
+#### S-SFTP-04 · SFTP needs an account
+P2 · How: U H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- no account → "<name> (SFTP) needs an account. Right-click it → Edit… and set one …"; editor "SFTP needs a user name."; password and keyboard-interactive only (no key authentication)
+
+#### S-SFTP-05 · Wrong password
+P2 · How: H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- "The user name or password is incorrect (or the server doesn't allow password sign-in)."
+
+#### S-FTP-03 · FTP without TLS
+P3 · How: H U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- security None → description "FTP · not encrypted", address `ftp://`, the editor warns "Not encrypted: the password and every file go over the network in plain text …"
+
+#### S-FTP-04 · Implicit TLS / anonymous
+P3 · How: H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- implicit → port 990; no account → user "anonymous", tab source "anonymous sign-in (no account set)"; wrong password → "The user name or password is incorrect."
+
+#### S-DAV-04 · No account / redirect / status codes
+P3 · How: H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- no account → the Windows credentials; 301/302/307/308 → "The server redirects to <Location> – use that address for the share."; 403/404/409/423/507 → their messages
+
+#### S-SHR-01 · Password not stored
+P2 · How: U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- prompt "No password is stored for <user>. Enter it to open <server › share> – it is kept in memory only."; Reconnect reuses it without asking; nothing written to the stored secrets
+
+#### S-SHR-02 · Trust dialog / Forget
+P2 · How: U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- first key or certificate → "Trust this server?" (*Trust and connect*); a changed key → "Server key changed"; the accepted value is kept; *Forget* in the editor → asked again next time
+
+#### S-SHR-03 · Idle close
+P3 · How: H U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- after 5 min idle "Idle – the connection to the share was closed and opens again when you use it."; the next listing reconnects without asking
+
+#### S-SHR-04 · Transfer safety
+P2 · How: H · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- uploads go to `<name>.remotehub-part`, size checked, then renamed; existing file without overwrite → "Skipped – the file already exists"; same-name folder → "Skipped – a folder has that name"; size mismatch → "… the transfer was incomplete." and the part file removed
+
+#### S-SHR-05 · Browse actions
+P3 · How: H U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- deleting the share root → "The share itself can't be deleted."; renaming onto an existing name → "\"<n>\" already exists."
+
+#### S-SHR-06 · Shares on their own
+P2 · How: U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
+
+**Expected:**
+- New → Network share: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed
+
+#### W-NAME-01 · Setup by computer name
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
+
+**Expected:**
+- certificate CN=<name>, SAN `DNS=<fqdn>` and `DNS=<short>`; reuse needs the same CN; a name with other characters refused by RemoteHub "… isn't a computer name or IP address."
+
+### 9.1 Connect, Hello, sessions
+
+#### D-CON-11 · Unrequested sign-in request
+P3 · How: H E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- a SignInRequest (type 31) RemoteHub wasn't asked for closes the connection; during a session it is a protocol error and the resume token is void
+
+### 9.2 Consent
+
+#### D-ASK-08 · RemoteHub closes while asking
+P3 · How: H E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- 2100 "…: The connection ended before access was granted."
+
+#### D-ASK-09 · Hide apps from the question
+P2 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- *Allow and hide apps…* opens the app picker; the countdown restarts; the chosen apps hidden from the start
+
+#### D-PIN-06 · PIN dialog choices
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- the code window has *Hide apps…* and *Deny*; Deny → Denied
+
+#### D-NONE-05 · Own session with Ask / Pin
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- the own session started with Ask or Pin → the dialog is shown all the same
+
+#### D-MODES-03 · No mode left
+P2 · How: PS H E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- `ConsentModes` allowing nothing usable → Hello consentModes [], Failed "No way to connect is allowed on this device (policy).", 2100
+
+#### D-MODES-04 · Mode on a locked / sign-in session
+P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- a mode the policy doesn't allow isn't refused there: it runs as None, the follow-up mode applies when someone unlocks or signs in
+
+### 9.3 Banner and user at the device
+
+#### D-BAN-08 · Never collapsed while hiding
+P3 · How: S C · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- something hidden → the banner stays open with " · mouse and keyboard blocked" and 'Click "Disconnect" to end'
+
+#### D-BAN-09 · Clicks pass through
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- the admin's clicks on the banner's area reach the window below (`WS_EX_TRANSPARENT`)
+
+#### D-BAN-10 · No banner after automatic sign-in
+P1 · How: H C · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- a session automatic sign-in created shows only the cover, no banner
+
+### 9.5 Secure desktop, sign-in, lock, user switch
+
+#### D-SIGNIN-05 · Own account by SID
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- the account signing in at the device is recognised as the admin's own by its SID (not the name) → continued without asking
+
+### 9.6 Ctrl+Alt+Del
+
+#### D-SAS-12 · Screen hidden by the user
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- Ctrl+Alt+Del while the user hides the screen → "The user at the device has hidden their screen – Ctrl+Alt+Del isn't sent until they show it again."
+
+### 9.7 Input
+
+#### D-IN-08 · No input into hidden apps
+P2 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- mouse down / wheel over a hidden app and key-down while it has the focus are dropped
+
+#### D-IN-09 · Input stops when the user hides
+P2 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Expected:**
+- the user hides the screen → held keys released, no input passes
+
+### 9.8 Picture, encoder, resolution, monitors
+
+#### D-VID-11 · RDP windows keep drawing
+P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- while connected `RemoteDesktop_SuppressWhenMinimized` = 2, restored afterwards (`rdp-minimized-<sid>.txt`), log line
+
+#### D-VID-12 · GPU picture stands still
+P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- Desktop Duplication frozen while the screen changes → GDI for the rest of the connection, log "… using GDI for this connection"
+
+#### D-VID-13 · Display kept on
+P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- the display doesn't turn off while connected
+
+#### D-FIT-04 · Fit bounds
+P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- below 320×200 ignored, capped at 7680×4320
+
+#### D-VD-05 · Off after a service restart
+P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- the virtual display is removed when the service restarts
+
+### 9.9 Clipboard
+
+#### D-CLIP-19 · Newer copy cancels the first
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- a second copy to the device while the first is still offered replaces it silently
+
+#### D-CLIP-20 · Long text
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- text over 1,000,000 characters truncated silently
+
+#### D-CLIP-21 · Too many files
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- 1001 single files → only 1000 offered, no message
+
+#### D-CLIP-22 · Bad image
+P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- a broken BMP to the device: receipt ok, the device's clipboard unchanged
+
+### 9.10 Idle, reconnect, robustness
+
+#### D-IDLE-04 · Clipboard counts as activity
+P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- clipboard and transfers reset the idle time
+
+#### D-RES-08 · Token void after an invalid message
+P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- a protocol error ends the session and its resume token
+
+#### D-RES-09 · No token after a service restart
+P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- a resume after a service restart → consent again
+
+#### D-RES-10 · The agent notices the drop first
+P1 · How: H N PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- network cut ~75 s (beyond the 30 s keep-alive), resumed within 1 min → 1101 "(connection lost …)", 1103, no new question. Fails today: the end is taken as "closed by RemoteHub" and the token revoked (`DesktopEndpoint.cs:220-230`)
+
+#### D-ROB-07 · Unrequested sign-in request
+P3 · How: H E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- "invalid message from RemoteHub: A sign-in request the agent didn't ask for." / "Sign-in request too large."
+
+#### D-ROB-08 · Message over 16 MiB
+P3 · How: H E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
+
+**Expected:**
+- 1101 "(invalid message from RemoteHub: Message too large.)"
+
+### 9.11a Privacy screen, hidden apps, user privacy
+
+#### D-PRIV-01 · Privacy screen
+P1 · How: PS H C E · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- right PrivacyScreen, policy `PrivacyScreen` 0 / 1 / 2 → Hello `privacyScreen` / `privacyInputBlock` and feature `privacyScreen` match; turned on → console screenshot black while frames still arrive, event 1104; refused → 2103
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-PRIV-02 · Local input blocked
+P1 · How: H S C · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- level 2: the device's own keyboard and mouse don't reach the session (marker app); level 1: they do, and a request with blocking is refused with 2103 "Blocking the mouse and keyboard at the device isn't allowed on this device (policy)."
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-PRIV-03 · Not available before 2004
+P2 · How: H E · Needs: 1809 · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- on W10-1809 no `privacyScreen` feature, a request refused with 2103
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-PRIV-04 · Kept after a resume
+P2 · How: H N · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- privacy screen still on after D-RES-01
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-PRIV-05 · Snips and switching blocked
+P1 · How: H S C · Needs: – · Status: ◐ Written, not yet run in the lab – `D-PRIVACY2.Tests.ps1`
+
+**Expected:**
+- while any privacy screen is up Print Screen, Win+Shift+S, Alt+Tab and Win+Tab are dropped at the device and from the admin; Win+S and Shift+Tab work; switching works again when it is off
+
+#### D-PRIV-06 · Snipping tools closed
+P2 · How: H S PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-PRIVACY2.Tests.ps1`
+
+**Expected:**
+- SnippingTool / ScreenClippingHost / ScreenSketch closed when they show a window; agent log "… was closed – a snip would show the screen at the device", no event
+
+#### D-PRIV-07 · View-only has none
+P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `D-PRIVACY2.Tests.ps1`
+
+**Expected:**
+- a privacy screen request on a view-only connection is ignored
+
+#### D-PRIV-08 · Monitors change
+P3 · How: H PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-PRIVACY2.Tests.ps1`
+
+**Expected:**
+- monitors change while it is on → overlays rebuilt, or 2103 "… turned off because the device's monitors changed"
+
+#### D-HIDE-01 · Hidden apps by policy
+P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- `HiddenApps` (full path and `aumid:`) → those windows never in the frames, whatever the user chooses
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-HIDE-02 · The user hides
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
+
+**Expected:**
+- the user at the device hides the screen or chosen apps ("Allow and hide apps…") → event 1105 and a Privacy message; kept after a resume without a new question; cleared when another user signs in
+- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+
+#### D-HIDE-03 · Policy apps aren't the user's
+P3 · How: PS H S E · Needs: – · Status: ◐ Written, not yet run in the lab – `D-PRIVACY2.Tests.ps1`
+
+**Expected:**
+- today policy `HiddenApps` count as user-hidden: the first Privacy message has hiddenApps=1, the banner "1 app hidden", 1105 "the user … hides 1 app(s)" – product finding
+
+### 9.11b Shell surfaces over the privacy screen (spike, not merged)
+
+#### D-SHELL-01 · Helper token UIAccess switch
+P2 · How: PS H · Needs: – · Status: ○ Not automated
+
+**Expected:**
+- helper token TokenUIAccess 1 by default, 0 with `HelperUIAccess`=0
+
+#### D-SHELL-02 · Shell surfaces stay covered
+P1 · How: H C S · Needs: – · Status: ○ Not automated
+
+**Expected:**
+- with UIAccess and `PrivacyScreen`=2: Start, Search, Quick Settings, Notification Center, a toast, a taskbar thumbnail → the console below the banner strip < 0.5 % bright (Alt+Tab / Task View are dropped by SnipGuard, D-PRIV-05)
+
+#### D-SHELL-03 · Overlays still excluded from capture
+P1 · How: H S · Needs: – · Status: ○ Not automated
+
+**Expected:**
+- overlays keep `WDA_EXCLUDEFROMCAPTURE` (0x11) with UIAccess
+
+#### D-SHELL-04 · Banner above the overlays
+P2 · How: S · Needs: – · Status: ○ Not automated
+
+**Expected:**
+- the banner's z-order above the overlays
+
+#### D-SHELL-05 · Disconnect still works
+P1 · How: H S · Needs: – · Status: ○ Not automated
+
+**Expected:**
+- the device's user ends the session with *Disconnect* through the input block → Ended "The user at the device ended the session."
+
+### 9.12 Automatic sign-in – credential provider (C-PROV)
+
+#### C-PROV-01 · Install with `AUTOSIGNIN=1`
+P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- msiexec exit 0/3010; `RemoteHubCredentialProvider.dll` in Program Files, signature valid (lab certificate trusted on the VM); both keys for CLSID `{718FFFD2-…}`, `ThreadingModel` Apartment
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-02 · Inert without a ticket
+P1 · How: C PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- with the provider registered and no sign-in pending, signing out and in again with Ctrl+Alt+Del and the password reaches the desktop
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-03 · Sign-in through the provider
+P1 · How: C PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- Lab DLL + `RemoteHubCpTestServer.exe` (SYSTEM): client LogonUI accepted, `Result` status 0, the console account's desktop, the ticket file deleted
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-04 · Update keeps it
+P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- a rebuild of the same version (new ProductCode, a major upgrade) without `AUTOSIGNIN` → DLL and keys still there
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-05 · `AUTOSIGNIN=0` removes it
+P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- DLL and both keys gone; the `NoUserBehavior` / `Rights\AutoSignIn` values the install set removed
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-06 · RemoteHub's *Install credential provider*
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- `AgentInstaller.ChangeCredentialProvider` over the agent → installed, DLL signed, both keys; policy `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn=S-1-5-32-544` set; message "Automatic sign-in allowed on this device"
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-07 · RemoteHub's *Remove credential provider*
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- removed, DLL and keys gone, policy values removed again; the agent's service process is the same as before both actions and health answers with the same certificate
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-08 · Another build on the device
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
+
+**Expected:**
+- install refused with "a different build … Update the agent first", nothing installed
+- Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
+
+#### C-PROV-09 · No agent / restart needed
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
+
+**Expected:**
+- `ChangeCredentialProvider` without an installed agent → "isn't installed"; a 3010 exit → the "after the device restarts" message
+- Steps: see the test (`lab/tests/A-MORE.Tests.ps1`).
+
+#### C-AUTO-01 · Turned off by IT
+P1 · How: H · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- installed with `AUTOSIGNIN=1` (policy values and marker written by the agent), then `NoUserBehavior=SignInScreen` set as IT would → `Rights.AutoSignIn` false; a request → SignInFailed "turned off"
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-AUTO-02 · View-only
+P1 · How: H · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- policy and right set, view-only start → SignInFailed, Windows never asked
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-AUTO-03 · No password sent
+P2 · How: H · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- SignInReady, nothing sent for 30 s → SignInFailed "didn't send the sign-in in time"
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-AUTO-04 · Wrong password
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- SigningIn → SignInFailed "password was wrong"; no desktop; event 2105
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-AUTO-05 · Right password
+P1 · How: H C PS E · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- after closing the failed attempt's message: SignInReady → SignedIn; the console account's desktop; event 1106, no 3101/3102
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-AUTO-06 · No password in logs
+P1 · How: PS E · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
+
+**Expected:**
+- the lab password in neither the agent's log files nor the Application log
+- Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
+
+#### C-END-01 · Covered from the start
+P1 · How: H C PS · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- after SignedIn: a screenshot of the console shows the privacy screen message; keys typed at the console don't reach the desktop; RemoteHub's picture shows the desktop
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-02 · Lock on disconnect
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- connection closed → the session is disconnected from the console (`WTSDisconnectSession`, on client and Server alike), its programs keep running; event 1107 "… locked (closed by RemoteHub)"
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-03 · Sign out on disconnect
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- end action SignOut (connection or policy) → the session is gone; event 1107 "signed out"
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-04 · Policy wins
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- policy `AutoSignInEndAction = Lock`, RemoteHub sends SignOut → locked
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-05 · Network drop and resume
+P1 · How: H N C · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- the VM's adapter cut for 30 s → the overlay stays, the desktop is untouched; reconnected within 2 min → same session, no sign-out
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-06 · Network drop without resume
+P1 · How: H N PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- adapter cut for 3 min → signed out after 2 min; event 1107
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-07 · Agent restart
+P1 · How: H PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- service killed while connected → at the next start the session gets its end action (signed out when it was dropped)
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-08 · Cover ends after a drop
+P2 · How: H N C · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
+
+**Expected:**
+- a session automatic sign-in created has no banner (since 0.18.10), only the cover; the cover's helper ending during the 2 minutes → signed out at once, event 1107 "… (the screen cover ended after the connection dropped)"
+- Steps: see the test (`lab/tests/C-END.Tests.ps1`).
+
+#### C-END-09 · Input blocked at level 1 too
+P1 · How: H C PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- `PrivacyScreen`=1 → after SignedIn the console's own keys still don't reach the session
+
+#### C-END-10 · No privacy screen available
+P2 · How: H C E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- `PrivacyScreen`=0 (`AutoSignInRequirePrivacyScreen` 0) → signed in, 1106 ", no privacy screen on this device", the console shows the desktop, no banner
+
+#### C-END-11 · Locked at the device during the hold
+P3 · How: H N C E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- after a drop Ctrl+Alt+Del → Lock at the console → not signed out at once; signed out when the 2 min run out
+
+#### C-END-12 · Resume brings the cover back
+P2 · How: H N C · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back
+
+#### C-END-13 · Failed sign-in removes the cover
+P3 · How: H C · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- wrong password → the service's privacy screen dropped, a later manual sign-in isn't covered
+
+#### C-END-14 · Who turned the cover on
+P3 · How: E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- 1104 for the service's cover reads "<admin> … turned the privacy screen on …" although the admin didn't – product finding
+
+#### C-END-15 · The agent notices the drop first
+P1 · How: H N PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
+
+**Expected:**
+- cut ≥ 75 s, resumed within 2 min → same session, no lock; fails today (D-RES-10)
+
+#### C-AUTO-07 · Off without the option
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- installed without `AUTOSIGNIN` → no `NoUserBehavior`, Hello `autoSignIn` false, no `autoSignIn` feature; a request → "turned off on this device (policy NoUserBehavior)"
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-08 · Rights
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- `Rights\AutoSignIn` without the account → "may not sign in automatically on this device (right AutoSignIn)"; without SecureDesktop the Start on the sign-in screen is refused first: Failed "Nobody is signed in or the session is locked – and your account may not see the sign-in screen on this device.", 2100, Hello `autoSignIn` false, log "Desktop: automatic sign-in not offered to <acct>: … needs the rights Desktop and SecureDesktop …"
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-09 · Privacy screen required
+P2 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- `AutoSignInRequirePrivacyScreen=1` with `PrivacyScreen=0` → refused, the policy named
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-10 · Session state
+P1 · How: H S · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- someone signed in on the console → "Someone is signed in on the console now"; the account has a disconnected session → "already has a session on the device"
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-11 · Rate limit
+P1 · How: H E · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- the 4th automatic sign-in of an account within 15 minutes → "Too many automatic sign-ins", event 2104
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-12 · Provider unusable
+P1 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- `ExcludedCredentialProviders` lists the CLSID / InprocServer32 outside the agent folder / DLL not signed → Hello `autoSignIn` false, refused with that reason
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-13 · IT's policy kept
+P1 · How: PS · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
+
+**Expected:**
+- `NoUserBehavior=SignInScreen` set before an `AUTOSIGNIN=1` install → left as it is (log says so), still there after the uninstall
+- Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
+
+#### C-AUTO-14 · Sign-in not confirmed
+P2 · How: H PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- the console's new session has another SID → signed out, 3101 "… the console session N has user <sid>, not <acct> … – signed out", Ended "The automatic sign-in couldn't be confirmed, so it was undone …" (needs a provider test build)
+
+#### C-AUTO-15 · Console changed before the ticket
+P2 · How: H C E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- someone signs in at the console between SignInReady and the ticket → SignInFailed "Someone is signed in on the console now …", 2104 SessionChanged, no ticket sent
+
+#### C-AUTO-16 · Provider never loads
+P2 · How: H PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- LogonUI doesn't load the provider → SignInFailed "The device's sign-in screen didn't load the RemoteHub credential provider." (2104 NoProvider); result timeout → "The sign-in screen didn't take the sign-in. …"
+
+#### C-AUTO-17 · Second sign-in at once
+P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- two connections ask at the same time → the second gets "Another automatic sign-in is running on this device."
+
+#### C-AUTO-18 · Pipe squatted
+P2 · How: PS H E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- `\\.\pipe\RemoteHubAgent.AutoSignIn` created by another process before the service → 3102 "Automatic sign-in unavailable: the pipe … couldn't be created (…)", Hello `autoSignIn` false
+
+#### C-AUTO-19 · Foreign pipe client refused
+P2 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- a client that isn't LogonUI / SYSTEM / the console connects → log "Automatic sign-in: pipe client refused (<why>)", a later automatic sign-in still works; an RDP session's LogonUI on Server refused ("session N isn't the console")
+
+#### C-AUTO-20 · Windows refusals
+P2 · How: H PS E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- account locked / disabled / expired password / "Deny log on locally" → SignInFailed with Windows' reason ("The account is locked." …), 2105 with the status
+
+#### C-AUTO-21 · DLL signed by another certificate
+P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab – `C-AUTO3.Tests.ps1`
+
+**Expected:**
+- trusted, but not signed by the agent's certificate → "… isn't signed by the same certificate as the agent", Hello `autoSignIn` false
+
+### 9.13 Jump hosts (J)
+
+#### J-00 · Isolation
+P1 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- this PC reaches the jump host; RDP, WinRM and the agent port of the device behind it fail directly
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-01 · RDP through the forwarder
+P1 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- the device's RDP certificate (CN = computer name) comes back through the tunnel; the full sign-in and RemoteHub's "Trust this RDP certificate?" question are UI-JUMP-01
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-02 · WinRM through the forwarder
+P1 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- HTTPS to 127.0.0.1 with the name not checked opens a session (HTTP to 127.0.0.1 / localhost needs TrustedHosts on the admin's PC – not changed on the lab host)
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-03 · The agent through the jump host
+P1 · How: H PS E · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- health, PowerShell, files both ways, registry, services, processes, the remote desktop (picture decoded); jump host audit 1200 / 1201 with the device's address and port; the device's audit shows the jump host as the source
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-04 · Without the agent
+P1 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- PowerShell over WinRM through the jump host
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-05 · Policy
+P1 · How: PS H E · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- `TunnelEnabled=0` (and no `tunnel` in health), `TunnelTargets` without the device, a port outside `TunnelPorts`, right `Tunnel` removed (PowerShell still works) – each refused with its message: `TunnelEnabled=0` → `/v1/tunnel` 404 before sign-in, no audit; right `Tunnel` removed → 403 at sign-in, audit 2000 "not a member of an allowed group"; TunnelTargets / TunnelPorts → audit 2200 "(TunnelTargets)" / "(TunnelPorts)"; loopback and 169.254.169.254 refused by default, a name never opens them, `127.0.0.0/8` listed does
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-06 · Tunnel drop
+P1 · How: H N · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- the jump host's side towards this PC off for 30 s → the desktop resumes without a new question, tools connect again
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-07 · Forwarder only for RemoteHub
+P1 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- another program on this PC connecting to the forwarder's local port gets nothing; RemoteHub's own connection works
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-08 · Throughput
+P2 · How: H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- 2 GB to the device arrive unchanged while its remote desktop keeps sending pictures
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-09 · Install and update through it
+P1 · How: H PS · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- the scope offered is the jump host's address (`LocalAddressAsync`: a probe – the agent only resolves and checks the target, answers Refused `probe` "<host>:<port> is allowed; not connected (probe).", no TCP connection to the device), install over WinRM through the jump host, firewall rule scoped to the jump host, update through the agent through it
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-10 · Shares of a device behind it
+P2 · How: H PS · Needs: Jump, Server · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- SMB (always RemoteHub's own client: "SMB · RemoteHub client"), SFTP and WebDAV copy both ways; FTP refused ("FTP can't go through a jump host …", J-22)
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-11 · Moving in the tree
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
+
+**Expected:**
+- connection / folder moved between jump host, folder under it, another jump host and a plain folder → the route follows; the drops of §4.3 refused with "<target> is reached through <outer>. Only one jump host is supported for now." / "<j> is a jump host itself …" / "<inner> in this folder is a jump host itself …"; *Move under* lists only connections with an agent or children (at most 40); settings inherited past the jump host
+- Steps: see the test (`lab/tests/UI-RDP.Tests.ps1`).
+
+#### J-12 · Older RemoteHub
+P2 · How: U PS · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
+
+**Expected:**
+- a RemoteHub without jump hosts (≤ 0.18.7) opens the new database and shared file, keeps the items below a jump host as ordinary items, and its save keeps them
+- Steps: see the test (`lab/tests/UI-RDP.Tests.ps1`).
+
+#### J-13 · Other refusals
+P2 · How: PS H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- a name that doesn't resolve → `dns`; a closed port → `unreachable` / `timeout`; more than `MaxTunnelStreams` → `limit`; no 2200 for these – unreachable only in the agent log "Jump connection <acct> from <src>: <host:port> unreachable (…)"
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-14 · Limits shared with sessions
+P3 · How: PS H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
+
+**Expected:**
+- jump connections count toward `maxSessions`; an unreadable policy key → `/v1/tunnel` 404
+- Steps: see the test (`lab/tests/J-JUMP.Tests.ps1`).
+
+#### J-15 · Indentation
+P3 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- inside a jump host's frame its connections, folders and shares sit 12 px further in than a folder's items
+
+#### J-16 · Route shown
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- tree "via <jump>" beside the address, tooltip "Reached through <jump> (its RemoteHub Agent is the jump host) …"; editor "Reached through <jump> – its RemoteHub Agent is the jump host …"; share tab "<description> · via <jump>"; tooltip location "… › <jump> › <device>"
+
+#### J-17 · Jump host without agent
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- connecting a child → "<c> is reached through <j>, but <j> has no RemoteHub Agent. Install it there …, or move <c> out of <j> to connect directly."; tree tooltip "<j> has no RemoteHub Agent – install it there to reach the items below it."
+
+#### J-18 · Jump host credentials
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- none → "No credentials are set for the jump host <j> …"; no stored password → asked once ("… kept in memory only."), then reused for every child and tab, or taken from an open agent tab of <j>
+
+#### J-19 · Deleting a jump host
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- "Delete connection "<n>"? … <k> item(s) are reached through it …" with *Keep them* (moved next to it, reached directly) or *Delete all*
+
+#### J-20 · Duplicate a jump host
+P3 · How: H · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- copy "<n> (copy)" without the items under it; its agent and RDP certificate pin cleared
+
+#### J-21 · Move changes credentials
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- moving into or out of a jump host when the inherited credentials change → "Move – credentials change", target 'connection "<j>" (reached through it)'; the jump host's own credentials are never inherited
+
+#### J-22 · FTP share behind a jump host
+P2 · How: U H · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- menu *Open* off, tooltip "Reached through <j>. FTP can't go through a jump host – its data connections go to addresses the server announces. SMB, SFTP and WebDAV can."; opened anyway → the same text
+
+#### J-23 · Share editor host hints
+P3 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- a jump host's share on another host → "Reached directly, like <s> itself. …"; a child's share → "Another device, reached through <j> like <s>."
+
+#### J-24 · Drops beside §4.3
+P3 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- a share on its own dropped onto a connection lands next to it; *Move under* puts it under a jump host; an .rdp file dropped on a jump host is imported under it, on a child next to that child (under the same jump host)
+
+#### J-25 · Install below a jump host without WinRM
+P2 · How: U · Needs: Jump · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- the install dialog defaults to "Save the installer and the enrollment file to a folder…", hints "<c> is reached through <j> … allow connections from <j>'s address …", hides "Use the agent … afterwards"
+
+#### J-26 · Agent refusals of /v1/tunnel
+P2 · How: H · Needs: Jump · Status: ◐ Written, not yet run in the lab – `J-JUMP2.Tests.ps1`
+
+**Expected:**
+- 404 → "The RemoteHub Agent on <h:p> can't be used as a jump host: jump connections are turned off by a policy on the device (TunnelEnabled), or the agent there is older …"; 403 → "… may not use … as a jump host … (right Tunnel – by default the administrators)."; both as "Can't use the jump host <j>: …"
+
+#### J-27 · The jump host's own address
+P2 · How: PS H E · Needs: Jump · Status: ◐ Written, not yet run in the lab – `J-JUMP2.Tests.ps1`
+
+**Expected:**
+- its own adapter address refused by default, also when its subnet is in TunnelTargets; allowed only by an entry naming that single address; reason `policy` "… is this jump host itself or a special address …", 2200 "(own or special address)"
+
+#### J-28 · Unreadable policy entries
+P3 · How: PS H · Needs: Jump · Status: ◐ Written, not yet run in the lab – `J-JUMP2.Tests.ps1`
+
+**Expected:**
+- TunnelTargets / TunnelPorts with only invalid entries (`not a host!`, `0`, `99999`) refuse every Open with `policy`, never "any"
+
+#### J-29 · Bad tunnel traffic
+P3 · How: H E · Needs: Jump · Status: ◐ Written, not yet run in the lab – `J-JUMP2.Tests.ps1`
+
+**Expected:**
+- more than 256 KB unacknowledged on a stream resets it; a text or garbled frame or a duplicate stream id ends the tunnel, 1202 "(protocol error: …)"; a target not closing within 60 s after Close is reset
+
+#### J-30 · A name with allowed and disallowed addresses
+P3 · How: PS H · Needs: Jump · Status: ◐ Written, not yet run in the lab – `J-JUMP2.Tests.ps1`
+
+**Expected:**
+- one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed)
+
+### 10.1 Installer
+
+#### C-MSI-09 · Same-version reinstall
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- a rebuilt MSI with the same version replaces the installed one (`AllowSameVersionUpgrades`), exit 0, one Apps entry
+
+### 10.2 Storage, protection, audit
+
+#### C-DB-06 · Unreadable database, no usable backup
+P2 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "RemoteHub's database can't be opened: <reason> Start with empty settings? The unreadable database is kept in <dir> …" (OK / Cancel); OK → `remotehub.db`, `-wal`, `-shm`, `db.key` renamed `.damaged-<stamp>`, `backup\` → `backup.damaged-<stamp>`, a new empty database; Cancel → RemoteHub ends, nothing changed
+
+#### C-DB-07 · Older backup when the newest fails
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- restoring a backup fails → the offer comes again for the next older one
+
+#### C-DB-08 · db.key missing
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- reason "The database key file (db.key) is missing."
+
+#### C-DB-09 · Database of a newer version
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- reason "The database was created by a newer version of RemoteHub (schema N)."
+
+#### C-DB-10 · Daily check finds damage
+P2 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- no backup made, the existing ones kept; audit "Database check failed": "The database check found a problem; the existing backups were kept."
+
+#### C-DB-11 · Migration fails
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- the new database deleted, `settings.dat` stays in use; a `settings.dat` that reappears next to a database with data is ignored
+
+#### C-DB-12 · `.migrated` clean-up
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- 30 days after the migration `settings.dat.migrated` and `settings.dat.bak` deleted at start
+
+#### C-DB-13 · Unreadable `settings.dat`
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- a copy `settings.dat.unreadable-<stamp>`; "The settings file could not be read (<err>). A copy was saved to: <path> …"; starts empty
+
+#### C-LOCK-05 · Change the startup password
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- needs the current one; a new key (an old `lock.json` copy opens nothing), database re-keyed, Hello set up again if it was; "The startup password was changed."
+
+#### C-LOCK-06 · Password rules
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Use at least 8 characters.", "The passwords do not match.", "The current password is wrong.", empty unlock → "Enter the startup password."
+
+#### C-LOCK-07 · Exit while auto-locked
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- *Exit RemoteHub* ("Disconnects all sessions and closes RemoteHub") ends it without showing the windows again
+
+#### C-LOCK-08 · No auto-lock under a dialog
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- a modal dialog open → no lock; it locks after the dialog closes
+
+#### C-LOCK-09 · Old RDP Manager folder
+P3 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- with `%APPDATA%\RdpManager` present, turning on offers "Delete the old, unprotected copy of the RDP Manager settings (<path>)"; ticked → the folder deleted
+
+#### C-LOCK-10 · keys.dat sealed
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- with protection on `keys.dat` starts with `RHK2`
+
+#### C-SHARE-04 · Change seen with nothing pending
+P2 · How: U · Needs: SMB, 2VM · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Settings updated": "The settings file was updated on another device. Load the new version now?" (*Reload*)
+
+#### C-SHARE-05 · Join an existing shared file
+P2 · How: U · Needs: SMB · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Open shared settings": "This folder already contains a shared settings file. Enter its password … The connections currently on this PC are replaced by the shared ones …" (*Open*)
+
+#### C-SHARE-06 · Back to this PC only
+P3 · How: U · Needs: SMB · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Use this PC only" … "The shared file itself is not deleted." (*Switch*); audit "Settings location changed" "Settings: this PC"
+
+#### C-SHARE-07 · Forget remembered passwords
+P3 · How: U · Needs: SMB · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- `keys.dat` deleted, "Done – the password will be asked again at the next start.", "Unlock shared settings" at the next start
+
+#### C-AUD-05 · Retention in Settings → Logs
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- choices 30 days … 10 years, default "1 year (default)", "Older entries are removed the next time RemoteHub starts."; audit "Audit log retention changed" "Entries kept for <x> (before: <y>)"; under the policy the box is off, "Set by your organisation."
+
+#### C-AUD-06 · Newest entries removed
+P2 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- Verify: "The newest entries were removed: the log ends at entry X, but entry Y was written."; intact → "All N entries are unchanged and complete since they were written."
+
+#### C-AUD-07 · More events
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Added", "Connection failed", "Startup protection changed" ("Startup password" / "… and Windows Hello" / "Off"), "Settings location changed", "Backup exported" ("<n> folders and connections, <m> saved credentials")
+
+#### C-AUD-08 · Bulk save summary
+P3 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- more than 50 changes in one save → one "Changed" entry, target "<n> items", detail "<a> added, <c> changed, <d> deleted"
+
+#### C-BAK-04 · Not a backup file
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-DATA2.Tests.ps1`
+
+**Expected:**
+- "Import failed": "Not a RemoteHub backup file."
+
+### 10.3 Policies, updates, telemetry, crash reports
+
+#### C-POL-08 · `DisableAgentAutoSignIn`
+P2 · How: PS U · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
+
+**Expected:**
+- the editor rows "Sign in automatically when nobody is signed in" and "When an automatic sign-in's connection ends" hidden; the agent desktop's connect page never offers automatic sign-in, even with the stored option On; the menu entry *Install credential provider* and the install dialog's "Allow automatic sign-in" stay
+- Steps: see the test (`lab/tests/C-POLUPD.Tests.ps1`).
+
+#### C-POL-09 · `UpdateChannel` values and types
+P3 · How: PS U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- `ga` / `release` read as stable, `prerelease` / `pre-release` as beta (any case); an unknown value (`nightly`) ignored – the user's channel applies, the channel buttons stay on; a DWORD policy stored as REG_SZ (`DisableTelemetry`="1") ignored
+
+#### C-UPD-06 · No valid checksum
+P1 · How: U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- `download.sha256` missing, not 64 characters or not hex → "The update has no valid SHA-256 checksum, so it can't be verified."; nothing requested from the download URL
+
+#### C-UPD-07 · Size mismatch
+P3 · How: U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- more than `download.size` → "The download is larger than announced."; less → "The download is incomplete (x of y bytes)."; neither `.partial` nor `.msi` kept
+
+#### C-UPD-08 · Untrusted redirect
+P2 · How: U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- an allowed URL redirecting to a host other than github.com / githubusercontent.com / remotehub.dev (and subdomains) → "The download was redirected to an address that isn't trusted."
+
+#### C-UPD-09 · Update server errors
+P3 · How: U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- *Check for updates now*: 404 on stable → "No release in this channel yet" / "There is no GA (stable) release yet. Switch to the Beta channel…", on beta → "The update server has no release for this channel."; 500 → "Couldn't check for updates"; bad JSON → "…an answer RemoteHub doesn't understand."; no answer in 15 s → "The update server didn't answer in time."; a lower version → "RemoteHub is up to date" (only updates to a higher version)
+
+#### C-UPD-10 · Install declined at the open-sessions question
+P3 · How: U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- "Install cancelled. The verified download is kept until the next update."; no msiexec; *Download and install* enabled again
+
+#### C-TEL-03 · Off discards local records
+P2 · How: PS U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- telemetry off (setting or policy) → at the next start pending `crash\crash-*.json` deleted and never sent, `run-time.json` removed; with the policy `install-id` is kept (the setting deletes it, C-TEL-02)
+
+#### C-CRASH-03 · Native crash
+P3 · How: U E M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- unclean exit with an Application Error 1000 for RemoteHub.exe → `app_crash` with `errorType` `NativeCrash`, message "Exception 0x… in <module> <ver>", stack "<module>+0x<offset>", `version` of the crashed session
+
+#### C-CRASH-04 · Crash queue limits
+P3 · How: PS U M · Needs: – · Status: ◐ Written, not yet run in the lab – `C-POLUPD2.Tests.ps1`
+
+**Expected:**
+- at most the newest 5 reports sent; reports older than 30 days deleted; a report the server refuses stays in `crash\` and goes at the next start; a handled "RemoteHub – unexpected error" recorded at most 3 times per session
+
+### 10.4 RDP through RemoteHub (2VM)
+
+#### R-RDP-10 · Password toast *Clear now*
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
+
+**Expected:**
+- 'Stored password for "<name>" copied' / "Press Ctrl+V in the password field, then OK." with *Clear now* (clipboard emptied at once); closes when Windows' dialog closes or the clipboard changes
+
+#### R-RDP-11 · Password prompt "Do nothing"
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
+
+**Expected:**
+- *When Windows asks for the password* = Do nothing → clipboard untouched, no toast, no "Password copied" audit
+
+#### R-RDP-12 · Switch hotkey inside RDP
+PU C · How: " in the session instead · Needs: ○ · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
+
+**Expected:**
+- Ctrl+Alt+< → next tab, Ctrl+Alt+Shift+< → previous (full screen left first); on de-DE AltGr+< types "\
+
+#### R-RDP-13 · Additional RDP session
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
+
+**Expected:**
+- with an RDP tab open *Open additional session* (tree) / *Additional remote desktop session* (tab) → a second tab and a second session on the device
+
+### 10.5 End to end through RemoteHub's window (2VM)
+
+#### UI-AG-07 · Allow automatic sign-in in the install dialog
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
+
+**Expected:**
+- checkbox shown only when the package contains the provider, enabled only for remoting and through the agent (shown but off for clipboard / save to folder, nothing passed); starts ticked only when RemoteHub's record says it installed the provider; ticked → `AUTOSIGNIN=1`; unticked after RemoteHub installed the provider → `AUTOSIGNIN=0`, unticked otherwise → not passed
+- Steps: see the test (`lab/tests/UI-DESKTOP.Tests.ps1`).
+
+#### UI-AG-08 · Credential provider from the UI
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
+
+**Expected:**
+- right-click → *RemoteHub Agent* → *Install credential provider* (only with the agent installed and the provider in RemoteHub's package) → confirmed, "The credential provider is installed and registered.", audit `agent.credential_provider` "Installed – credential provider"; the entry then reads *Remove credential provider*; with "Sign in automatically when nobody is signed in" On the sign-in screen is signed in, audit `agent.auto_sign_in` "Requested" then "Signed in automatically on the console"
+- Steps: see the test (`lab/tests/UI-DESKTOP.Tests.ps1`).
+
+#### UI-AG-09 · Connect page offers automatic sign-in
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- checkbox "Sign in automatically as <account>" only for the console session at the sign-in screen, when the device reports `autoSignIn` and `Rights.AutoSignIn` and `DisableAgentAutoSignIn` isn't set; ticked when the connection option is On; *View only* switches it off; hidden for any other session
+
+#### UI-AG-10 · Sign out asks first
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- end action *Sign out*: the notice after SignedIn ends "When you disconnect, the session is signed out."; Disconnect, closing the tab (x, middle click, Ctrl+W) or the group asks "Sign out on the device?" (*Disconnect* / Cancel keeps it); with Lock, or the device's `AutoSignInEndAction` = Lock, "… is locked." and nothing asked
+
+#### UI-AG-11 · 2-minute reconnect after automatic sign-in
+P2 · How: U N · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- after SignedIn the device's network cut 60 s → the tab shows "Attempt n – trying for up to 120 s." and resumes the same session; past 120 s: "The connection dropped and couldn't be restored within 120 s: …"; a normal session keeps 30 s (UI-NET-01)
+
+#### UI-AG-12 · Password checks before sending
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- no stored password → "Automatic sign-in needs a stored password for this connection – sign in on the device's screen instead."; over 256 characters → "The password is too long for the automatic sign-in – …"; nothing sent, no "Requested" audit entry
+
+#### UI-AG-13 · Agent test fails → offer to install
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- agent stopped, *Test RemoteHub Agent* → "The RemoteHub Agent on <name> could not be used. <reason>" with *Install / update the agent…*; the entry then reads "Test RemoteHub Agent again", tooltip "Last result: <reason>"
+
+#### UI-AG-14 · Install dialog checks its fields
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- port 0 / x → "The port must be a number from 1 to 65535."; scope "abc" → "\"Allow connections from\" must be IP addresses or ranges …"; empty label → "Enter a device label."; the dialog stays open
+
+#### UI-AG-15 · Installed but this PC can't reach it
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- scope leaving out the admin's PC → after 5 tries "Installed, but this PC can't reach the agent on <host>:<port> (<error>). Check firewalls …"; still marked installed
+
+#### UI-AG-16 · Throttled sign-in in the UI
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- after repeated wrong passwords the tab shows "The RemoteHub Agent on <host>:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts."
+
+#### UI-JUMP-01 · RDP tab through a jump host
+P1 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-RDP.Tests.ps1`
+
+**Expected:**
+- **2VM** + jump host: connection under the jump host → RemoteHub asks "Trust this RDP certificate?" ("<name> is reached through <jump> …", issued to the device's computer name, thumbprint) → *Trust and connect* → RDP signs in with NTLM through the forwarder (4624 NTLM), no certificate warning from the RDP client
+- Steps: see the test (`lab/tests/UI-RDP.Tests.ps1`).
+
+#### UI-JUMP-02 · RDP certificate pin
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-JUMP.Tests.ps1`
+
+**Expected:**
+- the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab
+
+#### UI-AD-09 · No usable session
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- nobody signed in, no SecureDesktop right → entries end " – your account may not see it" and are off, "Nobody is using a session right now, and your account may not see the sign-in or lock screen …", *Connect* off
+
+#### UI-AD-10 · Consent choices per session
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- own signed-in session: "Connect without asking (they see a banner)" offered even when the policy lacks None; locked / sign-in session: "When someone unlocks or signs in: ask them / show them a code / don't ask (they see a banner)"
+
+#### UI-CP-13 · DesktopClipboard=2 (images)
+P3 · How: U S PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- an image reaches the device; a file copy is refused – today with "Copying images and files isn't allowed on this device – only text.", which is wrong for level 2 (the agent says "Copying files isn't allowed on this device.")
+
+#### UI-CP-14 · Copies from before connecting are quiet
+P3 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- a too-big or refused copy already on the clipboard when the tab goes live → no notice; the same copy while connected → the notice
+
+#### UI-CP-15 · Cancel a copy to the device
+P3 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived."
+
+#### UI-TL-07 · WinRM account refused
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- "PowerShell remoting answers on <name>, but the account was refused. <msg>", no *Set up on the target…*
+
+#### UI-TL-08 · Untrusted HTTPS from the remoting test
+P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- "<name> answers over HTTPS, but this PC doesn't trust its certificate yet. …" → *Check the certificate…* → "Trust this certificate?" / *Same – trust it*; declined → "Not trusted. Nothing was changed on this PC."
+
+#### UI-TL-09 · Copy script
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- *Test again* only after Copy or Save; "Copied. Open an elevated PowerShell on <host>, paste … Then click \"Test again\" …"; clipboard kept out of history, cleared after 120 s
+
+#### UI-NET-03 · Agent reconnect gives up
+P2 · How: U N · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
+
+**Expected:**
+- cut longer than 30 s (normal session) → "Connection lost – reconnecting…", "Attempt n – trying for up to 30 s.", then "The connection dropped and couldn't be restored within 30 s: <error>"; *Stop reconnecting* ends it at once
+
+### 10.6 Recordings
+
+#### C-REC-07 · Record a network-share tab
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
+
+**Expected:**
+- `<connection> - <share name> - <date time>.mp4`
+
+#### C-REC-08 · Tab hidden while recording
+P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
+
+**Expected:**
+- the video shows "Tab not visible – recording continues when it is shown again"
+
+#### C-REC-09 · Normal exit while recording
+P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
+
+**Expected:**
+- recordings finish (up to 10 s), the file plays, no dialog
+
+#### C-REC-10 · "Recording saved"
+P3 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
+
+**Expected:**
+- file, `mm:ss · size`, folder; Play / Show in folder / Close / *Delete recording…* (to the Recycle Bin)
+
+#### C-REC-11 · Unsafe connection names
+P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
+
+**Expected:**
+- invalid characters → `_`, cut at 80 characters, a second file ` (2)`

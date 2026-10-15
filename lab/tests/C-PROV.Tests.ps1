@@ -1,4 +1,4 @@
-# C-PROV - automatic sign-in, phase 1 (credential provider spike, docs/credential-provider-design.md §13 build order).
+# C-PROV - automatic sign-in, phase 1 (credential provider spike, docs/credential-provider-design.md section 13 build order).
 # The agent MSI under test must be built with the provider (build-installer.ps1 -LabSigning -CredentialProvider), and
 # the provider's lab build staged (build-credential-provider.ps1 -Configuration Lab); Start-LabRun.ps1 copies both.
 #

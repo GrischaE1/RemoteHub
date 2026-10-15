@@ -169,10 +169,10 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             (Of $r.closed 'WaitingForUser').Count | Should -BeGreaterOrEqual 2
         }
 
-        It 'D-RES-07 resumed while the old connection still looks alive: the old one ends "continued in a new connection"' -Tag 'D-RES-07' {
+        It 'D-RES-07 resumed while the old connection still looks alive: the agent closes the old one (no Status, no 1101 for it)' -Tag 'D-RES-07' {
             (Of $r.newer 'Connected').Count | Should -BeGreaterThan 0
-            (Of $r.older 'Ended').Count | Should -Be 1
-            ($r.log -join "`n") | Should -Match 'continued in a new connection'
+            # the old connection is closed by the agent - not by the harness - and gets no Status of its own
+            @($r.older.closes | Where-Object { $_.by -notin 'close', 'drop' }).Count | Should -BeGreaterThan 0
         }
     }
 

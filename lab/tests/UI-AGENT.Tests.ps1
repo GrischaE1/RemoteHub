@@ -147,8 +147,9 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $a.state.Service.State | Should -Be 'Running'
         }
 
-        It 'UI-AG-02 Test RemoteHub Agent: OK with the version' -Tag 'UI-AG-02' {
-            if ($a.Contains('test')) { $a.test | Should -Match (Get-LabMsiVersion (Get-LabAgentMsi)) }
+        It 'UI-AG-02 Test RemoteHub Agent: works (PowerShell version and computer), or the tools offered once it is known to work' -Tag 'UI-AG-02' {
+            # the dialog names the device's PowerShell, not the agent's version ("The RemoteHub Agent works (PowerShell 5.1 on <computer>).")
+            if ($a.Contains('test')) { $a.test | Should -Match 'The RemoteHub Agent works \(PowerShell \d+\.\d+ on ' }
             else { foreach ($e in 'PowerShell', 'File transfer', 'Registry', 'Services', 'Processes') { $a.entries | Should -Contain $e } }
         }
     }

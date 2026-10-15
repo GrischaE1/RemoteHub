@@ -1,7 +1,7 @@
 # RemoteHub – local database
 
-Status: phases 0–2 implemented (0.14.0), phases 3–5 open · Scope: RemoteHub app (not the agent) · Priorities:
-**encryption, security, performance**
+Status: phases 0–2 implemented (0.14.0), phases 3–5 open; brought in line with 0.18.11 (2026-10-15) · Scope: RemoteHub
+app (not the agent) · Priorities: **encryption, security, performance**
 
 ## 1. Goal
 
@@ -63,11 +63,19 @@ Sync folder (OneDrive):  sync.key = sync master key (256-bit random) wrapped wit
   and re-encrypts nothing else.
 - The DB key is random (256 bit), so the cipher's own password KDF adds no security. It is passed as a hex key and
   the KDF iterations are set to the minimum, so opening is fast; the slow, attack-resistant derivation happens once, in
-  the startup lock. (Exact pragmas – `hexkey`, `kdf_iter` – to be confirmed against the SQLite3MC docs in phase 0.)
+  the startup lock. (Built: `PRAGMA cipher = 'chacha20'`, `PRAGMA kdf_iter = 1`, then `sqlite3_key` with the key
+  bytes – see sections 14 and 15.)
 - The key never appears in a connection string that is logged or kept; the connection is opened with the key
   pragma and the string is cleared.
 - Keys live in pinned byte arrays, are zeroed after use (`CryptographicOperations.ZeroMemory`) and are never logged.
-- Turning the startup lock on or off rewraps `db.key` only (the same pattern as `SettingsStore.Reprotect` today).
+- `db.key` holds both keys (64 bytes) under DPAPI (CurrentUser, own entropy); header `RHDK` + 1 = DPAPI only,
+  `RHDK` + 2 = sealed with the startup-lock key inside DPAPI. Written through a temp file and a rename.
+- Turning the startup lock on or off does **more** than rewrap `db.key`: the database is re-encrypted with a new random
+  DB key (`sqlite3_rekey`; the secret key stays), stored with the protection that is on now, so a key copy from before
+  can't open it. The old backups (old key) are deleted and exactly one new backup is written. Crash safety: a DPAPI-only
+  copy of the old keys (`db.key.reprotect`) while the lock switches, and the new key in `db.key.next` until the rekey is
+  done – on the next start whichever key opens the database is kept. A database that fails `quick_check` isn't
+  re-encrypted. `settings.dat.migrated` and `.bak` copies are deleted at the same time (`SettingsStore.Reprotect`).
 
 ## 5. Security measures
 
@@ -186,9 +194,10 @@ On the first start of the new version:
 2. Write everything into the new DB in one transaction, moving passwords into `secrets`.
 3. Verify: read the DB back, rebuild `AppData`, and compare it with the source (all records and fields equal).
 4. Only then rename the old file to `settings.dat.migrated`. It stays encrypted as before and is deleted
-   automatically after 30 days. If anything fails, the DB is deleted and the old file is used unchanged.
-5. In sync mode: write the item files and `sync.key`; `RemoteHub.settings` is renamed to
-   `RemoteHub.settings.migrated` and keeps its old password.
+   automatically after 30 days, together with `settings.dat.bak` (also at once when the startup lock is turned on or
+   off). If anything fails, the DB is deleted and the old file is used unchanged.
+5. In sync mode (phase 4, not built): write the item files and `sync.key`; `RemoteHub.settings` is renamed to
+   `RemoteHub.settings.migrated` and keeps its old password. Today the shared file stays in use as it is (section 15).
 
 Downgrade: an older version doesn't read the DB. Before GA this is acceptable; the release notes say so.
 
@@ -197,18 +206,45 @@ before each one.
 
 ## 10. Backup and recovery
 
-- Daily backup through SQLite's online backup API to `%LOCALAPPDATA%\RemoteHub\backup\` (same encryption, last 7
-  kept).
-- Manual export: an encrypted file protected with a password (the existing export format, extended).
-- If the DB fails to open (HMAC error, disk fault): offer the latest backup, or a fresh pull from the sync folder.
+- Automatic backup at every start, in the background, when the newest one is 24 h old or older: `PRAGMA quick_check`
+  first (reads every page); only if it passes, SQLite's online backup API copies the database to
+  `%LOCALAPPDATA%\RemoteHub\backup\remotehub-<UTC yyyyMMdd-HHmmss>.db` (same key), last 7 kept. A failed check makes no
+  backup, keeps the existing ones and writes "Database check failed" to the audit log.
+- Manual export: an encrypted file protected with a password (Settings → Security & storage → Export backup…).
+- If the DB fails to open (wrong or missing key, damaged page found while loading): RemoteHub offers the automatic
+  backups, newest first ("Restore the automatic backup of <time>?" – Yes / No / Cancel); one that doesn't open either
+  leads to the next older one. Restoring keeps the current file beside it as
+  `remotehub.db.damaged-<yyyyMMdd-HHmmss>` (local time, with its `-wal` / `-shm`) and writes "Database restored".
+  No (or no backup left): "Start with empty settings?" – the database, its `-wal` / `-shm` and `db.key` are renamed to
+  `….damaged-<stamp>`, `backup\` to `backup.damaged-<stamp>` (those backups belong to the old key), and a new empty
+  database is created. Cancel ends RemoteHub without changing anything.
+- Not built: recovery from the sync folder (needs phase 4).
 
 ## 11. Audit log (client side)
 
-Events: connect/disconnect, password shown or copied, credentials changed, settings changed, export/import, agent
-installed, file transfer, recording started/stopped, script run (later), unlock failed, sync conflict.
+Events (`AuditEvents`, grouped as in the viewer's filter):
 
-- Retention: 365 days by default; policy `AuditRetentionDays` (HKLM/HKCU\SOFTWARE\Policies\RemoteHub).
-- Viewer: filter by time, connection, event; export to CSV.
+| Group | Events (code) |
+|---|---|
+| Sessions | Connected (`session.connected`), Disconnected (`session.ended`), Connection failed (`session.failed`) |
+| Changes to connections and settings | Added, Changed, Deleted (`data.added` / `data.changed` / `data.deleted`) – field names only, never values |
+| Passwords and protection | Password copied (`password.copied`), RemoteHub unlocked (`app.unlocked`), Unlock failed (`app.unlock_failed`), RemoteHub locked (`app.locked`, auto-lock), Startup protection changed (`app.protection_changed`), Audit log retention changed (`audit.retention_changed`) |
+| Files, recordings and agents | Files transferred (`files.transferred`), Recording started / saved (`recording.started` / `recording.stopped`), Agent installed (`agent.installed`), Credential provider installed or removed (`agent.credential_provider`), Automatic sign-in (`agent.auto_sign_in`: requested, signed in, failed) |
+| Backups and storage | Backup exported / imported (`backup.exported` / `backup.imported`), Settings moved to the database (`storage.migrated`), Database check failed (`storage.check_failed`), Database restored (`storage.restored`), Settings location changed (`storage.location_changed`) |
+
+Not built: "password shown" (RemoteHub logs copying a password, there is no separate show event), sync conflict
+(phase 4), script run (phase 5).
+
+- Append-only in the database: triggers reject every UPDATE ("The audit log is append-only.") and every DELETE of an
+  entry inside the retention period ("Only audit entries past the retention period can be deleted.").
+- Retention: policy `AuditRetentionDays` (DWORD, HKLM or HKCU\SOFTWARE\Policies\RemoteHub, 1–36,500 days; larger
+  values are capped), else the setting under Settings → Logs (30 days … 10 years), else 365 days. Applied at every start in
+  the background, in chunks of 1,000 rows, per device only the oldest entries up to the first one inside the period; the
+  connection history uses the same cut-off.
+- Viewer: filter by period (24 hours … all), event group, connection and text; the newest 10,000 entries are shown;
+  "Verify integrity" checks the hash chain; for one connection it shows its sessions and total time.
+- Export to CSV (UTF-8 with BOM, header row): a value starting with `=`, `+`, `-`, `@`, tab or CR gets a leading
+  apostrophe, so a spreadsheet doesn't run it as a formula.
 - Agent-side audit stays in the device's Windows Event Log (already built).
 
 ## 12. Implementation
@@ -219,7 +255,7 @@ installed, file transfer, recording started/stopped, script run (later), unlock 
 | 1 | `DataStore` replacing `SettingsStore.Load/Save`; key handling; migration; backups. No visible change | **Done** (0.14.0) – see section 15. Migration on real data: still to be checked on a real install |
 | 2 | Audit log + connection history (+ "unused connections" filter on real history) | **Done** (0.14.0) – see section 15 |
 | 3 | Notes: per connection/folder, Markdown, attachments, full-text search | |
-| 4 | Device sync with item files; migrating the sync file | Two-device tests pass |
+| 4 | Device sync with item files; migrating the sync file; audit log sync; sync-conflict audit event; recovery from the sync folder | Two-device tests pass |
 | 5 | Scripts | Own design |
 
 Tests: wrong key fails, tampered page fails, AAD swap fails, migration round-trip, kill during write, two simulated
@@ -269,6 +305,7 @@ What differs from the plan above, and why:
 | Plan | Built | Why |
 |---|---|---|
 | Separate `folders` and `connections` tables | One `nodes` table (kind = folder/connection); `credentials` and `settings` have the same columns | One code path for all records; queried fields (name, host, parent) are columns |
+| Schema version 1 as in §6 | Tables `meta`, `nodes`, `credentials`, `settings`, `secrets` (key: owner_kind, owner_id, `path` in the record), `audit` (with `device_name`), `connection_history` (`kind` instead of `via`); no `notes`, `sync_items` or `conflicts` yet | Only what phases 1–2 use; the rest comes with phases 3–4 |
 | Key passed with `PRAGMA hexkey` | `sqlite3_key` with the key bytes | The key never exists as a string |
 | Passwords decrypted only when used | Decrypted when loading, into the existing in-memory model | The app's model holds passwords today; changing that is a larger refactor (open) |
 | Folder ACL: only the user and SYSTEM | The profile's default ACL (user, SYSTEM, Administrators) | Administrators can take any file anyway; the protection is DPAPI and the startup lock |
@@ -276,7 +313,7 @@ What differs from the plan above, and why:
 | Sync of the audit log (phase 4) | Not yet – per device until phase 4 | Phase 4 |
 | "Unused" filter on the history table | Still uses the last connection time | The same event sets both; the history adds counts and durations (shown in the audit viewer for one connection) |
 | One writer on a background queue, separate read connections (§7) | One writer connection under a lock on the caller's thread; read-only connections of their own for long reads (`LocalDb.Read`: audit viewer, verify, history summary, daily check + backup) | Writes take well under a millisecond, so a queue adds nothing; the long reads were what made saves wait. Reads hold a shared "lifetime" lock so the key can't change under them (0.15.0) |
-| Startup lock with auto-lock (§5) | Auto-lock after 5–60 min without input on the PC (off by default): windows hidden, the startup-lock key wiped from memory; the DB key stays for the running sessions | A UI lock: sessions keep running behind it (0.15.0) |
+| Startup lock with auto-lock (§5) | Auto-lock (only with the startup lock on) after 5, 15, 30 or 60 min without mouse or keyboard input on the PC – default Never; checked every 15 s, and not while a modal dialog is open (it locks once that is closed): windows hidden, the startup-lock key wiped from memory; the DB key stays for the running sessions | A UI lock: sessions keep running behind it (0.15.0) |
 
 Audit log additions (0.14.4): a batch that fails to write is kept and tried again; each device's newest entry (id, time,
 hash) is recorded in `meta`, so removing entries from the end is detected too.
@@ -284,6 +321,19 @@ hash) is recorded in `meta`, so removing entries from the end is detected too.
 Shared-folder mode (phase 4 open): connections stay in `RemoteHub.settings` as before; the database holds this PC's own
 settings (the fallback when the shared file is unavailable), the audit log and the history. A save with no changes
 no longer rewrites the shared file.
+- The shared file is `RemoteHub.settings` in the chosen folder (`RdpManager.settings` only when that is the only one
+  there). Its password is set when the file is created; each PC asks for it once and remembers the derived key in
+  `%APPDATA%\RemoteHub\keys.dat` (DPAPI; header `RHK2` when also sealed with the startup lock). "Forget remembered
+  passwords on this PC" clears it.
+- `lock.json` (startup lock: the settings key wrapped by the password – PBKDF2-SHA256, 600,000 iterations – and
+  optionally Windows Hello), `keys.dat` and `local.json` are in `%APPDATA%\RemoteHub`; the database and `db.key` in
+  `%LOCALAPPDATA%\RemoteHub`.
+- Policy `SettingsFolder` (HKLM or HKCU\SOFTWARE\Policies\RemoteHub) fixes the folder; the location can't be changed in
+  the app. No file is created there: if none exists (or it can't be opened), RemoteHub says "The shared settings file
+  could not be opened" and starts with the settings stored on this PC for this session, without touching the shared file.
+- Conflicts: a save that finds the file changed since it was read asks "Settings changed on another device" – Reload
+  (use the other version) or Keep mine (overwrite it). A change synced in while nothing is pending asks "Settings
+  updated" – "The settings file was updated on another device. Load the new version now?"
 
 Measured (Release, this PC, 5,000 connections in 50 folders, ~300-character notes, every tenth with its own password):
 
@@ -302,3 +352,11 @@ database as it was; a password moved to another row or field → refused (AAD). 
 
 Known limits: failed unlock attempts are written to the audit log only when the next unlock succeeds (before, the
 database can't be opened); the audit log is tamper-evident, not tamper-proof (see section 5).
+
+## 16. Not done yet
+
+- Notes, attachments and full-text search (phase 3); device sync, audit sync, sync conflicts and recovery from the sync
+  folder (phase 4); scripts (phase 5).
+- Passwords decrypted only when used (today: when loading – section 15).
+- Audit events planned but not built: "password shown", "sync conflict", "script run" (section 11).
+- Schema migration steps with a backup before each (there is only schema version 1 so far).

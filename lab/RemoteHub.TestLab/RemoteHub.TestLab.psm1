@@ -359,7 +359,7 @@ function Use-LabJump {
 function Invoke-LabJump {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('open', 'local', 'rdp', 'forward', 'streams', 'direct')][string]$Kind,
+        [Parameter(Mandatory)][ValidateSet('open', 'local', 'rdp', 'forward', 'streams', 'direct', 'raw')][string]$Kind,
         [Parameter(Mandatory)][string]$TargetHost,
         [int]$Port = 3389,
         [hashtable]$Params = @{},
@@ -533,13 +533,14 @@ function Send-LabMouse {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][int]$X,
         [Parameter(Mandatory)][int]$Y,
-        [ValidateSet('Move', 'Left', 'Right', 'Double')][string]$Action = 'Left'
+        [ValidateSet('Move', 'Left', 'Right', 'Middle', 'Double')][string]$Action = 'Left'
     )
     $mouse = Get-LabMouse $Name
     Assert-CimResult (Invoke-CimMethod -InputObject $mouse -MethodName SetAbsolutePosition -Arguments @{ HorizontalPosition = [int32]$X; VerticalPosition = [int32]$Y }) "${Name}: mouse position"
     if ($Action -eq 'Move') { return }
     Start-Sleep -Milliseconds 150
-    $button = if ($Action -eq 'Right') { 2 } else { 1 }
+    # Msvm_SyntheticMouse buttons: 1 left, 2 right, 3 middle
+    $button = switch ($Action) { 'Right' { 2 } 'Middle' { 3 } default { 1 } }
     foreach ($n in 1..$(if ($Action -eq 'Double') { 2 } else { 1 })) {
         Assert-CimResult (Invoke-CimMethod -InputObject $mouse -MethodName SetButtonState -Arguments @{ ButtonIndex = [uint32]$button; IsDown = $true }) "${Name}: mouse down"
         Start-Sleep -Milliseconds 80
@@ -1297,11 +1298,14 @@ function Invoke-LabSetupScript {
         [bool]$Https = $true,
         [bool]$LocalAdmins = $true,
         [switch]$DryRun,
-        [int]$TimeoutSec = 600
+        [int]$TimeoutSec = 600,
+        # the host the script is made for (a computer name, W-NAME-01); default the VM's address
+        [string]$TargetHost
     )
+    if (-not $TargetHost) { $TargetHost = Get-LabVmAddress -Name $Name }
     if (-not $Allow) { $Allow = @(Get-LabHostAddress -Name $Name) }
     $local = Join-Path $env:TEMP "RemoteHub-setup-$([guid]::NewGuid().ToString('N').Substring(0, 8)).ps1"
-    $null = Invoke-LabHarness @('tool', '--op', 'script', '--host', (Get-LabVmAddress -Name $Name), '--allow', ($Allow -join '|'),
+    $null = Invoke-LabHarness @('tool', '--op', 'script', '--host', $TargetHost, '--allow', ($Allow -join '|'),
         '--https', $(if ($Https) { '1' } else { '0' }), '--local-admins', $(if ($LocalAdmins) { '1' } else { '0' }), '--out', $local)
     try {
         $text = [IO.File]::ReadAllText($local)
@@ -1754,7 +1758,8 @@ function Get-LabAgentEvent {
     Invoke-LabGuest -Name $Name -ArgumentList $Since, $Id -ScriptBlock {
         param($Since, $Id)
         $filter = @{ LogName = 'Application'; ProviderName = 'RemoteHub Agent'; StartTime = $Since }
-        if ($Id) { $filter.Id = $Id }
+        # int[]: several ids arrive as a deserialized list, which Get-WinEvent refuses ("parameter is incorrect")
+        if ($Id) { $filter.Id = [int[]]@($Id) }
         # no events, or the event source already gone (uninstalled): Get-WinEvent throws either way
         $ev = try { @(Get-WinEvent -FilterHashtable $filter -ErrorAction Stop) } catch { @() }
         @($ev | Sort-Object TimeCreated | ForEach-Object { [pscustomobject]@{ Id = $_.Id; Time = $_.TimeCreated; Message = [string]$_.Message } })
@@ -1953,6 +1958,25 @@ function Set-LabMockLatest {
 }
 
 # The requests the mock got so far (time, method, path, query, agent, body - telemetry bodies parsed into .json).
+# The mock's behaviour beyond latest.json (RhMockServer.ps1 reads <Root>\control.json per request): -LatestStatus answers
+# /latest with that code (500 ...), -LatestDelayMs stalls it (RemoteHub gives up after 15 s), -TelemetryStatus refuses
+# /telemetry (e.g. 503), -Redirects @{ '/download/x.msi' = 'https://elsewhere/x.msi' } answers 302. -Clear removes it.
+function Set-LabMockControl {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [int]$LatestStatus, [int]$LatestDelayMs, [int]$TelemetryStatus, [hashtable]$Redirects, [switch]$Clear)
+    $c = [ordered]@{}
+    if ($LatestStatus) { $c.latestStatus = $LatestStatus }
+    if ($LatestDelayMs) { $c.latestDelayMs = $LatestDelayMs }
+    if ($TelemetryStatus) { $c.telemetryStatus = $TelemetryStatus }
+    if ($Redirects) { $c.redirects = $Redirects }
+    $json = if ($Clear) { $null } else { $c | ConvertTo-Json -Depth 4 }
+    Invoke-LabGuest -Name $Name -ArgumentList $json -ScriptBlock {
+        param($json)
+        $p = 'C:\ProgramData\RemoteHubLab\mock\control.json'
+        if ($json) { [IO.File]::WriteAllText($p, $json) } else { Remove-Item $p -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-LabMockRequests {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)

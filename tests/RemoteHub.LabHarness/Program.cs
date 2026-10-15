@@ -38,7 +38,8 @@ using RemoteHub.Remoting;
 //       AgentInstaller.ChangeCredentialProvider over the agent's PowerShell (RemoteHub's "Install / Remove credential provider").
 //   auto-sign-in --host .. --port .. --pin .. --user .. --password .. [--view-only 1] [--no-request 1] [--password-for-sign-in ..] [--stay s]
 //       Automatic sign-in on the console's sign-in screen through the agent desktop, as RemoteHub's desktop tab does it.
-//   share ... / share-conflict ...   network shares (see ShareHarness.cs)
+//   share ... [--windows-user <COMPUTER\user>] [--safety 1] / share-conflict ... / share-lifetime ... / share-session ...
+//       network shares: copy scenario, transfer safety, Windows SMB connection lifetime, the share tab's connection (see ShareHarness.cs)
 //   seed --connections n [--folders n] [--shares n] [--standalone n]   test data for the start-time test (see SeedHarness.cs)
 //   tool --op <op> --via agent|winrm ...   RemoteHub's PowerShell connection and remote tools (see LabTools.cs)
 //   probe --kind <kind> ...                raw HTTP/TLS/WebSocket checks of the agent (see LabProbes.cs)
@@ -67,6 +68,8 @@ try
         "auto-sign-in" => await AutoSignIn(opt),
         "share" => ShareHarness.Run(opt),
         "share-conflict" => ShareHarness.Conflict(opt),
+        "share-lifetime" => ShareHarness.Lifetime(opt),
+        "share-session" => ShareHarness.Session(opt),
         "seed" => SeedHarness.Run(opt),
         "tool" => await LabTools.Run(opt),
         "probe" => await LabProbes.Run(opt),

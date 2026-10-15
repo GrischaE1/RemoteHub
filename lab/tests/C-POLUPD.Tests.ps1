@@ -98,22 +98,34 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             # settings folder fixed by policy (the legacy RdpManager key is read for this one)
             Policy @{ SettingsFolder = 'C:\Users\Public\LabSettings' } -Key 'RdpManager'
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $null = New-Item -ItemType Directory -Path 'C:\Users\Public\LabSettings' -Force; icacls 'C:\Users\Public\LabSettings' /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null }
-            Restart-Client
-            Start-Sleep -Seconds 5
-            $p.sharedFile = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Public\LabSettings' -ErrorAction SilentlyContinue | ForEach-Object Name) }
+            # the folder holds no RemoteHub.settings: RemoteHub warns before its window and runs on this PC's settings
+            # (SettingsStore: the file is never created in a policy folder) - started by hand, Start-LabClient waits for
+            # the main window
+            if ($script:task) { Stop-LabClient -Name $VmName -Task $script:task }
+            $script:task = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' }
+            $p.folderWarning = Ui '*could not be opened*' -Title '*' -Value read -Optional -TimeoutSec 90
+            $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 10
+            $null = Ui 'NewButton' -Value fit -TimeoutSec 90
             Settings-Page 'Security & storage'
-            $null = Ui 'Change location*' -Title 'Settings' -Optional
-            $p.locationWindow = Ui '*' -Title 'Settings location' -Value list -Optional -TimeoutSec 10
-            $null = Ui 'Cancel' -Title 'Settings location' -Optional
+            $p.changeLocation = Ui 'Change location*' -Title 'Settings' -Value exists -Optional
+            $p.storageText = Settings-Text
             $null = Ui 'Cancel' -Title 'Settings' -Optional
-            # automatic sign-in hidden
+            # automatic sign-in: both editor rows (PowerShell remoting page) - first without the policy (control), then hidden by it
+            function AutoSignInRows {
+                $null = Ui 'Local' -Value rightclick
+                $null = Ui 'Edit?' -Title '*'
+                $null = Ui 'PowerShell remoting' -Title 'Edit connection'
+                $rows = [ordered]@{
+                    signIn    = (Ui 'Sign in automatically when nobody is signed in' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 5).found
+                    endAction = (Ui 'When an automatic sign-in*s connection ends' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 5).found
+                }
+                $null = Ui 'Cancel' -Title 'Edit connection'
+                $rows
+            }
+            $p.autoSignInRowsBefore = AutoSignInRows
             Policy @{ DisableAgentAutoSignIn = 1 }
             Restart-Client
-            $null = Ui 'Local' -Value rightclick
-            $null = Ui 'Edit?' -Title '*'
-            $null = Ui 'PowerShell remoting' -Title 'Edit connection'
-            $p.autoSignInRow = Ui 'Sign in automatically when nobody is signed in' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 5
-            $null = Ui 'Cancel' -Title 'Edit connection'
+            $p.autoSignInRows = AutoSignInRows
             Save 'policies' $p
         }
 
@@ -131,9 +143,12 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             @($p.stable | Where-Object query -match 'channel=beta') | Should -BeNullOrEmpty
         }
 
-        It 'C-POL-04 SettingsFolder: the settings file there, the location can''t be changed' -Tag 'C-POL-04' {
-            @($p.sharedFile) | Should -Contain 'RemoteHub.settings'
-            ($p.locationWindow.items -join "`n") | Should -Not -Match 'Apply.*Button' -Because 'the location is fixed by the policy'
+        It 'C-POL-04 SettingsFolder without a settings file there: warned, this PC''s settings used; the location can''t be changed' -Tag 'C-POL-04' {
+            $p.folderWarning.found | Should -BeTrue
+            "$($p.folderWarning.value)$($p.folderWarning.name)" | Should -Match 'LabSettings'
+            $p.changeLocation.found | Should -BeTrue
+            $p.changeLocation.enabled | Should -BeFalse -Because 'the location is managed'
+            $p.storageText | Should -Match 'set by your organi[sz]ation'
         }
 
         It 'C-POL-05 DisableRecording: the Record button is gone' -Tag 'C-POL-05' {
@@ -147,11 +162,14 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
 
         It 'C-POL-07 HKLM before HKCU; SettingsFolder also from the legacy RdpManager key' -Tag 'C-POL-07' {
             $p.recordHklmWins.found | Should -BeTrue -Because 'HKLM DisableRecording=0 wins over HKCU 1'
-            @($p.sharedFile) | Should -Contain 'RemoteHub.settings'
+            "$($p.folderWarning.value)$($p.folderWarning.name)" | Should -Match 'LabSettings' -Because 'SettingsFolder was read from the legacy RdpManager key'
         }
 
-        It 'C-POL-08 DisableAgentAutoSignIn: the option "Sign in automatically when nobody is signed in" is hidden' -Tag 'C-POL-08' {
-            $p.autoSignInRow.found | Should -BeFalse
+        It 'C-POL-08 DisableAgentAutoSignIn: both automatic sign-in rows of the editor are hidden (shown without it)' -Tag 'C-POL-08' {
+            $p.autoSignInRowsBefore.signIn | Should -BeTrue -Because 'without the policy the row is there (control)'
+            $p.autoSignInRowsBefore.endAction | Should -BeTrue
+            $p.autoSignInRows.signIn | Should -BeFalse
+            $p.autoSignInRows.endAction | Should -BeFalse
         }
     }
 
@@ -264,11 +282,13 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $null = Ui 'New'; $null = Ui 'New folder' -Title '*'
             $null = Ui 'Display name' -Title 'New folder' -Value 'setnext:Lab folder' -Optional
             $null = Ui 'Save' -Title 'New folder' -Optional
-            Start-Sleep -Seconds 5
+            # app_session only follows a session with run time on record (written every minute; Restart-Client kills)
+            Start-Sleep -Seconds 75
             Restart-Client
             Start-Sleep -Seconds 15
             $t.events = @(Requests '/telemetry' | ForEach-Object json)
-            # killed as Task Manager would: UnexpectedExit at the next start
+            # killed as Task Manager would: UnexpectedExit at the next start (the earlier kill's report cleared first)
+            Clear-Requests
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub | Stop-Process -Force }
             $script:task = Start-LabClient -Name $VmName
             Start-Sleep -Seconds 15

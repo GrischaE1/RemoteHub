@@ -21,6 +21,7 @@ using RemoteHub.Remoting;
 ///                                                              connects to it (must be refused) and this process connects (must work)
 ///   jump --kind streams --host <target> --port n --count n     n tunnel connections at once (MaxTunnelStreams)
 ///   jump --kind direct --host <target> --port n                a plain TCP connect from this PC (J0: must fail)
+///   jump --kind raw --host <target> --port n --case ..          frames sent by hand on /v1/tunnel (J-29), see Raw
 /// </summary>
 internal static class LabJump
 {
@@ -89,6 +90,8 @@ internal static class LabJump
                     }
                     return new { localPort = forward.Port, other, own, forwardError = forward.TakeError() };
                 }
+                case "raw":
+                    return await Raw(route, host, port, o, cts.Token);
                 case "streams":
                 {
                     var count = int.Parse(o["count"]);
@@ -110,6 +113,100 @@ internal static class LabJump
         }
         catch (JumpHostException ex) { return new { connected = false, reason = ex.Reason, message = ex.Message, local = ex.Local }; }
         finally { JumpForwarders.CloseAll(); JumpTunnels.CloseAll(); }
+    }
+
+    // Frames sent by hand on /v1/tunnel (J-29) - what RemoteHub never sends:
+    //   window    Open, then 64 KB Data frames without waiting for credit, until Reset or --bytes (default 1 MB)
+    //   text      a text message;  garbled  a 2-byte binary frame;  unknown  frame type 99;  duplicate  Open twice with id 1
+    //   drain     Open, then Close, then wait up to --wait s (default 75) for the agent's Reset
+    // Answers opened, reset, resetAfterSeconds, ended (the tunnel closed or aborted), closeStatus, the frames received.
+    private static async Task<object> Raw(JumpRoute route, string host, int port, Dictionary<string, string> o, CancellationToken ct)
+    {
+        var expected = RemoteHub.Agent.AgentProtocol.NormalizeFingerprint(route.Endpoint.Fingerprint);
+        using var ws = new System.Net.WebSockets.ClientWebSocket();
+        ws.Options.RemoteCertificateValidationCallback = (_, cert, _, _) => cert is not null && RemoteHub.Agent.AgentProtocol.Fingerprint(cert.GetRawCertData()) == expected;
+        var cred = route.Credential.GetNetworkCredential();
+        var user = string.IsNullOrEmpty(cred.Domain) ? cred.UserName : cred.Domain + "\\" + cred.UserName;
+        ws.Options.SetRequestHeader("Authorization", "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(user + ":" + cred.Password)));
+        await ws.ConnectAsync(new Uri($"wss://{route.Host}:{route.Endpoint.Port}{RemoteHub.Agent.TunnelProtocol.Path}"), ct);
+
+        var frames = new List<object>();
+        var opened = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reset = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var receive = Task.Run(async () =>
+        {
+            var buffer = new byte[RemoteHub.Agent.TunnelProtocol.MaxFrame + 16];
+            try
+            {
+                while (ws.State == System.Net.WebSockets.WebSocketState.Open)
+                {
+                    var r = await ws.ReceiveAsync(buffer, ct);
+                    if (r.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) break;
+                    if (!RemoteHub.Agent.TunnelProtocol.TryRead(buffer.AsSpan(0, r.Count), out var type, out var stream)) continue;
+                    var payload = r.Count > 5 && type != RemoteHub.Agent.TunnelMessage.Data ? System.Text.Encoding.UTF8.GetString(buffer, 5, r.Count - 5) : null;
+                    lock (frames) frames.Add(new { type = type.ToString(), stream, payload, bytes = r.Count - 5 });
+                    if (type is RemoteHub.Agent.TunnelMessage.Opened) opened.TrySetResult(true);
+                    if (type is RemoteHub.Agent.TunnelMessage.Refused) opened.TrySetResult(false);
+                    if (type is RemoteHub.Agent.TunnelMessage.Reset) reset.TrySetResult(true);
+                }
+            }
+            catch (Exception) { /* aborted by the agent or the timeout */ }
+        }, ct);
+
+        Task Send(byte[] frame) => ws.SendAsync(frame, System.Net.WebSockets.WebSocketMessageType.Binary, true, ct);
+        byte[] Open(uint id) => RemoteHub.Agent.TunnelProtocol.Json(RemoteHub.Agent.TunnelMessage.Open, id, new RemoteHub.Agent.TunnelOpen(host, port), RemoteHub.Agent.TunnelJson.Default.TunnelOpen);
+        bool? wasOpened = null;
+        double? resetAfter = null;
+        string? sendError = null;
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            switch (o.GetValueOrDefault("case") ?? "")
+            {
+                case "window":
+                {
+                    await Send(Open(1));
+                    wasOpened = await opened.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+                    var chunk = new byte[RemoteHub.Agent.TunnelProtocol.MaxData];
+                    var limit = long.Parse(o.GetValueOrDefault("bytes") ?? (1024 * 1024).ToString());
+                    sw.Restart();
+                    for (long sent = 0; sent < limit && !reset.Task.IsCompleted && ws.State == System.Net.WebSockets.WebSocketState.Open; sent += chunk.Length)
+                        await Send(RemoteHub.Agent.TunnelProtocol.Frame(RemoteHub.Agent.TunnelMessage.Data, 1, chunk));
+                    if (await Task.WhenAny(reset.Task, Task.Delay(TimeSpan.FromSeconds(10), ct)) == reset.Task) resetAfter = Math.Round(sw.Elapsed.TotalSeconds, 2);
+                    break;
+                }
+                case "text":
+                    await ws.SendAsync(System.Text.Encoding.UTF8.GetBytes("hello"), System.Net.WebSockets.WebSocketMessageType.Text, true, ct);
+                    break;
+                case "garbled":
+                    await Send([1, 0]);
+                    break;
+                case "unknown":
+                    await Send(RemoteHub.Agent.TunnelProtocol.Frame((RemoteHub.Agent.TunnelMessage)99, 1));
+                    break;
+                case "duplicate":
+                    await Send(Open(1));
+                    await Send(Open(1));
+                    break;
+                case "drain":
+                {
+                    await Send(Open(1));
+                    wasOpened = await opened.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+                    sw.Restart();
+                    await Send(RemoteHub.Agent.TunnelProtocol.Frame(RemoteHub.Agent.TunnelMessage.Close, 1));
+                    var wait = TimeSpan.FromSeconds(int.Parse(o.GetValueOrDefault("wait") ?? "75"));
+                    if (await Task.WhenAny(reset.Task, Task.Delay(wait, ct)) == reset.Task) resetAfter = Math.Round(sw.Elapsed.TotalSeconds, 2);
+                    break;
+                }
+                default: throw new ArgumentException("raw needs --case window|text|garbled|unknown|duplicate|drain");
+            }
+        }
+        catch (Exception ex) when (ex is not ArgumentException) { sendError = ex.GetBaseException().Message; }
+        // the agent ends the tunnel on a protocol error: wait a moment for it
+        await Task.WhenAny(receive, Task.Delay(TimeSpan.FromSeconds(5), ct));
+        var ended = ws.State != System.Net.WebSockets.WebSocketState.Open;
+        if (!ended) try { await ws.CloseAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "lab", CancellationToken.None); } catch { /* gone */ }
+        lock (frames) return new { opened = wasOpened, reset = reset.Task.IsCompleted, resetAfterSeconds = resetAfter, ended, closeStatus = ws.CloseStatus?.ToString(), sendError, frames = frames.ToArray() };
     }
 
     // Answers what another local process gets from the forwarder: "refused" (closed without data), "open" or the error.

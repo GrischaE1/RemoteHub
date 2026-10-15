@@ -206,7 +206,8 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         }
 
         It 'D-MON-01 two monitors (virtual display "always"): Layout lists 2, primary first; another monitor gives another picture' -Tag 'D-MON-01' {
-            $l = @($m.r.layouts)[0].layout
+            # the first Layout comes before the virtual monitor exists: the first one with two monitors
+            $l = @($m.r.layouts | Where-Object { @($_.layout.monitors).Count -ge 2 })[0].layout
             @($l.monitors).Count | Should -Be 2
             $l.monitors[0].primary | Should -BeTrue
             $m.similar | Should -BeLessThan 0.95
@@ -215,7 +216,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         It 'D-MON-02 all monitors (-1): the picture is the bounding box of both' -Tag 'D-MON-02' {
             $all = @($m.r.layouts | Where-Object { $_.layout.monitor -eq -1 })[0].layout
             $all | Should -Not -BeNullOrEmpty
-            $all.width | Should -BeGreaterThan ((@($m.r.layouts)[0].layout.monitors | Measure-Object -Property width -Maximum).Maximum)
+            $all.width | Should -BeGreaterThan ((@($m.r.layouts | Where-Object { @($_.layout.monitors).Count -ge 2 })[0].layout.monitors | Measure-Object -Property width -Maximum).Maximum)
         }
 
         It 'D-MON-03 a monitor removed while connected: Layout sent again, the index clamped, no crash' -Tag 'D-MON-03' {

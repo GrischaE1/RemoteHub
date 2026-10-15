@@ -73,7 +73,9 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
             # without SecureDesktop the sign-in screen itself is refused first (Start: "may not see the sign-in screen");
             # Hello already says no automatic sign-in
             $runs.noSecureDesktop.rights.autoSignIn | Should -BeFalse
-            Text $runs.noSecureDesktop | Should -Match 'needs the rights Desktop and SecureDesktop|may not see the sign-in screen'
+            # without SecureDesktop the Start on the sign-in screen is refused before any automatic sign-in check (the
+            # 'needs the rights Desktop and SecureDesktop' reason is only in the agent log as 'not offered')
+            Text $runs.noSecureDesktop | Should -Match 'may not see the sign-in screen'
         }
 
         It 'C-AUTO-09 AutoSignInRequirePrivacyScreen with the privacy screen off: refused, policy named' -Tag 'C-AUTO-09' {

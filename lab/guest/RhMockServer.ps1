@@ -22,11 +22,24 @@ while ($listener.IsListening) {
         if ($req.HasEntityBody) { $sr = New-Object IO.StreamReader($req.InputStream, $req.ContentEncoding); $body = $sr.ReadToEnd(); $sr.Dispose() }
         $entry = [ordered]@{ time = (Get-Date).ToString('o'); method = $req.HttpMethod; path = $req.Url.AbsolutePath; query = $req.Url.Query; agent = $req.UserAgent; body = $body }
         Add-Content -Path $log -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
+        # <Root>\control.json (Set-LabMockControl), read per request: latestStatus / latestDelayMs (for /latest),
+        # telemetryStatus (for /telemetry), redirects { "<path>": "<Location>" } (302)
+        $control = $null
+        $cf = Join-Path $Root 'control.json'
+        if (Test-Path $cf) { try { $control = Get-Content $cf -Raw | ConvertFrom-Json } catch { } }
+        function Ctl($n) { if ($control -and $control.PSObject.Properties[$n]) { $control.$n } else { $null } }
         $file = $null; $status = 404; $type = 'application/json'
-        if ($req.Url.AbsolutePath -eq '/latest') { $file = Join-Path $Root 'latest.json' }
-        elseif ($req.Url.AbsolutePath -eq '/telemetry') { $status = 204 }
-        elseif ($req.Url.AbsolutePath -like '/download/*') { $file = Join-Path $Root ('download\' + [IO.Path]::GetFileName($req.Url.AbsolutePath)); $type = 'application/octet-stream' }
-        if ($file -and (Test-Path $file)) { $status = 200 }
+        $path = $req.Url.AbsolutePath
+        $redirect = $(if ((Ctl 'redirects') -and $control.redirects.PSObject.Properties[$path]) { $control.redirects.$path })
+        if ($redirect) { $res.StatusCode = 302; $res.RedirectLocation = $redirect; continue }
+        if ($path -eq '/latest') {
+            if (Ctl 'latestDelayMs') { Start-Sleep -Milliseconds ([int](Ctl 'latestDelayMs')) }
+            $file = Join-Path $Root 'latest.json'
+        }
+        elseif ($path -eq '/telemetry') { $status = $(if (Ctl 'telemetryStatus') { [int](Ctl 'telemetryStatus') } else { 204 }) }
+        elseif ($path -like '/download/*') { $file = Join-Path $Root ('download\' + [IO.Path]::GetFileName($path)); $type = 'application/octet-stream' }
+        if ($file -and (Test-Path $file -PathType Leaf)) { $status = 200 }
+        if ($path -eq '/latest' -and (Ctl 'latestStatus')) { $status = [int](Ctl 'latestStatus'); $file = $null }
         $res.StatusCode = $status
         if ($status -eq 200) {
             $bytes = [IO.File]::ReadAllBytes($file)

@@ -954,7 +954,12 @@ internal static class DesktopHarness
             {
                 var got = await Until(() =>
                 {
-                    if (d is null && c.Decoder is { } now) { d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures; }
+                    if (d is null && c.Decoder is { } now)
+                    {
+                        d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures;
+                        // a screen that doesn't change sends nothing new: a key frame is decoded while we wait
+                        c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                    }
                     return d is not null && (d.Failed is not null || d.Pictures > start);
                 }, Dbl(s, "timeout", 30), ct);
                 if (d?.Failed is { } failed) return (false, new D { ["failed"] = "decoder: " + failed });

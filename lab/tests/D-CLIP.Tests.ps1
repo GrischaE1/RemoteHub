@@ -191,8 +191,8 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             @($l.r.statuses + $l.r.transfers | Where-Object { "$($_.message)$($_.reason)" -match 'Too much to copy' }).Count | Should -BeGreaterThan 0
         }
 
-        It 'D-CLIP-09 "..\..\evil.txt", "C:\x", "CON" are refused; nothing outside the clipboard folder' -Tag 'D-CLIP-09' {
-            foreach ($id in 901, 902, 903) { @(Ends $l.r | Where-Object { $_.id -eq $id -and -not $_.ok }).Count | Should -Be 1 -Because "transfer $id" }
+        It 'D-CLIP-09 "..\..\evil.txt" and "CON" are refused, "C:\x" is made relative (C\x) inside the clipboard folder; nothing outside it' -Tag 'D-CLIP-09' {
+            foreach ($id in 901, 903) { @(Ends $l.r | Where-Object { $_.id -eq $id -and -not $_.ok }).Count | Should -Be 1 -Because "transfer $id" }
             @($l.evil) | Should -BeNullOrEmpty
         }
 
@@ -297,7 +297,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
         BeforeAll {
             $n = [ordered]@{}
             # an old clipboard folder of normaluser's
-            $old = Invoke-LabGuest -Name $VmName -ArgumentList (Clip-Folder) -ScriptBlock { param($c) $d = Join-Path $c '20200101-000000'; $null = New-Item -ItemType Directory -Path $d -Force; Set-Content "$d\old.txt" 'old'; (Get-Item $d).LastWriteTime = (Get-Date).AddDays(-3); $d }
+            $old = Invoke-LabGuest -Name $VmName -ArgumentList (Clip-Folder) -ScriptBlock { param($c) $d = Join-Path $c '20200101-000000'; $null = New-Item -ItemType Directory -Path $d -Force; Set-Content "$d\old.txt" 'old'; (Get-Item $d).CreationTime = (Get-Date).AddDays(-3); $d }
             $big50 = "$data\big50.bin"; $fs = [IO.File]::Create($big50); $rng = [Security.Cryptography.RandomNumberGenerator]::Create(); $buf = New-Object byte[] (1MB); for ($k = 0; $k -lt 50; $k++) { $rng.GetBytes($buf); $fs.Write($buf, 0, $buf.Length) }; $fs.Dispose()
             $o = Out 'newer'
             $job = Begin 'newer' @(

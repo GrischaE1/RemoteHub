@@ -1,7 +1,7 @@
 # RemoteHub – Jump hosts
 
-Status: Draft v3 (2026-10-13), checked against the code of 0.18.4. Decisions in §12. **Phases 1–3 implemented** (§13–§15);
-the lab tests (§11) have not run yet.
+Status: brought in line with 0.18.11 (2026-10-15). Decisions in §12. **Phases 1–3 implemented** (§13–§15); the lab
+tests run in `lab\tests\J-JUMP.Tests.ps1` (§11). What is still open: §16.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -47,7 +47,7 @@ needs no agent – only the jump host does.
   (§12).
 - **Relay servers** (both sides dial out), **SSH jump hosts** and **RD Gateway**. Only the RemoteHub Agent is a jump
   host.
-- **UDP.** RDP falls back to TCP through the tunnel; Wake-on-LAN and ICMP ping of devices behind a jump host don't work.
+- **UDP.** RDP falls back to TCP through the tunnel.
 - **FTP** (its data connections go to addresses the server announces).
 - **Client-side restrictions** (which jump hosts or ports RemoteHub may use).
 
@@ -56,8 +56,8 @@ needs no agent – only the jump host does.
 | Threat | Answer |
 |---|---|
 | Someone uses the jump host to reach the internal network | Needs a Windows account with the right **Tunnel** on the jump host (§6.1), its pinned certificate, and the policy must allow the target and port (§6.2). Same brute-force limits as every agent sign-in. |
-| The tunnel reaches services that only listen on the jump host itself (`127.0.0.1`) or cloud metadata (`169.254.169.254`) | Loopback, unspecified and link-local addresses are refused unless the policy lists them explicitly (§6.2). |
-| A host name passes the check, then resolves to another address (DNS rebinding) | The agent resolves once, checks the name and every address, and connects to the address it checked (§5.3). |
+| The tunnel reaches services that only listen on the jump host itself (`127.0.0.1`, its own adapter addresses) or cloud metadata (`169.254.169.254`) | Refused unless the policy lists them explicitly: the jump host's own addresses only by an entry naming that single address, the other special addresses only by a range of /8 or narrower that contains them – never by a name (§6.2). |
+| A host name passes the check, then resolves to another address (DNS rebinding) | The agent resolves once, checks each resolved address on its own, and connects only to an address it allowed (§5.3). |
 | Another user or process on RemoteHub's PC uses the local forwarding port | The forwarder accepts connections from RemoteHub's own process only (§8.2). |
 | The jump host is compromised | It sees who connects where and can drop or delay traffic, but not read it (principle 3). Impersonating the target fails on the pinned agent certificate, RDP's server certificate check (§9.1) and SSH host keys, as today. |
 | An admin hides what they did by going through a jump host | Audited on the jump host (§7); the target audits its own sign-ins as before, with the jump host's address as the source. |
@@ -87,23 +87,28 @@ Today only folders contain items (`Folder.Children`, `NodeBase.Parent` is a `Fol
   next to the jump host and loses only the route when it saves. Items in a folder below a jump host stay in that folder
   (the folder carries the id). An id whose jump host is missing, or a second hop, is ignored – the item stays where it is.
 - Export and import, backups and history carry the children. Duplicating a jump host duplicates it without its
-  children.
+  children ("<name> (copy)", with its agent and its RDP certificate pin cleared, like every copy).
 
 ### 4.2 Navigation
 
 - **Drag a connection or folder onto a connection** → it moves under it (dropping on the upper/lower edge still
-  means "before/after", as today; the middle of the item means "into"). The same with cut and paste, and a new
-  context-menu item **Move under…** (pick the jump host from a list) for keyboard users.
+  means "before/after", as today; the middle of the item means "into"). For keyboard users, the context-menu item
+  **Move under** (a submenu, §13).
 - **New folder** and **New connection** on a jump host's context menu create them under it; inside a folder under a
   jump host they work as in any folder.
-- A jump host shows its children below its shares, with the same indent and expand arrow; folders under it look like
-  any folder.
-- Each connection below a jump host shows a route hint beside the address – **"via JUMP01"** – in the secondary text
-  colour. Folders don't (their contents do).
-- The bar above a session and the tab's tooltip show the route too ("SQL01 via JUMP01").
-- Search and filters find children; a match shows its path including the jump host.
-- **Moving a jump host** moves everything below it with it.
-- **Deleting a jump host** asks: delete everything below it too, or move it into the jump host's folder (default).
+- A jump host shows its children below its shares, framed like a folder; its connections, folders and shares sit a step
+  (12 px) further in than a folder's items. Folders under it look like any folder.
+- Each connection (and share on its own) below a jump host shows a route hint beside the address – **"via JUMP01"** – in
+  the secondary text colour, in the warning colour when the jump host has no agent. Folders don't (their contents do).
+  Its tooltip: "Reached through JUMP01 (its RemoteHub Agent is the jump host). Move it out of JUMP01 to connect
+  directly."
+- The header line of the agent desktop, PowerShell and tool tabs shows the route ("sql01.contoso.local via JUMP01"),
+  a share tab's status "<description> · via JUMP01". The RDP tab doesn't show it.
+- Search and filters find children; the tooltip's location includes the jump host ("Customer A › JUMP01 › SQL01").
+- **Moving a jump host** moves everything below it with it. A move into or out of a jump host that changes the
+  inherited credentials asks first ("Move – credentials change", as for folders).
+- **Deleting a jump host** asks: *Keep them* (default – the items below it move next to it and are reached directly)
+  or *Delete all*.
 
 ### 4.3 What can go where (one hop)
 
@@ -113,13 +118,15 @@ The rule: **nothing below a jump host may be a jump host itself.**
 |---|---|
 | Connection or folder onto a connection that is directly reachable (no jump host above it) | Moves under it. |
 | Anything onto a connection that is itself below a jump host | Refused – cursor "not allowed", tooltip "SQL01 is reached through JUMP01. Only one jump host is supported for now." |
-| A jump host – or a folder containing one – onto a connection, or into a folder below a jump host | Refused – same reason. |
+| A jump host – or a folder containing one – onto a connection, or into a folder below a jump host | Refused – "JUMP02 is a jump host itself. …" / "JUMP02 in this folder is a jump host itself. …". |
 | Connection or folder into a folder below a jump host | Moves there; it is now reached through that jump host. |
-| Network share onto a connection | As today (it becomes that connection's share). |
+| Network share on its own onto a connection | Lands next to the connection (a drop never makes it a server's share); *Move under* puts it under a jump host (§15). A server's shares stay with their server. |
+| `.rdp` file onto a jump host / a folder below it | Imported under it; onto a connection below a jump host: imported next to that connection (under the same jump host or folder). |
 
-A connection may be placed under a jump host **without an agent** (to prepare the tree). Everything below it shows a
-warning ("JUMP01 has no RemoteHub Agent – install it to reach the connections below it"), and connecting says the same
-with the action **Install RemoteHub Agent on JUMP01**.
+A connection may be placed under a jump host **without an agent** (to prepare the tree). Everything below it shows the
+route hint in the warning colour with the tooltip "JUMP01 has no RemoteHub Agent – install it there to reach the items
+below it.", and connecting says "SQL01 is reached through JUMP01, but JUMP01 has no RemoteHub Agent. Install it there
+(right-click JUMP01 → Install RemoteHub Agent…), or move SQL01 out of JUMP01 to connect directly."
 
 ### 4.4 What a child offers
 
@@ -127,17 +134,18 @@ Everything a direct connection offers, through the jump host, except:
 
 | Action | Behind a jump host |
 |---|---|
-| Wake-on-LAN | Disabled – "Not available through a jump host". |
-| FTP shares | Can't be opened – same tooltip; they stay saved. |
-| SMB shares | Always through RemoteHub's built-in SMB client (§5.5). |
+| FTP shares | Can't be opened – *Open* is off in the menu with the reason ("Reached through JUMP01. FTP can't go through a jump host – its data connections go to addresses the server announces. SMB, SFTP and WebDAV can."); opened anyway, the same text. They stay saved. |
+| SMB shares | Always through RemoteHub's built-in SMB client (§5.5); the tab says "SMB · RemoteHub client · via JUMP01". |
 
 ## 5. The tunnel
 
 ### 5.1 Endpoint
 
 A new WebSocket endpoint on the agent: **`GET /v1/tunnel`**, HTTP Basic sign-in like `/v1/powershell` (same
-`SignIn`, rate limits and lockout), right **Tunnel** (§6.1). `/v1/health` lists the feature `tunnel` when the policy
-has tunnelling on, so RemoteHub can say "JUMP01's agent is too old / doesn't allow jump connections" before trying.
+`SignIn`, rate limits and lockout), right **Tunnel** (§6.1). A jump connection counts toward the agent's
+`maxSessions` like any session (503 when reached). `/v1/health` lists the feature `tunnel` when the policy has
+tunnelling on; RemoteHub doesn't check it first – it tries `/v1/tunnel` and explains the answer: 404 (turned off by
+`TunnelEnabled`, or an agent older than jump hosts) and 403 (right `Tunnel` missing), §5.6.
 
 ### 5.2 One connection, many streams
 
@@ -149,47 +157,57 @@ Binary WebSocket messages, each `[type: 1 byte][stream id: 4 bytes][payload]`:
 
 | Type | Direction | Payload |
 |---|---|---|
-| `Open` | RemoteHub → agent | JSON `{ "host": "sql01.contoso.local", "port": 3389 }` |
+| `Open` | RemoteHub → agent | JSON `{ "host": "sql01.contoso.local", "port": 3389, "probe": false }` |
 | `Opened` | agent → RemoteHub | JSON `{ "address": "10.20.1.15", "local": "10.20.1.2" }` – connected; `local` is the jump host's own address towards the target |
-| `Refused` | agent → RemoteHub | JSON `{ "reason": "…", "message": "…", "local": "…" }` – reason `policy`, `unreachable`, `timeout`, `dns` or `limit`; `local` as for `Opened` when the address was resolved and allowed (worked out without sending a packet, like `RemotingSetup.LocalAddressFor`) |
+| `Refused` | agent → RemoteHub | JSON `{ "reason": "…", "message": "…", "local": "…" }` – reason `policy`, `unreachable`, `timeout`, `dns`, `limit` or `probe`; `local` as for `Opened` when the address was resolved and allowed (worked out without sending a packet, like `RemotingSetup.LocalAddressFor`) |
 | `Data` | both | bytes (≤ 64 KB) |
 | `Credit` | both | 4 bytes: more bytes the sender may send on this stream |
 | `Close` | both | – (the sender closes its sending side; both closed → stream gone) |
+| `Reset` | both | – ends the stream at once in both directions (§13) |
 
+- **Probe:** an `Open` with `probe: true` is only resolved and checked, never connected: the agent answers `Refused`
+  with reason `probe`, "sql01.contoso.local:58732 is allowed; not connected (probe).", and `local`. RemoteHub uses it
+  for the firewall scope of an agent install (§8.4) – no TCP connection to the device.
 - **Flow control per stream:** each side may have at most 256 KB unacknowledged per stream; `Credit` returns
-  allowance as data is written onward. A large copy never stalls another stream (the RDP picture).
+  allowance as data is written onward. A large copy never stalls another stream (the RDP picture). A sender that
+  overruns the window gets the stream reset.
 - Stream ids are chosen by RemoteHub; the agent limits open streams per tunnel (`MaxTunnelStreams`, default 64).
+- A text or garbled frame, an unknown type or an id that is already open is a protocol error: the agent ends the whole
+  tunnel (audit 1202 "(protocol error: …)").
 - Keep-alive: the WebSocket's ping every 30 s, as for the other agent connections. When the tunnel ends, every stream
   ends; RDP's auto-reconnect, the agent desktop's resume and the tools' reconnects open a new one.
-- The tunnel closes itself after 2 minutes without streams.
+- RemoteHub closes the tunnel after 2 minutes without streams.
 
 ### 5.3 What the agent does on `Open`
 
-1. Reads the policy again (a changed policy applies to the next stream).
-2. Resolves the host name **on the jump host** (names behind the jump host often resolve only there), 10 s limit.
-3. Checks the name, every resolved address and the port against the policy (§6.2). Refused → `Refused`, audited.
-4. Connects to the first allowed address (15 s limit), sends `Opened`, then copies bytes until either side closes.
-5. Audits the stream when it ends (§7).
+1. Reads the policy again (a changed policy applies to the next stream); too many open streams → `limit`.
+2. Checks `TunnelEnabled` and the port (`TunnelPorts`). Refused → `Refused` `policy`, audited (2200).
+3. Resolves the host name **on the jump host** (names behind the jump host often resolve only there), 10 s limit;
+   no answer → `dns`.
+4. Checks each resolved address on its own against `TunnelTargets` and the special addresses (§6.2). None allowed →
+   `Refused` `policy`, audited (2200).
+5. A probe ends here (`probe`, §5.2). Otherwise connects to the allowed addresses in turn (15 s limit in all) →
+   `unreachable` / `timeout` (agent log only), or sends `Opened` and copies bytes until either side closes.
+6. Audits the stream when it ends (§7).
 
 ### 5.4 How RemoteHub uses it
 
-A new `JumpTunnels` service owns the tunnel connections (§8.1). Two ways in, depending on who opens the socket:
+`JumpTunnels` owns the tunnel connections (§8.1). Two ways in, depending on who opens the socket:
 
 - **In-process stream** – for code that can take a socket from RemoteHub:
   - The agent: every agent connection goes through `AgentClientTransport.Connect` (PowerShell, tools, desktop) or
     `AgentInstaller.HealthAsync`. Both get the socket from a `SocketsHttpHandler.ConnectCallback`
     (`ClientWebSocket.ConnectAsync(uri, HttpMessageInvoker, ct)`); TLS, the pin, the sign-in and the messages stay
     as they are. The URI keeps the target's name.
-  - WebDAV (`HttpClient`, the same callback); SFTP and SMB where SSH.NET and SMBLibrary can take a stream, otherwise
-    through the forwarder.
-- **Local forwarder** – for components that only take a host and port: the **RDP control** and **WinRM**. A listener
-  on `127.0.0.1` with a free port, one per target and port, alive while a session uses it. Each accepted connection
-  becomes one stream (§8.2).
+  - WebDAV (`HttpClient`, the same callback).
+- **Local forwarder** – for components that only take a host and port: the **RDP control**, **WinRM**, **SFTP**
+  (SSH.NET) and **SMB** (SMBLibrary). A listener on `127.0.0.1` with a free port, one per target and port, alive while a
+  session uses it. Each accepted connection becomes one stream (§8.2).
 
-All connect paths go through one function – `ConnectionRoute.Resolve(connection, port)` → direct `(host, port)` or
-`(jump host, tunnel)` – so no feature can forget the route. Today each feature builds its target itself
-(`RdpSession.Configure`, `PsRemoting.WsManConnectionInfo`, `AgentConnectionInfo`, `ShareConnector`, `RemotingSetup`'s
-probes); each is changed to ask the route first.
+The route comes from one place in the window – `TryRoute(connection)` (`MainWindow.JumpHosts.cs`) → null (direct) or a
+`JumpRoute` (the jump host, its agent endpoint and its credentials, §8.1) – and is handed to each connect path as a
+parameter: `AgentEndpoint.Via` (agent, health), `PsTarget.Via` (WinRM, agent install), `RdpRouteAsync` (RDP),
+`ShareConnector.Open(…, via)` (shares), `RemotingSetupDialog`'s checks.
 
 ### 5.5 Per protocol
 
@@ -198,22 +216,31 @@ probes); each is changed to ask the route first.
 | Agent PowerShell, tools, desktop, health | agent port (58732) | in-process stream | TLS to the pinned certificate, end to end. |
 | RDP | connection's port | local forwarder | Kerberos and the certificate name: §9.1. |
 | WinRM (PowerShell, tools without agent) | 5985 / 5986 | local forwarder | §9.2. |
-| SFTP | share's port | stream / forwarder | Host key checked as today. |
-| SMB | 445 | **built-in client** only | Windows' own SMB client can't use another port before Windows 11 24H2 / Server 2025, and `127.0.0.1:445` is this PC's own server. Shares behind a jump host always use `ManagedSmbShare`. |
+| SFTP | share's port | local forwarder | Host key checked as today. |
+| SMB | 445 | **built-in client** only, local forwarder | Windows' own SMB client can't use another port before Windows 11 24H2 / Server 2025, and `127.0.0.1:445` is this PC's own server. Shares behind a jump host always use `ManagedSmbShare` (§15). |
 | WebDAV | share's port | `ConnectCallback` | The HTTPS certificate is checked against the share's host name, as today – only the socket is tunnelled. |
-| FTP | – | not in v1 | Passive data connections go to addresses the server announces. |
+| FTP | – | refused before connecting | Passive data connections go to addresses the server announces. |
 | Availability checks (RDP, WinRM, agent) | each | a stream that opens and closes | `Refused` "unreachable" = port closed; refused by policy = "not allowed through JUMP01". |
 
 ### 5.6 Errors the user sees
 
 Each names which step failed – jump host or target:
 
-- "Can't reach the jump host JUMP01: …" (the direct connection to JUMP01's agent failed – today's messages).
-- "Sign-in to JUMP01 failed" / "Your account may not use JUMP01 as a jump host (right Tunnel)".
-- "JUMP01's RemoteHub Agent is too old for jump connections – update it" / "Jump connections are turned off on
-  JUMP01 by policy (TunnelEnabled)".
-- "JUMP01 doesn't allow connections to sql01.contoso.local port 3389 (policy TunnelTargets / TunnelPorts)".
-- "JUMP01 can't resolve sql01.contoso.local" / "JUMP01 can't reach sql01.contoso.local:3389 (refused / timed out)".
+- Before connecting: "No credentials are set for the jump host JUMP01. …", or JUMP01 has no agent (§4.3).
+- "Can't use the jump host JUMP01: …" – the connection to JUMP01's agent failed, with the agent's usual messages
+  (unreachable, certificate, sign-in), and for `/v1/tunnel`:
+  - 404: "The RemoteHub Agent on JUMP01:58732 can't be used as a jump host: jump connections are turned off by a policy
+    on the device (TunnelEnabled), or the agent there is older than this RemoteHub – update it (…)."
+  - 403: "The account may not use the RemoteHub Agent on JUMP01:58732 as a jump host: it must be in a group that the
+    device's policy allows for jump connections (right Tunnel – by default the administrators)."
+- Refused by policy: "The jump host JUMP01 doesn't allow this connection. " + the agent's message, e.g. "This jump
+  host's policy doesn't allow connections to sql01.contoso.local (TunnelTargets)." / "… to port 3389 (TunnelPorts)." /
+  "… is this jump host itself or a special address (…); its policy doesn't allow it (TunnelTargets)."
+- Other refusals: "Through the jump host JUMP01: " + "The jump host can't resolve sql01.contoso.local." / "No answer
+  from sql01.contoso.local:3389 in time." / "… can't be reached from the jump host (ConnectionRefused)." / "Too many
+  connections through this jump host at once (MaxTunnelStreams = 64)."
+- RDP, WinRM, SMB and SFTP only see their local connection closed; the forwarder keeps the jump host's answer and that
+  is shown instead (§14).
 - After that, the target's own errors, as today.
 
 ## 6. Policy (jump host only)
@@ -222,23 +249,34 @@ Each names which step failed – jump host or target:
 
 New `AgentRight.Tunnel`, default: the groups in `agent.json` (Administrators). An account with the PowerShell right can
 already open network connections from the device, so the default gives nothing new; IT can take it away separately
-(subkey `Rights`, value `Tunnel`).
+(subkey `Rights`, value `Tunnel`). Without it, `/v1/tunnel` answers 403 at sign-in, audited as a refused sign-in
+(2000, "not a member of an allowed group"); PowerShell keeps working.
 
 ### 6.2 Values under `HKLM\SOFTWARE\Policies\RemoteHub\Agent`
 
 | Value | Type | Default | Meaning |
 |---|---|---|---|
-| `TunnelEnabled` | DWORD | 1 | 0: this device is never a jump host (`/v1/tunnel` answers 404, health doesn't list `tunnel`). |
-| `TunnelTargets` | REG_MULTI_SZ | any | Allowed targets: `10.20.0.0/16`, `fd00::/8`, `sql01.contoso.local`, `*.contoso.local`. A target passes if its name matches a name pattern **or** all its resolved addresses lie in allowed ranges. |
-| `TunnelPorts` | REG_MULTI_SZ | any | Allowed ports and ranges, e.g. `3389`, `5985-5986`, `58732`, `22`, `445`, `443`. Unset: every port, so connections on custom ports just work. |
+| `TunnelEnabled` | DWORD | 1 | 0: this device is never a jump host (`/v1/tunnel` answers 404 before the sign-in, nothing audited; health doesn't list `tunnel`). |
+| `TunnelTargets` | REG_MULTI_SZ | any | Allowed targets: `10.20.0.0/16`, `fd00::/8`, `10.1.2.3`, `sql01.contoso.local`, `*.contoso.local`, `*`. Each resolved address is checked on its own: it passes if it lies in an allowed range or the name matches a name pattern. The agent connects only to addresses that passed; a name with some allowed addresses isn't refused as a whole. |
+| `TunnelPorts` | REG_MULTI_SZ | any | Allowed ports and ranges, e.g. `3389`, `5985-5986`, `58732`, `22`, `445`, `443`, `*`. Unset: every port, so connections on custom ports just work. |
 | `MaxTunnelStreams` | DWORD | 64 | Open streams per tunnel connection (1–1024). |
 
-Always refused unless a `TunnelTargets` entry names them explicitly: loopback (`127.0.0.0/8`, `::1`), unspecified
-(`0.0.0.0`, `::`), link-local (`169.254.0.0/16`, `fe80::/10`), multicast and broadcast.
+Special addresses are never allowed by a name (which could resolve to anything), only by an address entry about them
+(`TunnelRules.Allowed`):
 
-A policy that can't be read refuses everything (as today: `AgentPolicy.Refused` turns tunnelling off).
+- The jump host's own adapter addresses – only by an entry naming that single address (`10.20.1.2` or `10.20.1.2/32`);
+  a range containing its subnet doesn't open them.
+- Loopback (`127.0.0.0/8`, `::1`), unspecified (`0.0.0.0`, `::`), link-local (`169.254.0.0/16`, `fe80::/10`),
+  multicast, broadcast and reserved (`240.0.0.0/4`) – only by a range of /8 or narrower that contains them
+  (`127.0.0.0/8` does, `0.0.0.0/0` doesn't).
 
-The ADMX template, the README's policy table and `agent-spec.md` get the new values.
+IPv4-mapped IPv6 addresses count as IPv4, and IPv6 scope ids are ignored when classifying.
+
+A policy that can't be read refuses everything (as today: `AgentPolicy.Refused` turns tunnelling off – `/v1/tunnel`
+answers 404). A `TunnelTargets` or `TunnelPorts` value that is set but has no readable entry (e.g. `not a host!`, `0`,
+`99999`) allows nothing – every `Open` is refused with `policy`, never "any".
+
+The README's policy list and `agent-spec.md` have the new values (there is no ADMX template).
 
 ## 7. Audit (on the jump host)
 
@@ -246,11 +284,13 @@ The ADMX template, the README's policy table and `agent-spec.md` get the new val
 |---|---|---|
 | `TunnelStarted` | 1200 | Tunnel connection signed in: account, source. |
 | `TunnelStream` | 1201 | A stream ended: account, source, target name, address, port, duration, bytes each way. |
-| `TunnelEnded` | 1202 | Tunnel connection closed: duration, number of streams. |
-| `TunnelRefused` | 2200 | A stream refused by policy: account, source, target, port, which rule. |
+| `TunnelEnded` | 1202 | Tunnel connection closed: duration, number of streams, why ("closed by RemoteHub", "connection lost", "protocol error: …"). |
+| `TunnelRefused` | 2200 | A stream refused by policy: account, source, target, port, which rule – "(TunnelTargets)", "(TunnelPorts)", "(own or special address)" or "(TunnelEnabled = 0)" when the policy changed while the tunnel was open. |
 
-Unreachable targets go to the agent's log, not the audit (no security meaning, and noisy). Availability checks are
-logged like any stream. RemoteHub's own history records sessions as today, with the route added ("via JUMP01").
+Refusals for `dns`, `limit`, `unreachable` and `timeout` are not audited; unreachable targets go to the agent's log
+("Jump connection <account> from <source>: <host:port> unreachable (…)") – no security meaning, and noisy.
+`TunnelEnabled=0` (404) and a missing right `Tunnel` (403, audit 2000) end before a tunnel exists (§6). Availability
+checks are logged like any stream. RemoteHub's own history records sessions as today, without the route (§16).
 
 ## 8. RemoteHub side
 
@@ -259,7 +299,9 @@ logged like any stream. RemoteHub's own history records sessions as today, with 
 - One tunnel per (jump host connection, credentials), opened on first use and shared by every session and tool tab of
   every child; closed after 2 minutes without streams.
 - Signs in with the jump host's **effective** credentials (its own or inherited) and its pinned certificate –
-  `AgentClientTransport.Connect` with the path `/v1/tunnel`.
+  `AgentClientTransport.Connect` with the path `/v1/tunnel`. No credentials → "No credentials are set for the jump host
+  JUMP01. …". Without a stored password RemoteHub asks once ("… it is kept in memory only.") and reuses it for every
+  child and tab, or takes it from an open agent tab of JUMP01 with the same account.
 - On a dropped tunnel every stream gets an error; the next connect reopens it. No silent retry of a stream that was
   already sending.
 
@@ -274,9 +316,9 @@ logged like any stream. RemoteHub's own history records sessions as today, with 
 
 ### 8.3 UI beyond the navigation
 
-- The connection's editor shows a read-only line **"Reached through JUMP01"** with a link that selects JUMP01, and a
-  note that the route follows the navigation.
-- The agent shield tooltip and the PowerShell status say "… through JUMP01" when the check ran through it.
+- The connection's (and folder's) editor shows a read-only text: "Reached through JUMP01 – its RemoteHub Agent is the
+  jump host. Move it out of JUMP01 in the list to connect directly." (no link to JUMP01).
+- The PowerShell target and tab header say "… via JUMP01".
 - Connecting a child opens no tab for the jump host – the tunnel is invisible, only its errors show (§5.6).
 
 ### 8.4 Installing and updating the agent on a child
@@ -284,14 +326,17 @@ logged like any stream. RemoteHub's own history records sessions as today, with 
 The target doesn't need an agent, but can have one (for the agent desktop and faster tools).
 
 - **Install:** the installer copies the files and runs `msiexec` through PowerShell remoting (`agent-spec.md` §5.3).
-  With WinRM through the tunnel (Phase 2) this works for children too. Before that, and when WinRM isn't available,
-  **Install RemoteHub Agent…** offers **Save install files** – the MSI and the `.rhagent` enrollment file – for
-  installing by hand or with software distribution.
+  With WinRM through the tunnel (Phase 2) this works for children too. When WinRM isn't available, **Install RemoteHub
+  Agent…** defaults to **Save the installer and the enrollment file to a folder…** – the MSI and the `.rhagent`
+  enrollment file – for installing by hand or with software distribution. The dialog says "SQL01 is reached through
+  JUMP01, so its agent will only be reached from there: allow connections from JUMP01's address in that network." and
+  hides "Use the agent for this connection afterwards" (below a jump host an installed agent is used anyway).
 - **Update** through the running agent works through the tunnel from Phase 1.
-- **Firewall:** a child's agent is only ever reached from the jump host, so the enrollment's allowed remote addresses
-  are pre-filled with **the address the target will see** – the jump host's own address in that network. RemoteHub
-  gets it by opening a stream to the target's agent port: the answer carries `local` even when nothing listens there
-  yet (§5.2). If that fails (name not resolvable, refused by policy), the field stays empty with a hint.
+- **Firewall:** a child's agent is only ever reached from the jump host, so the button for the allowed remote addresses
+  offers **the address the target will see** – "Add JUMP01 (10.20.1.2)", the jump host's own address in that network.
+  RemoteHub gets it with a probe to the target's agent port (`JumpTunnels.LocalAddressAsync`, §5.2): the agent only
+  resolves and checks, nothing is connected. If that fails (name not resolvable, refused by policy), no address is
+  offered.
 
 ## 9. Technical risks
 
@@ -317,6 +362,10 @@ connects to the forwarder. Candidates, in order:
 **Decided:** if only 3 works, RDP through a jump host ships with it (NTLM plus the pinned certificate), and
 connections where NTLM is blocked are pointed to the agent desktop. Kerberos is not a requirement for Phase 2.
 
+**Built:** option 3 (§14). RemoteHub checks the certificate itself and asks "Trust this RDP certificate?" once (pinned per
+connection, "RDP certificate changed" when it differs); the RDP control then shows no warning of its own. Candidates 1
+and 2 were not explored (§16).
+
 ### 9.2 WinRM through a local port
 
 WinRM to `http://127.0.0.1:<port>` with explicit credentials → NTLM; WinRM's client refuses NTLM over HTTP to hosts not
@@ -329,7 +378,8 @@ in **TrustedHosts**. Options:
 - Plain HTTP: needs `127.0.0.1` in TrustedHosts – RemoteHub doesn't change that machine setting itself; the error
   says how. Over HTTP, WinRM's own message encryption still protects the content.
 
-Spike J2 tests whether `localhost` is treated differently from `127.0.0.1`.
+Built: HTTPS with `SkipCNCheck` (§14); lab test J-02 opens a session that way. Whether `localhost` is treated
+differently from `127.0.0.1` over HTTP was not tested (the lab host's TrustedHosts is left alone).
 
 ### 9.3 Throughput
 
@@ -352,14 +402,20 @@ forwarder refusing another process.
 
 ## 11. Lab tests
 
-Needs one new lab network: a Hyper-V **private switch** with a target VM that only the jump VM can reach (the jump VM
-gets a second network adapter on it). The VM running RemoteHub must not reach the target directly – J0 checks that.
+Built in the lab: `lab.json` `JumpHost` – the VM `RemoteHub-JumpHost` with an adapter on the Hyper-V private switch
+`RemoteHub-Jump` (192.168.231.1/24). `lab\tests\J-JUMP.Tests.ps1` moves the VM under test behind it at run time (its
+adapters onto that switch, a static address from .10 up); the revert undoes it and the jump VM is turned off afterwards.
+Everything goes through RemoteHub's own client code with the route set (`AgentEndpoint.Via`, `PsTarget.Via`, harness
+`--jump`). The lab's ids are J-00 … J-14 (`docs\test-lab-cases.md` §9.13, which also lists the UI cases J-15 … J-30).
+The script runs J-00 … J-10, J-13 (dns / unreachable / timeout / limit refusals) and J-14 (`maxSessions`, unreadable
+policy key); J-11 and J-12 below are partly covered by unit tests only. The PC running RemoteHub must not reach the
+target directly – J-00 checks that.
 
 | Id | Test |
 |---|---|
 | J0 | Direct connections from RemoteHub's VM to the target fail (RDP, WinRM, agent port). |
-| J1 | **Spike:** RDP through the forwarder – Kerberos or NTLM used, certificate warning, and each candidate of §9.1. |
-| J2 | **Spike:** WinRM through the forwarder – HTTP to `127.0.0.1` and to `localhost`, HTTPS with `SkipCNCheck`. |
+| J1 | RDP through the forwarder: the device's RDP certificate comes back through the tunnel (the spike's other candidates of §9.1 were not run). |
+| J2 | WinRM through the forwarder: HTTPS to `127.0.0.1` with `SkipCNCheck` opens a session (HTTP needs TrustedHosts – not changed on the lab host). |
 | J3 | Through the jump host: agent desktop (incl. consent, privacy mode, clipboard), PowerShell console, files, registry, services, processes. The jump host's audit shows each stream; the target's audit shows the jump host as the source. |
 | J4 | RDP and WinRM (PowerShell and tools without an agent) through the jump host. |
 | J5 | Policy: `TunnelEnabled=0`, `TunnelTargets` excluding the target, a port not in `TunnelPorts`, right `Tunnel` removed – each refused with the right message and audit entry. A name allowed by pattern resolving to a loopback address is refused. Loopback and `169.254.169.254` refused by default. |
@@ -367,7 +423,7 @@ gets a second network adapter on it). The VM running RemoteHub must not reach th
 | J7 | Another local process connecting to the forwarder's port is refused (`Test-NetConnection 127.0.0.1 -Port …`). |
 | J8 | Throughput: a 2 GB file transfer to the target while its RDP session (or agent desktop) stays smooth. |
 | J9 | Agent install on a child through WinRM, and by hand with the install files (firewall allows the jump host only); agent update through the jump host. |
-| J10 | SFTP, SMB and WebDAV shares of a child. |
+| J10 | SFTP, SMB (RemoteHub's own client) and WebDAV shares of a child copy both ways; FTP is refused. |
 | J11 | Move a connection and a folder between jump host, a folder under it, another jump host and a plain folder; the route follows for everything inside; the drops in §4.3 are refused; settings are inherited past the jump host (§4.1). |
 | J12 | An older RemoteHub opening the new database and shared file (§4.1). |
 
@@ -408,7 +464,7 @@ What was built, and where it differs from the sections above:
   why in a tooltip at the pointer. **Move under** is a submenu (out of the current jump host; existing jump hosts and
   connections with an agent, at most 40) instead of a list dialog. *New connection / New folder here* on a jump host
   create the item under it. Deleting a jump host asks *Keep them, delete only this* (they move next to it) or *Delete all*.
-- **Phase 1 limits shown to the user:** RDP, *Add network share* and the shares of a device below a jump host are in
+- **Phase 1 limits shown to the user (lifted in Phases 2 and 3; only FTP stays off):** RDP, *Add network share* and the shares of a device below a jump host are in
   the menus but switched off, with the reason; opening them anyway explains it. "Connect through" and "Remote desktop
   through" are fixed to the agent below a jump host (the editor says so in their hints).
 - **Install:** a new method for every connection, *Save the installer and the enrollment file to a folder*
@@ -434,7 +490,7 @@ What was built, and where it differs from the sections above:
   RemoteHub's own process; anything else is closed at once and written to the diagnostic log.
 - **Errors:** RDP and WinRM only see "connection closed" when the jump host refuses a stream; the forwarder keeps the
   jump host's answer, and the RDP tab and the PowerShell error show it instead.
-- **RDP (§9.1):** spike J1 was not run yet; the session goes with option 3. Before each connect RemoteHub opens a stream to
+- **RDP (§9.1):** the session goes with option 3 (lab J-01 checks the certificate through the tunnel). Before each connect RemoteHub opens a stream to
   the RDP port itself, does the X.224 security negotiation and the TLS handshake, and reads the certificate
   (`ServerCertificates.RdpAsync`). A certificate this PC trusts for the target's name is accepted as a direct connection
   would; otherwise the user confirms it once (subject, issuer, expiry, thumbprint, and the PowerShell line that shows the
@@ -444,7 +500,7 @@ What was built, and where it differs from the sections above:
   security have no certificate: the control's own setting applies. The check and the control's own connection are two
   connections; with NLA the sign-in itself (CredSSP) is bound to the server's key, so a different server in between
   can't complete it. Sign-in falls back from Kerberos to NTLM (D9).
-- **WinRM (§9.2):** spike J2 not run yet. WinRM goes to the forwarder's port with `SkipCNCheck` over HTTPS – the
+- **WinRM (§9.2):** WinRM goes to the forwarder's port with `SkipCNCheck` over HTTPS – the
   certificate must still be trusted on this PC (the setup script and "Test again" fetch it through the jump host and
   compare its thumbprint as for a direct connection), and NTLM over HTTPS is bound to it (channel binding). Over HTTP
   the WinRM client refuses NTLM to 127.0.0.1 unless it is in TrustedHosts; the error says so and points to HTTPS or the
@@ -458,7 +514,7 @@ What was built, and where it differs from the sections above:
 - **Tests:** forwarder through a real jump host agent (data and half-close, one port per target), another process
   refused (`powershell.exe` connecting to the port), a refused target as the forwarder's error, idle close, the RDP
   negotiation and certificate (TLS and old RDP security).
-- **Not done yet:** spikes J1/J2 and lab tests J4, J6, J7, J9 (§11).
+- **Lab:** J-01, J-02, J-04, J-06, J-07 and J-09 run in `J-JUMP.Tests.ps1` (§11).
 
 ## 15. Implementation notes (Phase 3)
 
@@ -485,4 +541,19 @@ What was built, and where it differs from the sections above:
 - **Tests:** WebDAV through a real jump host agent with a name that only the jump host resolves (the Host header keeps it);
   SMB, SFTP and WebDAV refused by the jump host's policy give its message; FTP isn't tried; SMBLibrary's port overload;
   standalone shares below a jump host in the tree rules and the saved file.
-- **Not done yet:** lab test J10 (SMB, SFTP and WebDAV against real servers behind a jump host).
+- **Lab:** J-10 (SMB, SFTP and WebDAV against real servers behind a jump host; FTP refused) runs in `J-JUMP.Tests.ps1`.
+- **Share editor:** for a jump host's own share on another host it warns "Reached directly, like JUMP01 itself. For a
+  device reached through JUMP01, add the share to that device's connection, or place a share on its own below
+  JUMP01."; for a child's share on another host "Another device, reached through JUMP01 like SQL01." *Add network
+  share…* on a child is on; its tooltip says FTP can't go through a jump host.
+
+## 16. Not done yet
+
+- **More than one hop** (D5): only the tree rule limits it – "… Only one jump host is supported for now."
+- **Client-side restrictions** (D6), **relay servers**, **SSH jump hosts**, **RD Gateway**.
+- **FTP through a jump host.**
+- **Kerberos for RDP through a jump host** (§9.1 candidates 1 and 2); WinRM over HTTP to `localhost` (§9.2).
+- **The route in RemoteHub's session history** (§7) and on the RDP tab (§4.2).
+- **Cut and paste in the navigation** (moving is drag and drop or *Move under*).
+- **An ADMX template** for the agent policy (the values are in the README).
+- **Lab:** the UI cases J-11, J-12 (partly) and J-15 … J-30 of `test-lab-cases.md` §9.13.

@@ -83,11 +83,12 @@ public static class RhLabWts {
         }
     }
     # the console account's sessions (the one automatic sign-in created)
-    function Mine { @(Sessions | Where-Object { $_.User -match "\\$([regex]::Escape($account))$" }) }
+    # (",": the array as it is - PowerShell would hand back $null for none and the object itself for one)
+    function Mine { , @(Sessions | Where-Object { $_.User -match "\\$([regex]::Escape($account))$" }) }
     function Wait-Gone([int]$TimeoutSec = 90) {
         $until = (Get-Date).AddSeconds($TimeoutSec)
-        do { $left = Mine; if ($left.Count -eq 0) { return @() }; Start-Sleep -Seconds 3 } while ((Get-Date) -lt $until)
-        $left
+        do { $left = @(Mine); if ($left.Count -eq 0) { return , @() }; Start-Sleep -Seconds 3 } while ((Get-Date) -lt $until)
+        , $left
     }
     # event 1107 "Automatic sign-in session <n> of <account> locked / signed out (<why>)" since a guest time
     function Wait-Ended([datetime]$Since, [int]$TimeoutSec = 90) {
@@ -219,7 +220,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             @($c.Signed | Where-Object State -eq 'Active').Count | Should -Be 1
             ($c.Ended.Message -join "`n") | Should -Match "Automatic sign-in session \d+ of .*$([regex]::Escape($account)) locked"
             # WTSDisconnectSession on client and Server alike: client Windows shows the lock screen, Server the sign-in screen
-            $c.After.Count | Should -Be 1
+            @($c.After).Count | Should -Be 1
             $c.After[0].Id | Should -Be $c.Signed[0].Id
             $c.After[0].State | Should -Be 'Disconnected'
             $c.After[0].Console | Should -BeFalse
@@ -260,7 +261,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             ($w.SignedInEvent.Message -join "`n") | Should -Match 'when the connection ends: lock'
             ($w.Ended.Message -join "`n") | Should -Match 'Automatic sign-in session \d+ of .* locked'
             ($w.Ended.Message -join "`n") | Should -Not -Match 'signed out'
-            $w.After.Count | Should -Be 1
+            @($w.After).Count | Should -Be 1
             $w.After[0].State | Should -Be 'Disconnected'
         }
     }
@@ -300,16 +301,16 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
         It 'C-END-05 the adapter cut for 30 s: the cover stays, the desktop untouched; resumed - same session, no sign-out' -Tag 'C-END-05' {
             Text $d.R | Should -Match 'SignedIn: Signed in as'
             $d.CutText | Should -Match 'signed in remotely'
-            $d.During.Count | Should -Be 1
+            @($d.During).Count | Should -Be 1
             $d.During[0].Id | Should -Be $d.Before[0].Id
             $d.During[0].State | Should -Be 'Active'
             $resumed = @($d.R.statuses | Where-Object { $_.connection -eq 2 })
             ($resumed | ForEach-Object { "$($_.state): $($_.message)" }) -join "`n" | Should -Match 'Continuing on the device'
             @($resumed | Where-Object state -eq 'Connected').Count | Should -BeGreaterThan 0
             @($resumed | Where-Object state -in 'SignInReady', 'SigningIn', 'WaitingForUser') | Should -BeNullOrEmpty
-            $d.Resumed.Count | Should -BeGreaterThan 0 -Because 'event 1103: continued'
+            @($d.Resumed).Count | Should -BeGreaterThan 0 -Because 'event 1103: continued'
             @($d.EndedBeforeClose) | Should -BeNullOrEmpty -Because 'no end action and no sign-out while resumed in time'
-            $d.After.Count | Should -Be 1
+            @($d.After).Count | Should -Be 1
             $d.After[0].Id | Should -Be $d.Before[0].Id
             $d.After[0].State | Should -Be 'Active'
             (@($d.After[0].Explorer) -join ',') | Should -Be (@($d.Before[0].Explorer) -join ',') -Because 'the same explorer.exe: the desktop untouched'
@@ -392,7 +393,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             Text $k.ConnectedR | Should -Match 'SignedIn: Signed in as'
             $k.ConnectedState | Should -Match '"Dropped"\s*:\s*false'
             ($k.ConnectedEnded.Message -join "`n") | Should -Match 'locked \(the agent restarted while it was open\)'
-            $k.ConnectedAfter.Count | Should -Be 1
+            @($k.ConnectedAfter).Count | Should -Be 1
             $k.ConnectedAfter[0].State | Should -Be 'Disconnected'
             Text $k.DroppedR | Should -Match 'SignedIn: Signed in as'
             $k.DropLine | Should -Not -BeNullOrEmpty

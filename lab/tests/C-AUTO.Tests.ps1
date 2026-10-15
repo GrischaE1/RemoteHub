@@ -1,4 +1,4 @@
-# C-AUTO - automatic sign-in end to end, phases 2 and 3 (docs/credential-provider-design.md §13 build order): the agent
+# C-AUTO - automatic sign-in end to end, phases 2 and 3 (docs/credential-provider-design.md section 13 build order): the agent
 # service hands the ticket to the credential provider in the console's LogonUI; RemoteHub's desktop client asks for it
 # and sends the password when the agent says SignInReady. The agent MSI under test must be built with the provider and
 # signed (build-installer.ps1 -LabSigning -CredentialProvider).
@@ -68,7 +68,7 @@ BeforeAll {
     $afterWrong = Get-Console
     Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-auto-after-wrong.png') | Out-Null
 
-    # ---- 4. The right password – after closing the failed attempt's message, as the operator does through the picture
+    # ---- 4. The right password - after closing the failed attempt's message, as the operator does through the picture
     Send-LabKey -Name $VmName -Key Enter
     Start-Sleep -Seconds 3
     $right = Run

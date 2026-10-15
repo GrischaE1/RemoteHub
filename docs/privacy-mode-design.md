@@ -1,6 +1,6 @@
 # RemoteHub Agent – Privacy mode
 
-Status: Draft v1 (2026-10-13), checked against the code of 0.18.0. Phases 1, 2 and 3 are implemented (§14) with the proposals in §12 as defaults (Q2 changed: input block on by default); the lab tests §5.7 and §6.6 and the Phase 3 lab cases have not run yet.
+Status: Draft v1 (2026-10-13), checked against the code of 0.18.0. Phases 1, 2 and 3 are implemented (§14) with the proposals in §12 as defaults (Q2 changed: input block on by default); the lab tests §5.7 and §6.6 and the Phase 3 lab cases have not run yet. The snip guard (§14.2) and the corrections in §5.2, §5.4, §5.5 and §8 were brought in line with 0.18.11 (2026-10-15).
 Owner: Grischa Ernst
 
 This covers the item "privacy mode" that [agent-desktop-draft.md](agent-desktop-draft.md) §2 (decision 8) left out of v1, and Phase 2 of [credential-provider-design.md](credential-provider-design.md) §12 ("black out the physical screen and block local input").
@@ -137,8 +137,8 @@ Turning the monitor off (`SC_MONITORPOWER`) is not an option: it stops DXGI capt
   - Styles: `WS_POPUP`, `WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE`, no rounded corners, no border.
   - `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`. Afterwards the helper reads it back with `GetWindowDisplayAffinity`. If it doesn't read `0x11`, the overlay is destroyed **before it is shown** and the agent reports `Screen = ""` with a reason. A window that isn't excluded would black out the admin's picture as well.
   - Build < 19041: the feature is not advertised (§2).
-- **Black:** the window is filled with `#000000`. No text, no cursor (`SetCursor(NULL)` in `WM_SETCURSOR`).
-- **Message:** a navy background (`Theme.OverlayBackground`) with a soft glow (`Theme.OverlayGlow`) behind the RemoteHub logo, and one centred block: the logo (220 px, drawn as vector shapes so it is sharp at any size; smaller on a small screen, so everything fits), the letter-spaced eyebrow "PRIVACY MODE ACTIVE" (`Theme.AccentLight`), the heading "Remote Support Session in Progress", and the body "Your screen is temporarily hidden while an authorized administrator assists your device." Below it a short accent line and, next to a lock, "Secure, monitored session • Please do not power off your device".
+- **Black:** the window is filled with `#000000`. No text; the cursor stays visible (the overlay doesn't handle `WM_SETCURSOR`, see §14).
+- **Message:** a navy background (`Theme.OverlayBackground`) with a soft glow (`Theme.OverlayGlow`) behind the RemoteHub logo, and one centred block: the logo (220 px, drawn as vector shapes so it is sharp at any size; smaller on a small screen, so everything fits), the letter-spaced eyebrow "PRIVACY MODE ACTIVE" (`Theme.AccentLight`), the heading "Remote Support Session in Progress", and the body "Your screen is temporarily hidden while an authorized administrator assists your device." In a session automatic sign-in created for the admin (no banner there), the body is "DOMAIN\user is signed in remotely. The screen stays hidden while they work." Below it a short accent line and, next to a lock, "Secure, monitored session • Please do not power off your device".
 - **Staying on top:** other topmost windows (Task Manager, a topmost app) can come above the overlay. The helper re-asserts `HWND_TOPMOST` every 500 ms and on `EVENT_SYSTEM_FOREGROUND`. The banner is re-asserted **above** the overlays (rule 2).
 - **Monitor changes:** on `WM_DISPLAYCHANGE` the overlays are rebuilt. This includes the virtual monitor ([third-party/VirtualDisplayDriver](../third-party/VirtualDisplayDriver)).
 - **The admin's picture is unchanged:** excluded windows aren't in DXGI or GDI captures. The admin sees the desktop. The local cursor shape is still sent separately, as it is today.
@@ -165,12 +165,12 @@ The service refuses the command when the right or policy is missing. In that cas
 - **What stays local:**
   - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely. While input is blocked, the screen it opens offers only Task Manager and Cancel (§5.9).
   - Mouse clicks inside the banner's rect, so **Disconnect** keeps working (§5.5).
-- **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are paused".
+- **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are blocked." under the body.
 
 ### 5.5 Disconnect always works
 
 - The banner stays above the overlays (§5.2) and does not collapse while the privacy screen is on. A collapsed pill is easy to miss on a black screen.
-- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor itself is not shown on a Black overlay. While input is blocked, the banner shows a hint: "Move the mouse here and click Disconnect to end".
+- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end".
 - Ctrl+Alt+Del → Lock or Sign out ends the admin's view of the user desktop, as it does today.
 
 ### 5.6 What the privacy screen does not cover
@@ -498,7 +498,7 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 | Item | Kind | Default | Meaning |
 |---|---|---|---|
 | `AgentRight.PrivacyScreen` | Right (subkey `Rights`) | `config.AllowedGroups` (same as `Desktop`) | May turn on the privacy screen (Phase 1). Also needs `Desktop` (not view-only). |
-| `PrivacyScreen` | DWORD | 1 | 0 – privacy screen off; 1 – allowed; 2 – allowed, including blocking local input |
+| `PrivacyScreen` | DWORD | 2 (see §14, Q2) | 0 – privacy screen off; 1 – allowed, local input stays usable; 2 – allowed, including blocking local input |
 | `PrivacyScreenMessage` | REG_SZ | (built-in text) | Replaces the heading on the Message overlay, e.g. "Contoso IT is working on this PC" |
 | `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. |
 
@@ -536,7 +536,7 @@ These events go through `o.Log.Audit` in the same format as the existing desktop
 | # | Question | Proposal |
 |---|---|---|
 | Q1 | Privacy screen style: black only, or also "with message"? | Both, chosen per use (menu §5.1). Default: with message. |
-| Q2 | Block local input: default on or off? | Off. It's an extra checkbox and only allowed with policy value 2. |
+| Q2 | Block local input: default on or off? | Off. It's an extra checkbox and only allowed with policy value 2. **Changed: on by default (§14, `PrivacyScreen` default 2).** |
 | Q3 | Blur: may the admin still control the device? | No, input is paused (safer: no clicking into something they can't read). |
 | Q4 | Remember the hidden apps for the next connection? | Not in v1. Later: per user, in `HKCU` of the session's user, written by the helper on their behalf. |
 | Q5 | May IT turn off the user's privacy controls by policy (kiosk or unattended support)? | No in v1. The user asked for "always". Revisit if a customer needs it. |
@@ -577,3 +577,11 @@ Where the code differs from the text above, or settles something the text left o
 - **The app list never reaches RemoteHub.** The helper sends it to the service (`HelperMessage.HiddenApps`), which keeps it for a new helper and the resume token; RemoteHub gets the count and the covered regions.
 - **Consent:** in the question the picker keeps a countdown (started again at full length): no answer in time denies, Cancel goes back to the question. The service's own last-resort timeout for Ask grew by 180 s for that.
 - **Not built yet:** the hatched fill (the agent fills with the console's dark colour; RemoteHub draws a frame and "Hidden by the user" on areas of at least 180×60), and the picker's "Hide selected" button isn't disabled while nothing changed.
+
+### 14.2 Snip guard (`SnipGuard.cs`)
+
+The overlay is kept out of every capture – also out of a screen snip – and Windows shows a snip's frozen picture full-screen above every topmost window. A snip at the device would therefore show the person there what the overlay hides. So while any privacy screen is up (the admin's, or the one automatic sign-in puts up):
+
+- **Keys dropped:** Print Screen (with any modifier), Win+Shift+S, Alt+Tab and Win+Tab (their thumbnails are drawn above the overlay, too) – both the device's own keyboard and the admin's injected keys. Only the press is dropped; its release goes through, so nothing stays held. Win+S and Shift+Tab still work.
+- **Snipping tools closed:** `SnippingTool.exe`, `ScreenClippingHost.exe` and `ScreenSketch.exe` are ended as soon as they show a window (started from the Start menu, by a timer, …). The agent's log gets "Desktop: session N: Privacy screen: ScreenClippingHost.exe was closed – a snip would show the screen at the device"; there is no audit event.
+- A low-level keyboard hook and an out-of-context WinEvent hook (`EVENT_OBJECT_SHOW`) on their own thread, like `InputBlocker`; they start with the overlays and stop when the overlays come down or the helper ends. If a hook can't be installed, that goes to the log.

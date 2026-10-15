@@ -918,6 +918,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
             }
             Step $j move {
+                # Ctrl+N puts a new connection where the selection is: select a top-level item first (not Behind)
+                $null = Ui 'Device' -Value realclick
                 New-LabClientConnection -Name $VmName -Display 'Movable' -TargetHost 'movable.lab.test'
                 $j.h0 = Hints
                 $null = Ui 'Movable' -Value 'menu:Move under>JumpHost'
@@ -951,13 +953,15 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             @($j.logons | Where-Object Package -eq 'NTLM').Count | Should -BeGreaterThan 0
         }
 
-        It 'J-11 moved under a jump host, under another one and out again: the route follows; Behind isn''t offered, a jump host can''t go under another' -Tag 'J-11' {
+        It 'J-11 moved under a jump host, under another one and out again: the route follows; Behind (no agent, no children) isn''t offered, moving a jump host under another is switched off with the reason' -Tag 'J-11' {
             $j.h1.Jump | Should -Be ($j.h0.Jump + 1)
             $j.offer.error | Should -Match "no menu entry 'Behind'"
             @($j.offer.entries) | Should -Contain 'Device'
             $j.h2.Jump | Should -Be $j.h0.Jump
             $j.h2.Device | Should -Be ($j.h0.Device + 1)
-            "$($j.jumpUnder.error)" | Should -Not -BeNullOrEmpty
+            # the entry is offered but switched off, its tooltip says why (TreeLayout: one jump host only)
+            "$($j.jumpUnder.error)" | Should -Match 'is disabled'
+            "$($j.jumpUnder.help)" | Should -Match 'jump host itself|Only one jump host'
             $j.h3.Jump | Should -Be $j.h2.Jump
             $j.h3.Device | Should -Be $j.h2.Device
             $j.h4.Device | Should -Be $j.h0.Device
