@@ -408,7 +408,8 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         if (error is null)
         {
             if (screen.BlockLocalInput) error = InputBlocker.Start();
-            else InputBlocker.Stop();
+            else { InputBlocker.Stop(); ShowSasActions(); }
+            if (error is null && screen.BlockLocalInput) HideSasActions();
         }
         if (error is not null) RemoveOverlays();
         done(error);
@@ -459,6 +460,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     private void RemoveOverlays()
     {
         InputBlocker.Stop();
+        ShowSasActions();
         SnipGuard.Stop();
         KillTimer(_messageWindow, TopTimer);
         foreach (var o in _overlays) o.Destroy();
@@ -467,6 +469,25 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     }
 
     private const int TopTimer = 7;
+
+    // The Ctrl+Alt+Del screen offers only Cancel while local input is blocked (SasActions). Tried again on the timer
+    // until the session's user is signed in and their profile is loaded; once per block when it fails.
+    private readonly SasActions _sasActions = new();
+    private bool _sasFailed;
+
+    private void HideSasActions()
+    {
+        if (_sasActions.Hidden || _sasFailed) return;
+        try { if (_sasActions.Hide() is { } done) Noted?.Invoke(done); }
+        catch (Exception ex) { _sasFailed = true; Noted?.Invoke("Ctrl+Alt+Del screen: its actions could not be hidden: " + ex.Message); }
+    }
+
+    private void ShowSasActions()
+    {
+        _sasFailed = false;
+        try { if (_sasActions.Show() is { } done) Noted?.Invoke(done); }
+        catch (Exception ex) { Noted?.Invoke("Ctrl+Alt+Del screen: its actions could not be put back (the service does at its next start): " + ex.Message); }
+    }
 
     /// <summary>The overlays on top of everything, and the banner on top of them (so "Disconnect" stays reachable).</summary>
     private void KeepOnTop()
@@ -548,6 +569,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         Post(() =>
         {
             InputBlocker.Stop();
+            ShowSasActions();
             SnipGuard.Stop();
             LocalPointerWatch.Stop();
             foreach (var h in _windows.Keys.ToList()) DestroyWindow(h);
@@ -631,7 +653,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                         case WM_RENDERFORMAT: ui.Render((uint)wParam); return 0;
                         case WM_RENDERALLFORMATS: return 0; // the helper ends: an offer not pasted yet is gone, nothing is fetched
                         case WM_DESTROYCLIPBOARD: ui.OfferEnded(); return 0;
-                        case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); return 0;
+                        case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); if (ui._screen.BlockLocalInput) ui.HideSasActions(); return 0;
                     }
                 if (ui._windows.TryGetValue(hwnd, out var w))
                 {

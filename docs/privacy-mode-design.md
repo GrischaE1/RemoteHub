@@ -163,7 +163,7 @@ The service refuses the command when the right or policy is missing. In that cas
 - **Tagging:** every event the agent injects is tagged with `dwExtraInfo = 0x52484131` ("RHA1") in [InputInjector.cs](../src/RemoteHub.Agent/Desktop/InputInjector.cs). Injected input is not tagged today. The hooks drop every event that doesn't carry the tag. Checking only `LLKHF_INJECTED` isn't enough, because on-screen keyboards and other tools inject too.
 - **Fast callbacks:** the callback only compares a few fields and returns. Windows removes LL hooks that take longer than `LowLevelHooksTimeout`.
 - **What stays local:**
-  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely.
+  - Ctrl+Alt+Del. Windows handles it and it can't be hooked, so local input can never be locked completely. While input is blocked, the screen it opens offers only Cancel (§5.9).
   - Mouse clicks inside the banner's rect, so **Disconnect** keeps working (§5.5).
 - **Visible to the user:** with Message style, the overlay adds the line "Mouse and keyboard are paused".
 
@@ -257,6 +257,50 @@ Not tested: Windows 10 22H2 and Windows 11 23H2/24H2. The lab has no VMs for the
 - the remaining suites on both VMs, D-CLIP and D-IN against the control build;
 - Windows 10 22H2 and Windows 11 23H2/24H2;
 - a security review, because UIAccess also lets the helper drive windows of higher integrity (it is LocalSystem already).
+
+### 5.9 The Ctrl+Alt+Del screen while input is blocked
+
+Ctrl+Alt+Del can't be blocked (§5.4), and the screen it opens is on the secure desktop, which the overlay doesn't cover (§5.6). What the agent controls is what that screen offers. While the privacy screen blocks the device's mouse and keyboard, it offers only **Cancel**. That covers the admin's privacy screen with "block local input" and the one automatic sign-in puts up, which always blocks input (§9.1).
+
+| Hidden | Policy value | Where |
+|---|---|---|
+| Task Manager (also Ctrl+Shift+Esc) | `DisableTaskMgr` = 1 | session user: `HKU\<sid>\Software\Microsoft\Windows\CurrentVersion\Policies\System` |
+| Lock (also Win+L) | `DisableLockWorkstation` = 1 | same |
+| Change a password | `DisableChangePassword` = 1 | same |
+| Sign out | `NoLogoff` = 1 | session user: `…\Policies\Explorer` |
+| Power button | `NoClose` = 1 | same |
+| Switch user | `HideFastUserSwitching` = 1 | machine: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System` (Windows has no per-user value) |
+
+Not hidden: the network and accessibility buttons in the corner. Windows has no policy for them on this screen.
+
+**Putting them back** (`SasActions.cs`, run by the helper):
+- **What gets recorded:** before setting a value, the helper writes what was there (the value, or "absent") to `sas-actions-<sid>.txt` next to agent.json. The machine value goes to `sas-actions-machine.txt`. A value that isn't a DWORD is left alone.
+- **When:**
+  - The block ends: the admin unblocks input or turns the privacy screen off.
+  - The overlays come down (the monitors changed and they couldn't be rebuilt).
+  - The helper ends with the connection.
+- **Exactly as before:** an existing value comes back as it was, and an absent one is deleted.
+- **Switch user:** the machine-wide value comes back only when no other session still hides it. A system mutex orders the helpers and the service.
+- **A helper that was killed:**
+  - The next helper in that session keeps the original record.
+  - The service puts everything back when it starts. No helper runs then, so all records are leftovers.
+  - A user's hive that isn't loaded at that moment (the user signed out) keeps its record until that user's next connection.
+- **Log:** each step writes a line ("Ctrl+Alt+Del screen: …"). There is no audit event.
+
+**Timing:** the user's hive must be loaded. On the auto sign-in screen the helper starts before the profile is, so it tries again every 500 ms (the overlay's keep-on-top timer) until it can.
+
+**Lab:** D-CADHIDE ([D-CADHIDE.Tests.ps1](../lab/tests/D-CADHIDE.Tests.ps1)). Ctrl+Alt+Del is pressed at the Hyper-V console; the screen is read by OCR and the six values are read from the registry.
+
+| Case | W11 26H2 | Server 2025 |
+|---|---|---|
+| 01 Control, before any connection: values not set, the screen offers Lock and Task Manager | **pass** | **pass** |
+| 02 Admin's privacy screen with input blocked: all six set, the screen offers only Cancel | **pass** | **pass** |
+| 03 Input unblocked while still connected: put back; blocked again: hidden again | **pass** | **pass** |
+| 04 Connection ends: put back as they were, no record left | **pass** | **pass** |
+| 05 Service and helper killed while hidden: put back when the service starts (log: "actions an earlier helper hid are back") | **pass** | **pass** |
+| 06 Automatic sign-in: hidden in the admin's new session, the screen offers only Cancel; put back after | **pass** | **pass** |
+
+Also seen: a helper killed on its own is started again by the service, and the new one keeps the original record and puts the values back when the connection ends.
 
 ## 6. Phase 2 – Hide my screen (person at the device)
 

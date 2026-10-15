@@ -28,6 +28,8 @@ try
     log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
+    try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
+    catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
     VirtualDisplay.Reset(); // the virtual monitor is off until a connection needs it (a crash may have left it on)
     await app.RunAsync();
     log.Write("RemoteHub Agent stopped");
