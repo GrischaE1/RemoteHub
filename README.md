@@ -36,7 +36,7 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
 - **0.x = pre-release.** Versions stay below 1.0 until the first GA release, which will be **1.0.0**. Builds made before the move to GitHub were numbered up to 2.1.0; they were reset to **0.9.0** (same features as 2.1.0).
 - **Format:** `major.minor.patch` (e.g. `0.9.1`), optionally with a pre-release suffix (`0.9.1-beta.1`). An MSI only knows three numeric parts, so a fourth part would be ignored by upgrades. The program file shows the same version with `.0` appended (e.g. 0.9.0.0).
 - **The git tag is the version.** Pushing a tag `v0.9.1` runs [.github/workflows/release.yml](.github/workflows/release.yml): restore, build, run the tests, build the MSI with `build/build-installer.ps1 -Version 0.9.1`, and publish a GitHub Release with the MSI attached. Tags below 1.0 or with a suffix are marked as pre-releases. Keep `<Version>` in the csproj in step (it's used for local builds); the workflow warns when it differs from the tag.
-- **Every push and pull request** to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml) (build and tests).
+- **Every push and pull request** to `main` runs [.github/workflows/ci.yml](.github/workflows/ci.yml) (build, tests, both MSIs, and an antivirus scan of the build output with Microsoft Defender and ClamAV).
 - **Cutting a release:**
 
   ```bash
