@@ -1,15 +1,43 @@
 name: Claude review
 
-# Reviews every pull request and posts the findings as inline comments. Review standards come from CLAUDE.md,
-# which pulls in the same instruction files Copilot used.
+# Reviews a pull request when an admin marks it ready for review and posts the findings as inline comments. Pushes
+# don't trigger a review, and neither does a non-admin marking their own pull request ready: an admin converts it to
+# a draft and marks it ready to start one. To review again, do the same. Review standards come from CLAUDE.md, which
+# pulls in the same instruction files Copilot used.
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [ready_for_review]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+# A newer review of the same pull request replaces one still running.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  review:
-    # Secrets are not passed to workflows from forks, so skip those instead of failing.
+  sender:
+    # Secrets are not passed to workflows from forks, so pull requests from forks are skipped instead of failing.
     if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      admin: ${{ steps.permission.outputs.admin }}
+    steps:
+      - id: permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$SENDER/permission" --jq .permission)
+          echo "admin=$([ "$permission" = admin ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  review:
+    needs: sender
+    # Only an admin marking the pull request ready starts a review.
+    if: needs.sender.outputs.admin == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
