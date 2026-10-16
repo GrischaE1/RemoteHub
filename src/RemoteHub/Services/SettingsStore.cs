@@ -127,27 +127,7 @@ public static class SettingsStore
     // ------------------------------------------------------------------ location
 
     /// <summary>Shared folder preset by policy (IT), with environment variables expanded. Null if none.</summary>
-    public static string? PolicyFolder
-    {
-        get
-        {
-            foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })
-            {
-                try
-                {
-                    // RdpManager: the policy key from before the rename, still honoured.
-                    foreach (var key in new[] { @"SOFTWARE\Policies\RemoteHub", @"SOFTWARE\Policies\RdpManager" })
-                    {
-                        using var k = root.OpenSubKey(key);
-                        if (k?.GetValue("SettingsFolder") is string s && s.Trim().Length > 0)
-                            return Environment.ExpandEnvironmentVariables(s.Trim());
-                    }
-                }
-                catch { /* no access – ignore */ }
-            }
-            return null;
-        }
-    }
+    public static string? PolicyFolder => AppPolicy.SettingsFolder; // also the RdpManager key from before the rename
 
     public static bool IsPolicyManaged => PolicyFolder is not null;
 

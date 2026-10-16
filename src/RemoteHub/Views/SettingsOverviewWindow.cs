@@ -9,7 +9,7 @@ using TextBlock = System.Windows.Controls.TextBlock;
 namespace RemoteHub.Views;
 
 /// <summary>Actions the settings overview can start (they open the existing editors).</summary>
-public sealed record SettingsActions(Action EditDefaults, Action ChangeLocation, Action ManageCredentials, Action OpenFolder, Action OpenLog, Action StartupProtection);
+public sealed record SettingsActions(Action EditDefaults, Action ChangeLocation, Action ManageCredentials, Action OpenFolder, Action OpenLog, Action StartupProtection, Action Policies);
 
 /// <summary>
 /// Read-only overview of all settings in one place – where they are stored, global defaults, remote tools, credentials,
@@ -136,6 +136,8 @@ public sealed class SettingsOverviewWindow : FluentWindow
             new("Credentials", SymbolRegular.Key24, creds, [("Saved credentials…", _actions.ManageCredentials)]),
             new("Appearance & keys", SymbolRegular.WeatherMoon24, appearance, []),
             new("Library", SymbolRegular.Folder24, library, [("Open diagnostic log", _actions.OpenLog)]),
+            // Every value in detail is on Settings → Policies; here only how many.
+            new("Policies", SymbolRegular.LockClosed24, [("Set by your organisation", PolicyReport.Build(false).Summary)], [("Show policies…", _actions.Policies)]),
         ];
     }
 

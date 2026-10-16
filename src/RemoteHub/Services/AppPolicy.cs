@@ -1,61 +1,41 @@
-using Microsoft.Win32;
+using RemoteHub.Agent;
 
 namespace RemoteHub.Services;
 
 /// <summary>
 /// Settings IT can enforce under HKLM (or HKCU) \SOFTWARE\Policies\RemoteHub. A value set there wins over the user's
-/// choice, and the settings window shows it as managed.
+/// choice, and the settings window shows it as managed. Names, types and ranges come from <see cref="PolicyCatalog"/>, which
+/// the ADMX template (policy\RemoteHub.admx) is checked against; an invalid value counts as not set.
 /// </summary>
 public static class AppPolicy
 {
-    private const string Key = @"SOFTWARE\Policies\RemoteHub";
+    /// <summary>Where the values are read from.</summary>
+    private static IPolicySource Source => RegistryPolicySource.Instance;
 
     /// <summary>DWORD DisableTelemetry = 1: no usage data is sent.</summary>
-    public static bool TelemetryDisabled => Dword("DisableTelemetry") == 1;
+    public static bool TelemetryDisabled => PolicyCatalog.Number(PolicyCatalog.DisableTelemetry, Source) == 1;
 
     /// <summary>DWORD DisableUpdateCheck = 1: RemoteHub never contacts the update server (e.g. when updates come via software deployment).</summary>
-    public static bool UpdateCheckDisabled => Dword("DisableUpdateCheck") == 1;
+    public static bool UpdateCheckDisabled => PolicyCatalog.Number(PolicyCatalog.DisableUpdateCheck, Source) == 1;
 
     /// <summary>String UpdateChannel = "stable" or "beta": fixes the update channel.</summary>
-    public static string? UpdateChannel => String("UpdateChannel") is { } c && UpdateService.NormalizeChannel(c) is { } n ? n : null;
+    public static string? UpdateChannel => UpdateService.NormalizeChannel(PolicyCatalog.Text(PolicyCatalog.UpdateChannel, Source));
 
-    /// <summary>DWORD DisableAgentAutoSignIn = 1: RemoteHub never signs in automatically through the agent (the setting is hidden).</summary>
-    public static bool AgentAutoSignInDisabled => Dword("DisableAgentAutoSignIn") == 1;
+    /// <summary>DWORD DisableAgentAutoSignIn = 1: RemoteHub never signs in automatically through the agent (the setting is greyed out).</summary>
+    public static bool AgentAutoSignInDisabled => PolicyCatalog.Number(PolicyCatalog.DisableAgentAutoSignIn, Source) == 1;
 
     /// <summary>DWORD DisableRecording = 1: tabs can't be recorded (the Record button is hidden).</summary>
-    public static bool RecordingDisabled => Dword("DisableRecording") == 1;
+    public static bool RecordingDisabled => PolicyCatalog.Number(PolicyCatalog.DisableRecording, Source) == 1;
 
     /// <summary>String RecordingFolder (environment variables allowed): where recordings are saved; users can't change it.</summary>
-    public static string? RecordingFolder => String("RecordingFolder") is { } f ? Environment.ExpandEnvironmentVariables(f) : null;
+    public static string? RecordingFolder => PolicyCatalog.Text(PolicyCatalog.RecordingFolder, Source);
 
     /// <summary>DWORD AuditRetentionDays (1–36500): how long the audit log keeps entries; default 365.</summary>
-    public static int? AuditRetentionDays => Dword("AuditRetentionDays") is { } d and > 0 ? Math.Min(d, 36_500) : null;
+    public static int? AuditRetentionDays => PolicyCatalog.Number(PolicyCatalog.AuditRetentionDays, Source);
 
-    private static int? Dword(string name)
-    {
-        foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })
-        {
-            try
-            {
-                using var k = root.OpenSubKey(Key);
-                if (k?.GetValue(name) is int v) return v;
-            }
-            catch { /* no access – ignore */ }
-        }
-        return null;
-    }
+    /// <summary>String SettingsFolder (environment variables allowed): the shared settings folder; also read from the old RdpManager key.</summary>
+    public static string? SettingsFolder => PolicyCatalog.Text(PolicyCatalog.SettingsFolder, Source);
 
-    private static string? String(string name)
-    {
-        foreach (var root in new[] { Registry.LocalMachine, Registry.CurrentUser })
-        {
-            try
-            {
-                using var k = root.OpenSubKey(Key);
-                if (k?.GetValue(name) is string s && s.Trim().Length > 0) return s.Trim();
-            }
-            catch { /* no access – ignore */ }
-        }
-        return null;
-    }
+    /// <summary>Every console value that is set (valid or not), for Settings → Policies.</summary>
+    public static IReadOnlyList<PolicyValue> Configured() => PolicyCatalog.Configured(PolicyCatalog.ConsoleEntries, Source);
 }

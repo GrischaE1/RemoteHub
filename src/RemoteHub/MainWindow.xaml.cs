@@ -1837,7 +1837,8 @@ public partial class MainWindow : FluentWindow
             ManageCredentials: () => Credentials_Click(this, e),
             StartupProtection: () => StartupProtection_Click(this, e),
             OpenFolder: () => OpenSettingsFolder_Click(this, e),
-            OpenLog: () => OpenLog_Click(this, e));
+            OpenLog: () => OpenLog_Click(this, e),
+            Policies: () => OpenSettings(EditorWindow.PagePolicySettings));
         new SettingsOverviewWindow(() => _vm.Data, _vm.AllNodes, actions) { Owner = this }.ShowDialog();
     }
 

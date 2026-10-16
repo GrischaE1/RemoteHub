@@ -17,8 +17,11 @@
                     <TextBlock Text="{Binding Label}" />
                     <TextBlock Text="{Binding Hint}" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None"
                                Visibility="{Binding Hint, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{Binding PolicyNote}" Style="{StaticResource Caption}" FontWeight="SemiBold" TextWrapping="Wrap" TextTrimming="None"
+                               Visibility="{Binding PolicyNote, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
-                <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected}" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}" SelectedItem="{Binding Selected}" VerticalAlignment="Center"
+                          IsEnabled="{Binding IsEditable}" ToolTip="{Binding PolicyNote}" ToolTipService.ShowOnDisabled="True" />
             </Grid>
         </DataTemplate>
     </ui:FluentWindow.Resources>
@@ -353,6 +356,18 @@
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
                                Text="For troubleshooting: connection and password-prompt events – no passwords, usernames or host names. A text file on this PC." />
                     <ui:Button x:Name="HelpLogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}" />
+                </StackPanel>
+
+                <StackPanel x:Name="PagePolicies" Visibility="Collapsed">
+                    <TextBlock x:Name="PolicySummaryText" TextWrapping="Wrap" Margin="0,0,0,6" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10"
+                               Text="Values your organisation set in the registry (Group Policy, Intune or a script). They can't be changed in RemoteHub: the settings they belong to are greyed out. Invalid values are ignored and shown in red." />
+                    <StackPanel x:Name="PolicyList" />
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <ui:Button x:Name="PolicyCopyButton" Content="Copy as text" Icon="{ui:SymbolIcon Copy24}" Margin="0,0,8,0" />
+                        <ui:Button x:Name="PolicyRefreshButton" Content="Refresh" Icon="{ui:SymbolIcon ArrowSync24}"
+                                   ToolTip="Read the policy values again, e.g. after gpupdate" />
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel x:Name="PageRecordings" Visibility="Collapsed">

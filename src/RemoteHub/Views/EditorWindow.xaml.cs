@@ -34,7 +34,7 @@ public sealed record AppSettingsHost(
 public partial class EditorWindow : FluentWindow
 {
     public const string PageAppSettings = "PageApp", PageUpdateSettings = "PageUpdates", PageDataSettings = "PageData", PageHelpSettings = "PageHelp",
-        PageRecordingSettings = "PageRecordings", PageLogSettings = "PageLogs",
+        PageRecordingSettings = "PageRecordings", PageLogSettings = "PageLogs", PagePolicySettings = "PagePolicies",
         PageDefaults = "PageDisplay";
 
     private readonly EditorViewModel _vm;
@@ -96,6 +96,7 @@ public partial class EditorWindow : FluentWindow
             Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials, where the settings are kept, backup.");
             Page(PageRecordingSettings, "Recordings", SymbolRegular.Record24, "Frame rate, video size, graphics card and folder of tab recordings.");
             Page(PageLogSettings, "Logs", SymbolRegular.DocumentBulletList24, "Audit log, how long it keeps entries, diagnostic log.");
+            Page(PagePolicySettings, "Policies", SymbolRegular.LockClosed24, "What your organisation set for RemoteHub on this PC – through Group Policy, Intune or the registry.");
             Page(PageHelpSettings, "Help & about", SymbolRegular.QuestionCircle24, "Version, settings overview and keyboard shortcuts.");
             Group("Connection defaults", new SymbolIcon(SymbolRegular.PlugConnected24) { FontSize = 18 });
             Page("PageCredentials", "Credentials", SymbolRegular.Key24, item);
@@ -218,18 +219,17 @@ public partial class EditorWindow : FluentWindow
         ChannelBeta.IsChecked = channel == UpdateService.Beta;
         if (AppPolicy.UpdateCheckDisabled || AppPolicy.UpdateChannel is not null)
         {
-            UpdateCheckToggle.IsEnabled = !AppPolicy.UpdateCheckDisabled;
-            ChannelStable.IsEnabled = ChannelBeta.IsEnabled = AppPolicy.UpdateChannel is null;
-            UpdatePolicyText.Text = "Some of these settings are managed by your organisation.";
+            if (AppPolicy.UpdateCheckDisabled) PolicyLock.Apply(UpdateCheckToggle, CheckNowButton);
+            if (AppPolicy.UpdateChannel is not null) PolicyLock.Apply(ChannelStable, ChannelBeta);
+            UpdatePolicyText.Text = "Some of these settings are managed by your organisation (Settings → Policies).";
             UpdatePolicyText.Visibility = Visibility.Visible;
         }
-        CheckNowButton.IsEnabled = !AppPolicy.UpdateCheckDisabled;
         CheckNowButton.Click += (_, _) => _host?.CheckForUpdates(SelectedChannel);
         TelemetryToggle.IsChecked = Telemetry.Enabled(ui);
         if (AppPolicy.TelemetryDisabled)
         {
-            TelemetryToggle.IsEnabled = false;
-            TelemetryPolicyText.Text = "Turned off by your organisation.";
+            PolicyLock.Apply(TelemetryToggle);
+            TelemetryPolicyText.Text = "Turned off by your organisation (Settings → Policies).";
             TelemetryPolicyText.Visibility = Visibility.Visible;
         }
         LicenseButton.Click += (_, _) => OpenProgramFile("LICENSE.txt", "The license");
@@ -284,8 +284,8 @@ public partial class EditorWindow : FluentWindow
         {
             AuditRetentionBox.ItemsSource = new[] { RetentionChoiceLabel(policyDays) };
             AuditRetentionBox.SelectedIndex = 0;
-            AuditRetentionBox.IsEnabled = false;
-            AuditRetentionText.Text = "Set by your organisation.";
+            PolicyLock.Apply(AuditRetentionBox);
+            AuditRetentionText.Text = "Set by your organisation (Settings → Policies).";
         }
         else
         {
@@ -333,6 +333,66 @@ public partial class EditorWindow : FluentWindow
         AboutButton.Click += (_, _) => _host?.About();
         OverviewButton.Click += (_, _) => _host?.SettingsOverview();
         HelpLogButton.Click += (_, _) => _host?.OpenLog();
+
+        // Policies
+        RefreshPolicyPage();
+        PolicyRefreshButton.Click += (_, _) => RefreshPolicyPage();
+        PolicyCopyButton.Click += (_, _) =>
+        {
+            try { Clipboard.SetText(_policyReport!.ToText()); }
+            catch (Exception ex) { PolicySummaryText.Text = $"Couldn't copy: {ex.Message}"; }
+        };
+    }
+
+    private PolicyReport? _policyReport;
+
+    /// <summary>Settings → Policies: every value set in the registry, grouped like the ADMX template; read-only.</summary>
+    private void RefreshPolicyPage()
+    {
+        _policyReport = PolicyReport.Build(AgentInstalledHere());
+        PolicySummaryText.Text = _policyReport.Summary;
+        PolicyList.Children.Clear();
+        AddSection(null, _policyReport.Console);
+        if (_policyReport.Agent is { } agent)
+            AddSection("RemoteHub Agent on this PC", agent, agent.Count == 0 ? "No policies are set for the agent on this PC." : "The agent's own policy (HKLM\\SOFTWARE\\Policies\\RemoteHub\\Agent): what others may do on this PC. Shown here only – it doesn't change RemoteHub.");
+
+        void AddSection(string? title, IReadOnlyList<PolicyRow> rows, string? note = null)
+        {
+            if (title is not null) PolicyList.Children.Add(new TextBlock { Text = title, Style = (Style)FindResource("SectionHeader"), Margin = new Thickness(0, 18, 0, 4) });
+            if (note is not null) PolicyList.Children.Add(new TextBlock { Text = note, Style = (Style)FindResource("Caption"), TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.None, Margin = new Thickness(0, 0, 0, 6) });
+            foreach (var group in rows.GroupBy(r => r.Group))
+            {
+                PolicyList.Children.Add(new TextBlock { Text = group.Key, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 4) });
+                foreach (var r in group)
+                {
+                    var row = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(280) });
+                    var left = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
+                    left.Children.Add(new TextBlock { Text = r.Title, TextWrapping = TextWrapping.Wrap });
+                    left.Children.Add(new TextBlock { Text = $"{r.Source} · {r.Registry}", Style = (Style)FindResource("Caption"), TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.None });
+                    if (r.Problem is { } problem)
+                        left.Children.Add(new TextBlock { Text = problem, Foreground = System.Windows.Media.Brushes.IndianRed, TextWrapping = TextWrapping.Wrap });
+                    var value = new TextBlock { Text = r.Value, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Top };
+                    if (!r.Valid) value.TextDecorations = TextDecorations.Strikethrough;
+                    Grid.SetColumn(value, 1);
+                    row.Children.Add(left);
+                    row.Children.Add(value);
+                    PolicyList.Children.Add(row);
+                }
+            }
+        }
+    }
+
+    /// <summary>The RemoteHub Agent service is installed on this PC (then its policy is listed too).</summary>
+    private static bool AgentInstalledHere()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Services\RemoteHubAgent");
+            return key is not null;
+        }
+        catch { return false; }
     }
 
     private string? _recordingFolder;
@@ -348,10 +408,9 @@ public partial class EditorWindow : FluentWindow
               "toolbar or by right-clicking the tab. Videos are MP4 files without sound. They aren't encrypted and can contain personal " +
               "data or passwords shown on screen.";
         RecordingInfoText.Text = CurrentRecordingFolder + (managed ? " (set by your organisation)" : "");
-        RecordingFolderButton.IsEnabled = RecordingDefaultButton.IsEnabled = !managed && !AppPolicy.RecordingDisabled;
         RecordingDefaultButton.Visibility = string.IsNullOrWhiteSpace(_recordingFolder) ? Visibility.Collapsed : Visibility.Visible;
-        RecordingOpenButton.IsEnabled = !AppPolicy.RecordingDisabled;
-        RecordingFpsBox.IsEnabled = RecordingResolutionBox.IsEnabled = RecordingGpuToggle.IsEnabled = RecordingDetailsToggle.IsEnabled = !AppPolicy.RecordingDisabled;
+        if (managed || AppPolicy.RecordingDisabled) PolicyLock.Apply(RecordingFolderButton, RecordingDefaultButton);
+        if (AppPolicy.RecordingDisabled) PolicyLock.Apply(RecordingOpenButton, RecordingFpsBox, RecordingResolutionBox, RecordingGpuToggle, RecordingDetailsToggle);
     }
 
     private string SelectedChannel => ChannelBeta.IsChecked == true ? UpdateService.Beta : UpdateService.Stable;
@@ -366,7 +425,7 @@ public partial class EditorWindow : FluentWindow
             var n => $"Named credentials that folders and connections can use. {n} saved.",
         };
         LocationText.Text = SettingsStore.Describe() + (SettingsStore.IsPolicyManaged ? " (set by your organisation)" : "");
-        LocationButton.IsEnabled = !SettingsStore.IsPolicyManaged;
+        if (SettingsStore.IsPolicyManaged) PolicyLock.Apply(LocationButton);
     }
 
     /// <summary>Writes the RemoteHub settings of this window into <see cref="UiState"/> and applies them.</summary>

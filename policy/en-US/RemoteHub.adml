@@ -1,0 +1,365 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                           revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>RemoteHub</displayName>
+  <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
+  <resources>
+    <stringTable>
+      <string id="SUPPORTED_RemoteHub_0_18_11">RemoteHub 0.18.11 or later</string>
+      <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
+
+      <!-- Categories -->
+      <string id="Cat_RemoteHub">RemoteHub</string>
+      <string id="Cat_Console">RemoteHub – connecting from this PC</string>
+      <string id="Cat_Console_Help">Settings of RemoteHub, the console: what the person at this PC may do on other devices.
+
+They are read from HKLM or HKCU\Software\Policies\RemoteHub; the computer's value wins. A value set here can't be changed in RemoteHub, and Settings → Policies lists every value in effect.
+
+The devices themselves are protected by the RemoteHub Agent's policy (RemoteHub Agent – connections to this device) and by Windows.</string>
+      <string id="Cat_Console_Storage">Settings storage</string>
+      <string id="Cat_Console_Updates">Updates and usage data</string>
+      <string id="Cat_Console_Recordings">Recordings</string>
+      <string id="Cat_Console_Logs">Logs</string>
+      <string id="Cat_Console_Agent">RemoteHub Agent features</string>
+      <string id="Cat_Agent">RemoteHub Agent – connections to this device</string>
+      <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
+
+They are read from HKLM\Software\Policies\RemoteHub\Agent for every connection, so a change applies without restarting the service, and they win over the agent's agent.json. If the key exists but can't be read, the agent allows nothing until it can.
+
+On a device with RemoteHub installed too, these policies don't affect what RemoteHub on this device may do on other devices: that is RemoteHub – connecting from this PC.</string>
+      <string id="Cat_Agent_Rights">Access rights</string>
+      <string id="Cat_Agent_Desktop">Remote desktop</string>
+      <string id="Cat_Agent_Consent">Consent</string>
+      <string id="Cat_Agent_Privacy">Privacy</string>
+      <string id="Cat_Agent_AutoSignIn">Automatic sign-in</string>
+      <string id="Cat_Agent_JumpHost">Jump host</string>
+      <string id="Cat_Agent_Service">Service</string>
+
+      <!-- Console -->
+      <string id="Console_SettingsFolder">Shared settings folder</string>
+      <string id="Console_SettingsFolder_Help">The folder where RemoteHub keeps its shared, encrypted settings file (folders, connections, credentials), for example %OneDriveCommercial%\RemoteHub or a network share. Environment variables are allowed.
+
+Enabled: RemoteHub uses this folder, and users can't change the location. Each PC asks once for the settings file's password.
+
+Disabled or Not configured: the user chooses where the settings are kept (this PC or a shared folder).
+
+Registry: SettingsFolder (REG_EXPAND_SZ). The older key Software\Policies\RdpManager is still read.</string>
+
+      <string id="Console_DisableUpdateCheck">Turn off the update check</string>
+      <string id="Console_DisableUpdateCheck_Help">Enabled: RemoteHub never contacts the update server, for example when updates come through software deployment. The setting is greyed out in RemoteHub.
+
+Disabled or Not configured: the user decides in Settings → Updates &amp; privacy.
+
+Registry: DisableUpdateCheck (REG_DWORD) = 1.</string>
+
+      <string id="Console_UpdateChannel">Update channel</string>
+      <string id="Console_UpdateChannel_Help">Fixes the channel RemoteHub looks for updates in: GA (stable releases) or Beta (pre-releases). The choice is greyed out in RemoteHub.
+
+Disabled or Not configured: the user decides. The default is Beta for versions below 1.0 and pre-releases, otherwise GA.
+
+Registry: UpdateChannel (REG_SZ) = stable or beta.</string>
+      <string id="Console_UpdateChannel_Stable">GA – stable releases</string>
+      <string id="Console_UpdateChannel_Beta">Beta – pre-releases</string>
+
+      <string id="Console_DisableTelemetry">Turn off usage data and crash reports</string>
+      <string id="Console_DisableTelemetry_Help">Enabled: RemoteHub sends no anonymous usage data and no crash reports. The setting is greyed out in RemoteHub.
+
+Disabled or Not configured: the user decides in Settings → Updates &amp; privacy (on by default).
+
+The RemoteHub Agent never sends usage data.
+
+Registry: DisableTelemetry (REG_DWORD) = 1.</string>
+
+      <string id="Console_DisableRecording">Turn off recording</string>
+      <string id="Console_DisableRecording_Help">Enabled: tabs can't be recorded. The Record button isn't shown, and the recording settings are greyed out.
+
+Disabled or Not configured: users can record tabs.
+
+Registry: DisableRecording (REG_DWORD) = 1.</string>
+
+      <string id="Console_RecordingFolder">Recording folder</string>
+      <string id="Console_RecordingFolder_Help">The folder where recordings are saved. Environment variables are allowed, for example %USERPROFILE%\Videos\RemoteHub or a network share.
+
+Enabled: recordings go to this folder, and users can't change it.
+
+Disabled or Not configured: the user chooses (default: Videos\RemoteHub).
+
+Registry: RecordingFolder (REG_EXPAND_SZ).</string>
+
+      <string id="Console_AuditRetentionDays">Keep audit log entries</string>
+      <string id="Console_AuditRetentionDays_Help">How many days RemoteHub's audit log on this PC keeps its entries (1–36500). Older entries are removed when RemoteHub starts.
+
+Enabled: this number of days; the setting is greyed out in Settings → Logs.
+
+Disabled or Not configured: the user decides (default 365 days).
+
+Registry: AuditRetentionDays (REG_DWORD).</string>
+
+      <string id="Console_DisableAgentAutoSignIn">Turn off automatic sign-in through the agent</string>
+      <string id="Console_DisableAgentAutoSignIn_Help">Enabled: RemoteHub never signs in automatically on a device where nobody is signed in. The connection setting "Sign in automatically when nobody is signed in" is greyed out.
+
+Disabled or Not configured: users can turn it on per connection. The device must allow it too: RemoteHub Agent – connections to this device → Automatic sign-in.
+
+Registry: DisableAgentAutoSignIn (REG_DWORD) = 1.</string>
+
+      <!-- Agent: rights -->
+      <string id="Agent_Right_PowerShell">Who may use PowerShell, files, registry, services and processes</string>
+      <string id="Agent_Right_PowerShell_Help">Groups that may open a PowerShell session through the agent. RemoteHub's PowerShell, file transfer, registry, services and processes tabs all use it.
+
+Enter one group per line, as a SID (recommended, for example S-1-5-32-544 for Administrators) or a name (CONTOSO\Helpdesk). Names differ between Windows languages; SIDs don't. To allow nobody, enter S-1-0-0.
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: Rights\PowerShell (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_Desktop">Who may see and control the screen</string>
+      <string id="Agent_Right_Desktop_Help">Groups that may connect to the device's screen through the agent and use its mouse and keyboard.
+
+Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: Rights\Desktop (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_DesktopViewOnly">Who may only see the screen</string>
+      <string id="Agent_Right_DesktopViewOnly_Help">Groups that may see the device's screen through the agent without controlling it.
+
+Enter one group per line, as a SID (recommended) or a name.
+
+Not configured: nobody.
+
+Registry: Rights\DesktopViewOnly (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_SecureDesktop">Who may use the sign-in screen, lock screen and UAC prompts</string>
+      <string id="Agent_Right_SecureDesktop_Help">Groups that may see and use the secure desktop through the agent: the sign-in screen, the lock screen and UAC prompts.
+
+Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: Rights\SecureDesktop (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_ConsentBypass">Who may connect without asking the signed-in user</string>
+      <string id="Agent_Right_ConsentBypass_Help">Groups that may connect to a signed-in user's screen without asking them, when "Allowed ways to get the user's consent" includes "No prompt". The banner on the device still shows who is connected.
+
+Enter one group per line, as a SID (recommended) or a name.
+
+Not configured: nobody.
+
+Registry: Rights\ConsentBypass (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_PrivacyScreen">Who may turn on the privacy screen</string>
+      <string id="Agent_Right_PrivacyScreen_Help">Groups that may black out the device's screen while they work on it. The policy "Privacy screen" must allow it too.
+
+Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: Rights\PrivacyScreen (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_Tunnel">Who may use this device as a jump host</string>
+      <string id="Agent_Right_Tunnel_Help">Groups that may connect through this device to other devices. "Allow this device as a jump host" must be on too.
+
+Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: Rights\Tunnel (REG_MULTI_SZ).</string>
+      <string id="Agent_Right_AutoSignIn">Who may sign in automatically</string>
+      <string id="Agent_Right_AutoSignIn_Help">Groups whose members may be signed in automatically on this device's console when nobody is signed in. "When nobody is signed in" must allow it, the credential provider must be installed, and the account also needs "Who may see and control the screen" and "Who may use the sign-in screen, lock screen and UAC prompts".
+
+Enter one group per line, as a SID (recommended) or a name.
+
+Not configured: nobody, unless the agent was installed with automatic sign-in allowed.
+
+Registry: Rights\AutoSignIn (REG_MULTI_SZ).</string>
+
+      <!-- Agent: remote desktop -->
+      <string id="Agent_DesktopEnabled">Allow remote desktop</string>
+      <string id="Agent_DesktopEnabled_Help">Enabled or Not configured: the agent offers this device's screen to the accounts in "Who may see and control the screen" and "Who may only see the screen".
+
+Disabled: nobody can connect to this device's screen through the agent. PowerShell and the other tools aren't affected.
+
+Registry: DesktopEnabled (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_DesktopLimits">Highest frame rate and picture quality</string>
+      <string id="Agent_DesktopLimits_Help">Upper limits for what RemoteHub may choose: frames per second (1–60) and picture quality (1–100).
+
+Not configured: 60 frames per second and quality 100.
+
+Registry: MaxFramesPerSecond and MaxQuality (REG_DWORD).</string>
+      <string id="Agent_DesktopClipboard">Clipboard</string>
+      <string id="Agent_DesktopClipboard_Help">What may be copied between RemoteHub and this device during a remote desktop. View-only connections get no clipboard.
+
+Not configured: text, images and files.
+
+Registry: DesktopClipboard (REG_DWORD) = 0 off, 1 text, 2 text and images, 3 text, images and files.</string>
+      <string id="Agent_DesktopClipboard_0">Off</string>
+      <string id="Agent_DesktopClipboard_1">Text</string>
+      <string id="Agent_DesktopClipboard_2">Text and images</string>
+      <string id="Agent_DesktopClipboard_3">Text, images and files</string>
+      <string id="Agent_DesktopIdleTimeoutMinutes">End idle remote desktops</string>
+      <string id="Agent_DesktopIdleTimeoutMinutes_Help">A remote desktop without mouse or keyboard input for this many minutes ends, after a warning shortly before. View-only connections count too. 0 = never (0–1440).
+
+Not configured: never.
+
+Registry: DesktopIdleTimeoutMinutes (REG_DWORD).</string>
+
+      <!-- Agent: consent -->
+      <string id="Agent_AllowedConsentModes">Allowed ways to get the user's consent</string>
+      <string id="Agent_AllowedConsentModes_Help">How the signed-in user agrees before someone connects to their screen:
+- Ask: the user is asked and clicks Allow.
+- PIN: the device shows a code the user reads out.
+- No prompt: no question; needs "Who may connect without asking the signed-in user". The banner still shows.
+
+Not configured: Ask or PIN.
+
+Registry: AllowedConsentModes (REG_SZ, separated by ;) – Ask, Pin, None.</string>
+      <string id="Agent_Consent_AskPin">Ask or PIN</string>
+      <string id="Agent_Consent_Ask">Ask only</string>
+      <string id="Agent_Consent_Pin">PIN only</string>
+      <string id="Agent_Consent_AskPinNone">Ask, PIN or no prompt</string>
+      <string id="Agent_Consent_AskNone">Ask or no prompt</string>
+      <string id="Agent_Consent_PinNone">PIN or no prompt</string>
+      <string id="Agent_Consent_None">No prompt only</string>
+      <string id="Agent_ConsentTimeoutSeconds">Time to answer</string>
+      <string id="Agent_ConsentTimeoutSeconds_Help">How many seconds the signed-in user has to answer before it counts as "Deny" (5–600).
+
+Not configured: 30 seconds.
+
+Registry: ConsentTimeoutSeconds (REG_DWORD).</string>
+
+      <!-- Agent: privacy -->
+      <string id="Agent_PrivacyScreen">Privacy screen</string>
+      <string id="Agent_PrivacyScreen_Help">Whether an admin may black out this device's screen while working on it ("Who may turn on the privacy screen" decides who):
+- Allowed, and the device's mouse and keyboard can be blocked (the admin can still leave them usable).
+- Allowed, but the device's mouse and keyboard stay usable.
+- Not allowed.
+
+Not configured: allowed, and the mouse and keyboard can be blocked.
+
+Registry: PrivacyScreen (REG_DWORD) = 2, 1 or 0.</string>
+      <string id="Agent_PrivacyScreen_2">Allowed, the device's mouse and keyboard can be blocked</string>
+      <string id="Agent_PrivacyScreen_1">Allowed, the device's mouse and keyboard stay usable</string>
+      <string id="Agent_PrivacyScreen_0">Not allowed</string>
+      <string id="Agent_HiddenApps">Apps never shown to an admin</string>
+      <string id="Agent_HiddenApps_Help">Apps whose windows are always covered in the admin's picture, whatever the user at the device chooses, for example a password manager.
+
+One per line: the full path of a program (C:\Program Files\KeePass\KeePass.exe), or aumid: followed by a Store app's AppUserModelID.
+
+Not configured: none; the user can still hide apps.
+
+Registry: HiddenApps (REG_MULTI_SZ).</string>
+
+      <!-- Agent: automatic sign-in -->
+      <string id="Agent_NoUserBehavior">When nobody is signed in</string>
+      <string id="Agent_NoUserBehavior_Help">What a remote desktop shows on this device's console when nobody is signed in:
+- Show the sign-in screen: the admin signs in on the sign-in screen.
+- Allow automatic sign-in: RemoteHub may sign in with the connection's account. It also needs the credential provider (installed with the agent's AUTOSIGNIN option), "Who may sign in automatically", and RemoteHub must not have it turned off (RemoteHub – connecting from this PC → Turn off automatic sign-in through the agent).
+
+Not configured: the sign-in screen, unless the agent was installed with automatic sign-in allowed.
+
+Registry: NoUserBehavior (REG_SZ) = SignInScreen or AutoSignIn.</string>
+      <string id="Agent_NoUserBehavior_SignInScreen">Show the sign-in screen</string>
+      <string id="Agent_NoUserBehavior_AutoSignIn">Allow automatic sign-in</string>
+      <string id="Agent_AutoSignInRequirePrivacyScreen">Only with the privacy screen</string>
+      <string id="Agent_AutoSignInRequirePrivacyScreen_Help">Enabled: no automatic sign-in where the privacy screen can't be shown (Windows before 10 2004 / Server 2022, or "Privacy screen" not allowed).
+
+Disabled or Not configured: automatic sign-in works there too.
+
+Registry: AutoSignInRequirePrivacyScreen (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_AutoSignInEndAction">When the connection ends</string>
+      <string id="Agent_AutoSignInEndAction_Help">What happens to a session the agent signed in automatically when its connection ends: lock it, or sign it out (unsaved work is lost). This wins over the connection's setting in RemoteHub.
+
+Not configured: RemoteHub's setting decides (Lock by default).
+
+Registry: AutoSignInEndAction (REG_SZ) = Lock or SignOut.</string>
+      <string id="Agent_AutoSignInEndAction_Lock">Lock the session</string>
+      <string id="Agent_AutoSignInEndAction_SignOut">Sign out</string>
+
+      <!-- Agent: jump host -->
+      <string id="Agent_TunnelEnabled">Allow this device as a jump host</string>
+      <string id="Agent_TunnelEnabled_Help">Enabled or Not configured: RemoteHub can reach other devices through this device's agent ("Who may use this device as a jump host" decides who).
+
+Disabled: this device is never a jump host.
+
+Registry: TunnelEnabled (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_TunnelTargets">Where jump connections may go</string>
+      <string id="Agent_TunnelTargets_Help">The addresses and names connections through this device may go to. One per line: address ranges (10.20.0.0/16, fd00::/8, 10.1.2.3) and names (sql01.contoso.local, *.contoso.local).
+
+This device's own addresses are only allowed when an entry names that exact address. Loopback, link-local (169.254.0.0/16, for example cloud metadata) and multicast addresses are only allowed by a range of /8 or narrower that contains them.
+
+Not configured: anywhere, except those special addresses.
+
+Registry: TunnelTargets (REG_MULTI_SZ).</string>
+      <string id="Agent_TunnelPorts">Ports jump connections may go to</string>
+      <string id="Agent_TunnelPorts_Help">The ports connections through this device may go to. One per line: a port (3389), a range (5985-5986) or * for all.
+
+Not configured: every port.
+
+Registry: TunnelPorts (REG_MULTI_SZ).</string>
+      <string id="Agent_MaxTunnelStreams">Connections per jump connection</string>
+      <string id="Agent_MaxTunnelStreams_Help">How many connections may be open at once through one jump connection (1–1024).
+
+Not configured: 64.
+
+Registry: MaxTunnelStreams (REG_DWORD).</string>
+
+      <!-- Agent: service -->
+      <string id="Agent_AuditToEventLog">Audit to the Windows Application log</string>
+      <string id="Agent_AuditToEventLog_Help">Enabled or Not configured: the agent's audit entries (sign-ins, sessions, remote desktops, jump connections, automatic sign-ins) also go to the Windows Application log, source "RemoteHub Agent", for event forwarding or a SIEM.
+
+Disabled: they are only in the agent's log files.
+
+Registry: AuditToEventLog (REG_DWORD) = 1 or 0.</string>
+    </stringTable>
+
+    <presentationTable>
+      <presentation id="Console_SettingsFolder">
+        <textBox refId="SettingsFolder"><label>Folder:</label></textBox>
+      </presentation>
+      <presentation id="Console_UpdateChannel">
+        <dropdownList refId="UpdateChannel" noSort="true" defaultItem="0">Channel:</dropdownList>
+      </presentation>
+      <presentation id="Console_RecordingFolder">
+        <textBox refId="RecordingFolder"><label>Folder:</label></textBox>
+      </presentation>
+      <presentation id="Console_AuditRetentionDays">
+        <decimalTextBox refId="AuditRetentionDays" defaultValue="365" spinStep="30">Days:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_Right">
+        <multiTextBox refId="Groups">Groups (one per line, SID or name):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_DesktopLimits">
+        <decimalTextBox refId="MaxFramesPerSecond" defaultValue="60" spinStep="5">Highest frames per second:</decimalTextBox>
+        <decimalTextBox refId="MaxQuality" defaultValue="100" spinStep="5">Highest picture quality:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_DesktopClipboard">
+        <dropdownList refId="DesktopClipboard" noSort="true" defaultItem="3">Clipboard:</dropdownList>
+      </presentation>
+      <presentation id="Agent_DesktopIdleTimeoutMinutes">
+        <decimalTextBox refId="DesktopIdleTimeoutMinutes" defaultValue="0" spinStep="5">Minutes (0 = never):</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_AllowedConsentModes">
+        <dropdownList refId="AllowedConsentModes" noSort="true" defaultItem="0">Allowed:</dropdownList>
+      </presentation>
+      <presentation id="Agent_ConsentTimeoutSeconds">
+        <decimalTextBox refId="ConsentTimeoutSeconds" defaultValue="30" spinStep="5">Seconds:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_PrivacyScreen">
+        <dropdownList refId="PrivacyScreen" noSort="true" defaultItem="0">Privacy screen:</dropdownList>
+      </presentation>
+      <presentation id="Agent_HiddenApps">
+        <multiTextBox refId="HiddenApps">Apps (one per line):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_NoUserBehavior">
+        <dropdownList refId="NoUserBehavior" noSort="true" defaultItem="0">When nobody is signed in:</dropdownList>
+      </presentation>
+      <presentation id="Agent_AutoSignInEndAction">
+        <dropdownList refId="AutoSignInEndAction" noSort="true" defaultItem="0">When the connection ends:</dropdownList>
+      </presentation>
+      <presentation id="Agent_TunnelTargets">
+        <multiTextBox refId="TunnelTargets">Ranges and names (one per line):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_TunnelPorts">
+        <multiTextBox refId="TunnelPorts">Ports (one per line):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_MaxTunnelStreams">
+        <decimalTextBox refId="MaxTunnelStreams" defaultValue="64" spinStep="8">Connections:</decimalTextBox>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>

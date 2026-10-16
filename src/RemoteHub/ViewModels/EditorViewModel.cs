@@ -27,6 +27,9 @@ public sealed partial class OptionRow : ObservableObject
     public string? Hint { get; init; }
     public required IReadOnlyList<Choice> Choices { get; init; }
     public required Action<RdpOptions, object?> Setter { get; init; }
+    /// <summary>Set when a policy decides this row: it stays visible but greyed out, with this text (docs/admx-design.md P2).</summary>
+    public string? PolicyNote { get; init; }
+    public bool IsEditable => PolicyNote is null;
     [ObservableProperty] private Choice _selected = null!;
 }
 
@@ -214,7 +217,7 @@ public sealed partial class EditorViewModel : ObservableObject
         var parent = IsDefaults ? RdpOptions.BuiltInDefaults() : Inheritance.ResolveOptions(_node, _data, includeSelf: false);
 
         OptionRow Row(string label, object? current, object? inherited, (object Value, string Label)[] values,
-                      Action<RdpOptions, object?> set, string? hint = null)
+                      Action<RdpOptions, object?> set, string? hint = null, string? policyNote = null)
         {
             var choices = new List<Choice>();
             if (CanInherit)
@@ -224,7 +227,7 @@ public sealed partial class EditorViewModel : ObservableObject
             }
             choices.AddRange(values.Select(v => new Choice(v.Label, v.Value)));
             var sel = choices.FirstOrDefault(c => Equals(c.Value, current)) ?? choices[0];
-            return new OptionRow { Label = label, Hint = hint, Choices = choices, Selected = sel, Setter = set };
+            return new OptionRow { Label = label, Hint = hint, Choices = choices, Selected = sel, Setter = set, PolicyNote = policyNote };
         }
 
         BuildAppearance(own.ColorTag, parent.ColorTag);
@@ -282,20 +285,20 @@ public sealed partial class EditorViewModel : ObservableObject
             (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
             "RemoteHub Agent: the device's screen without RDP – for desktops where RDP is turned off. The device decides who may see or control " +
             "the screen and whether the signed-in user is asked first. RDP stays available: right-click → Remote desktop via RDP."));
-        if (!AppPolicy.AgentAutoSignInDisabled)
-            PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
-                (o, v) => o.AgentAutoSignIn = (bool?)v,
-                "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
-                "credentials. The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
-                "policy) and have the credential provider installed (right-click → Install credential provider). Anyone at the device can see the " +
-                "session while you work."));
-        if (!AppPolicy.AgentAutoSignInDisabled)
-            PsRows.Add(Row("When an automatic sign-in's connection ends", own.AgentAutoSignInEndAction, parent.AgentAutoSignInEndAction,
-                [(Agent.AutoSignInEndActions.Lock, "Lock the session"), (Agent.AutoSignInEndActions.SignOut, "Sign out – unsaved work in the session is lost")],
-                (o, v) => o.AgentAutoSignInEndAction = (string?)v,
-                "For a session RemoteHub signed in automatically: when you disconnect, it is locked (you can come back to open work) or signed " +
-                "out. A connection that drops is always signed out after 2 minutes if it isn't continued. The device's policy " +
-                "(\"AutoSignInEndAction\") may decide instead."));
+        // Turned off by policy: the rows stay, greyed out (settings are never hidden, only actions are).
+        var autoSignInOff = AppPolicy.AgentAutoSignInDisabled ? "Turned off by your organisation – see Settings → Policies." : null;
+        PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
+            (o, v) => o.AgentAutoSignIn = (bool?)v,
+            "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
+            "credentials. The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
+            "policy) and have the credential provider installed (right-click → Install credential provider). Anyone at the device can see the " +
+            "session while you work.", autoSignInOff));
+        PsRows.Add(Row("When an automatic sign-in's connection ends", own.AgentAutoSignInEndAction, parent.AgentAutoSignInEndAction,
+            [(Agent.AutoSignInEndActions.Lock, "Lock the session"), (Agent.AutoSignInEndActions.SignOut, "Sign out – unsaved work in the session is lost")],
+            (o, v) => o.AgentAutoSignInEndAction = (string?)v,
+            "For a session RemoteHub signed in automatically: when you disconnect, it is locked (you can come back to open work) or signed " +
+            "out. A connection that drops is always signed out after 2 minutes if it isn't continued. The device's policy " +
+            "(\"AutoSignInEndAction\") may decide instead.", autoSignInOff));
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,

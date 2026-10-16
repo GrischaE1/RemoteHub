@@ -1,0 +1,340 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RemoteHub and RemoteHub Agent – one template for both products (docs/admx-design.md).
+  Console values: HKLM or HKCU\Software\Policies\RemoteHub (HKLM wins). Agent values: HKLM\Software\Policies\RemoteHub\Agent.
+  Names, types and ranges must match src\RemoteHub.Agent\PolicyCatalog.cs; tests\RemoteHub.Tests\PolicyTemplateTests.cs checks it.
+-->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="remotehub" namespace="RemoteHub.Policies.RemoteHub" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_RemoteHub_0_18_11" displayName="$(string.SUPPORTED_RemoteHub_0_18_11)" />
+      <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
+    </definitions>
+  </supportedOn>
+
+  <categories>
+    <category name="RemoteHub" displayName="$(string.Cat_RemoteHub)" />
+
+    <category name="Console" displayName="$(string.Cat_Console)" explainText="$(string.Cat_Console_Help)">
+      <parentCategory ref="RemoteHub" />
+    </category>
+    <category name="Console_Storage" displayName="$(string.Cat_Console_Storage)"><parentCategory ref="Console" /></category>
+    <category name="Console_Updates" displayName="$(string.Cat_Console_Updates)"><parentCategory ref="Console" /></category>
+    <category name="Console_Recordings" displayName="$(string.Cat_Console_Recordings)"><parentCategory ref="Console" /></category>
+    <category name="Console_Logs" displayName="$(string.Cat_Console_Logs)"><parentCategory ref="Console" /></category>
+    <category name="Console_Agent" displayName="$(string.Cat_Console_Agent)"><parentCategory ref="Console" /></category>
+
+    <category name="Agent" displayName="$(string.Cat_Agent)" explainText="$(string.Cat_Agent_Help)">
+      <parentCategory ref="RemoteHub" />
+    </category>
+    <category name="Agent_Rights" displayName="$(string.Cat_Agent_Rights)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Desktop" displayName="$(string.Cat_Agent_Desktop)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Consent" displayName="$(string.Cat_Agent_Consent)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Privacy" displayName="$(string.Cat_Agent_Privacy)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_AutoSignIn" displayName="$(string.Cat_Agent_AutoSignIn)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_JumpHost" displayName="$(string.Cat_Agent_JumpHost)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Service" displayName="$(string.Cat_Agent_Service)"><parentCategory ref="Agent" /></category>
+  </categories>
+
+  <policies>
+    <!-- ================================================================ RemoteHub (console) -->
+
+    <policy name="Console_SettingsFolder" class="Both" displayName="$(string.Console_SettingsFolder)" explainText="$(string.Console_SettingsFolder_Help)"
+            presentation="$(presentation.Console_SettingsFolder)" key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Storage" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <elements>
+        <text id="SettingsFolder" valueName="SettingsFolder" expandable="true" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Console_DisableUpdateCheck" class="Both" displayName="$(string.Console_DisableUpdateCheck)" explainText="$(string.Console_DisableUpdateCheck_Help)"
+            key="Software\Policies\RemoteHub" valueName="DisableUpdateCheck">
+      <parentCategory ref="Console_Updates" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><delete /></disabledValue>
+    </policy>
+
+    <policy name="Console_UpdateChannel" class="Both" displayName="$(string.Console_UpdateChannel)" explainText="$(string.Console_UpdateChannel_Help)"
+            presentation="$(presentation.Console_UpdateChannel)" key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Updates" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <elements>
+        <enum id="UpdateChannel" valueName="UpdateChannel" required="true">
+          <item displayName="$(string.Console_UpdateChannel_Stable)"><value><string>stable</string></value></item>
+          <item displayName="$(string.Console_UpdateChannel_Beta)"><value><string>beta</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Console_DisableTelemetry" class="Both" displayName="$(string.Console_DisableTelemetry)" explainText="$(string.Console_DisableTelemetry_Help)"
+            key="Software\Policies\RemoteHub" valueName="DisableTelemetry">
+      <parentCategory ref="Console_Updates" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><delete /></disabledValue>
+    </policy>
+
+    <policy name="Console_DisableRecording" class="Both" displayName="$(string.Console_DisableRecording)" explainText="$(string.Console_DisableRecording_Help)"
+            key="Software\Policies\RemoteHub" valueName="DisableRecording">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><delete /></disabledValue>
+    </policy>
+
+    <policy name="Console_RecordingFolder" class="Both" displayName="$(string.Console_RecordingFolder)" explainText="$(string.Console_RecordingFolder_Help)"
+            presentation="$(presentation.Console_RecordingFolder)" key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <elements>
+        <text id="RecordingFolder" valueName="RecordingFolder" expandable="true" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Console_AuditRetentionDays" class="Both" displayName="$(string.Console_AuditRetentionDays)" explainText="$(string.Console_AuditRetentionDays_Help)"
+            presentation="$(presentation.Console_AuditRetentionDays)" key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Logs" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <elements>
+        <decimal id="AuditRetentionDays" valueName="AuditRetentionDays" minValue="1" maxValue="36500" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Console_DisableAgentAutoSignIn" class="Both" displayName="$(string.Console_DisableAgentAutoSignIn)" explainText="$(string.Console_DisableAgentAutoSignIn_Help)"
+            key="Software\Policies\RemoteHub" valueName="DisableAgentAutoSignIn">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><delete /></disabledValue>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: access rights -->
+
+    <policy name="Agent_Right_PowerShell" class="Machine" displayName="$(string.Agent_Right_PowerShell)" explainText="$(string.Agent_Right_PowerShell_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="PowerShell" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_Desktop" class="Machine" displayName="$(string.Agent_Right_Desktop)" explainText="$(string.Agent_Right_Desktop_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="Desktop" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_DesktopViewOnly" class="Machine" displayName="$(string.Agent_Right_DesktopViewOnly)" explainText="$(string.Agent_Right_DesktopViewOnly_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="DesktopViewOnly" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_SecureDesktop" class="Machine" displayName="$(string.Agent_Right_SecureDesktop)" explainText="$(string.Agent_Right_SecureDesktop_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="SecureDesktop" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_ConsentBypass" class="Machine" displayName="$(string.Agent_Right_ConsentBypass)" explainText="$(string.Agent_Right_ConsentBypass_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="ConsentBypass" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_PrivacyScreen" class="Machine" displayName="$(string.Agent_Right_PrivacyScreen)" explainText="$(string.Agent_Right_PrivacyScreen_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="PrivacyScreen" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_Tunnel" class="Machine" displayName="$(string.Agent_Right_Tunnel)" explainText="$(string.Agent_Right_Tunnel_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="Tunnel" required="true" /></elements>
+    </policy>
+    <policy name="Agent_Right_AutoSignIn" class="Machine" displayName="$(string.Agent_Right_AutoSignIn)" explainText="$(string.Agent_Right_AutoSignIn_Help)"
+            presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="Groups" valueName="AutoSignIn" required="true" /></elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: remote desktop -->
+
+    <policy name="Agent_DesktopEnabled" class="Machine" displayName="$(string.Agent_DesktopEnabled)" explainText="$(string.Agent_DesktopEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="DesktopEnabled">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_DesktopLimits" class="Machine" displayName="$(string.Agent_DesktopLimits)" explainText="$(string.Agent_DesktopLimits_Help)"
+            presentation="$(presentation.Agent_DesktopLimits)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <decimal id="MaxFramesPerSecond" valueName="MaxFramesPerSecond" minValue="1" maxValue="60" required="true" />
+        <decimal id="MaxQuality" valueName="MaxQuality" minValue="1" maxValue="100" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Agent_DesktopClipboard" class="Machine" displayName="$(string.Agent_DesktopClipboard)" explainText="$(string.Agent_DesktopClipboard_Help)"
+            presentation="$(presentation.Agent_DesktopClipboard)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <enum id="DesktopClipboard" valueName="DesktopClipboard" required="true">
+          <item displayName="$(string.Agent_DesktopClipboard_0)"><value><decimal value="0" /></value></item>
+          <item displayName="$(string.Agent_DesktopClipboard_1)"><value><decimal value="1" /></value></item>
+          <item displayName="$(string.Agent_DesktopClipboard_2)"><value><decimal value="2" /></value></item>
+          <item displayName="$(string.Agent_DesktopClipboard_3)"><value><decimal value="3" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_DesktopIdleTimeoutMinutes" class="Machine" displayName="$(string.Agent_DesktopIdleTimeoutMinutes)" explainText="$(string.Agent_DesktopIdleTimeoutMinutes_Help)"
+            presentation="$(presentation.Agent_DesktopIdleTimeoutMinutes)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <decimal id="DesktopIdleTimeoutMinutes" valueName="DesktopIdleTimeoutMinutes" minValue="0" maxValue="1440" required="true" />
+      </elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: consent -->
+
+    <policy name="Agent_AllowedConsentModes" class="Machine" displayName="$(string.Agent_AllowedConsentModes)" explainText="$(string.Agent_AllowedConsentModes_Help)"
+            presentation="$(presentation.Agent_AllowedConsentModes)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Consent" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <enum id="AllowedConsentModes" valueName="AllowedConsentModes" required="true">
+          <item displayName="$(string.Agent_Consent_AskPin)"><value><string>Ask;Pin</string></value></item>
+          <item displayName="$(string.Agent_Consent_Ask)"><value><string>Ask</string></value></item>
+          <item displayName="$(string.Agent_Consent_Pin)"><value><string>Pin</string></value></item>
+          <item displayName="$(string.Agent_Consent_AskPinNone)"><value><string>Ask;Pin;None</string></value></item>
+          <item displayName="$(string.Agent_Consent_AskNone)"><value><string>Ask;None</string></value></item>
+          <item displayName="$(string.Agent_Consent_PinNone)"><value><string>Pin;None</string></value></item>
+          <item displayName="$(string.Agent_Consent_None)"><value><string>None</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_ConsentTimeoutSeconds" class="Machine" displayName="$(string.Agent_ConsentTimeoutSeconds)" explainText="$(string.Agent_ConsentTimeoutSeconds_Help)"
+            presentation="$(presentation.Agent_ConsentTimeoutSeconds)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Consent" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <decimal id="ConsentTimeoutSeconds" valueName="ConsentTimeoutSeconds" minValue="5" maxValue="600" required="true" />
+      </elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: privacy -->
+
+    <policy name="Agent_PrivacyScreen" class="Machine" displayName="$(string.Agent_PrivacyScreen)" explainText="$(string.Agent_PrivacyScreen_Help)"
+            presentation="$(presentation.Agent_PrivacyScreen)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Privacy" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <enum id="PrivacyScreen" valueName="PrivacyScreen" required="true">
+          <item displayName="$(string.Agent_PrivacyScreen_2)"><value><decimal value="2" /></value></item>
+          <item displayName="$(string.Agent_PrivacyScreen_1)"><value><decimal value="1" /></value></item>
+          <item displayName="$(string.Agent_PrivacyScreen_0)"><value><decimal value="0" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_HiddenApps" class="Machine" displayName="$(string.Agent_HiddenApps)" explainText="$(string.Agent_HiddenApps_Help)"
+            presentation="$(presentation.Agent_HiddenApps)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Privacy" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="HiddenApps" valueName="HiddenApps" required="true" /></elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: automatic sign-in -->
+
+    <policy name="Agent_NoUserBehavior" class="Machine" displayName="$(string.Agent_NoUserBehavior)" explainText="$(string.Agent_NoUserBehavior_Help)"
+            presentation="$(presentation.Agent_NoUserBehavior)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_AutoSignIn" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <enum id="NoUserBehavior" valueName="NoUserBehavior" required="true">
+          <item displayName="$(string.Agent_NoUserBehavior_SignInScreen)"><value><string>SignInScreen</string></value></item>
+          <item displayName="$(string.Agent_NoUserBehavior_AutoSignIn)"><value><string>AutoSignIn</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_AutoSignInRequirePrivacyScreen" class="Machine" displayName="$(string.Agent_AutoSignInRequirePrivacyScreen)" explainText="$(string.Agent_AutoSignInRequirePrivacyScreen_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="AutoSignInRequirePrivacyScreen">
+      <parentCategory ref="Agent_AutoSignIn" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_AutoSignInEndAction" class="Machine" displayName="$(string.Agent_AutoSignInEndAction)" explainText="$(string.Agent_AutoSignInEndAction_Help)"
+            presentation="$(presentation.Agent_AutoSignInEndAction)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_AutoSignIn" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <enum id="AutoSignInEndAction" valueName="AutoSignInEndAction" required="true">
+          <item displayName="$(string.Agent_AutoSignInEndAction_Lock)"><value><string>Lock</string></value></item>
+          <item displayName="$(string.Agent_AutoSignInEndAction_SignOut)"><value><string>SignOut</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: jump host -->
+
+    <policy name="Agent_TunnelEnabled" class="Machine" displayName="$(string.Agent_TunnelEnabled)" explainText="$(string.Agent_TunnelEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="TunnelEnabled">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_TunnelTargets" class="Machine" displayName="$(string.Agent_TunnelTargets)" explainText="$(string.Agent_TunnelTargets_Help)"
+            presentation="$(presentation.Agent_TunnelTargets)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="TunnelTargets" valueName="TunnelTargets" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_TunnelPorts" class="Machine" displayName="$(string.Agent_TunnelPorts)" explainText="$(string.Agent_TunnelPorts_Help)"
+            presentation="$(presentation.Agent_TunnelPorts)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements><multiText id="TunnelPorts" valueName="TunnelPorts" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_MaxTunnelStreams" class="Machine" displayName="$(string.Agent_MaxTunnelStreams)" explainText="$(string.Agent_MaxTunnelStreams_Help)"
+            presentation="$(presentation.Agent_MaxTunnelStreams)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <elements>
+        <decimal id="MaxTunnelStreams" valueName="MaxTunnelStreams" minValue="1" maxValue="1024" required="true" />
+      </elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: service -->
+
+    <policy name="Agent_AuditToEventLog" class="Machine" displayName="$(string.Agent_AuditToEventLog)" explainText="$(string.Agent_AuditToEventLog_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="AuditToEventLog">
+      <parentCategory ref="Agent_Service" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_11" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+  </policies>
+</policyDefinitions>

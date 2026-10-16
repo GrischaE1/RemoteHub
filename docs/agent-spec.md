@@ -186,6 +186,9 @@ those.
 Read again for every connection (no restart needed); a value there wins over `agent.json`. If the key exists but can't
 be read, nothing is allowed (no right, no desktop, no tunnel) and the log says so. Invalid values keep the default.
 
+The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.admx` (category *RemoteHub Agent –
+connections to this device*) is checked against in CI ([admx-design.md](admx-design.md)).
+
 | Value | Type | Meaning (default) |
 |---|---|---|
 | `DesktopEnabled` | DWORD | 0 turns the remote desktop off (on) |
