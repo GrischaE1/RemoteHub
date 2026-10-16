@@ -53,6 +53,42 @@ jobs:
         shell: pwsh
         run: ./build/build-installer.ps1 -Configuration Release -OutputPath artifacts
 
+      # Antivirus, part 1: Microsoft Defender over the MSIs and the publish folders (the files the MSIs are made from).
+      # The runner image excludes its drives from Defender, so the exclusions go first; a test file (EICAR, put
+      # together here so it is never in the repository) proves the scan really finds something before the real one.
+      - name: Defender scan
+        shell: pwsh
+        run: |
+          $mp = Get-MpPreference
+          if ($mp.ExclusionPath) { Remove-MpPreference -ExclusionPath $mp.ExclusionPath }
+          if ($mp.ExclusionExtension) { Remove-MpPreference -ExclusionExtension $mp.ExclusionExtension }
+          if ($mp.ExclusionProcess) { Remove-MpPreference -ExclusionProcess $mp.ExclusionProcess }
+          $cmd = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+          & $cmd -SignatureUpdate
+          if ($LASTEXITCODE -ne 0) { "::warning::Defender signature update exited with $LASTEXITCODE - scanning with the image's signatures." }
+
+          $probe = Join-Path $env:RUNNER_TEMP 'av-probe'
+          New-Item -ItemType Directory -Force $probe | Out-Null
+          $eicar = 'X5O!P%@AP[4\PZX54(P^)7CC)7}$' + 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+          [IO.File]::WriteAllText((Join-Path $probe 'eicar.txt'), $eicar)
+          & $cmd -Scan -ScanType 3 -File $probe -DisableRemediation | Out-Null
+          if ($LASTEXITCODE -ne 2) { throw "Defender did not detect the EICAR test file (exit code $LASTEXITCODE) - the scan below would prove nothing." }
+          Remove-Item $probe -Recurse -Force
+
+          & $cmd -Scan -ScanType 3 -File (Resolve-Path artifacts) -DisableRemediation
+          switch ($LASTEXITCODE) {
+            0 { 'Defender: no threats found.' }
+            2 { Get-MpThreatDetection | Format-List; throw 'Defender found a threat in the build output.' }
+            default { throw "Defender scan failed (exit code $LASTEXITCODE)." }
+          }
+
+      - name: Upload installers for the antivirus scan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers
+          path: artifacts/
+          retention-days: 3
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -60,3 +96,34 @@ jobs:
           name: test-results
           path: '**/test-results.trx'
           if-no-files-found: ignore
+
+  # Antivirus, part 2: ClamAV, a second engine, over the same build output. Same EICAR self-check as Defender.
+  clamav-scan:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installers
+          path: artifacts
+
+      - name: Install ClamAV and update signatures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav
+          sudo systemctl stop clamav-freshclam || true   # the service holds the update lock
+          sudo freshclam
+
+      # The limits are raised so the MSIs (cabinets inside) are scanned whole and not skipped for their size.
+      - name: Scan
+        run: |
+          limits="--max-filesize=2000M --max-scansize=4000M --max-files=100000 --max-recursion=30"
+          probe="$RUNNER_TEMP/av-probe"; mkdir -p "$probe"
+          printf '%s%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$' 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > "$probe/eicar.txt"
+          rc=0; clamscan --no-summary $limits "$probe/eicar.txt" > /dev/null || rc=$?
+          if [ "$rc" -ne 1 ]; then
+            echo "::error::ClamAV did not detect the EICAR test file - the scan below would prove nothing (exit code $rc)."; exit 1
+          fi
+          rm -rf "$probe"
+          clamscan --recursive --infected $limits artifacts/
