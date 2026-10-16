@@ -21,4 +21,7 @@ public static class ReviewProbe
             result[i] = items[i];
         return result;
     }
+
+    /// <summary>True once a saved sign-in ticket has expired, so it must not be used any more.</summary>
+    public static bool IsExpired(DateTime expiresUtc) => expiresUtc > DateTime.UtcNow;
 }
