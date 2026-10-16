@@ -1,0 +1,51 @@
+name: Drafts
+
+# Pull requests start as drafts, and can only be marked ready for review once every check has passed:
+# - A pull request opened as ready is converted to a draft with a note.
+# - Marking a pull request ready while a check is still running or has failed converts it back, naming those checks.
+# Dependabot's pull requests are left alone. The Claude review is not counted – it runs after the pull request is ready.
+# pull_request_target: runs this file as it is on main – the pull request's own code is never checked out or run.
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+# convertPullRequestToDraft is refused with pull-requests: write alone; it also needs contents: write.
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+jobs:
+  draft:
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Opened as ready
+        if: github.event.action == 'opened'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr ready "$PR" --undo -R "$GITHUB_REPOSITORY"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "Pull requests start as drafts here. Mark this one **Ready for review** when it's done and all checks have passed."
+
+      - name: Marked ready before the checks passed
+        if: github.event.action == 'ready_for_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Every check except this workflow's own and the Claude review's must have passed (or been skipped), and
+          # the build must have run at all – it may not have started yet right after a push. gh pr checks exits non-zero
+          # while checks are pending or failing, but still prints them.
+          checks=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --json name,bucket,workflow \
+            --jq '[.[] | select(.workflow != "Drafts" and .workflow != "Claude review" and .name != "claude-review")]' || true)
+          blocking=$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"] | join(", ")' <<<"$checks")
+          if ! jq -e 'any(.[]; .name == "build-and-test" and .bucket == "pass")' <<<"$checks" >/dev/null; then
+            blocking="${blocking:+$blocking, }build-and-test (not passed yet)"
+          fi
+          if [ -n "$blocking" ]; then
+            gh pr ready "$PR" --undo -R "$GITHUB_REPOSITORY"
+            gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "Back to draft: a pull request can only be marked ready once every check has passed. Still waiting for: $blocking."
+          fi
