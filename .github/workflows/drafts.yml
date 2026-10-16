@@ -42,8 +42,8 @@ jobs:
           checks=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --json name,bucket,workflow \
             --jq '[.[] | select(.workflow != "Drafts" and .workflow != "Claude review" and .name != "claude-review")]' || true)
           blocking=$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"] | join(", ")' <<<"$checks")
-          if ! jq -e 'any(.[]; .name == "build-and-test" and .bucket == "pass")' <<<"$checks" >/dev/null; then
-            blocking="${blocking:+$blocking, }build-and-test (not passed yet)"
+          if ! jq -e 'any(.[]; .name == "build-and-test")' <<<"$checks" >/dev/null; then
+            blocking="${blocking:+$blocking, }build-and-test (not started yet)"
           fi
           if [ -n "$blocking" ]; then
             gh pr ready "$PR" --undo -R "$GITHUB_REPOSITORY"
