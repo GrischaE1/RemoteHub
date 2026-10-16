@@ -57,6 +57,8 @@
     <Compile Include="..\RemoteHub.Agent\Desktop\VideoCodec.cs" Link="Remoting\Desktop\VideoCodec.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\ClipboardTransfer.cs" Link="Remoting\Desktop\ClipboardTransfer.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\VirtualFiles.cs" Link="Remoting\Desktop\VirtualFiles.cs" />
+    <!-- Policy values of both products (Settings → Policies, policy\RemoteHub.admx) -->
+    <Compile Include="..\RemoteHub.Agent\PolicyCatalog.cs" Link="Services\PolicyCatalog.cs" />
   </ItemGroup>
 
   <ItemGroup>

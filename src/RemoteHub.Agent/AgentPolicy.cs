@@ -52,7 +52,7 @@ public enum AgentRight
 /// </summary>
 public sealed class AgentPolicy
 {
-    public const string RegistryPath = @"SOFTWARE\Policies\RemoteHub\Agent";
+    public const string RegistryPath = PolicyCatalog.Root + @"\" + PolicyCatalog.AgentKey;
 
     public bool DesktopEnabled { get; init; } = true;
     public IReadOnlyList<string> ConsentModes { get; init; } = [DesktopConsent.Ask, DesktopConsent.Pin, DesktopConsent.None];
@@ -139,29 +139,34 @@ public sealed class AgentPolicy
         var rights = new Dictionary<AgentRight, IReadOnlyList<string>>(d.Rights);
         foreach (var right in Enum.GetValues<AgentRight>())
             if (values.Strings("Rights", right.ToString()) is { } groups) rights[right] = groups.Where(g => g.Trim().Length > 0).Select(g => g.Trim()).ToList();
-        var modes = values.Strings(null, "AllowedConsentModes")?
+        var modes = Strings(PolicyCatalog.AllowedConsentModes)?
             .Select(m => DesktopConsent.All.FirstOrDefault(c => c.Equals(m.Trim(), StringComparison.OrdinalIgnoreCase)))
             .OfType<string>().Distinct().ToList();
         return new AgentPolicy
         {
-            DesktopEnabled = values.Number(null, "DesktopEnabled") is not 0,
+            DesktopEnabled = Raw(PolicyCatalog.DesktopEnabled) is not 0,
             ConsentModes = modes is { Count: > 0 } ? modes : d.ConsentModes,
-            ConsentTimeoutSeconds = values.Number(null, "ConsentTimeoutSeconds") is { } t and >= 5 and <= 600 ? t : d.ConsentTimeoutSeconds,
-            MaxFramesPerSecond = values.Number(null, "MaxFramesPerSecond") is { } f and >= 1 and <= 60 ? f : d.MaxFramesPerSecond,
-            MaxQuality = values.Number(null, "MaxQuality") is { } q and >= 1 and <= 100 ? q : d.MaxQuality,
-            Clipboard = values.Number(null, "DesktopClipboard") is { } c and >= 0 and <= 3 ? c : d.Clipboard,
-            IdleTimeout = values.Number(null, "DesktopIdleTimeoutMinutes") is { } idle and >= 0 and <= 1440 ? TimeSpan.FromMinutes(idle) : d.IdleTimeout,
-            AuditToEventLog = values.Number(null, "AuditToEventLog") is not 0,
-            PrivacyScreen = values.Number(null, "PrivacyScreen") is { } p and >= PrivacyScreenLevel.Off and <= PrivacyScreenLevel.WithInputBlock ? p : d.PrivacyScreen,
-            HiddenApps = values.Strings(null, "HiddenApps")?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.HiddenApps,
-            TunnelEnabled = values.Number(null, "TunnelEnabled") is not 0,
-            Tunnel = TunnelRules.Parse(values.Strings(null, "TunnelTargets"), values.Strings(null, "TunnelPorts")),
-            MaxTunnelStreams = values.Number(null, "MaxTunnelStreams") is { } streams and >= 1 and <= 1024 ? streams : d.MaxTunnelStreams,
-            NoUserBehavior = NoUserBehaviors.Valid(values.Strings(null, "NoUserBehavior")?.FirstOrDefault()),
-            AutoSignInRequirePrivacyScreen = values.Number(null, "AutoSignInRequirePrivacyScreen") is 1,
-            AutoSignInEndAction = AutoSignInEndActions.Valid(values.Strings(null, "AutoSignInEndAction")?.FirstOrDefault()),
+            ConsentTimeoutSeconds = Number(PolicyCatalog.ConsentTimeoutSeconds) ?? d.ConsentTimeoutSeconds,
+            MaxFramesPerSecond = Number(PolicyCatalog.MaxFramesPerSecond) ?? d.MaxFramesPerSecond,
+            MaxQuality = Number(PolicyCatalog.MaxQuality) ?? d.MaxQuality,
+            Clipboard = Number(PolicyCatalog.DesktopClipboard) ?? d.Clipboard,
+            IdleTimeout = Number(PolicyCatalog.DesktopIdleTimeoutMinutes) is { } idle ? TimeSpan.FromMinutes(idle) : d.IdleTimeout,
+            AuditToEventLog = Raw(PolicyCatalog.AuditToEventLog) is not 0,
+            PrivacyScreen = Number(PolicyCatalog.PrivacyScreen) ?? d.PrivacyScreen,
+            HiddenApps = Strings(PolicyCatalog.HiddenApps)?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.HiddenApps,
+            TunnelEnabled = Raw(PolicyCatalog.TunnelEnabled) is not 0,
+            Tunnel = TunnelRules.Parse(Strings(PolicyCatalog.TunnelTargets), Strings(PolicyCatalog.TunnelPorts)),
+            MaxTunnelStreams = Number(PolicyCatalog.MaxTunnelStreams) ?? d.MaxTunnelStreams,
+            NoUserBehavior = NoUserBehaviors.Valid(Strings(PolicyCatalog.NoUserBehavior)?.FirstOrDefault()),
+            AutoSignInRequirePrivacyScreen = Raw(PolicyCatalog.AutoSignInRequirePrivacyScreen) is 1,
+            AutoSignInEndAction = AutoSignInEndActions.Valid(Strings(PolicyCatalog.AutoSignInEndAction)?.FirstOrDefault()),
             Rights = rights,
         };
+
+        // Names and ranges come from the catalogue the ADMX template is checked against; a number outside its range keeps the default.
+        int? Raw(PolicyEntry e) => values.Number(null, e.Name);
+        int? Number(PolicyEntry e) => Raw(e) is { } n && n >= e.Min && n <= e.Max ? n : null;
+        IReadOnlyList<string>? Strings(PolicyEntry e) => values.Strings(null, e.Name);
     }
 
     internal interface IPolicyValues

@@ -110,14 +110,15 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $p.changeLocation = Ui 'Change location*' -Title 'Settings' -Value exists -Optional
             $p.storageText = Settings-Text
             $null = Ui 'Cancel' -Title 'Settings' -Optional
-            # automatic sign-in: both editor rows (PowerShell remoting page) - first without the policy (control), then hidden by it
+            # automatic sign-in: both editor rows (PowerShell remoting page) - first without the policy (control), then greyed out by it
             function AutoSignInRows {
                 $null = Ui 'Local' -Value rightclick
                 $null = Ui 'Edit?' -Title '*'
                 $null = Ui 'PowerShell remoting' -Title 'Edit connection'
                 $rows = [ordered]@{
-                    signIn    = (Ui 'Sign in automatically when nobody is signed in' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 5).found
-                    endAction = (Ui 'When an automatic sign-in*s connection ends' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 5).found
+                    # readnext: found, and whether the ComboBox after the label can be changed
+                    signIn    = Ui 'Sign in automatically when nobody is signed in' -Title 'Edit connection' -Value readnext -Optional -TimeoutSec 5
+                    endAction = Ui 'When an automatic sign-in*s connection ends' -Title 'Edit connection' -Value readnext -Optional -TimeoutSec 5
                 }
                 $null = Ui 'Cancel' -Title 'Edit connection'
                 $rows
@@ -165,11 +166,13 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             "$($p.folderWarning.value)$($p.folderWarning.name)" | Should -Match 'LabSettings' -Because 'SettingsFolder was read from the legacy RdpManager key'
         }
 
-        It 'C-POL-08 DisableAgentAutoSignIn: both automatic sign-in rows of the editor are hidden (shown without it)' -Tag 'C-POL-08' {
-            $p.autoSignInRowsBefore.signIn | Should -BeTrue -Because 'without the policy the row is there (control)'
-            $p.autoSignInRowsBefore.endAction | Should -BeTrue
-            $p.autoSignInRows.signIn | Should -BeFalse
-            $p.autoSignInRows.endAction | Should -BeFalse
+        It 'C-POL-08 DisableAgentAutoSignIn: both automatic sign-in rows of the editor stay visible but greyed out (editable without it)' -Tag 'C-POL-08' {
+            $p.autoSignInRowsBefore.signIn.enabled | Should -BeTrue -Because 'without the policy the row can be changed (control)'
+            $p.autoSignInRowsBefore.endAction.enabled | Should -BeTrue
+            $p.autoSignInRows.signIn.found | Should -BeTrue -Because 'a setting set by policy is greyed out, never hidden (docs/admx-design.md P2)'
+            $p.autoSignInRows.signIn.enabled | Should -BeFalse
+            $p.autoSignInRows.endAction.found | Should -BeTrue
+            $p.autoSignInRows.endAction.enabled | Should -BeFalse
         }
     }
 
