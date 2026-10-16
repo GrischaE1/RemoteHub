@@ -605,7 +605,9 @@ existing callers don't change.
 
 ### 12.1 Delivery
 
-- `release.yml` attaches `RemoteHub-PolicyTemplates-<version>.zip` (the contents of `policy\`). The README links it and
+- `release.yml` attaches the templates next to the MSIs: `RemoteHub.admx`, `RemoteHub.adml` (en-US) and
+  `RemoteHub-PolicyTemplates-<version>.zip` (the contents of `policy\`), each with a `.sha256`. A missing or invalid
+  template fails the release. The README links them and
   explains the Central Store, a single PC's `%WINDIR%\PolicyDefinitions`, and the Intune import.
 - **The MSIs don't install the template.** Both would install the same file into `PolicyDefinitions`. On a device with
   both products, an older console and a newer agent would leave whichever template was installed last, and uninstalling
@@ -742,7 +744,8 @@ What was built, and where it differs from the sections above:
   - what the agent does with the template's values;
   - the reader: HKLM over HKCU, invalid values, legacy key, expansion;
   - the Policies page model.
-- **Release:** `release.yml` attaches `RemoteHub-PolicyTemplates-<version>.zip`.
+- **Release:** `release.yml` attaches `RemoteHub.admx`, `RemoteHub.adml` and `RemoteHub-PolicyTemplates-<version>.zip`, each
+  with a `.sha256`, and fails when a template is missing or isn't valid XML.
 - **Checked with the `admx-adml-generator` skill's validator** (`validate_admx.py`, 2026-10-16). It reports no problems
   except one error and one warning, and both are gaps in the validator, so the files stay as they are:
   - *Error: ADML namespace is `http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions`, expected

@@ -44,6 +44,7 @@ A capability counts as release-ready only when both columns pass.
 | Automatic sign-in on the sign-in screen (credential provider) | C-PROV-*, C-AUTO-* | UI-AG-07…08, C-POL-08 |
 | Privacy screen, hidden apps, user privacy | D-PRIV-*, D-HIDE-* | – |
 | Recording of each tab type | – | C-REC-* |
+| Policies of both products, the Group Policy template | POL-01…09 | POL-11…13, C-POL-* |
 
 ## 2. Client VMs
 
@@ -920,6 +921,30 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | C-REC-09 | Normal exit while recording | recordings finish (up to 10 s), the file plays, no dialog | U PS | 2 | ◐ | 2VM |
 | C-REC-10 | "Recording saved" | file, `mm:ss · size`, folder; Play / Show in folder / Close / *Delete recording…* (to the Recycle Bin) | U | 3 | ◐ | 2VM |
 | C-REC-11 | Unsafe connection names | invalid characters → `_`, cut at 80 characters, a second file ` (2)` | PS | 3 | ◐ | |
+
+### 10.7 Policies of both products and the Group Policy template (POL)
+
+The template (`policy\RemoteHub.admx`, `en-US\RemoteHub.adml`) and the agent's phase 2 values
+([admx-design.md](admx-design.md) §16, §17). The values are written to the registry the way the template writes them
+(`Set-LabAgentPolicy`, or the C-POLUPD `Policy` helper for the console). The lab has no domain, so only POL-01 opens
+the Group Policy editor. Agent cases run on every VM (`POL-AGENT.Tests.ps1`), and console cases on client VMs with
+RemoteHub and the agent on the same VM (`POL-CLIENT.Tests.ps1`).
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| POL-01 | Template in the Group Policy editor | `RemoteHub.admx` and `en-US\RemoteHub.adml` from the build copied into `%WINDIR%\PolicyDefinitions`: `gpedit.msc` opens without an *Administrative Templates* error dialog, and *Computer Configuration → Administrative Templates* lists *RemoteHub* with both *RemoteHub – connecting from this PC* and *RemoteHub Agent – connections to this device* | PS S | 1 | ◐ | |
+| POL-02 | Both products on one VM: each reads only its own key | agent `DesktopEnabled` = 0 → the desktop *to* this VM is refused (404, "turned off by a policy on the device"), and RemoteHub on the same VM still lists `DesktopEnabled` only under *RemoteHub Agent on this PC* on Settings → Policies; console `DisableRecording` = 1 at `…\Policies\RemoteHub` → the agent's `policy` output doesn't list it and the agent still allows everything | PS H U | 1 | ◐ | |
+| POL-03 | `RemoteHubAgent.exe policy` | with `MaxSessions` = 50, `PowerShellEnabled` = 0, `ConsentTimeoutSeconds` = 9999 set: `MaxSessions 50 [policy]`, `PowerShellEnabled Off [policy]`, `ListenPort 58732 [agent.json]`, `ConsentTimeoutSeconds 30 [default]` plus "INVALID in the policy: 9999 is outside 5–600 – ignored"; every agent value of the template is listed; the policy key unreadable for SYSTEM (deny ACE) → "THE POLICY KEY CAN'T BE READ" | PS | 2 | ◐ | |
+| POL-04 | New agent values apply without a restart | `MaxSessions` = 1: a second PowerShell session while one is held → 503 "limit of simultaneous sessions", and the log says "session limit (1)"; `MaxSessions` = 0 → ignored (default), "Policy MaxSessions: 0 is outside 1–200 – ignored" logged exactly once after two connections; `PrivacyScreenMessage` = "Contoso IT is working on this PC" → the device's screen (console screenshot, OCR) shows it on the privacy screen with message, and without the policy "Remote Support Session in Progress" | PS H C E | 2 | ◐ | |
+| POL-05 | `PowerShellEnabled` = 0 | health's features have no `powershell`; a PowerShell session through the agent is refused before any sign-in (404, no failed-logon event 4625 for the try), the error says "turned off … by a policy on the device (PowerShellEnabled)", the log says "Refused PowerShell from … (policy PowerShellEnabled)"; the remote desktop still connects; policy removed → PowerShell works again without a restart | PS H E | 1 | ◐ | |
+| POL-06 | `AllowedGroups` | `AllowedGroups` = a new local group with a new user in it: that user gets PowerShell and the desktop; PSAdmin (not in it) is refused (403) for both; `Rights\Desktop` = Administrators set as well → PSAdmin gets the desktop again but not PowerShell; `DesktopViewOnly`, `ConsentBypass`, `AutoSignIn` stay nobody | PS H | 1 | ◐ | |
+| POL-07 | `ListenPort` and the firewall rule | `ListenPort` = 58800, service restarted: the agent listens on 58800 only, health with the pin answers there, the rule *RemoteHub Agent* has local port 58800 and the same remote address scope as before, the log says "moved to port 58800"; policy removed and restarted → 58732 again, rule back; `ListenPort` = 0 → ignored, 58732 | PS H E | 1 | ◐ | |
+| POL-08 | Automatic sign-in moves out of the policy key on update | previous release installed with `AUTOSIGNIN=1` (it wrote `NoUserBehavior` and `Rights\AutoSignIn` into the policy key and `autosignin.policy`), updated to the build under test: both values gone from the policy key, `agent.json` has `noUserBehavior` = AutoSignIn and `autoSignInGroups`, `autosignin.policy` gone, the log says "moved NoUserBehavior and Rights\AutoSignIn"; `policy` shows both as `[agent.json]`; automatic sign-in still works (harness `auto-sign-in`). Variant: `NoUserBehavior` set to SignInScreen by IT before the update → it stays in the policy key, the log says "left in the policy key", automatic sign-in is refused | PS H E | 1 | ◐ | |
+| POL-09 | What the device's policy decides, in health | `ListenPort`, `VirtualDisplay` and `NoUserBehavior` set: health's `managed` = `autoSignIn`, `virtualDisplay`, `port` – nothing else, no values; one invalid (`ListenPort` = 0) → not named; none set → no `managed` | PS H | 2 | ◐ | |
+| POL-10 | Intune import | the ADMX imports in Intune (*Devices → Configuration → Import ADMX*) without a prerequisite, and a profile from it writes the values to a test device | – | 2 | ○ | Intune tenant (manual) |
+| POL-11 | Settings → Policies | HKLM `DisableTelemetry` = 1, HKCU `AuditRetentionDays` = 0, agent `DesktopClipboard` = 1: the page says "2 settings of RemoteHub on this PC are set by your organisation (1 for the computer, 1 for your user account)" (the invalid one counts), lists *Turn off usage data and crash reports: Turned off* with "Computer · HKLM\SOFTWARE\Policies\RemoteHub\DisableTelemetry", shows "AuditRetentionDays 0 is outside 1–36500 – ignored", and lists *Clipboard: Text* under *RemoteHub Agent on this PC*; *Copy as text* puts the same on the clipboard; a value changed while the page is open shows after *Refresh*; nothing set → "No policies are set for RemoteHub on this PC"; *Settings overview* has the *Policies* section and *Show policies…* opens the page | PS U | 2 | ◐ | |
+| POL-12 | Set by policy = greyed out, not hidden | with `DisableTelemetry`, `UpdateChannel`, `AuditRetentionDays` = 90 and `RecordingFolder` set: the usage data toggle, the GA channel button, *Keep entries for* (showing the policy's 90 days) and *Change folder…* are there but disabled; without the policies they are there and enabled | PS U | 2 | ◐ | |
+| POL-13 | What the device's policy decides, in RemoteHub's install dialog | the device's `ListenPort` set: RemoteHub's *Update RemoteHub Agent…* for it shows "Set by the device's policy (ListenPort)" under *Port*, the field greyed out even with *Create a new device certificate* ticked; `VirtualDisplay` / `NoUserBehavior` set: the hints of *Virtual display* and *Allow automatic sign-in* say the device's policy decides when they're used, both still changeable. Needs RemoteHub to have installed the agent itself (the UI-AGENT flow) | U H | 2 | ○ | 2VM |
 
 ## 11. Report in the PR
 

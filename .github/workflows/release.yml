@@ -100,13 +100,33 @@ jobs:
           "agent=$agent" >> $env:GITHUB_OUTPUT
 
       # Group Policy / Intune templates for RemoteHub and the agent (one pair of files for both, docs/admx-design.md §12).
+      # Every release carries them next to the MSIs: RemoteHub.admx and RemoteHub.adml (en-US) as they are, and a zip with
+      # the PolicyDefinitions layout (RemoteHub.admx, en-US\RemoteHub.adml). A missing or broken template fails the release
+      # (the Test step above has already checked them against the code: PolicyTemplateTests).
       - name: Policy templates
         id: policy
         shell: pwsh
         run: |
-          $zip = "artifacts/RemoteHub-PolicyTemplates-${{ steps.version.outputs.version }}.zip"
+          $admx = 'policy/RemoteHub.admx'
+          $adml = 'policy/en-US/RemoteHub.adml'
+          foreach ($file in $admx, $adml) {
+            if (-not (Test-Path $file)) { throw "$file is missing - the release must carry the policy templates." }
+            try { $xml = [xml](Get-Content $file -Raw) } catch { throw "$file is not valid XML: $($_.Exception.Message)" }
+            $root = $xml.DocumentElement.LocalName
+            if ($root -notin 'policyDefinitions', 'policyDefinitionResources') { throw "$file has the root <$root>, not an ADMX or ADML." }
+          }
+          $version = '${{ steps.version.outputs.version }}'
+          $zip = "artifacts/RemoteHub-PolicyTemplates-$version.zip"
           Compress-Archive -Path policy/* -DestinationPath $zip -Force
-          "path=$zip" >> $env:GITHUB_OUTPUT
+          Copy-Item $admx artifacts/RemoteHub.admx -Force
+          Copy-Item $adml artifacts/RemoteHub.adml -Force
+          foreach ($file in $zip, 'artifacts/RemoteHub.admx', 'artifacts/RemoteHub.adml') {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+            "$hash  $(Split-Path $file -Leaf)" | Out-File -Encoding ascii "$file.sha256"
+          }
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+          "admx=artifacts/RemoteHub.admx" >> $env:GITHUB_OUTPUT
+          "adml=artifacts/RemoteHub.adml" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -117,7 +137,14 @@ jobs:
             ${{ steps.msi.outputs.path }}.sha256
             ${{ steps.msi.outputs.agent }}
             ${{ steps.msi.outputs.agent }}.sha256
-            ${{ steps.policy.outputs.path }}
+            ${{ steps.policy.outputs.admx }}
+            ${{ steps.policy.outputs.admx }}.sha256
+            ${{ steps.policy.outputs.adml }}
+            ${{ steps.policy.outputs.adml }}.sha256
+            ${{ steps.policy.outputs.zip }}
+            ${{ steps.policy.outputs.zip }}.sha256
           prerelease: ${{ steps.version.outputs.prerelease }}
+          body: |
+            **Group Policy / Intune templates** for RemoteHub and the RemoteHub Agent: `RemoteHub.admx` goes into `PolicyDefinitions` (the Central Store, or `%WINDIR%\PolicyDefinitions`), `RemoteHub.adml` into its `en-US` folder – or take `RemoteHub-PolicyTemplates-<version>.zip`, which has that layout. Intune: import `RemoteHub.admx` and `RemoteHub.adml` under *Devices → Configuration → Import ADMX*.
           generate_release_notes: true
           fail_on_unmatched_files: true
