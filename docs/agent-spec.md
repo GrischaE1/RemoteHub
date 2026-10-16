@@ -207,6 +207,20 @@ connections to this device*) is checked against in CI ([admx-design.md](admx-des
 | `AutoSignInRequirePrivacyScreen` | DWORD | 1: no automatic sign-in where the privacy screen can't be shown (0) |
 | `AutoSignInEndAction` | SZ | `Lock` or `SignOut`; wins over RemoteHub's setting (unset) |
 | `Rights\<right>` | MULTI_SZ | groups for PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (§4.2) |
+| `AllowedGroups` | MULTI_SZ | the groups for every right not set on its own, instead of `allowedGroups` in agent.json; never view-only, ConsentBypass or AutoSignIn (agent.json) – since 0.18.12 |
+| `PowerShellEnabled` | DWORD | 0: no PowerShell session, so no files, registry, services, processes or update through the agent; `/v1/powershell` answers 404 before any sign-in, and health leaves out `powershell` (on) – since 0.18.12 |
+| `VirtualDisplay` | SZ | `auto`, `always`, `off` (agent.json) – since 0.18.12 |
+| `PrivacyScreenMessage` | SZ | heading of the privacy screen, at most 120 characters (built-in text) – since 0.18.12 |
+| `ListenPort` | DWORD | 1–65535, read at service start; the firewall rule moves with it (agent.json) – since 0.18.12 |
+| `LogRetentionDays`, `MaxSessions` | DWORD | 1–3650 and 1–200 (agent.json) – since 0.18.12 |
+
+An invalid value is logged once per service run. `RemoteHubAgent.exe policy` prints every value with its source (policy,
+agent.json, default). Health (`/v1/health`) lists in `managed` which of RemoteHub's install options the policy decides
+(`autoSignIn`, `virtualDisplay`, `port`) – names only.
+
+Automatic sign-in as chosen at install is in agent.json (`noUserBehavior`, `autoSignInGroups`) since 0.18.12; the policy
+values win. Older versions wrote it into this key (recorded in `autosignin.policy`); the service moves those values to
+agent.json at its first start, unless IT changed them since.
 
 ## 8. Logging
 

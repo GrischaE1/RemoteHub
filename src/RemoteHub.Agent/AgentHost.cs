@@ -63,19 +63,35 @@ public static class AgentHost
         app.MapGet(AgentProtocol.HealthPath, (RequestDelegate)(ctx =>
         {
             var policy = o.CurrentPolicy();
-            List<string> features = [AgentFeatures.PowerShell];
+            List<string> features = [];
+            if (policy.PowerShellEnabled) features.Add(AgentFeatures.PowerShell);
             if (o.Desktop is not null && policy.DesktopEnabled) features.Add(AgentFeatures.Desktop);
             if (policy.TunnelEnabled) features.Add(AgentFeatures.Tunnel);
-            var health = new AgentHealth("RemoteHub Agent", AgentVersion, AgentProtocol.Version, o.Config.DeviceId, [.. features]);
+            var health = new AgentHealth("RemoteHub Agent", AgentVersion, AgentProtocol.Version, o.Config.DeviceId, [.. features],
+                policy.Managed.Count > 0 ? [.. policy.Managed] : null);
             return ctx.Response.WriteAsJsonAsync(health, AgentJson.Default.AgentHealth);
         }));
 
-        // The policy for this connection; one that can't be read allows nothing (and says so in the log).
+        // The policy for this connection; one that can't be read allows nothing (and says so in the log). An invalid value
+        // keeps its default and is logged once per service run.
+        var reported = new ConcurrentDictionary<string, byte>();
         AgentPolicy Policy()
         {
             var policy = o.CurrentPolicy();
             if (policy.LoadError is { } error) o.Log.Write($"The policy ({AgentPolicy.RegistryPath}) can't be read – access refused: {error}");
+            foreach (var problem in policy.Problems)
+                if (reported.TryAdd(problem, 0)) o.Log.Write($"Policy {problem} – ignored, the default applies");
             return policy;
+        }
+
+        // The session limit: policy MaxSessions, else agent.json (read for each new session).
+        bool TryStartSession(AgentPolicy policy, ShellIdentity identity, string source, HttpContext ctx)
+        {
+            if (Interlocked.Increment(ref sessions) <= policy.MaxSessions) return true;
+            Interlocked.Decrement(ref sessions);
+            o.Log.Write($"Refused {identity.Account} from {source}: session limit ({policy.MaxSessions}) reached");
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            return false;
         }
 
         // Checks the request, the sign-in and the right (TLS to the pinned certificate is done). Null = refused, status code set.
@@ -128,15 +144,17 @@ public static class AgentHost
         app.Map(AgentProtocol.PowerShellPath, (RequestDelegate)(async ctx =>
         {
             var source = ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-            using var identity = await SignIn(ctx, Policy().Groups(AgentRight.PowerShell), source);
-            if (identity is null) return;
-            if (Interlocked.Increment(ref sessions) > o.Config.MaxSessions)
+            var policy = Policy();
+            if (!policy.PowerShellEnabled)
             {
-                Interlocked.Decrement(ref sessions);
-                o.Log.Write($"Refused {identity.Account} from {source}: session limit ({o.Config.MaxSessions}) reached");
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                // Before the sign-in, like the desktop and the tunnel: nothing is tried. RemoteHub explains it from /health.
+                o.Log.Write($"Refused PowerShell from {source}: turned off on this device (policy PowerShellEnabled)");
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;
             }
+            using var identity = await SignIn(ctx, policy.Groups(AgentRight.PowerShell), source);
+            if (identity is null) return;
+            if (!TryStartSession(policy, identity, source, ctx)) return;
             try
             {
                 IShellProcess shell;
@@ -170,13 +188,7 @@ public static class AgentHost
             }
             using var identity = await SignIn(ctx, [.. policy.Groups(AgentRight.Desktop), .. policy.Groups(AgentRight.DesktopViewOnly)], source);
             if (identity is null) return;
-            if (Interlocked.Increment(ref sessions) > o.Config.MaxSessions)
-            {
-                Interlocked.Decrement(ref sessions);
-                o.Log.Write($"Refused {identity.Account} from {source}: session limit ({o.Config.MaxSessions}) reached");
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                return;
-            }
+            if (!TryStartSession(policy, identity, source, ctx)) return;
             try
             {
                 using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
@@ -197,13 +209,7 @@ public static class AgentHost
             }
             using var identity = await SignIn(ctx, policy.Groups(AgentRight.Tunnel), source);
             if (identity is null) return;
-            if (Interlocked.Increment(ref sessions) > o.Config.MaxSessions)
-            {
-                Interlocked.Decrement(ref sessions);
-                o.Log.Write($"Refused {identity.Account} from {source}: session limit ({o.Config.MaxSessions}) reached");
-                ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-                return;
-            }
+            if (!TryStartSession(policy, identity, source, ctx)) return;
             try
             {
                 using var ws = await ctx.WebSockets.AcceptWebSocketAsync();

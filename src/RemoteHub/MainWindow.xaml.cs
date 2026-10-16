@@ -1099,15 +1099,20 @@ public partial class MainWindow : FluentWindow
         var jump = c.JumpHost;
         var remoting = PsEnabled(c) || c.PsRemoting is { ViaAgent: false, State: PsRemotingState.Available };
         var agentReachable = false;
+        string[]? managed = null; // what the device's policy decides (names only), for the dialog's notes
         if (c.Agent is { Status: AgentStatus.Installed } a && EndpointOf(c, a, quiet: jump is null) is { } endpoint)
-            try { await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(jump is null ? 4000 : 20_000).Token); agentReachable = true; }
+            try
+            {
+                managed = (await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(jump is null ? 4000 : 20_000).Token)).Managed;
+                agentReachable = true;
+            }
             catch { /* offer the other ways */ }
         // The firewall scope's suggestion: the address the device sees – this PC's, or the jump host's in the device's network.
         var local = jump is null
             ? await Task.Run(() => RemotingSetup.LocalAddressFor(c.Host.Trim()))
             : await JumpLocalAddressAsync(c, c.Agent?.Port ?? Agent.AgentProtocol.DefaultPort);
 
-        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, jump?.Name, AgentInstaller.PackageHasCredentialProvider(package)) { Owner = this };
+        var dlg = new AgentInstallDialog(c, remoting, agentReachable, local, jump?.Name, AgentInstaller.PackageHasCredentialProvider(package), managed) { Owner = this };
         if (dlg.ShowDialog() != true || dlg.Options is not { } o) return;
 
         // The progress in a window of its own: a row per step with a check mark when it's done.

@@ -50,7 +50,7 @@ public enum AgentRight
 /// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (REG_MULTI_SZ) – group SIDs or names.</item>
 /// </list>
 /// </summary>
-public sealed class AgentPolicy
+public sealed record AgentPolicy
 {
     public const string RegistryPath = PolicyCatalog.Root + @"\" + PolicyCatalog.AgentKey;
 
@@ -81,6 +81,28 @@ public sealed class AgentPolicy
     public string? AutoSignInEndAction { get; init; }
     public IReadOnlyDictionary<AgentRight, IReadOnlyList<string>> Rights { get; init; } = new Dictionary<AgentRight, IReadOnlyList<string>>();
 
+    /// <summary>PowerShellEnabled: PowerShell sessions – and so files, registry, services and processes – through the agent.</summary>
+    public bool PowerShellEnabled { get; init; } = true;
+    /// <summary>VirtualDisplay: auto, always or off (policy, else agent.json).</summary>
+    public string VirtualDisplay { get; init; } = VirtualDisplayModes.Auto;
+    /// <summary>PrivacyScreenMessage: the heading of the privacy screen; null = the built-in one.</summary>
+    public string? PrivacyScreenMessage { get; init; }
+    /// <summary>ListenPort (policy, else agent.json); read when the service starts.</summary>
+    public int ListenPort { get; init; } = AgentProtocol.DefaultPort;
+    /// <summary>LogRetentionDays (policy, else agent.json).</summary>
+    public int LogRetentionDays { get; init; } = 30;
+    /// <summary>MaxSessions (policy, else agent.json).</summary>
+    public int MaxSessions { get; init; } = 20;
+
+    /// <summary>Policy values that are set but invalid, as "name: problem" – they keep the default (<see cref="Load"/> fills it).</summary>
+    public IReadOnlyList<string> Problems { get; init; } = [];
+
+    /// <summary>
+    /// What IT decides on this device that RemoteHub's device actions would otherwise change (agent health,
+    /// <see cref="AgentHealth.Managed"/>): only these names, never values or other policies.
+    /// </summary>
+    public IReadOnlyList<string> Managed { get; init; } = [];
+
     /// <summary>Set when the policy key couldn't be read: then nothing is allowed (see <see cref="Load"/>).</summary>
     public string? LoadError { get; init; }
 
@@ -90,20 +112,29 @@ public sealed class AgentPolicy
     /// Defaults: everything for the groups in agent.json (Administrators), nothing view-only – except connecting without
     /// asking: the signed-in user is asked (or shown a PIN) unless a policy allows the mode None and grants ConsentBypass.
     /// </summary>
-    public static AgentPolicy Defaults(AgentConfig config) => new()
+    public static AgentPolicy Defaults(AgentConfig config) => Defaults(config, config.AllowedGroups);
+
+    /// <summary><paramref name="allowed"/>: the groups for every right that isn't set on its own (policy AllowedGroups, else agent.json).</summary>
+    private static AgentPolicy Defaults(AgentConfig config, IReadOnlyList<string> allowed) => new()
     {
         ConsentModes = [DesktopConsent.Ask, DesktopConsent.Pin],
         Rights = new Dictionary<AgentRight, IReadOnlyList<string>>
         {
-            [AgentRight.PowerShell] = config.AllowedGroups,
-            [AgentRight.Desktop] = config.AllowedGroups,
+            [AgentRight.PowerShell] = allowed,
+            [AgentRight.Desktop] = allowed,
             [AgentRight.DesktopViewOnly] = [],
-            [AgentRight.SecureDesktop] = config.AllowedGroups,
+            [AgentRight.SecureDesktop] = allowed,
             [AgentRight.ConsentBypass] = [],
-            [AgentRight.PrivacyScreen] = config.AllowedGroups,
-            [AgentRight.Tunnel] = config.AllowedGroups,
-            [AgentRight.AutoSignIn] = [],
+            [AgentRight.PrivacyScreen] = allowed,
+            [AgentRight.Tunnel] = allowed,
+            // Not the allowed groups: automatic sign-in is only for whom the install (or a policy) chose.
+            [AgentRight.AutoSignIn] = config.AutoSignInGroups ?? [],
         },
+        NoUserBehavior = NoUserBehaviors.Valid(config.NoUserBehavior),
+        VirtualDisplay = VirtualDisplayModes.IsValid(config.VirtualDisplay) ? config.VirtualDisplay : VirtualDisplayModes.Auto,
+        ListenPort = config.ListenPort,
+        LogRetentionDays = Math.Max(1, config.LogRetentionDays),
+        MaxSessions = Math.Max(1, config.MaxSessions),
     };
 
     /// <summary>
@@ -112,18 +143,38 @@ public sealed class AgentPolicy
     /// </summary>
     public static AgentPolicy Load(AgentConfig config)
     {
+        config = config.WithCurrentAutoSignIn(); // changed by "auto-sign-in on|off" while the service runs
         try
         {
             using var key = Registry.LocalMachine.OpenSubKey(RegistryPath);
-            return From(config, key is null ? null : new RegistryValues(key));
+            if (key is null) return From(config, null);
+            var configured = PolicyCatalog.Configured(PolicyCatalog.AgentEntries);
+            return From(config, new RegistryValues(key)) with
+            {
+                Problems = [.. configured.Where(v => !v.Valid).Select(v => $"{v.Entry.Name}: {v.Problem}")],
+                Managed = ManagedNames(configured),
+            };
         }
         catch (Exception ex) { return Refused(ex.Message); }
     }
 
-    /// <summary>No right for anyone, no remote desktop.</summary>
+    /// <summary>The device actions RemoteHub offers that a valid policy value decides here (see <see cref="Managed"/>).</summary>
+    internal static IReadOnlyList<string> ManagedNames(IEnumerable<PolicyValue> configured)
+    {
+        var names = configured.Where(v => v.Valid).Select(v => v.Entry).ToList();
+        var managed = new List<string>();
+        if (names.Contains(PolicyCatalog.NoUserBehavior) || names.Any(e => e.Key == PolicyCatalog.RightsKey && e.Name == nameof(AgentRight.AutoSignIn)))
+            managed.Add(AgentManaged.AutoSignIn);
+        if (names.Contains(PolicyCatalog.VirtualDisplay)) managed.Add(AgentManaged.VirtualDisplay);
+        if (names.Contains(PolicyCatalog.ListenPort)) managed.Add(AgentManaged.Port);
+        return managed;
+    }
+
+    /// <summary>No right for anyone, no remote desktop, no PowerShell.</summary>
     internal static AgentPolicy Refused(string reason) => new()
     {
         DesktopEnabled = false,
+        PowerShellEnabled = false,
         ConsentModes = [],
         PrivacyScreen = PrivacyScreenLevel.Off,
         TunnelEnabled = false,
@@ -134,11 +185,12 @@ public sealed class AgentPolicy
     /// <summary>Applies policy values (tests pass their own).</summary>
     internal static AgentPolicy From(AgentConfig config, IPolicyValues? values)
     {
-        var d = Defaults(config);
-        if (values is null) return d;
+        if (values is null) return Defaults(config);
+        var allowed = Groups(values.Strings(null, PolicyCatalog.AllowedGroups.Name));
+        var d = Defaults(config, allowed is { Count: > 0 } ? allowed : config.AllowedGroups);
         var rights = new Dictionary<AgentRight, IReadOnlyList<string>>(d.Rights);
         foreach (var right in Enum.GetValues<AgentRight>())
-            if (values.Strings("Rights", right.ToString()) is { } groups) rights[right] = groups.Where(g => g.Trim().Length > 0).Select(g => g.Trim()).ToList();
+            if (Groups(values.Strings("Rights", right.ToString())) is { } groups) rights[right] = groups;
         var modes = Strings(PolicyCatalog.AllowedConsentModes)?
             .Select(m => DesktopConsent.All.FirstOrDefault(c => c.Equals(m.Trim(), StringComparison.OrdinalIgnoreCase)))
             .OfType<string>().Distinct().ToList();
@@ -157,27 +209,45 @@ public sealed class AgentPolicy
             TunnelEnabled = Raw(PolicyCatalog.TunnelEnabled) is not 0,
             Tunnel = TunnelRules.Parse(Strings(PolicyCatalog.TunnelTargets), Strings(PolicyCatalog.TunnelPorts)),
             MaxTunnelStreams = Number(PolicyCatalog.MaxTunnelStreams) ?? d.MaxTunnelStreams,
-            NoUserBehavior = NoUserBehaviors.Valid(Strings(PolicyCatalog.NoUserBehavior)?.FirstOrDefault()),
+            // Set by the policy: that value; not set (or not one of the two words): what the install chose (agent.json).
+            // (an invalid policy value still means the sign-in screen – a policy that restricts must not turn into a permission)
+            NoUserBehavior = Strings(PolicyCatalog.NoUserBehavior)?.FirstOrDefault() is { } behavior ? NoUserBehaviors.Valid(behavior) : d.NoUserBehavior,
             AutoSignInRequirePrivacyScreen = Raw(PolicyCatalog.AutoSignInRequirePrivacyScreen) is 1,
             AutoSignInEndAction = AutoSignInEndActions.Valid(Strings(PolicyCatalog.AutoSignInEndAction)?.FirstOrDefault()),
             Rights = rights,
+            PowerShellEnabled = Raw(PolicyCatalog.PowerShellEnabled) is not 0,
+            VirtualDisplay = Word(PolicyCatalog.VirtualDisplay) ?? d.VirtualDisplay,
+            PrivacyScreenMessage = values.Text(null, PolicyCatalog.PrivacyScreenMessage.Name) is { } heading
+                && PolicyCatalog.PrivacyScreenMessage.Check(heading) is { Problem: null, Value: string checkedHeading } ? checkedHeading : null,
+            ListenPort = Number(PolicyCatalog.ListenPort) ?? d.ListenPort,
+            LogRetentionDays = Number(PolicyCatalog.LogRetentionDays) ?? d.LogRetentionDays,
+            MaxSessions = Number(PolicyCatalog.MaxSessions) ?? d.MaxSessions,
         };
 
         // Names and ranges come from the catalogue the ADMX template is checked against; a number outside its range keeps the default.
         int? Raw(PolicyEntry e) => values.Number(null, e.Name);
         int? Number(PolicyEntry e) => Raw(e) is { } n && n >= e.Min && n <= e.Max ? n : null;
         IReadOnlyList<string>? Strings(PolicyEntry e) => values.Strings(null, e.Name);
+        string? Word(PolicyEntry e) => Strings(e)?.FirstOrDefault() is { } w && e.Check(w) is { Problem: null, Value: string word } ? word : null;
     }
+
+    /// <summary>A list of groups as set: trimmed, empty entries dropped; null when not set.</summary>
+    private static List<string>? Groups(IReadOnlyList<string>? groups) =>
+        groups?.Where(g => g.Trim().Length > 0).Select(g => g.Trim()).ToList();
 
     internal interface IPolicyValues
     {
         int? Number(string? subKey, string name);
         IReadOnlyList<string>? Strings(string? subKey, string name);
+        /// <summary>A REG_SZ as it is (not split into a list) – for free text such as the privacy screen heading.</summary>
+        string? Text(string? subKey, string name) => Strings(subKey, name) is { Count: > 0 } s ? string.Join(", ", s) : null;
     }
 
     private sealed class RegistryValues(RegistryKey root) : IPolicyValues
     {
         public int? Number(string? subKey, string name) => Read(subKey, name) is int i ? i : null;
+
+        public string? Text(string? subKey, string name) => Read(subKey, name) switch { string s => s, string[] { Length: > 0 } l => l[0], _ => null };
 
         public IReadOnlyList<string>? Strings(string? subKey, string name) => Read(subKey, name) switch
         {

@@ -8,13 +8,27 @@ var log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), 30);
 // Setup commands, run by the MSI: enroll <file|folder>, cleanup.
 if (args.Length > 0 && args[0] is "enroll" or "cleanup" or "auto-sign-in") return Enrollment.Run(args, log);
 if (args.Length > 0 && args[0] == "selftest") return await SelfTest.RunAsync();
+// Every policy value in effect and where it comes from (policy, agent.json, default) – for support and the lab.
+if (args.Length > 0 && args[0] == "policy") return PolicyCommand.Run(Console.Out);
 // Remote desktop helper, started by the service in a Windows session (talks to the service over stdin/stdout only).
 if (args.Length > 0 && args[0] == "desktop") return DesktopHelperProgram.Run();
 
 try
 {
     var config = AgentConfig.Load(AgentConfig.DefaultPath);
-    log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), config.LogRetentionDays) { EventLogEnabled = () => AgentPolicy.Load(config).AuditToEventLog };
+    log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), config.LogRetentionDays)
+    {
+        EventLogEnabled = () => AgentPolicy.Load(config).AuditToEventLog,
+        RetentionDays = () => AgentPolicy.Load(config).LogRetentionDays,
+    };
+    // Automatic sign-in values an older version wrote into the policy key move to agent.json (once; docs/admx-design.md §11.3).
+    if (AutoSignInSetup.Migrate(config) is { } moved) log.Write(moved);
+    // The port: policy ListenPort, else agent.json; read only here. The firewall rule follows it.
+    var startPolicy = AgentPolicy.Load(config);
+    if (startPolicy.LoadError is null && startPolicy.ListenPort != config.ListenPort)
+        log.Write($"Port {startPolicy.ListenPort} set by policy ListenPort (agent.json: {config.ListenPort})");
+    if (startPolicy.LoadError is null) config.ListenPort = startPolicy.ListenPort; // not saved: without the policy agent.json's applies again
+    if (Enrollment.SetFirewallPort(config.ListenPort) is { } firewall) log.Write(firewall);
     var certificate = FindCertificate(config.CertificateThumbprint);
 
     // The pipe to the credential provider, before the agent listens on the network (design §7.1). Always created: the

@@ -30,7 +30,8 @@ public class PolicyTemplateTests
     private static XDocument Adml => XDocument.Load(Path.Combine(PolicyFolder, "en-US", "RemoteHub.adml"));
 
     /// <summary>One registry value a policy writes, and everything it can write there.</summary>
-    private sealed record Write(string Policy, string PolicyClass, string Key, string Name, string Element, List<object> Values, int? Min = null, int? Max = null);
+    private sealed record Write(string Policy, string PolicyClass, string Key, string Name, string Element, List<object> Values, int? Min = null, int? Max = null,
+        bool Expandable = false, int? MaxLength = null);
 
     private static List<Write> Writes()
     {
@@ -58,7 +59,7 @@ public class PolicyTemplateTests
                         if (item.Element(P + "value")!.Element(P + "decimal") is { } d) values.Add((int)d.Attribute("value")!);
                         else values.Add(item.Element(P + "value")!.Element(P + "string")!.Value);
                 writes.Add(new Write(name, cls, eKey, eName, e.Name.LocalName, values,
-                    (int?)e.Attribute("minValue"), (int?)e.Attribute("maxValue")));
+                    (int?)e.Attribute("minValue"), (int?)e.Attribute("maxValue"), (bool?)e.Attribute("expandable") ?? false, (int?)e.Attribute("maxLength")));
             }
         }
         return writes;
@@ -98,7 +99,11 @@ public class PolicyTemplateTests
             {
                 Assert.True(w.Min == entry.Min && w.Max == entry.Max, $"{w.Policy}: {entry.Name} range {w.Min}–{w.Max} in the ADMX, {entry.Min}–{entry.Max} in the code");
             }
-            if (w.Element == "text") Assert.True(entry.Expand, $"{w.Policy}: a text policy for a value the product doesn't expand");
+            if (w.Element == "text")
+            {
+                Assert.True(w.Expandable == entry.Expand, $"{w.Policy}: expandable=\"{w.Expandable}\" in the ADMX, but the product {(entry.Expand ? "expands" : "doesn't expand")} {entry.Name}");
+                Assert.True(w.MaxLength == (entry.Max > 0 ? entry.Max : null), $"{w.Policy}: maxLength {w.MaxLength} in the ADMX, {entry.Max} in the code");
+            }
             // Every value Enabled or Disabled can write must be one the product accepts.
             foreach (var value in w.Values)
             {
@@ -181,9 +186,10 @@ public class PolicyTemplateTests
 
     // ------------------------------------------------------------------ what the agent does with the template's values
 
-    private sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues
+    internal sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues
     {
         public int? Number(string? subKey, string name) => values.TryGetValue(Key(subKey, name), out var v) && v is int i ? i : null;
+        public string? Text(string? subKey, string name) => values.TryGetValue(Key(subKey, name), out var v) && v is string s ? s : null;
         // As the registry: a REG_SZ is split at ';' and ','.
         public IReadOnlyList<string>? Strings(string? subKey, string name) => values.TryGetValue(Key(subKey, name), out var v)
             ? v switch { string[] s => s, string s => s.Split([';', ','], StringSplitOptions.RemoveEmptyEntries), _ => null } : null;

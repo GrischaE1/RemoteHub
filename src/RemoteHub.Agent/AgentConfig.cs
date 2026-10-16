@@ -24,6 +24,16 @@ public sealed class AgentConfig
 
     public int LogRetentionDays { get; set; } = 30;
     public int MaxSessions { get; set; } = 20;
+
+    /// <summary>
+    /// Automatic sign-in as the install chose it (MSI AUTOSIGNIN, RemoteHub's "Install credential provider"):
+    /// "AutoSignIn" allows it, null leaves it off. The policy NoUserBehavior wins. Before 0.18.12 this was written into the
+    /// policy key instead (<see cref="AutoSignInSetup.Migrate"/>).
+    /// </summary>
+    public string? NoUserBehavior { get; set; }
+
+    /// <summary>Who may sign in automatically, as the install chose it (null: nobody). The policy Rights\AutoSignIn wins.</summary>
+    public List<string>? AutoSignInGroups { get; set; }
     public const string AdministratorsSid = "S-1-5-32-544";
 
     [JsonIgnore]
@@ -32,11 +42,37 @@ public sealed class AgentConfig
     [JsonIgnore]
     public static string DefaultPath => Path.Combine(Folder, "agent.json");
 
+    /// <summary>The file this was loaded from (null: made in code). Automatic sign-in is read from it again for every connection.</summary>
+    [JsonIgnore]
+    public string? SourcePath { get; private set; }
+
     public static AgentConfig Load(string path)
     {
         var config = JsonSerializer.Deserialize(File.ReadAllText(path), AgentConfigJson.Default.AgentConfig) ?? throw new InvalidDataException("Empty configuration.");
         config.Validate();
+        config.SourcePath = path;
         return config;
+    }
+
+    /// <summary>
+    /// This configuration with automatic sign-in as the file says now: RemoteHub's "Install / Remove credential provider"
+    /// changes it while the service runs (<c>auto-sign-in on|off</c>), without a restart. Unreadable: as loaded.
+    /// </summary>
+    public AgentConfig WithCurrentAutoSignIn()
+    {
+        if (SourcePath is null) return this;
+        try
+        {
+            var now = JsonSerializer.Deserialize(File.ReadAllText(SourcePath), AgentConfigJson.Default.AgentConfig);
+            if (now is null || (now.NoUserBehavior == NoUserBehavior && Same(now.AutoSignInGroups, AutoSignInGroups))) return this;
+            var copy = (AgentConfig)MemberwiseClone();
+            copy.NoUserBehavior = now.NoUserBehavior;
+            copy.AutoSignInGroups = now.AutoSignInGroups;
+            return copy;
+        }
+        catch { return this; }
+
+        static bool Same(List<string>? a, List<string>? b) => a is null ? b is null : b is not null && a.SequenceEqual(b);
     }
 
     public void Save(string path)

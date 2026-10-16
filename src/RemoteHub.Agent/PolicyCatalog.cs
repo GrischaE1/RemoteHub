@@ -14,7 +14,7 @@ public enum PolicyKind
 {
     /// <summary>REG_DWORD within <see cref="PolicyEntry.Min"/>–<see cref="PolicyEntry.Max"/>.</summary>
     Number,
-    /// <summary>REG_SZ (or REG_EXPAND_SZ); with <see cref="PolicyEntry.Words"/> only one of them (case-insensitive).</summary>
+    /// <summary>REG_SZ (or REG_EXPAND_SZ); with <see cref="PolicyEntry.Words"/> only one of them (case-insensitive); <see cref="PolicyEntry.Max"/> &gt; 0 limits the length.</summary>
     Text,
     /// <summary>REG_MULTI_SZ (a REG_SZ is split at ';' and ','); with <see cref="PolicyEntry.Words"/> each item one of them.</summary>
     List,
@@ -56,6 +56,7 @@ public sealed record PolicyEntry(
                 if (s is null) return (null, $"must be a string, not {TypeName(raw)}");
                 s = s.Trim();
                 if (s.Length == 0) return (null, "is empty");
+                if (Max > 0 && s.Length > Max) return (null, $"is longer than {Max} characters");
                 if (Words is null) return (Expand ? Environment.ExpandEnvironmentVariables(s) : s, null);
                 return Words.FirstOrDefault(w => w.Equals(s, StringComparison.OrdinalIgnoreCase)) is { } word
                     ? (word, null) : (null, $"\"{s}\" isn't one of {string.Join(", ", Words)}");
@@ -173,6 +174,18 @@ public static class PolicyCatalog
     public static readonly PolicyEntry MaxTunnelStreams = Agent("MaxTunnelStreams", PolicyKind.Number, "Jump host", "Connections per jump connection", 1, 1024);
     public static readonly PolicyEntry AuditToEventLog = Agent("AuditToEventLog", PolicyKind.Number, "Service", "Audit to the Windows Application log", 0, 1, labels: OnOff);
 
+    // Phase 2 (docs/admx-design.md §9): the device-side switch for PowerShell, and what agent.json had alone so far.
+    public static readonly PolicyEntry PowerShellEnabled = Agent("PowerShellEnabled", PolicyKind.Number, "Features", "Allow PowerShell, files, registry, services and processes", 0, 1, labels: OnOff, since: Phase2);
+    public static readonly PolicyEntry AllowedGroups = Agent("AllowedGroups", PolicyKind.List, "Access rights", "Default groups for every right", since: Phase2);
+    public static readonly PolicyEntry VirtualDisplay = Agent("VirtualDisplay", PolicyKind.Text, "Remote desktop", "Virtual display for devices without a monitor", words: ["auto", "always", "off"],
+        labels: new Dictionary<string, string> { ["auto"] = "Only when the device has no usable resolution", ["always"] = "Always", ["off"] = "Never" }, since: Phase2);
+    public static readonly PolicyEntry PrivacyScreenMessage = Agent("PrivacyScreenMessage", PolicyKind.Text, "Privacy", "Privacy screen heading", max: 120, since: Phase2);
+    public static readonly PolicyEntry ListenPort = Agent("ListenPort", PolicyKind.Number, "Service", "Port", 1, 65535, since: Phase2);
+    public static readonly PolicyEntry LogRetentionDays = Agent("LogRetentionDays", PolicyKind.Number, "Service", "Keep log files (days)", 1, 3650, since: Phase2);
+    public static readonly PolicyEntry MaxSessions = Agent("MaxSessions", PolicyKind.Number, "Service", "Sessions at once", 1, 200, since: Phase2);
+
+    private const string Phase2 = "0.18.12";
+
     /// <summary>Subkey Rights: one list of groups per AgentRight, in the enum's order.</summary>
     public static readonly IReadOnlyList<PolicyEntry> Rights =
     [
@@ -191,13 +204,14 @@ public static class PolicyCatalog
 
     public static readonly IReadOnlyList<PolicyEntry> AgentEntries =
     [
-        .. Rights,
-        DesktopEnabled, MaxFramesPerSecond, MaxQuality, DesktopClipboard, DesktopIdleTimeoutMinutes,
+        PowerShellEnabled,
+        AllowedGroups, .. Rights,
+        DesktopEnabled, MaxFramesPerSecond, MaxQuality, DesktopClipboard, DesktopIdleTimeoutMinutes, VirtualDisplay,
         AllowedConsentModes, ConsentTimeoutSeconds,
-        PrivacyScreen, HiddenApps,
+        PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
         TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams,
-        AuditToEventLog,
+        AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
     ];
 
     public static IEnumerable<PolicyEntry> All => ConsoleEntries.Concat(AgentEntries);
@@ -246,8 +260,8 @@ public static class PolicyCatalog
         new(PolicyProduct.Console, "", name, kind, group, title, min, max, words, labels, expand);
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
-        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null) =>
-        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels);
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11") =>
+        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels, Since: since);
 
     private static PolicyEntry Right(string name, string title) => new(PolicyProduct.Agent, RightsKey, name, PolicyKind.List, "Access rights", title);
 }

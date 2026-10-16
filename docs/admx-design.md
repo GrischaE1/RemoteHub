@@ -1,6 +1,6 @@
 # RemoteHub – Full configuration through the registry (ADMX)
 
-Status: Draft v3 (2026-10-16), written against 0.18.11. **Phase 1 is built** (§16); phases 2–5 are not. The principles
+Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1 and 2 are built** (§16, §17); phases 3–5 are not. The principles
 are in §2, and the open questions in §14.
 Owner: Grischa Ernst
 
@@ -753,3 +753,58 @@ What was built, and where it differs from the sections above:
   - When the validator runs again later, these two are expected. Anything else it reports is a real finding.
 - **Not run yet:** POL-01 (the template in `gpedit.msc`) and POL-11 (the Policies page in the lab), because the lab was in
   use.
+
+## 17. Implementation notes (Phase 2)
+
+What was built, and where it differs from §9, §8 and §11.3:
+
+- **New agent values** in `PolicyCatalog` and `AgentPolicy`, since 0.18.12:
+  - `PowerShellEnabled`, `AllowedGroups`, `VirtualDisplay`, `PrivacyScreenMessage`, `ListenPort`, `LogRetentionDays` and
+    `MaxSessions`.
+  - `VirtualDisplay`, `ListenPort`, `LogRetentionDays` and `MaxSessions` fall back to agent.json, and `AllowedGroups` to
+    `allowedGroups`.
+  - `AgentPolicy` is a record now, so `Load` can add `Problems` and `Managed` to what `From` returns.
+- **Where they're read:**
+  - `AgentHost`: `PowerShellEnabled` before the sign-in, answering 404, and `MaxSessions` at its three checks
+    (`TryStartSession`).
+  - `AgentLog.RetentionDays`: at each daily cleanup.
+  - `DesktopEndpoint`: `VirtualDisplay`, and the privacy heading through `HelperInit.PrivacyHeading` →
+    `IHelperUi.SetPrivacyHeading`. The heading travels from the service to the helper only, never from RemoteHub.
+  - `Program`: `ListenPort` at start (when the policy key can't be read, agent.json's port), then
+    `Enrollment.SetFirewallPort`.
+- **Firewall:** `netsh advfirewall firewall set rule … new localport=` keeps the rule's address scope. The current port
+  is read from `show rule`. On a Windows with non-English netsh output it can't be read, so the rule is set at every
+  start, which is harmless.
+- **Invalid values:** written to the log once per value and service run ("Policy MaxSessions: 0 is outside 1–200 –
+  ignored, the default applies").
+- **`RemoteHubAgent.exe policy`:** `PolicyCommand`. Every agent value, grouped like the template, with `[policy]`,
+  `[agent.json]` or `[default]`, invalid values flagged, and a warning when the key can't be read.
+- **Health instead of `Hello` (§8):**
+  - The device's managed names go into `AgentHealth.Managed`, because RemoteHub's install and update dialog needs them,
+    and that dialog has no desktop session.
+  - Health needs no sign-in, so it carries only three action names (`autoSignIn`, `virtualDisplay`, `port`), never
+    values or other policies. Its features also leave out `powershell` when `PowerShellEnabled` = 0.
+- **What RemoteHub does with them:**
+  - The install dialog greys out *Port* when the device's policy sets it.
+  - *Virtual display* and *Allow automatic sign-in* stay changeable, because they install or remove a driver or the sign-in
+    component, which the policy can't do. Their hints say that the device's policy decides when they are used.
+  - A 404 on `/v1/powershell` is explained as "turned off on the device (PowerShellEnabled)".
+- **Automatic sign-in out of the policy key (§11.3):**
+  - `AutoSignInSetup.On` and `Off` write `noUserBehavior` and `autoSignInGroups` into agent.json. Their answers say when a
+    policy decides instead.
+  - The running service reads the two values from agent.json again for every connection (`AgentConfig.WithCurrentAutoSignIn`),
+    because *Install credential provider* doesn't restart it.
+  - `Migrate` runs at service start and before `On` and `Off`:
+    - values still as the old version wrote them move to agent.json;
+    - values IT changed stay in the policy key;
+    - values removed since aren't brought back;
+    - the marker is deleted after.
+- **Template:** revision 1.1, 39 policies, a new category *Features*, and supported on *RemoteHub Agent 0.18.12 or later*.
+  The rights' help texts name *Default groups for every right*. The skill's validator again reports only the two known
+  gaps (§16).
+- **Tests:**
+  - `AgentPolicyPhase2Tests` (13): new values and fallbacks, `AllowedGroups`, automatic sign-in with policy precedence,
+    `Refused`, health names, the `policy` report, the netsh parsing, `On`/`Off`, live re-read, and the migration (moved,
+    kept by IT, nothing to do).
+  - `PolicyTemplateTests` also checks `expandable` and `maxLength` of text elements against the catalogue.
+- **Not run yet:** POL-02 to POL-05, POL-08 and POL-09 in the lab.

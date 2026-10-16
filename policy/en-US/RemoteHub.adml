@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                           revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                           revision="1.1" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <displayName>RemoteHub</displayName>
   <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
   <resources>
     <stringTable>
       <string id="SUPPORTED_RemoteHub_0_18_11">RemoteHub 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
+      <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
 
       <!-- Categories -->
       <string id="Cat_RemoteHub">RemoteHub</string>
@@ -27,6 +28,7 @@ The devices themselves are protected by the RemoteHub Agent's policy (RemoteHub 
 They are read from HKLM\Software\Policies\RemoteHub\Agent for every connection, so a change applies without restarting the service, and they win over the agent's agent.json. If the key exists but can't be read, the agent allows nothing until it can.
 
 On a device with RemoteHub installed too, these policies don't affect what RemoteHub on this device may do on other devices: that is RemoteHub – connecting from this PC.</string>
+      <string id="Cat_Agent_Features">Features</string>
       <string id="Cat_Agent_Rights">Access rights</string>
       <string id="Cat_Agent_Desktop">Remote desktop</string>
       <string id="Cat_Agent_Consent">Consent</string>
@@ -102,13 +104,33 @@ Disabled or Not configured: users can turn it on per connection. The device must
 
 Registry: DisableAgentAutoSignIn (REG_DWORD) = 1.</string>
 
+      <!-- Agent: features -->
+      <string id="Agent_PowerShellEnabled">Allow PowerShell, files, registry, services and processes</string>
+      <string id="Agent_PowerShellEnabled_Help">Enabled or Not configured: the agent offers PowerShell sessions to the accounts in "Who may use PowerShell, files, registry, services and processes". RemoteHub's PowerShell, file transfer, registry, services and processes tabs all run in such a session.
+
+Disabled: nobody gets a PowerShell session through the agent, so none of these tools work through it, and RemoteHub can't update the agent through itself. The remote desktop and jump connections aren't affected. RemoteHub says the tools are turned off on the device.
+
+The agent can't turn the tools off one by one: they all run in the same PowerShell session. RemoteHub's own policies can hide single tools on the PCs it runs on.
+
+Registry: PowerShellEnabled (REG_DWORD) = 1 or 0.</string>
+
       <!-- Agent: rights -->
+      <string id="Agent_AllowedGroups">Default groups for every right</string>
+      <string id="Agent_AllowedGroups_Help">The groups that get every right not set on its own below: PowerShell, the screen, the sign-in screen, the privacy screen and the jump host. Replaces the "Allowed accounts" chosen when the agent was installed.
+
+"Who may only see the screen", "Who may connect without asking the signed-in user" and "Who may sign in automatically" are never given by this: they stay "nobody" unless set on their own.
+
+Enter one group per line, as a SID (recommended, for example S-1-5-32-544 for Administrators) or a name (CONTOSO\Helpdesk).
+
+Not configured: the groups chosen when the agent was installed (Administrators by default).
+
+Registry: AllowedGroups (REG_MULTI_SZ).</string>
       <string id="Agent_Right_PowerShell">Who may use PowerShell, files, registry, services and processes</string>
       <string id="Agent_Right_PowerShell_Help">Groups that may open a PowerShell session through the agent. RemoteHub's PowerShell, file transfer, registry, services and processes tabs all use it.
 
 Enter one group per line, as a SID (recommended, for example S-1-5-32-544 for Administrators) or a name (CONTOSO\Helpdesk). Names differ between Windows languages; SIDs don't. To allow nobody, enter S-1-0-0.
 
-Not configured: the groups chosen when the agent was installed (Administrators by default).
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\PowerShell (REG_MULTI_SZ).</string>
       <string id="Agent_Right_Desktop">Who may see and control the screen</string>
@@ -116,7 +138,7 @@ Registry: Rights\PowerShell (REG_MULTI_SZ).</string>
 
 Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
 
-Not configured: the groups chosen when the agent was installed (Administrators by default).
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\Desktop (REG_MULTI_SZ).</string>
       <string id="Agent_Right_DesktopViewOnly">Who may only see the screen</string>
@@ -132,7 +154,7 @@ Registry: Rights\DesktopViewOnly (REG_MULTI_SZ).</string>
 
 Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
 
-Not configured: the groups chosen when the agent was installed (Administrators by default).
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\SecureDesktop (REG_MULTI_SZ).</string>
       <string id="Agent_Right_ConsentBypass">Who may connect without asking the signed-in user</string>
@@ -148,7 +170,7 @@ Registry: Rights\ConsentBypass (REG_MULTI_SZ).</string>
 
 Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
 
-Not configured: the groups chosen when the agent was installed (Administrators by default).
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\PrivacyScreen (REG_MULTI_SZ).</string>
       <string id="Agent_Right_Tunnel">Who may use this device as a jump host</string>
@@ -156,7 +178,7 @@ Registry: Rights\PrivacyScreen (REG_MULTI_SZ).</string>
 
 Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
 
-Not configured: the groups chosen when the agent was installed (Administrators by default).
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\Tunnel (REG_MULTI_SZ).</string>
       <string id="Agent_Right_AutoSignIn">Who may sign in automatically</string>
@@ -198,6 +220,21 @@ Not configured: never.
 
 Registry: DesktopIdleTimeoutMinutes (REG_DWORD).</string>
 
+      <string id="Agent_VirtualDisplay">Virtual display for devices without a monitor</string>
+      <string id="Agent_VirtualDisplay_Help">When the agent switches on its virtual monitor during a remote desktop:
+- Only when the device has no usable resolution (no monitor connected).
+- Always.
+- Never.
+
+The policy can't install the driver: it comes with the agent's install option "Virtual display for servers without a monitor". Without it, the first two do nothing.
+
+Not configured: what the install chose (only when needed, by default).
+
+Registry: VirtualDisplay (REG_SZ) = auto, always or off.</string>
+      <string id="Agent_VirtualDisplay_auto">Only when the device has no usable resolution</string>
+      <string id="Agent_VirtualDisplay_always">Always</string>
+      <string id="Agent_VirtualDisplay_off">Never</string>
+
       <!-- Agent: consent -->
       <string id="Agent_AllowedConsentModes">Allowed ways to get the user's consent</string>
       <string id="Agent_AllowedConsentModes_Help">How the signed-in user agrees before someone connects to their screen:
@@ -235,6 +272,12 @@ Registry: PrivacyScreen (REG_DWORD) = 2, 1 or 0.</string>
       <string id="Agent_PrivacyScreen_2">Allowed, the device's mouse and keyboard can be blocked</string>
       <string id="Agent_PrivacyScreen_1">Allowed, the device's mouse and keyboard stay usable</string>
       <string id="Agent_PrivacyScreen_0">Not allowed</string>
+      <string id="Agent_PrivacyScreenMessage">Privacy screen heading</string>
+      <string id="Agent_PrivacyScreenMessage_Help">The heading the person at the device sees on the privacy screen (with message), at most 120 characters, for example "Contoso IT is working on this PC". The rest of the screen stays as it is.
+
+Not configured: "Remote Support Session in Progress".
+
+Registry: PrivacyScreenMessage (REG_SZ).</string>
       <string id="Agent_HiddenApps">Apps never shown to an admin</string>
       <string id="Agent_HiddenApps_Help">Apps whose windows are always covered in the admin's picture, whatever the user at the device chooses, for example a password manager.
 
@@ -305,6 +348,29 @@ Registry: MaxTunnelStreams (REG_DWORD).</string>
 Disabled: they are only in the agent's log files.
 
 Registry: AuditToEventLog (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Agent_ListenPort">Port</string>
+      <string id="Agent_ListenPort_Help">The TCP port the agent listens on (1–65535). Read when the service starts: restart the RemoteHub Agent service (or the device) after changing it. The agent moves its firewall rule to the new port.
+
+RemoteHub connects to the port stored for each device. After changing it, set the same port in RemoteHub's connections (or install the agent again from RemoteHub), or RemoteHub can't reach the device.
+
+Not configured: the port chosen when the agent was installed (58732 by default).
+
+Registry: ListenPort (REG_DWORD).</string>
+      <string id="Agent_LogRetentionDays">Keep log files</string>
+      <string id="Agent_LogRetentionDays_Help">How many days the agent keeps its daily log files in %ProgramData%\RemoteHub\Agent\logs (1–3650). Older files are removed once a day.
+
+The Windows Application log ("Audit to the Windows Application log") has its own size and retention.
+
+Not configured: 30 days, or what agent.json says.
+
+Registry: LogRetentionDays (REG_DWORD).</string>
+      <string id="Agent_MaxSessions">Sessions at once</string>
+      <string id="Agent_MaxSessions_Help">How many PowerShell, remote desktop and jump connections the agent accepts at the same time (1–200). Further connections are refused until one ends.
+
+Not configured: 20, or what agent.json says.
+
+Registry: MaxSessions (REG_DWORD).</string>
     </stringTable>
 
     <presentationTable>
@@ -359,6 +425,24 @@ Registry: AuditToEventLog (REG_DWORD) = 1 or 0.</string>
       </presentation>
       <presentation id="Agent_MaxTunnelStreams">
         <decimalTextBox refId="MaxTunnelStreams" defaultValue="64" spinStep="8">Connections:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_AllowedGroups">
+        <multiTextBox refId="AllowedGroups">Groups (one per line, SID or name):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_VirtualDisplay">
+        <dropdownList refId="VirtualDisplay" noSort="true" defaultItem="0">Virtual display:</dropdownList>
+      </presentation>
+      <presentation id="Agent_PrivacyScreenMessage">
+        <textBox refId="PrivacyScreenMessage"><label>Heading:</label></textBox>
+      </presentation>
+      <presentation id="Agent_ListenPort">
+        <decimalTextBox refId="ListenPort" defaultValue="58732" spinStep="1">Port:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_LogRetentionDays">
+        <decimalTextBox refId="LogRetentionDays" defaultValue="30" spinStep="10">Days:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_MaxSessions">
+        <decimalTextBox refId="MaxSessions" defaultValue="20" spinStep="5">Sessions:</decimalTextBox>
       </presentation>
     </presentationTable>
   </resources>

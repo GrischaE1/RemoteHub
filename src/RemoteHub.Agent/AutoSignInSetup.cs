@@ -3,93 +3,170 @@ using Microsoft.Win32;
 namespace RemoteHub.Agent;
 
 /// <summary>
-/// Switches automatic sign-in on or off for this device at install time (docs/credential-provider-design.md §5): the
-/// policy NoUserBehavior = AutoSignIn and the right AutoSignIn for the agent's allowed groups – the two values IT would
-/// otherwise set by Group Policy. Run by the MSI (enroll with AUTOSIGNIN) and by RemoteHub's "Install / Remove
-/// credential provider" (<c>RemoteHubAgent.exe auto-sign-in on|off</c>, elevated).
+/// Switches automatic sign-in on or off for this device at install time (docs/credential-provider-design.md §5): "allow it"
+/// and the groups that may use it – the two things IT can also decide by policy (NoUserBehavior, Rights\AutoSignIn), which
+/// then win. Run by the MSI (enroll with AUTOSIGNIN) and by RemoteHub's "Install / Remove credential provider"
+/// (<c>RemoteHubAgent.exe auto-sign-in on|off</c>, elevated); the running service picks it up at the next connection.
 /// <para>
-/// A value that is already there is never changed – IT's policy wins. What this wrote is recorded next to agent.json, so
-/// "off" (and uninstall) removes exactly that, and only while it is still as it was written.
+/// Since 0.18.12 the install's choice is kept in agent.json (<see cref="AgentConfig.NoUserBehavior"/>,
+/// <see cref="AgentConfig.AutoSignInGroups"/>). Before, it was written into the policy key, where Group Policy would delete
+/// it again when IT sets the policy back to "Not configured" (docs/admx-design.md §11.3); <see cref="Migrate"/> moves it.
 /// </para>
 /// </summary>
 public static class AutoSignInSetup
 {
     private const string BehaviorValue = "NoUserBehavior", RightValue = "AutoSignIn";
 
+    /// <summary>What versions before 0.18.12 wrote into the policy key, so it could be removed again.</summary>
     internal static string MarkerPath => Path.Combine(AgentConfig.Folder, "autosignin.policy");
 
-    /// <summary>Writes what isn't set yet; returns what happened, for the log and RemoteHub.</summary>
-    public static string On(IReadOnlyList<string> groups)
+    /// <summary>Allows automatic sign-in for <paramref name="groups"/>; returns what happened, for the log and RemoteHub.</summary>
+    public static string On(IReadOnlyList<string> groups) => On(groups, AgentConfig.DefaultPath, ReadPolicy());
+
+    /// <summary>Stops automatic sign-in as the install allowed it. The policy, if IT set one, stays as it is.</summary>
+    public static string Off() => Off(AgentConfig.DefaultPath, ReadPolicy());
+
+    internal static string On(IReadOnlyList<string> groups, string configPath, (string? Behavior, string[]? Right) policy)
     {
-        var written = ReadMarker();
+        Migrate(configPath);
+        var config = AgentConfig.Load(configPath);
+        config.NoUserBehavior = NoUserBehaviors.AutoSignIn;
+        config.AutoSignInGroups = [.. groups];
+        config.Save(configPath);
         var notes = new List<string>();
-        using var key = Registry.LocalMachine.CreateSubKey(AgentPolicy.RegistryPath);
-        switch (key.GetValue(BehaviorValue))
-        {
-            case null:
-                key.SetValue(BehaviorValue, NoUserBehaviors.AutoSignIn, RegistryValueKind.String);
-                written[BehaviorValue] = NoUserBehaviors.AutoSignIn;
-                break;
-            case string s when NoUserBehaviors.Valid(s) == NoUserBehaviors.AutoSignIn:
-                break;
-            case var other:
-                notes.Add($"{BehaviorValue} is set to \"{other}\" on this device (Group Policy?) – left as it is, so automatic sign-in stays off");
-                break;
-        }
-        using (var rights = key.CreateSubKey("Rights"))
-        {
-            if (rights.GetValue(RightValue) is null)
-            {
-                rights.SetValue(RightValue, groups.ToArray(), RegistryValueKind.MultiString);
-                written[@"Rights\" + RightValue] = string.Join(";", groups);
-            }
-            else notes.Add($@"Rights\{RightValue} is already set on this device – left as it is");
-        }
-        WriteMarker(written);
+        if (policy.Behavior is { } behavior && NoUserBehaviors.Valid(behavior) != NoUserBehaviors.AutoSignIn)
+            notes.Add($"the policy {BehaviorValue} is \"{behavior}\" on this device (Group Policy?) – it decides, so automatic sign-in stays off");
+        if (policy.Right is not null)
+            notes.Add($@"the policy Rights\{RightValue} is set on this device – it decides who may sign in automatically");
         return notes.Count == 0
             ? $"Automatic sign-in allowed on this device for {string.Join(", ", groups.Select(Describe))}."
-            : "Automatic sign-in: " + string.Join("; ", notes) + ".";
+            : "Automatic sign-in allowed by the install, but " + string.Join("; ", notes) + ".";
     }
 
-    /// <summary>Removes what <see cref="On"/> wrote, if it is still unchanged. Nothing written → nothing to do.</summary>
-    public static string Off()
+    internal static string Off(string configPath, (string? Behavior, string[]? Right) policy)
     {
-        var written = ReadMarker();
-        if (written.Count == 0) return "Automatic sign-in: no policy values set by the agent.";
-        using (var key = Registry.LocalMachine.OpenSubKey(AgentPolicy.RegistryPath, writable: true))
+        Migrate(configPath);
+        if (File.Exists(configPath))
         {
-            if (key is not null)
-            {
-                if (written.TryGetValue(BehaviorValue, out var behavior) && key.GetValue(BehaviorValue) is string now && now == behavior)
-                    key.DeleteValue(BehaviorValue, throwOnMissingValue: false);
-                using var rights = key.OpenSubKey("Rights", writable: true);
-                if (rights is not null && written.TryGetValue(@"Rights\" + RightValue, out var groups)
-                    && rights.GetValue(RightValue) is string[] current && string.Join(";", current) == groups)
-                    rights.DeleteValue(RightValue, throwOnMissingValue: false);
-            }
+            var config = AgentConfig.Load(configPath);
+            config.NoUserBehavior = null;
+            config.AutoSignInGroups = null;
+            config.Save(configPath);
         }
-        try { File.Delete(MarkerPath); } catch { /* gone */ }
-        return "Automatic sign-in: the policy values set by the agent were removed.";
+        return policy.Behavior is { } behavior && NoUserBehaviors.Valid(behavior) == NoUserBehaviors.AutoSignIn
+            ? $"Automatic sign-in: the install's permission was removed, but the policy {BehaviorValue} on this device still allows it."
+            : "Automatic sign-in: off as far as the install allowed it.";
+    }
+
+    /// <summary>
+    /// Once, after an update from a version before 0.18.12: the values that version wrote into the policy key – recorded in
+    /// <see cref="MarkerPath"/> – move to agent.json, if they are still as written. A value IT changed since stays in the
+    /// policy key: IT has taken it over. Null when there was nothing to move; otherwise what happened, for the log.
+    /// </summary>
+    public static string? Migrate(AgentConfig config)
+    {
+        if (config.SourcePath is not { } path) return null;
+        var result = Migrate(path);
+        if (result is not null)
+        {
+            var now = AgentConfig.Load(path);
+            config.NoUserBehavior = now.NoUserBehavior;
+            config.AutoSignInGroups = now.AutoSignInGroups;
+        }
+        return result;
+    }
+
+    /// <param name="key">The policy key (tests pass their own; null: HKLM).</param>
+    /// <param name="markerPath">What the older version wrote (tests pass their own; null: <see cref="MarkerPath"/>).</param>
+    internal static string? Migrate(string configPath, IPolicyKey? key = null, string? markerPath = null)
+    {
+        markerPath ??= MarkerPath;
+        var written = ReadMarker(markerPath);
+        if (written.Count == 0) return null;
+        key ??= RegistryPolicyKey.Open();
+        var moved = new List<string>();
+        var kept = new List<string>();
+        AgentConfig? config = File.Exists(configPath) ? AgentConfig.Load(configPath) : null;
+        if (written.TryGetValue(BehaviorValue, out var behavior))
+        {
+            var now = key?.Text(BehaviorValue);
+            if (now == behavior)
+            {
+                key!.Delete(null, BehaviorValue);
+                config?.NoUserBehavior = behavior;
+                moved.Add(BehaviorValue);
+            }
+            else if (now is not null) kept.Add(BehaviorValue); // changed: IT's now. Gone: removed since – not brought back.
+        }
+        if (written.TryGetValue(@"Rights\" + RightValue, out var groups))
+        {
+            var now = key?.List("Rights", RightValue);
+            if (now is not null && string.Join(";", now) == groups)
+            {
+                key!.Delete("Rights", RightValue);
+                config?.AutoSignInGroups = [.. groups.Split(';', StringSplitOptions.RemoveEmptyEntries)];
+                moved.Add(@"Rights\" + RightValue);
+            }
+            else if (now is not null) kept.Add(@"Rights\" + RightValue);
+        }
+        config?.Save(configPath);
+        try { File.Delete(markerPath); } catch { /* gone */ }
+        return "Automatic sign-in: " +
+               (moved.Count > 0 ? $"moved {string.Join(" and ", moved)} from the policy key to agent.json" : "nothing to move from the policy key") +
+               (kept.Count > 0 ? $"; {string.Join(" and ", kept)} changed since the install – left in the policy key (IT's now)" : "") + ".";
+    }
+
+    /// <summary>The policy key, as far as the migration needs it (tests pass their own).</summary>
+    internal interface IPolicyKey
+    {
+        string? Text(string name);
+        string[]? List(string subKey, string name);
+        void Delete(string? subKey, string name);
+    }
+
+    private sealed class RegistryPolicyKey(RegistryKey key) : IPolicyKey
+    {
+        public static RegistryPolicyKey? Open() => Registry.LocalMachine.OpenSubKey(AgentPolicy.RegistryPath, writable: true) is { } k ? new(k) : null;
+
+        public string? Text(string name) => key.GetValue(name) as string;
+
+        public string[]? List(string subKey, string name)
+        {
+            using var sub = key.OpenSubKey(subKey);
+            return sub?.GetValue(name) as string[];
+        }
+
+        public void Delete(string? subKey, string name)
+        {
+            if (subKey is null) { key.DeleteValue(name, throwOnMissingValue: false); return; }
+            using var sub = key.OpenSubKey(subKey, writable: true);
+            sub?.DeleteValue(name, throwOnMissingValue: false);
+        }
+    }
+
+    /// <summary>What the policy sets for automatic sign-in now (for the notes in the answer).</summary>
+    private static (string? Behavior, string[]? Right) ReadPolicy()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(AgentPolicy.RegistryPath);
+            using var rights = key?.OpenSubKey("Rights");
+            return (key?.GetValue(BehaviorValue) as string, rights?.GetValue(RightValue) as string[]);
+        }
+        catch { return (null, null); }
     }
 
     private static string Describe(string group) => group == AgentConfig.AdministratorsSid ? "Administrators" : group;
 
-    private static Dictionary<string, string> ReadMarker()
+    private static Dictionary<string, string> ReadMarker(string path)
     {
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            foreach (var line in File.ReadAllLines(MarkerPath))
+            foreach (var line in File.ReadAllLines(path))
                 if (line.IndexOf('=') is var i and > 0) values[line[..i]] = line[(i + 1)..];
         }
         catch { /* none */ }
         return values;
-    }
-
-    private static void WriteMarker(Dictionary<string, string> values)
-    {
-        if (values.Count == 0) return;
-        Directory.CreateDirectory(AgentConfig.Folder); // protected at enrollment (SYSTEM and Administrators only)
-        File.WriteAllLines(MarkerPath, values.Select(v => $"{v.Key}={v.Value}"));
     }
 }

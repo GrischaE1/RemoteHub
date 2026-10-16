@@ -27,6 +27,9 @@ public sealed class AgentLog
     /// <summary>Whether audit entries also go to the Event Log (policy AuditToEventLog); read for every entry.</summary>
     public Func<bool> EventLogEnabled { get; init; } = () => false;
 
+    /// <summary>Days log files are kept (policy LogRetentionDays, else agent.json); read at each daily cleanup. Null: the constructor's.</summary>
+    public Func<int>? RetentionDays { get; init; }
+
     /// <summary>For tests: every audit entry as written.</summary>
     public event Action<AuditEvent, string>? Audited;
 
@@ -60,8 +63,10 @@ public sealed class AgentLog
     private void Clean(DateTime now)
     {
         _cleaned = DateOnly.FromDateTime(now);
+        int days;
+        try { days = RetentionDays is { } read ? Math.Max(1, read()) : _retentionDays; } catch { days = _retentionDays; }
         foreach (var file in Directory.GetFiles(_folder, "agent-*.log"))
-            if (File.GetLastWriteTime(file) < now.AddDays(-_retentionDays))
+            if (File.GetLastWriteTime(file) < now.AddDays(-days))
                 try { File.Delete(file); } catch { /* in use */ }
     }
 }
