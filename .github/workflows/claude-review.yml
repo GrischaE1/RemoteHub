@@ -1,10 +1,19 @@
 name: Claude review
 
-# Reviews every pull request and posts the findings as inline comments. Review standards come from CLAUDE.md,
-# which pulls in the same instruction files Copilot used.
+# Reviews a pull request when it is marked ready for review and posts the findings as inline comments. Pushes don't
+# trigger a review, so open pull requests as drafts while working; to review again, convert back to a draft and mark
+# it ready once more. Review standards come from CLAUDE.md, which pulls in the same instruction files Copilot used.
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [ready_for_review]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+# A newer review of the same pull request replaces one still running.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   review:
