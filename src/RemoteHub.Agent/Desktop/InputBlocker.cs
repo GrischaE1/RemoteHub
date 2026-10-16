@@ -131,19 +131,37 @@ internal static unsafe class InputBlocker
 }
 
 /// <summary>
-/// While the banner lets the admin's clicks through: watches for the device's own mouse (any event the agent didn't
-/// inject) and reports the first one, so the banner becomes the user's to click again. A low-level hook on its own
-/// thread, like <see cref="InputBlocker"/>; it only runs while it is needed.
+/// While the banner lets the admin's clicks through: watches for the device's own mouse and reports the first event
+/// from it, so the banner becomes the user's to click again. A low-level hook on its own thread, like
+/// <see cref="InputBlocker"/>; it only runs while it is needed.
 /// </summary>
+/// <remarks>
+/// Only a physical mouse counts. A full-screen RDP client (Hyper-V's VM connection, mstsc) moves the cursor itself after
+/// each of the admin's moves, to where the remote pointer is; taken for the user's mouse, that made the banner clickable
+/// again before every one of the admin's clicks, and they couldn't reach the client's connection bar below it.
+/// </remarks>
 internal static unsafe class LocalPointerWatch
 {
     private const int WH_MOUSE_LL = 14;
-    private const uint WM_QUIT = 0x0012;
+    private const uint WM_QUIT = 0x0012, WM_MOUSEMOVE = 0x0200;
+    private const uint LLMHF_INJECTED = 0x01, LLMHF_LOWER_IL_INJECTED = 0x02;
 
     private static readonly object Lock = new();
     private static Thread? _thread;
     private static uint _threadId;
     private static Action? _moved;
+    private static long _adminAt; // where the admin's pointer is: X in the low 32 bits, Y in the high ones
+
+    /// <summary>Where the admin's pointer is now (screen pixels): a move to exactly there isn't the user's.</summary>
+    public static void AdminAt(int x, int y) => Interlocked.Exchange(ref _adminAt, (long)y << 32 | (uint)x);
+
+    /// <summary>
+    /// Whether a mouse event comes from the device's own mouse: not injected – neither by the agent nor by another program
+    /// (an RDP client placing the cursor) – and, for a move, not one to where the admin's pointer already is.
+    /// </summary>
+    internal static bool FromUsersMouse(uint message, int x, int y, uint flags, IntPtr extraInfo, (int X, int Y) admin) =>
+        extraInfo != InputNative.Tag && (flags & (LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED)) == 0 &&
+        !(message == WM_MOUSEMOVE && x == admin.X && y == admin.Y);
 
     public static void Start(Action moved)
     {
@@ -185,8 +203,14 @@ internal static unsafe class LocalPointerWatch
     private static nint MouseProc(int code, nint wParam, nint lParam)
     {
         // Only report – never block, and return at once (Windows drops a slow low-level hook).
-        if (code >= 0 && ((MSLLHOOKSTRUCT*)lParam)->dwExtraInfo != InputNative.Tag && Interlocked.Exchange(ref _moved, null) is { } moved)
-            try { moved(); } catch { /* the UI is gone */ }
+        if (code >= 0)
+        {
+            var m = (MSLLHOOKSTRUCT*)lParam;
+            var admin = Interlocked.Read(ref _adminAt);
+            if (FromUsersMouse((uint)wParam, m->X, m->Y, m->flags, m->dwExtraInfo, ((int)admin, (int)(admin >> 32))) &&
+                Interlocked.Exchange(ref _moved, null) is { } moved)
+                try { moved(); } catch { /* the UI is gone */ }
+        }
         return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
     }
 
