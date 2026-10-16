@@ -1,6 +1,6 @@
 name: Draft on open
 
-# Pull requests start as drafts, so the Claude review only runs once an admin marks one ready for review.
+# Pull requests start as drafts and are marked ready for review once the work is done.
 # A pull request opened as ready is converted back to a draft with a note. Dependabot's pull requests are left alone.
 # pull_request_target: runs this file as it is on main – the pull request's own code is never checked out or run.
 on:
