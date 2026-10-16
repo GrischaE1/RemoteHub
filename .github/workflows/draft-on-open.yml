@@ -1,0 +1,24 @@
+name: Draft on open
+
+# Pull requests start as drafts, so the Claude review only runs once the author marks one ready for review.
+# A pull request opened as ready is converted back to a draft with a note. Dependabot's pull requests are left alone.
+# pull_request_target: runs this file as it is on main – the pull request's own code is never checked out or run.
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  draft:
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Convert to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr ready "$PR" --undo -R "$GITHUB_REPOSITORY"
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "Pull requests start as drafts here. Mark this one **Ready for review** when it's done – that starts the Claude review."

@@ -16,9 +16,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review:
-    # Secrets are not passed to workflows from forks, so skip those instead of failing.
+  author:
+    # Secrets are not passed to workflows from forks, and the action refuses authors without write access, so
+    # pull requests from forks are skipped instead of failing.
     if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      admin: ${{ steps.permission.outputs.admin }}
+    steps:
+      - id: permission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$AUTHOR/permission" --jq .permission)
+          echo "admin=$([ "$permission" = admin ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  review:
+    needs: author
+    # Reviews of pull requests by non-admins wait until an admin approves the run (required reviewers on the
+    # claude-review-approval environment).
+    environment: ${{ needs.author.outputs.admin == 'true' && 'claude' || 'claude-review-approval' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
