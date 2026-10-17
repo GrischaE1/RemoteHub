@@ -9,6 +9,7 @@
 #     another one with AUTOSIGNIN=0 removes the DLL and both keys.
 #  5. RemoteHub's "Install / Remove credential provider" (AgentInstaller.ChangeCredentialProvider over the agent):
 #     refused on another build; on the build under test it adds and removes the feature while the agent keeps running.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -145,6 +146,8 @@ BeforeAll {
 }
 
 AfterAll {
+    # the provider swapped, rebuilt agents installed: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
     Get-LabFile -Name $VmName -Path "$guestDir\*.log" -Destination (Join-Path $EvidenceDir 'c-prov-logs')
 }
 

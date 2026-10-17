@@ -65,6 +65,10 @@ if (Test-Path $cpLab) {
     if ($LASTEXITCODE -ge 8) { throw "robocopy of the credential provider lab build failed ($LASTEXITCODE)." }
 }
 
+# The Group Policy template of this build (policy\RemoteHub.admx, en-US\RemoteHub.adml), for POL-01.
+robocopy (Join-Path $repo 'policy') (Join-Path $LabRoot 'policy') /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy of the policy templates failed ($LASTEXITCODE)." }
+
 $runId = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runDir = Join-Path $LabRoot "results\$runId"
 Write-Host "Run $runId$(if ($msi) { ", agent $($msi.Name)" }) - queued for '$LabTask'"

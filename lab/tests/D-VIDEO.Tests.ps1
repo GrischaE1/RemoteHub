@@ -3,6 +3,7 @@
 # monitors, and the virtual monitor (auto / always / off, reference-counted, resized). The console account connects to
 # its own session (no question). Stats arrive every 2 s; the device side is read over PowerShell Direct.
 # See docs/test-lab-cases.md section 9.8.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -31,13 +32,15 @@ BeforeAll {
         $null = Restart-LabAgent -Name $VmName -Pin $pin
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    $init = Initialize-LabVm -Name $VmName -Agent
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-vid-agent-logs')
+    # agent.json, the virtual display driver disabled, the Hyper-V video stopped / set / reverted: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {

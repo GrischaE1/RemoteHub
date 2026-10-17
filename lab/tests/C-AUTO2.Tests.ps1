@@ -3,6 +3,8 @@
 # client (harness "auto-sign-in", signed in to the agent as the console account). The agent MSI under test must be
 # built with the provider and signed (build-installer.ps1 -LabSigning -CredentialProvider). The broker's check of the
 # installation is cached for a minute: every variant restarts the agent. See docs/test-lab-cases.md section 9.12.
+# Every context starts from the checkpoint (Reset-LabVm) with its own install.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -25,6 +27,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-auto2-agent-logs')
+    # installs, uninstalls, groups and console sign-ins changed the VM: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {

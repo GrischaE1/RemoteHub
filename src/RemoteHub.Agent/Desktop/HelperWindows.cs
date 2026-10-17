@@ -24,6 +24,9 @@ internal interface IHelperUi : IDisposable
     /// </summary>
     void ShowSignedInRemotely(HelperInit init) { }
 
+    /// <summary>The privacy screen's heading from the device's policy (PrivacyScreenMessage); null: the built-in one.</summary>
+    void SetPrivacyHeading(string? heading) { }
+
     /// <summary>What the device's windows stopped (a snipping tool), for the agent's log.</summary>
     Action<string>? Noted { get => null; set { } }
 
@@ -282,15 +285,21 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     {
         if (_banner is not { Handle: var h } || h == IntPtr.Zero || !GetWindowRect(h, out var r)) return;
         var over = x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom;
-        if (over && Volatile.Read(ref _bannerPassThrough) == 0)
+        if (over)
         {
+            // Set before every event, not only the first: the UI thread may just have made it clickable again.
+            LocalPointerWatch.AdminAt(x, y);
             SetClickThrough(h, true);
-            Volatile.Write(ref _bannerPassThrough, 1);
-            LocalPointerWatch.Start(() => Post(BannerClickableAgain));
+            if (Interlocked.Exchange(ref _bannerPassThrough, 1) == 0)
+                LocalPointerWatch.Start(() =>
+                {
+                    Volatile.Write(ref _bannerPassThrough, 0);
+                    Post(BannerClickableAgain);
+                });
         }
-        else if (!over && Interlocked.Exchange(ref _bannerPassThrough, 0) == 1)
+        else
         {
-            SetClickThrough(h, false);
+            if (Interlocked.Exchange(ref _bannerPassThrough, 0) == 1) SetClickThrough(h, false);
             LocalPointerWatch.Stop();
         }
     }
@@ -298,9 +307,9 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     /// <summary>UI thread: the user's own mouse moved – the banner is theirs to click again.</summary>
     private void BannerClickableAgain()
     {
-        if (Interlocked.Exchange(ref _bannerPassThrough, 0) == 0) return;
+        // The watch keeps running (re-armed by the admin's next event over the banner); it stops when their pointer leaves.
+        if (Volatile.Read(ref _bannerPassThrough) == 1) return; // the admin's pointer made it click-through again since
         if (_banner is { Handle: var h } && h != IntPtr.Zero) SetClickThrough(h, false);
-        LocalPointerWatch.Stop();
     }
 
     /// <summary>Clicks go through the (layered) window to what is below it, or not.</summary>
@@ -318,6 +327,14 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     public void ShowSignedInRemotely(HelperInit init) => Post(() =>
     {
         _signedInRemotely = init.Account;
+        if (_overlays.Count > 0) ShowOverlays(); // the text changes
+    });
+
+    private string? _privacyHeading; // policy PrivacyScreenMessage
+
+    public void SetPrivacyHeading(string? heading) => Post(() =>
+    {
+        _privacyHeading = string.IsNullOrWhiteSpace(heading) ? null : heading.Trim();
         if (_overlays.Count > 0) ShowOverlays(); // the text changes
     });
     private DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
@@ -434,7 +451,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             var w = new FluentWindow(this, Theme.Current(), FluentKind.Overlay)
             {
                 Subtitle = "PRIVACY MODE ACTIVE",
-                Heading = "Remote Support Session in Progress",
+                Heading = _privacyHeading ?? "Remote Support Session in Progress",
                 Body = _signedInRemotely is { } account
                     ? $"{account} is signed in remotely. The screen stays hidden while they work."
                     : "Your screen is temporarily hidden while an authorized administrator assists your device.",

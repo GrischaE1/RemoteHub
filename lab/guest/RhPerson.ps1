@@ -22,7 +22,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('windows', 'read', 'click', 'pin', 'marker', 'clip-get', 'clip-set', 'screen-read', 'key', 'close-window', 'hover', 'ocr-file', 'uia')][string]$Do,
+    [Parameter(Mandatory)][ValidateSet('windows', 'read', 'click', 'pin', 'marker', 'clip-get', 'clip-set', 'screen-read', 'key', 'close-window', 'hover', 'ocr-file', 'uia', 'serve')][string]$Do,
     [string]$Title = '*',
     [string]$Text,
     [string]$Value,
@@ -87,16 +87,20 @@ public static class RhNative
 '@
 # compiled once per user and source (csc takes seconds; each person action is a new process): loaded from TEMP after that
 $rhNativeDll = Join-Path $env:TEMP ('RhNative-' + [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($rhNativeSource)), 0, 8).Replace('-', '') + '.dll')
-if (-not (Test-Path $rhNativeDll)) {
-    try { Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition $rhNativeSource -OutputAssembly $rhNativeDll -OutputType Library } catch { }
+if (-not ('RhNative' -as [type])) {   # already loaded when -Do serve runs the actions in its own process
+    if (-not (Test-Path $rhNativeDll)) {
+        try { Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition $rhNativeSource -OutputAssembly $rhNativeDll -OutputType Library } catch { }
+    }
+    if (Test-Path $rhNativeDll) { Add-Type -Path $rhNativeDll } else { Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition $rhNativeSource }
 }
-if (Test-Path $rhNativeDll) { Add-Type -Path $rhNativeDll } else { Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition $rhNativeSource }
 [void][RhNative]::SetProcessDPIAware()
 
 # the answer: to -Out when given (output of a session task is wrapped at 4096 characters), else stdout
 function Out-Json($o) {
-    $j = $o | ConvertTo-Json -Depth 6 -Compress
-    if ($Out -and $Do -ne 'marker') { [IO.File]::WriteAllText($Out, $j) } else { $j }
+    # -InputObject: an empty list is "[]" (piped, Windows PowerShell writes nothing - an answer that looks missing)
+    $j = ConvertTo-Json -InputObject $o -Depth 6 -Compress
+    # written under another name, then renamed: the reader never sees half an answer
+    if ($Out -and $Do -ne 'marker') { [IO.File]::WriteAllText("$Out.part", $j); Move-Item -LiteralPath "$Out.part" -Destination $Out -Force } else { $j }
 }
 
 # Windows OCR on a bitmap: words with their boxes (bitmap pixels)
@@ -152,6 +156,34 @@ function Read-AgentWindow {
 }
 
 switch ($Do) {
+    'serve' {
+        # Stays in the session and runs the actions asked for in -Value (a folder): <id>.req.json { do, title, text,
+        # value, timeout, out } - each one in this process, so a step costs no new process, task or compile (the lab
+        # host's Invoke-LabPerson writes the request and waits for the answer file). alive.txt shows it runs. Ends
+        # after 30 minutes without a request, on stop.txt, or when this script file is replaced (the next request
+        # starts the new one).
+        $q = $Value
+        $null = New-Item -ItemType Directory -Path $q -Force
+        $self = $PSCommandPath
+        $stamp = (Get-Item $self).LastWriteTimeUtc
+        $idleUntil = (Get-Date).AddMinutes(30)
+        while ((Get-Date) -lt $idleUntil) {
+            Set-Content -Path (Join-Path $q 'alive.txt') -Value "$PID $((Get-Date).ToUniversalTime().ToString('o'))"
+            if ((Get-Item $self).LastWriteTimeUtc -ne $stamp -or (Test-Path (Join-Path $q 'stop.txt'))) { break }
+            $next = Get-ChildItem $q -Filter '*.req.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -First 1
+            if (-not $next) { Start-Sleep -Milliseconds 200; continue }
+            $req = $null
+            try { $req = [IO.File]::ReadAllText($next.FullName) | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 100; continue }   # still being written
+            Remove-Item $next.FullName -ErrorAction SilentlyContinue
+            $a = @{ Do = $req.do; Title = $(if ($req.title) { $req.title } else { '*' }); TimeoutSec = [int]$req.timeout; Out = $req.out }
+            if ($req.text) { $a.Text = $req.text }
+            if ($req.PSObject.Properties['value'] -and $null -ne $req.value) { $a.Value = [string]$req.value }
+            try { & $self @a }
+            catch { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = "$_" } -Compress)) }
+            $idleUntil = (Get-Date).AddMinutes(30)
+        }
+        Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
+    }
     'windows' { Out-Json @(Get-AgentWindows) }
     'read' {
         $r = Read-AgentWindow
@@ -211,15 +243,24 @@ switch ($Do) {
     }
     'clip-get' {
         Add-Type -AssemblyName System.Windows.Forms
-        $t = [Windows.Forms.Clipboard]::GetText()
+        $t = $null
+        foreach ($i in 1..20) { try { $t = [Windows.Forms.Clipboard]::GetText(); break } catch { Start-Sleep -Milliseconds 250 } }
         $sha = if ($t) { [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($t))).Replace('-', '') } else { $null }
         Out-Json @{ length = $t.Length; sha256 = $sha; start = $(if ($t) { $t.Substring(0, [Math]::Min(100, $t.Length)) } else { '' })
             formats = @([Windows.Forms.Clipboard]::GetDataObject().GetFormats()); files = @([Windows.Forms.Clipboard]::GetFileDropList()) }
     }
     'clip-set' {
         Add-Type -AssemblyName System.Windows.Forms
-        [Windows.Forms.Clipboard]::SetText($Value)
-        Out-Json @{ set = $Value.Length }
+        # another process may hold the clipboard (the agent reading a large copy): SetDataObject retries (20 x 250 ms),
+        # and that again until the timeout
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        $tries = 0
+        while ($true) {
+            $tries++
+            try { [Windows.Forms.Clipboard]::SetDataObject($Value, $true, 20, 250); break }
+            catch { if ((Get-Date) -ge $until) { throw } ; Start-Sleep -Milliseconds 500 }
+        }
+        Out-Json @{ set = $Value.Length; tries = $tries }
     }
     'close-window' {
         $w = @(Get-AgentWindows)
@@ -237,7 +278,7 @@ switch ($Do) {
     'ocr-file' {
         $bmp = [Drawing.Bitmap]::FromFile($Value)
         try { $ocr = Get-Ocr $bmp } finally { $bmp.Dispose() }
-        Out-Json @{ text = $ocr.Text; lines = $ocr.Lines; words = @($ocr.Words | ForEach-Object { @{ text = $_.Text; x = $_.X; y = $_.Y; w = $_.W; h = $_.H } }) }
+        Out-Json @{ text = $ocr.Text; lines = $ocr.Lines; words = @($ocr.Words | ForEach-Object { @{ text = $_.Text; x = $_.X; y = $_.Y; w = $_.W; h = $_.H; line = $_.Line } }) }
     }
     'uia' {
         # UI Automation of a normal window (RemoteHub, an installer dialog, Settings): -Title the window (wildcards),
@@ -248,7 +289,12 @@ switch ($Do) {
         $A = [Windows.Automation.AutomationElement]
         $until = (Get-Date).AddSeconds($TimeoutSec)
         $found = $null; $win = $null
+        $searchError = $null
+        $scrolled = $false
         do {
+          # a list that refreshes while the tree is walked (the processes tab every second) can make FindAll throw
+          # ("Unrecognized error", an element no longer there): that pass is tried again
+          try {
             $tops = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition))
             # RemoteHub's dialogs are owned windows: UIA lists them inside the main window, not at the top - those first
             $isWin = New-Object Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([Windows.Automation.ControlType]::Window)
@@ -257,8 +303,18 @@ switch ($Do) {
             $owned = @($tops | Where-Object { & $isMain $_.Current.Name } | ForEach-Object { @($_.FindAll([Windows.Automation.TreeScope]::Descendants, $isWin)) })
             $wins = @(@($owned | Where-Object { $_.Current.Name -like $Title -and $Title -ne '*' }) +
                 @($tops | Where-Object { $_.Current.Name -like $Title -or ($Title -eq 'RemoteHub*' -and (& $isMain $_.Current.Name)) }))
+            # a plain name (no wildcard): UI Automation matches it itself - walking every element and filtering here takes
+            # tens of seconds in a tab with a long refreshing list (services, processes)
+            $exact = $null
+            if ($Text -and $Text -notlike 'type:*' -and $Text -notmatch '[\*\?\[\]]') {
+                $ic = [Windows.Automation.PropertyConditionFlags]::IgnoreCase
+                $exact = New-Object Windows.Automation.OrCondition @(
+                    (New-Object Windows.Automation.PropertyCondition ($A::NameProperty), $Text, $ic),
+                    (New-Object Windows.Automation.PropertyCondition ($A::AutomationIdProperty), $Text, $ic),
+                    (New-Object Windows.Automation.PropertyCondition ($A::HelpTextProperty), $Text, $ic))
+            }
             foreach ($w in $wins) {
-                $hit = @($w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
+                $hit = @($w.FindAll([Windows.Automation.TreeScope]::Descendants, $(if ($exact) { $exact } else { [Windows.Automation.Condition]::TrueCondition })) |
                         Where-Object {
                             # "type:Edit": an element of that control type with neither a name nor an id (the PowerShell
                             # tab's input line and output); otherwise the name, the id or the tooltip (HelpText - RemoteHub's
@@ -266,9 +322,24 @@ switch ($Do) {
                             if ($Text -like 'type:*') { $_.Current.ControlType.ProgrammaticName -eq "ControlType.$(($Text.Substring(5) -split '#')[0])" -and -not $_.Current.Name -and -not $_.Current.AutomationId }
                             else { $_.Current.Name -like $Text -or $_.Current.AutomationId -like $Text -or ($_.Current.HelpText -and $_.Current.HelpText -like $Text) }
                         })
+                $any = $hit
                 $visible = @($hit | Where-Object { -not $_.Current.IsOffscreen })
                 # a plain click is an Invoke, which works off the screen too: a button below the screen still counts
                 $hit = if ($visible -or ($Value -and $Value -ne 'click')) { $visible } else { @($hit | Where-Object { $_.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' }) }
+                # only scrolled out of a list or tree (RemoteHub's tree grows past its window, a new item isn't scrolled
+                # to): its item (the element or the nearest parent with ScrollItemPattern) scrolled into view once, then
+                # looked for again
+                if (-not $hit -and @($any).Count -and -not $scrolled) {
+                    $scrolled = $true
+                    $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+                    $e = @($any)[0]; $moved = $false
+                    while ($e -and -not [Windows.Automation.Automation]::Compare($e, $w)) {
+                        $sp = $null
+                        if ($e.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); $moved = $true } catch { }; break }
+                        $e = $walker.GetParent($e)
+                    }
+                    if ($moved) { Start-Sleep -Milliseconds 400; break }
+                }
                 # "type:Edit#2": the second one in tree order (the file transfer tab's remote address box)
                 if ($Text -match '^type:.*#(\d+)$') { $hit = @($hit | Select-Object -Skip ([int]$Matches[1] - 1) -First 1) }
                 elseif ($hit.Count -gt 1) {
@@ -278,10 +349,12 @@ switch ($Do) {
                 }
                 if ($hit) { $found = $hit[0]; $win = $w; break }
             }
+          }
+          catch { $searchError = "$($_.Exception.Message)"; $found = $null; $win = $null }
             if (-not $found) { Start-Sleep -Milliseconds 500 }
         } while (-not $found -and (Get-Date) -lt $until)
         $action = if ($Value) { $Value } else { 'click' }
-        if (-not $found) { Out-Json @{ found = $false; title = $Title; text = $Text; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }; break }
+        if (-not $found) { Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }; break }
         $pat = { param($p) $o = $null; if ($found.TryGetCurrentPattern($p, [ref]$o)) { $o } else { $null } }
         $result = @{ found = $true; name = $found.Current.Name; type = $found.Current.ControlType.ProgrammaticName; window = $win.Current.Name; enabled = $found.Current.IsEnabled }
         $center = { $r = $found.Current.BoundingRectangle; @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
@@ -342,6 +415,18 @@ switch ($Do) {
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }
             'realclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]) }
             'keys:*' { $found.SetFocus(); Start-Sleep -Milliseconds 200; [Windows.Forms.SendKeys]::SendWait($action.Substring(5)) }
+            'readnext' {
+                # the current choice of the ComboBox after the label (-Text): its value, else its selected item's name
+                $all = @($win.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition))
+                $at = [array]::IndexOf($all, ($all | Where-Object { [Windows.Automation.Automation]::Compare($_, $found) } | Select-Object -First 1))
+                $field = $all | Select-Object -Skip ($at + 1) | Where-Object { $_.Current.ControlType.ProgrammaticName -eq 'ControlType.ComboBox' } | Select-Object -First 1
+                if (-not $field) { $result.error = "no ControlType.ComboBox after '$Text'"; break }
+                $o = $null
+                $result.value = if ($field.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$o) -and $o.Current.Value) { $o.Current.Value }
+                elseif ($field.TryGetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern, [ref]$o) -and @($o.Current.GetSelection()).Count) { @($o.Current.GetSelection())[0].Current.Name }
+                else { $field.Current.Name }
+                $result.enabled = $field.Current.IsEnabled
+            }
             { $_ -like 'setnext:*' -or $_ -like 'choose:*' } {
                 # RemoteHub's form fields have no names: the label (-Text) is a separate element before them - the next
                 # Edit (setnext) or ComboBox (choose) after it in tree order is the field
@@ -392,6 +477,13 @@ switch ($Do) {
                 $v = & $pat ([Windows.Automation.ValuePattern]::Pattern)
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
                 $tp = & $pat ([Windows.Automation.TextPattern]::Pattern)
+                # the label text inside a CheckBox (WPF lists both with the same name, either may be found first): the
+                # CheckBox's state, as check / uncheck use its parent's pattern
+                if (-not $v -and -not $tp -and -not $t) {
+                    $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
+                    $o = $null
+                    if ($p -and $p.Current.ControlType.ProgrammaticName -eq 'ControlType.CheckBox' -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o; $result.enabled = $p.Current.IsEnabled }
+                }
                 $result.value = if ($v) { $v.Current.Value } elseif ($tp) { $tp.DocumentRange.GetText(200000) } elseif ($t) { [string]$t.Current.ToggleState } else { $found.Current.Name }
             }
             'toggle-*' {

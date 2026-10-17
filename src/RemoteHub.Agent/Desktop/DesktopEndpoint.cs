@@ -163,12 +163,13 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             var init = new HelperInit(identity.Account, o.Config.DeviceLabel, consent, _pin, policy.ConsentTimeoutSeconds, _viewOnly, _secureRight,
                 Math.Clamp(start.FramesPerSecond, 1, policy.MaxFramesPerSecond), Math.Clamp(start.Quality, 1, policy.MaxQuality), monitor,
                 HoldUserDesktop: !active && !(session.State == DesktopSessionState.Locked && SameUser(session.User, _allowedBy)), Clipboard: _clipboard,
-                VirtualDisplay: o.Config.VirtualDisplay != VirtualDisplayModes.Off && VirtualDisplay.Installed ? o.Config.VirtualDisplay : "",
+                VirtualDisplay: policy.VirtualDisplay != VirtualDisplayModes.Off && VirtualDisplay.Installed ? policy.VirtualDisplay : "", // policy, else agent.json
                 OfferToViewer: start.Features?.Contains(DesktopFeatures.TransferOnPaste) == true,
                 // Continued after a dropped connection, nobody new asked: what the user hid stays hidden.
                 UserHidden: resumed is not null && consent == DesktopConsent.None ? resumed.UserHidden : DesktopScreenHide.None,
                 HiddenApps: resumed is not null && consent == DesktopConsent.None ? resumed.HiddenApps : null, AlwaysHidden: [.. policy.HiddenApps],
-                SignedInRemotely: _autoSigned?.Session == session.Id); // continued in the session automatic sign-in created
+                SignedInRemotely: _autoSigned?.Session == session.Id, // continued in the session automatic sign-in created
+                PrivacyHeading: policy.PrivacyScreenMessage);
             _hiddenApps = init.HiddenApps;
             _privacy = _privacy with { User = init.UserHidden };
             _settings = new DesktopSettings(init.Monitor, init.FramesPerSecond, init.Quality);

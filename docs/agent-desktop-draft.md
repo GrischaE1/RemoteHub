@@ -126,7 +126,7 @@ Each message is a type byte followed by a payload (JSON or binary):
 - **Banner.** A topmost window in the user session, on the user's desktop (not on the sign-in, lock or UAC screens), kept out of the captured picture (Windows 10 2004 and later). Admins can't hide it.
   - Heading "Your screen is being viewed and controlled by DOMAIN\user" (or "viewed by"), buttons **Hide screen**, **Hide apps…** and **Disconnect**.
   - After 8 s it collapses to a pill ("Controlled by DOMAIN\user" / "Viewed by DOMAIN\user") with Disconnect, and opens on hover. It never collapses while the user hides something or the privacy screen is on.
-  - The admin's pointer over the banner makes it click-through (`WS_EX_TRANSPARENT`), so the admin's clicks reach the window below; the user's own mouse makes it clickable again at once.
+  - The admin's pointer over the banner makes it click-through (`WS_EX_TRANSPARENT`), so the admin's clicks reach the window below; the user's own mouse makes it clickable again at once. Only a physical mouse counts: injected input – the agent's, or a full-screen RDP client such as Hyper-V's VM connection placing the cursor – and a move to exactly where the admin's pointer is don't.
   - **No banner** in a session automatic sign-in created for this admin (`SignedInRemotely`, since 0.18.10): only the privacy screen's cover, which says "DOMAIN\user is signed in remotely".
 
 ### 4.5 Policy (registry, ADMX-ready)

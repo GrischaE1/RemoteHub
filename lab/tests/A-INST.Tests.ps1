@@ -1,6 +1,8 @@
 # A-INST - agent install the way RemoteHub does it (AgentInstaller.InstallOverRemoting; the runspace is PowerShell
 # Direct instead of WinRM). Checks: service running, fingerprint = pinned, firewall rule scoped, ProgramData folder
 # owned by Administrators without a Users ACE, .rhagent gone. See docs/test-lab-spec.md section 9 and agent-spec 5.
+# Always from the checkpoint (Reset-LabVm): a fresh install with its own -Scope.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -18,6 +20,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'a-inst-agent-logs')
+    # an install scoped to this PC only: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-INST <VmName>' -Tag Agent, 'A-INST' {

@@ -23,6 +23,7 @@
 #    lets only SYSTEM open it, so the foreign clients here run as SYSTEM: in session 0, and in the console session.
 #  - C-AUTO-20: Windows' NTSTATUS from LogonUI -> AutoSignInStatus.Describe -> SignInFailed + 2105.
 #  - C-AUTO-21: the DLL must be signed by the same certificate as the agent (Authenticode.Signer).
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -107,6 +108,8 @@ AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-auto3-agent-logs')
+    # accounts, lockout, user rights and the provider's registration changed: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {

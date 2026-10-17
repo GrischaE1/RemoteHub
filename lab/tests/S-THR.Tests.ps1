@@ -3,6 +3,7 @@
 # (unreadable = nothing allowed; read live; per-right groups). Wrong passwords go to an account made by the test
 # (rhwrong): the throttle counts per address, not per account, and PSAdmin must never come near a lockout - it carries
 # PowerShell Direct. See docs/test-lab-cases.md section 6.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -21,9 +22,9 @@ BeforeAll {
     }
     function Status([object[]]$Results) { @($Results | ForEach-Object { [int]$_.status }) }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    $init = Initialize-LabVm -Name $VmName -Agent
+    $install = $init.Install
+    $pin = $init.Pin
     $null = New-LabGuestUser -Name $VmName -User 'rhwrong' -Admin
     Invoke-LabGuest -Name $VmName -ScriptBlock {
         $null = auditpol.exe /set /subcategory:'{0CCE9215-69AE-11D9-BED3-505054503030}' /failure:enable /success:enable
@@ -33,6 +34,9 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 's-thr-agent-logs')
+    # test account and group, audit policy, lockout threshold, agent.json and the policy key's ACL changed: the next
+    # file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'S-THR <VmName>' -Tag Agent, Security, 'S-THR', 'S-LIM', 'S-POL' {

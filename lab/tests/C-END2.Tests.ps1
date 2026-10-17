@@ -17,6 +17,7 @@
 #    for the service's cover, DesktopEndpoint.cs:768-771) and C-END-15 (a drop the agent notices first counts as
 #    "closed by RemoteHub", DesktopEndpoint.cs:220-230 - the session is locked at once, no resume).
 # Every sign-in starts from the sign-in screen with a restarted agent (the rate limit is 3 per account in 15 minutes).
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -29,6 +30,22 @@ BeforeAll {
     $account = $vm.ConsoleAccount
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "c-end2-$name.json") -Encoding UTF8 }
     function Out([string]$name) { $d = Join-Path $EvidenceDir "c-end2-$name"; $null = New-Item -ItemType Directory -Path $d -Force; $d }
+    # bright spots (icons on the sign-in screen) in a band of a picture: their middles, left to right
+    function Find-LabIcons([string]$Path, [int]$Top, [int]$Bottom) {
+        Add-Type -AssemblyName System.Drawing
+        $bmp = [Drawing.Bitmap]::FromFile($Path)
+        try {
+            $cols = for ($x = 0; $x -lt $bmp.Width; $x += 2) {
+                $ys = @(for ($y = [math]::Max(0, $Top); $y -lt [math]::Min($bmp.Height, $Bottom); $y += 2) { $c = $bmp.GetPixel($x, $y); if (($c.R + $c.G + $c.B) / 3 -gt 200) { $y } })
+                if ($ys) { [pscustomobject]@{ X = $x; Y = [int](($ys | Measure-Object -Average).Average) } }
+            }
+            $groups = @(); $cur = @()
+            foreach ($c in $cols) { if ($cur -and $c.X - $cur[-1].X -gt 12) { $groups += , $cur; $cur = @() }; $cur += $c }
+            if ($cur) { $groups += , $cur }
+            foreach ($g in $groups) { if ($g.Count -ge 3) { [pscustomobject]@{ X = [int](($g | Measure-Object X -Average).Average); Y = [int](($g | Measure-Object Y -Average).Average) } } }
+        }
+        finally { $bmp.Dispose() }
+    }
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 300) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
@@ -160,15 +177,18 @@ public static class RhLabWts {
         $x
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName -AutoSignIn $true
-    $pin = $install.pin
+    # -Clean: the sessions and autosignin.json must be only this file's (no earlier automatic sign-ins)
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoSignIn $true -Clean
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-end2-agent-logs')
+    # the console account signed out / locked, the network cut: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
@@ -318,8 +338,30 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             Start-Sleep -Seconds 3
             Send-LabKey -Name $VmName -Key Enter
             Start-Sleep -Seconds 3
+            # RemoteHub's tile stays selected after the failure (run 20261015-225719: "Signing in ...\Admin...", no password
+            # box): "Sign-in options", then the password's icon - the first of the row below it (Windows lists the
+            # password provider first)
+            $s1 = Join-Path $EvidenceDir 'c-end2-byhand-1-after-ok.png'
+            $null = Get-LabScreenshot -Name $VmName -Path $s1
+            $f.OptionsAt = Find-LabPictureText -Path $s1 -Text 'options'
+            if ($f.OptionsAt) {
+                $ox, $oy = [int[]]("$($f.OptionsAt)" -split ',')
+                Send-LabMouse -Name $VmName -X $ox -Y $oy
+                Start-Sleep -Seconds 2
+                $s2 = Join-Path $EvidenceDir 'c-end2-byhand-2-options.png'
+                $null = Get-LabScreenshot -Name $VmName -Path $s2
+                # the icons: bright spots in the band below the text, left to right
+                # (only those centred under the text: the account tiles at the left edge are in the same band)
+                $f.Icons = @(Find-LabIcons -Path $s2 -Top ($oy + 15) -Bottom ($oy + 90) | Where-Object { [math]::Abs($_.X - $ox) -lt 150 })
+                if ($f.Icons) { Send-LabMouse -Name $VmName -X $f.Icons[0].X -Y $f.Icons[0].Y; Start-Sleep -Seconds 2 }
+                $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-end2-byhand-2b-password.png')
+            }
+            else { Send-LabCtrlAltDel -Name $VmName; Start-Sleep -Seconds 3 }
             Send-LabText -Name $VmName -Text $cfg.Password
+            $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-end2-byhand-3-typed.png')
             Send-LabKey -Name $VmName -Key Enter
+            Start-Sleep -Seconds 5
+            $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-end2-byhand-4-entered.png')
             $f.ByHandError = $null
             try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 120 } catch { $f.ByHandError = "$_" }
             Start-Sleep -Seconds 10   # the connection follows the console into the new session

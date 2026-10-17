@@ -7,6 +7,8 @@
 #   J-30  one name with an allowed and a disallowed address (hosts file on the jump host)
 # Needs: the jump host VM (lab.json "JumpHost"); the VM under test is moved behind it as in J-JUMP.Tests.ps1, the revert
 # undoes it. Harness calls go through the jump host (Use-LabJump). The jump VM is turned off at the end.
+# LabRole: device
+# LabNeeds: jumphost
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -43,6 +45,8 @@ AfterAll {
     try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'j2-target-logs') } catch { }
     Stop-LabJumpHost
     Restore-LabVmNetwork -Name $VmName
+    # moved behind the jump host, agent scoped to it: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'J2 <VmName>' -Tag Jump, 'J' {
@@ -59,7 +63,7 @@ Describe 'J2 <VmName>' -Tag Jump, 'J' {
             Save 'refusals' $r
         }
 
-        It 'J-26 404 "can''t be used as a jump host ... (TunnelEnabled), or the agent there is older"; 403 "may not use ... as a jump host ... (right Tunnel)"; both "Can''t use the jump host <j>: ..."' -Tag 'J-26' {
+        It 'J-26 404 "can''t be used as a jump host ... (TunnelEnabled), or the agent there is older"; 403 "may not use ... as a jump host ... (right Tunnel)"; both "Can''t use the jump host [j]: ..."' -Tag 'J-26' {
             # AgentErrors.Explain (AgentTransport.cs), wrapped by JumpTunnel.ConnectAsync; the harness names the route "jump <address>"
             $where = [regex]::Escape("$($jump.Address):58732")
             $r.off.connected | Should -BeFalse

@@ -3,6 +3,8 @@
 # wrong enrollment (each rolled back without a trace), the ENROLLMENT property, and the install from the console
 # user's session, seen by RemoteHub's polling for the answer (WaitForManualInstall: health every 10 s, 5 s timeout).
 # The interactive install dialog (A-HAND-06) is UI automation, not here. See docs/test-lab-cases.md section 5.2.
+# Starts from the checkpoint (Reset-LabVm): the agent must not be installed yet.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -61,6 +63,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'a-hand-agent-logs')
+    # installed and uninstalled by hand, signing certificate added: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
@@ -123,7 +127,7 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             Save 'property' @{ Enrollment = $e; Result = $result; State = $state; FileLeft = $fileLeft; Health = $health; Uninstall = $uninstall }
         }
 
-        It 'A-HAND-04 ENROLLMENT=<path> in another folder is used, and the file is deleted afterwards' -Tag 'A-HAND-04' {
+        It 'A-HAND-04 ENROLLMENT=[path] in another folder is used, and the file is deleted afterwards' -Tag 'A-HAND-04' {
             $result.ExitCode | Should -BeIn 0, 3010
             $state.Config.deviceId | Should -Be $e.deviceId
             $state.Certificate.Sha256 | Should -Be $e.pin

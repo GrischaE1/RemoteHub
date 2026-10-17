@@ -278,6 +278,9 @@ internal static class AgentErrors
                    "allows for the remote desktop (by default the administrators), and network sign-in must not be denied by policy.";
         return status switch
         {
+            // Agents since 0.18.12: the device's policy PowerShellEnabled = 0 (older agents never answer 404 here).
+            HttpStatusCode.NotFound => $"PowerShell, files, registry, services and processes are turned off on {where} by a policy on the device " +
+                                       "(PowerShellEnabled). The remote desktop may still be available.",
             HttpStatusCode.Unauthorized => $"The RemoteHub Agent on {where} rejected the sign-in: wrong user name or password, or the account is " +
                                            "disabled, locked or its password expired. Use an account of that device or its domain.",
             HttpStatusCode.Forbidden => $"The account is not allowed to use the RemoteHub Agent on {where}: it must be an administrator there " +

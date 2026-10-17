@@ -3,6 +3,7 @@
 # Ctrl+Alt+Del setting, selftest, firewall scope (any / list), another port, groups as typed in the dialog, a custom
 # group, a label with umlauts, a port already in use (the install rolls back) and a broken enrollment (RemoteHub
 # shows the msiexec log lines). Every context reverts its VM. See docs/test-lab-cases.md section 5.1.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -49,6 +50,11 @@ BeforeAll {
         } while ((Get-Date) -lt $until)
         $null
     }
+}
+
+AfterAll {
+    # installs with other options, uninstalls, a port held, a broken enrollment: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-INSTOPT <VmName>' -Tag Agent, 'A-INST', 'A-ROLLBACK', 'A-UNINST' {

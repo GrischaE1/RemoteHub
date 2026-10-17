@@ -3,6 +3,8 @@
 # the dialog, PowerShell remoting set up with RemoteHub's script and its certificate trusted, the agent installed,
 # tested and updated from the menu, every tool tab, and the agent's refusals as RemoteHub shows them. The device side is
 # checked over PowerShell Direct. Client VMs only (2VM). See docs/test-lab-cases.md section 10.5.
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -10,12 +12,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "ui-agent-$name.json") -Encoding UTF8 }
     function Ui([string]$Text, [string]$Value = 'click', [string]$Title = 'RemoteHub*', [int]$TimeoutSec = 30, [switch]$Optional) {
@@ -33,20 +36,24 @@ BeforeAll {
     }
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-agent-$name.png") }
 
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
-    if ($vm.Os -ne 'Server') {
+    $device = Get-LabDevice -For $VmName
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so)
+        $null = Initialize-LabVm -Name $VmName -Client
         $clientIp = Get-LabVmAddress -Name $VmName
-        $null = Install-LabClient -Name $VmName
         $task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
     }
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
+        # the device's WinRM certificate trusted in the console account's root store (needs Windows' question to
+        # remove): the next file starts from the checkpoint; the device has WinRM HTTPS and the agent
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Shot 'end'
         Stop-LabClient -Name $VmName -Task $task
         try { Save-LabAgentEvidence -Name $device.Name -Destination (Join-Path $EvidenceDir 'ui-agent-device-logs') } catch { }
@@ -60,7 +67,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
         BeforeAll {
             $s = [ordered]@{}
             # the test fails (no HTTPS yet) and offers the setup
-            Menu 'Test PowerShell remoting*'
+            Menu 'Tools>Test PowerShell remoting*'
             $s.test1 = Message -Button 'Set up on the target*' -TimeoutSec 90
             # Copy script (Windows' Save As dialog has no usable UIA patterns here); the admin pastes it into an
             # elevated PowerShell on the device - here over PowerShell Direct, as an admin there
@@ -88,7 +95,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $s.result | Should -Match 'available|PowerShell \d'
         }
 
-        It 'W-TRUST-01 Test again puts "RemoteHub*WinRM <host>" into CurrentUser\Root after Windows'' question' -Tag 'W-TRUST-01' {
+        It 'W-TRUST-01 Test again puts "RemoteHub*WinRM [host]" into CurrentUser\Root after Windows'' question' -Tag 'W-TRUST-01' {
             $s.trust.found | Should -BeTrue
             $s.windows.found | Should -BeTrue
             "$($s.trusted)" | Should -Match 'RemoteHub.*WinRM'
@@ -188,7 +195,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # when a path is typed), then opened by its path in the address box: set directly, Enter opens it
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { $null = New-Item HKLM:\SOFTWARE\RemoteHubLab -Force }
             Step registry {
-            Menu 'Registry'
+            Menu 'Tools>Registry'
             $null = Ui 'type:Edit' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
             $null = Ui 'type:Edit' -Value 'keys:{ENTER}'
             Start-Sleep -Seconds 3
@@ -205,7 +212,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             }
             # services
             Step services {
-            Menu 'Services'
+            Menu 'Tools>Services'
             # the filter box has no name; the tool buttons are named by their tooltips; Dialogs.Confirm asks first
             $null = Ui 'type:Edit' -Value 'set:Spooler' -TimeoutSec 60
             $null = Ui 'Print Spooler' -Value realclick
@@ -221,7 +228,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # processes
             Step processes {
             $notepad = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Start-Process notepad.exe -PassThru).Id }
-            Menu 'Processes'
+            Menu 'Tools>Processes'
             $null = Ui 'type:Edit' -Value 'set:notepad' -TimeoutSec 60
             $null = Ui 'notepad*' -Value realclick
             $null = Ui 'End process (Del)'

@@ -5,7 +5,7 @@
   Names, types and ranges must match src\RemoteHub.Agent\PolicyCatalog.cs; tests\RemoteHub.Tests\PolicyTemplateTests.cs checks it.
 -->
 <policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                   revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                   revision="1.1" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <policyNamespaces>
     <target prefix="remotehub" namespace="RemoteHub.Policies.RemoteHub" />
   </policyNamespaces>
@@ -15,6 +15,7 @@
     <definitions>
       <definition name="SUPPORTED_RemoteHub_0_18_11" displayName="$(string.SUPPORTED_RemoteHub_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
+      <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
     </definitions>
   </supportedOn>
 
@@ -33,6 +34,7 @@
     <category name="Agent" displayName="$(string.Cat_Agent)" explainText="$(string.Cat_Agent_Help)">
       <parentCategory ref="RemoteHub" />
     </category>
+    <category name="Agent_Features" displayName="$(string.Cat_Agent_Features)"><parentCategory ref="Agent" /></category>
     <category name="Agent_Rights" displayName="$(string.Cat_Agent_Rights)"><parentCategory ref="Agent" /></category>
     <category name="Agent_Desktop" displayName="$(string.Cat_Agent_Desktop)"><parentCategory ref="Agent" /></category>
     <category name="Agent_Consent" displayName="$(string.Cat_Agent_Consent)"><parentCategory ref="Agent" /></category>
@@ -116,7 +118,25 @@
       <disabledValue><delete /></disabledValue>
     </policy>
 
+    <!-- ================================================================ RemoteHub Agent: features -->
+
+    <policy name="Agent_PowerShellEnabled" class="Machine" displayName="$(string.Agent_PowerShellEnabled)" explainText="$(string.Agent_PowerShellEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="PowerShellEnabled">
+      <parentCategory ref="Agent_Features" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
     <!-- ================================================================ RemoteHub Agent: access rights -->
+
+    <policy name="Agent_AllowedGroups" class="Machine" displayName="$(string.Agent_AllowedGroups)" explainText="$(string.Agent_AllowedGroups_Help)"
+            presentation="$(presentation.Agent_AllowedGroups)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Rights" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements><multiText id="AllowedGroups" valueName="AllowedGroups" required="true" /></elements>
+    </policy>
+
 
     <policy name="Agent_Right_PowerShell" class="Machine" displayName="$(string.Agent_Right_PowerShell)" explainText="$(string.Agent_Right_PowerShell_Help)"
             presentation="$(presentation.Agent_Right)" key="Software\Policies\RemoteHub\Agent\Rights">
@@ -210,6 +230,19 @@
       </elements>
     </policy>
 
+    <policy name="Agent_VirtualDisplay" class="Machine" displayName="$(string.Agent_VirtualDisplay)" explainText="$(string.Agent_VirtualDisplay_Help)"
+            presentation="$(presentation.Agent_VirtualDisplay)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements>
+        <enum id="VirtualDisplay" valueName="VirtualDisplay" required="true">
+          <item displayName="$(string.Agent_VirtualDisplay_auto)"><value><string>auto</string></value></item>
+          <item displayName="$(string.Agent_VirtualDisplay_always)"><value><string>always</string></value></item>
+          <item displayName="$(string.Agent_VirtualDisplay_off)"><value><string>off</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
     <!-- ================================================================ RemoteHub Agent: consent -->
 
     <policy name="Agent_AllowedConsentModes" class="Machine" displayName="$(string.Agent_AllowedConsentModes)" explainText="$(string.Agent_AllowedConsentModes_Help)"
@@ -250,6 +283,15 @@
           <item displayName="$(string.Agent_PrivacyScreen_1)"><value><decimal value="1" /></value></item>
           <item displayName="$(string.Agent_PrivacyScreen_0)"><value><decimal value="0" /></value></item>
         </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_PrivacyScreenMessage" class="Machine" displayName="$(string.Agent_PrivacyScreenMessage)" explainText="$(string.Agent_PrivacyScreenMessage_Help)"
+            presentation="$(presentation.Agent_PrivacyScreenMessage)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Privacy" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements>
+        <text id="PrivacyScreenMessage" valueName="PrivacyScreenMessage" maxLength="120" required="true" />
       </elements>
     </policy>
 
@@ -335,6 +377,33 @@
       <supportedOn ref="SUPPORTED_Agent_0_18_11" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_ListenPort" class="Machine" displayName="$(string.Agent_ListenPort)" explainText="$(string.Agent_ListenPort_Help)"
+            presentation="$(presentation.Agent_ListenPort)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Service" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements>
+        <decimal id="ListenPort" valueName="ListenPort" minValue="1" maxValue="65535" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Agent_LogRetentionDays" class="Machine" displayName="$(string.Agent_LogRetentionDays)" explainText="$(string.Agent_LogRetentionDays_Help)"
+            presentation="$(presentation.Agent_LogRetentionDays)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Service" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements>
+        <decimal id="LogRetentionDays" valueName="LogRetentionDays" minValue="1" maxValue="3650" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Agent_MaxSessions" class="Machine" displayName="$(string.Agent_MaxSessions)" explainText="$(string.Agent_MaxSessions_Help)"
+            presentation="$(presentation.Agent_MaxSessions)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Service" />
+      <supportedOn ref="SUPPORTED_Agent_0_18_12" />
+      <elements>
+        <decimal id="MaxSessions" valueName="MaxSessions" minValue="1" maxValue="200" required="true" />
+      </elements>
     </policy>
   </policies>
 </policyDefinitions>

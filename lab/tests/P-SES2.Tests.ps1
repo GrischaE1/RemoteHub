@@ -2,6 +2,7 @@
 # large arguments and output, a message over the agent's 16 MiB limit, a network drop during a session (the agent's
 # WebSocket keep-alive of 30 + 30 s ends it), prompts answered through the PowerShell tab's host (PsConsoleHost), and
 # Constrained Language Mode (on a CLM VM only). See docs/test-lab-cases.md section 7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -11,13 +12,14 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
     function Save($name, $data) { $data | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir "p-ses2-$name.json") -Encoding UTF8 }
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    $init = Initialize-LabVm -Name $VmName -Agent
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'p-ses2-agent-logs')
+    # nothing to undo: the network drop reconnects the VM, the sessions end by themselves - the VM stays reusable
 }
 
 Describe 'P-SES2 <VmName>' -Tag Agent, 'P-SES', 'P-CLM' {

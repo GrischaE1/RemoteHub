@@ -11,7 +11,7 @@
         'Reset-LabVm', 'Stop-LabVm', 'Wait-LabVm', 'Restart-LabVm', 'Get-LabVmAddress', 'Disconnect-LabNetwork', 'Connect-LabNetwork',
         'Start-LabJumpHost', 'Stop-LabJumpHost', 'Move-LabVmBehindJump', 'Restore-LabVmNetwork', 'Use-LabJump', 'Invoke-LabJump',
         'Invoke-LabGuest', 'Copy-LabFile', 'Get-LabFile',
-        'Get-LabScreenshot', 'Send-LabText', 'Send-LabKey', 'Send-LabCtrlAltDel', 'Send-LabMouse', 'Send-LabKeyCombo',
+        'Get-LabScreenshot', 'Get-LabCimVm', 'Initialize-LabVm', 'Clear-LabVmState', 'Set-LabVmDirty', 'Test-LabVmState', 'Get-LabDevice', 'Test-LabConsoleVm', 'Test-LabVmReady', 'Send-LabText', 'Send-LabKey', 'Send-LabCtrlAltDel', 'Send-LabMouse', 'Send-LabKeyCombo',
         'Set-LabAutoLogon', 'Clear-LabAutoLogon', 'Wait-LabDesktop',
         'Invoke-LabInSession', 'Lock-LabSession', 'Unlock-LabSession',
         'Start-LabInSession', 'Stop-LabInSession', 'Invoke-LabPerson', 'Start-LabMarker', 'Get-LabMarker', 'Invoke-LabDesktop', 'Start-LabDesktop', 'Receive-LabDesktop', 'Wait-LabHostFile', 'Compare-LabImage', 'Get-LabOcr', 'Get-LabColorShare', 'Find-LabPictureText',

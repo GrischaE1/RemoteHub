@@ -4,6 +4,7 @@
 # the harness' probes (LabProbes.cs), the device side is read over PowerShell Direct. Accounts that get locked, denied
 # or disabled are made by the test (the checkpoint removes them): PSAdmin carries PowerShell Direct and must stay
 # usable. See docs/test-lab-cases.md section 6.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -22,9 +23,9 @@ BeforeAll {
         (Invoke-LabProbe -Name $VmName -Kind ws -Params $p).results[0]
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    $init = Initialize-LabVm -Name $VmName -Agent
+    $install = $init.Install
+    $pin = $init.Pin
     $hostIp = Get-LabHostAddress -Name $VmName
     $computer = Invoke-LabGuest -Name $VmName -ScriptBlock {
         # failed sign-ins must reach the Security log (4625); by GUID - subcategory names are localized
@@ -37,6 +38,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 's-auth-agent-logs')
+    # audit policy, lockout threshold and test accounts changed: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'S-AUTH <VmName>' -Tag Agent, Security, 'S-TLS', 'S-AUTH' {

@@ -3,6 +3,7 @@
 # asked again when someone else signed in), the helper killed or failing, a service restart, a long session (D-ROB-04:
 # lab.json SoakMinutes, default 50 - a release run sets 480 and -FileTimeoutMin above it), fuzzed messages, ping.
 # normaluser is signed in and allows PSAdmin (RhPerson.ps1). See docs/test-lab-cases.md section 9.10.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -28,15 +29,15 @@ BeforeAll {
     }
     function Helper { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$' | ForEach-Object ProcessId) } }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-rob-agent-logs')
+    # reverted and reinstalled midway, the helper killed, the service restarted, fuzzed: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
