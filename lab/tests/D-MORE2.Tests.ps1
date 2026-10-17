@@ -9,6 +9,7 @@
 # Known product bug: D-RES-10 - the agent notices the drop first, the end is taken as "closed by RemoteHub" and the
 #        resume token revoked (DesktopEndpoint.cs:220-230). Tested for the correct behaviour: fails until fixed.
 # D-VID-12 can only be checked where Desktop Duplication stands still by itself (no hook to force it): skipped otherwise.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -67,11 +68,9 @@ Start-Sleep -Seconds 5
     [IO.File]::WriteAllBytes("$data\broken.bmp", [byte[]](@(0x58, 0x58) + @(0) * 62))
     [IO.File]::WriteAllBytes("$data\short.bmp", [byte[]](0x42, 0x4D, 1, 2, 3, 4, 5, 6, 7, 8))
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
     $userSid = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock { param($u) (Get-LocalUser -Name $u).SID.Value }
 }
 
@@ -79,6 +78,8 @@ AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-more2-agent-logs')
+    # the power plan (display off after 1 minute), agent.json, normaluser's RDP client value, the network cut: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D-IDLE', 'D-RES', 'D-ROB' {
@@ -159,7 +160,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             Save 'picture' $v
         }
 
-        It 'D-VID-11 while connected RemoteDesktop_SuppressWhenMinimized = 2 (rdp-minimized-<sid>.txt keeps the old value), put back afterwards; a log line' -Tag 'D-VID-11' {
+        It 'D-VID-11 while connected RemoteDesktop_SuppressWhenMinimized = 2 (rdp-minimized-[sid].txt keeps the old value), put back afterwards; a log line' -Tag 'D-VID-11' {
             $v.rdpBefore.Value | Should -Be 0
             $v.rdpDuring.Value | Should -Be 2
             $v.rdpDuring.Record | Should -Be '0'
@@ -205,6 +206,16 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
         BeforeAll {
             $d = [ordered]@{}
             Set-AgentJsonValue 'virtualDisplay' 'always'
+            # diagnosis: the device node as the agent finds it (pnputil 1167 "not connected" seen when switching it on)
+            $d.device = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $dev = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1
+                [ordered]@{
+                    status  = if ($dev) { [string]$dev.Status } else { $null }
+                    present = if ($dev) { $dev.Present } else { $null }
+                    problem = if ($dev) { (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_ProblemCode -ErrorAction SilentlyContinue).Data } else { $null }
+                    pnputil = (pnputil.exe /enum-devices /class Display 2>&1 | Out-String)
+                }
+            }
             $o = Out 'vd-restart'
             # "always" switches the virtual monitor on once a Fit size is sent
             $job = Begin 'vd-restart' @(@{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 10 }, (Mark $o 'on'), (Park $o 'end'), @{ do = 'sleep'; seconds = 1 })

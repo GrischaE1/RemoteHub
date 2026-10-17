@@ -3,6 +3,8 @@
 # no dialogs), an update during a remote desktop, an update that never comes back, uninstalling from Settings and while
 # a remote desktop is open, and RemoteHub's credential provider action without an agent. See docs/test-lab-cases.md
 # sections 5 and 9.12.
+# Every context starts from the checkpoint (Reset-LabVm): each changes the installation itself.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -27,6 +29,8 @@ BeforeAll {
 
 AfterAll {
     try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'a-more-agent-logs') } catch { }
+    # repaired, updated and uninstalled agents, the Ctrl+Alt+Del policy: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 'A-UPDFAIL', 'A-UNINST', 'C-PROV' {

@@ -29,6 +29,9 @@
 #     out / Lock, reconnects after a network cut. The agent is restarted before each sign-in (3 per account in 15 min).
 #  7. Wrong passwords until the agent throttles this PC.
 # Client VMs only. See docs/test-lab-cases.md section 10.5.
+# LabRole: console
+# TimeLimitMin: 120   (many UI steps with RemoteHub and the device, sign-ins and reconnects: > 60 min)
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -36,12 +39,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
     $R = [ordered]@{}
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "ui-more-$name.json") -Encoding UTF8 }
@@ -168,9 +172,36 @@ Start-Sleep -Seconds 600
 '@
 
     # ---- the agent desktop tab
-    function CloseTabs { foreach ($i in 1..8) { $c = Ui 'Close this tab' -Optional -TimeoutSec 3; if (-not $c.found) { break }; Start-Sleep -Seconds 2 } }
-    # a new agent tab at its connect page ("Signed in as ... Choose what to show.")
-    function OpenChoose { CloseTabs; Menu 'Connect'; Ui 'Signed in as *' -Value exists -TimeoutSec 90 }
+    # every tab closed: the group's x ("Close this tab" only shows in the second tab row, with more than one tab of a
+    # connection); a session RemoteHub signed in automatically with the end action Sign out asks first - signed out then
+    function CloseTabs {
+        foreach ($i in 1..8) {
+            $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3
+            if (-not $c.found) { break }
+            Start-Sleep -Seconds 2
+            foreach ($t in 'RemoteHub signed in on *automatically*', 'Sign out on the device?') {
+                $m = Ui 'Disconnect' -Title $t -Optional -TimeoutSec 1
+                if ($m.found) { Start-Sleep -Seconds 2; break }
+            }
+        }
+    }
+    # the agent desktop needs the agent installed from RemoteHub's dialog (UI-AG-15): without it Connect opens RDP
+    function NeedAgent { if (-not $R.agentInstalled) { throw 'the agent was not installed from RemoteHub''s dialog (UI-AG-15 failed) - this step needs it' } }
+    # a new agent tab at its connect page ("Signed in as ... Choose what to show."); an RDP tab or a failed sign-in
+    # ends the wait at once
+    function OpenChoose {
+        NeedAgent
+        CloseTabs
+        Menu 'Connect'
+        $until = (Get-Date).AddSeconds(90)
+        do {
+            $s = Ui 'Signed in as *' -Value exists -Optional -TimeoutSec 3
+            if ($s.found) { return $s }
+            if ((Ui '*' -Title '*Remote desktop*RemoteHub' -Value exists -Optional -TimeoutSec 1).found) { throw 'Connect opened an RDP tab, not the agent desktop (the connection does not use the agent)' }
+            if ((Ui 'Use RDP instead' -Value exists -Optional -TimeoutSec 1).found) { throw "the agent desktop ended before its connect page: $(@(Lines (TabTexts) | Where-Object { $_ -like 'Text|?*' } | Select-Object -Last 6) -join ' / ')" }
+        } while ((Get-Date) -lt $until)
+        throw 'no connect page ("Signed in as ...") within 90 s'
+    }
     function ConnectChosen([string]$Session = 'Console*', [string]$Consent = 'Ask them to allow it', [switch]$ViewOnly) {
         $null = Ui $Session -Value check
         if ($Consent) { $null = Ui 'The signed-in user' -Value "choose:$Consent" }
@@ -178,6 +209,15 @@ Start-Sleep -Seconds 600
         $null = Ui 'Connect'
     }
     function Live([int]$TimeoutSec = 60) { Ui 'Send Ctrl+Alt+Del' -Value exists -TimeoutSec $TimeoutSec -Optional }
+    # the agent desktop live, connected to the console session without asking (opened when it isn't, or -New)
+    function LiveDesktop([switch]$New) {
+        if ($New -or -not (Live 3).found) {
+            $null = OpenChoose
+            ConnectChosen -Consent 'Connect without asking*'
+            if (-not (Live 90).found) { throw "the agent desktop didn't go live within 90 s" }
+        }
+        $true
+    }
     function TabTexts { "$((Ui '*' -Value list -Optional -TimeoutSec 10).items -join "`n")" }
     function EditConnection([scriptblock]$Do, [string]$Node = 'Device') {
         Menu 'Edit*' -Node $Node
@@ -211,24 +251,26 @@ Start-Sleep -Seconds 600
         $R["$Key-box"] = Ui 'Sign in automatically as *' -Value check -Optional -TimeoutSec 10
         $null = Ui 'Connect'
         $R["$Key-signed"] = WaitFor -TimeoutSec 180 -Every 5 { (ExplorerOwners) -contains $device.AdminAccount }
-        $R["$Key-live"] = (Live 60).found
+        $R["$Key-live"] = if ($R["$Key-signed"]) { (Live 60).found } else { $false }
         Start-Sleep -Seconds 4
         $R["$Key-notices"] = @(Notices $mark)
         $R["$Key-sessions"] = AdminSessions
         $R["$Key-since"] = $since
+        # not signed in: the rest of the step (asks, sign-out, reconnects) has nothing to work on
+        if (-not $R["$Key-signed"]) { throw "automatic sign-in ($Key): $($device.AdminAccount) got no desktop on the device within 180 s" }
     }
 
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $dn = $device.Name
     $admins = 'S-1-5-32-544'
     $guests = 'S-1-5-32-546'
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $dn
         $deviceIp = Get-LabVmAddress -Name $dn
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so)
+        $null = Initialize-LabVm -Name $VmName -Client
         $clientIp = Get-LabVmAddress -Name $VmName
-        $null = Install-LabClient -Name $VmName
         $task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
         $watchFile = 'C:\ProgramData\RemoteHubLab\session\ui-more-texts.log'
@@ -244,7 +286,11 @@ Start-Sleep -Seconds 600
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
+        # the device's WinRM certificate trusted in the console account's root store (needs Windows' question to
+        # remove), test files: the next file starts from the checkpoint; the device has WinRM HTTPS, the agent, policies
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $dn }
         Shot 'end'
         try { Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 0 } catch { }
         try { [IO.File]::WriteAllLines((Join-Path $EvidenceDir 'ui-more-texts.log'), [string[]]@(Notices)) } catch { }
@@ -262,7 +308,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
         BeforeAll {
             Step 'tl09' {
                 # the test fails (no HTTPS yet) and offers the setup script
-                Menu 'Test PowerShell remoting*'
+                Menu 'Tools>Test PowerShell remoting*'
                 $R.tl09Test = Box @('PowerShell remoting is not available for Device*', 'PowerShell remoting') -Button 'Set up on the target*'
                 $R.tl09Before = Ui 'Test again' -Title 'Set up PowerShell remoting' -Value exists -TimeoutSec 60
                 $null = Ui 'Copy script' -Title 'Set up PowerShell remoting'
@@ -289,13 +335,13 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             }
             Step 'tl08' {
                 # declined: nothing changes on this PC
-                Menu 'Test PowerShell remoting*'
+                Menu 'Tools>Test PowerShell remoting*'
                 $R.tl08Ask = Box @('Device answers over HTTPS*', 'PowerShell remoting') -Button 'Check the certificate*'
                 $R.tl08Trust = Box @("$deviceIp presents this certificate*", 'Trust this certificate?') -Button 'Cancel'
                 $R.tl08Declined = Box @('Not trusted*', 'PowerShell remoting') -Button 'OK'
                 $R.tl08RootAfterDecline = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { @(Get-ChildItem Cert:\CurrentUser\Root | Where-Object FriendlyName -like 'RemoteHub*WinRM*' | ForEach-Object FriendlyName) -join ';' }
                 # trusted: Windows asks too; then the test runs again and works
-                Menu 'Test PowerShell remoting*'
+                Menu 'Tools>Test PowerShell remoting*'
                 $null = Box @('Device answers over HTTPS*', 'PowerShell remoting') -Button 'Check the certificate*'
                 $null = Box @("$deviceIp presents this certificate*", 'Trust this certificate?') -Button 'Same*trust it'
                 $R.tl08Windows = Ui 'Yes' -Title 'Security Warning' -TimeoutSec 30
@@ -306,14 +352,14 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 # normaluser over HTTPS (the certificate is trusted now): WinRM answers, the account is refused
                 New-LabClientConnection -Name $VmName -Display 'Refused' -TargetHost $deviceIp -User $device.UserAccount -Password $password
                 PsOption 'Use HTTPS' 'On*' -Node 'Refused'
-                Menu 'Test PowerShell remoting*' -Node 'Refused'
+                Menu 'Tools>Test PowerShell remoting*' -Node 'Refused'
                 $R.tl07 = Box @('PowerShell remoting answers on Refused*', 'PowerShell remoting') -Button 'OK' -TimeoutSec 120
             }
             Shot 'remoting'
             Save 'remoting' $R
         }
 
-        It 'UI-TL-09 Copy script: "Test again" only after it; "Copied. Open an elevated PowerShell on <host>, paste ..."; kept out of the clipboard history, cleared after 120 s' -Tag 'UI-TL-09' {
+        It 'UI-TL-09 Copy script: "Test again" only after it; "Copied. Open an elevated PowerShell on [host], paste ..."; kept out of the clipboard history, cleared after 120 s' -Tag 'UI-TL-09' {
             NoError 'tl09'
             $R.tl09Before.found | Should -BeTrue
             $R.tl09Before.enabled | Should -BeFalse -Because 'nothing was copied or saved yet'
@@ -326,7 +372,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             $R.tl09ClipLater.length | Should -Be 0 -Because "the script is cleared 120 s after the copy (read after $($R.tl09ClipLaterSeconds) s)"
         }
 
-        It 'UI-TL-08 the test over untrusted HTTPS: "<name> answers over HTTPS, but this PC doesn''t trust its certificate yet", Check the certificate, declined: "Not trusted. Nothing was changed on this PC."; trusted: works' -Tag 'UI-TL-08' {
+        It 'UI-TL-08 the test over untrusted HTTPS: "[name] answers over HTTPS, but this PC doesn''t trust its certificate yet", Check the certificate, declined: "Not trusted. Nothing was changed on this PC."; trusted: works' -Tag 'UI-TL-08' {
             NoError 'tl09'
             NoError 'tl08'
             ($R.tl09Run -join "`n") | Should -Match 'Done\. PowerShell remoting is enabled over HTTPS'
@@ -339,7 +385,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             "$($R.tl08Root)" | Should -Match 'RemoteHub.*WinRM'
         }
 
-        It 'UI-TL-07 WinRM refuses the account: "PowerShell remoting answers on <name>, but the account was refused. <msg>", no "Set up on the target..."' -Tag 'UI-TL-07' {
+        It 'UI-TL-07 WinRM refuses the account: "PowerShell remoting answers on [name], but the account was refused. [msg]", no "Set up on the target..."' -Tag 'UI-TL-07' {
             NoError 'tl07'
             $R.tl07 | Should -Match 'PowerShell remoting answers on Refused, but the account was refused\.'
             $R.tl07 | Should -Match 'Access denied\.'
@@ -377,21 +423,35 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 # silently over WinRM, the scope without this PC (TEST-NET address), automatic sign-in allowed
                 $null = Ui 'Device label' -Title $t -Value 'setnext:Device'
                 $null = Ui 'Allow connections from' -Title $t -Value 'setnext:192.0.2.10'
+                # offered only when PowerShell remoting works for the connection (UI-TL-08 trusted its HTTPS certificate)
+                $silent = Ui 'Install silently over PowerShell remoting*' -Title $t -Value exists -TimeoutSec 10
+                if (-not $silent.enabled) { throw 'the silent install over PowerShell remoting is not offered (remoting does not work for Device - see UI-TL-08)' }
                 $null = Ui 'Install silently over PowerShell remoting*' -Title $t -Value check
                 $R.ag15AutoSignIn = Ui 'Allow automatic sign-in*' -Title $t -Value check -Optional -TimeoutSec 5
                 $null = Ui 'Use the agent for this connection afterwards' -Title $t -Value check -Optional -TimeoutSec 5
                 $null = Ui 'Install' -Title $t
-                $R.ag15Done = Ui 'Done' -Title $t -TimeoutSec 600
-                $R.ag15Rows = @((Ui '*' -Title $t -Value list -Optional).items)
+                # the progress window (the same title): its rows are read before Done closes it; a failed install ends
+                # with "Failed: ..." and Close
+                $null = WaitFor -TimeoutSec 600 -Every 3 { (Ui 'Done' -Title $t -Value exists -Optional -TimeoutSec 1).found -or (Ui '*Failed: *' -Title $t -Value exists -Optional -TimeoutSec 1).found }
+                $R.ag15Rows = @((Ui '*' -Title $t -Value list -Optional -TimeoutSec 5).items)
                 Shot 'ag15'
-                $null = Ui 'Done' -Title $t -Optional -TimeoutSec 5
+                $R.ag15Done = Ui 'Done' -Title $t -Optional -TimeoutSec 2
+                $R.agentInstalled = [bool]$R.ag15Done.found
+                if (-not $R.agentInstalled) {
+                    $null = Ui 'Close' -Title $t -Optional -TimeoutSec 5
+                    throw "the install didn't end with Done: $(@($R.ag15Rows | Where-Object { $_ -like 'Text|?*' } | Select-Object -Last 6) -join ' / ')"
+                }
                 $R.ag15State = Get-LabAgentState -Name $dn
                 # still marked installed: the menu offers the update
                 $m = Ui 'Device' -Value 'menu:RemoteHub Agent>Update RemoteHub Agent*' -Optional -TimeoutSec 15
                 $R.ag15Update = -not ($m.PSObject.Properties['error'] -and $m.error)
                 if ($R.ag15Update) { $null = Ui 'Close' -Title 'Update RemoteHub Agent' -TimeoutSec 60 } else { $R.ag15Entries = @($m.entries); Esc }
-                # the admin opens the scope on the device: the agent's firewall rule for any address
-                Invoke-LabGuest -Name $dn -ScriptBlock { Set-NetFirewallRule -DisplayName 'RemoteHub Agent' -RemoteAddress Any }
+            }
+            # the admin opens the scope on the device: the agent's firewall rule for any address (also when a check above
+            # failed after the install - the later contexts need the agent)
+            if ($R.agentInstalled) {
+                try { Invoke-LabGuest -Name $dn -ScriptBlock { Set-NetFirewallRule -DisplayName 'RemoteHub Agent' -RemoteAddress Any } }
+                catch { $R['ag15-firewall'] = "$_" }
             }
             Save 'install' $R
         }
@@ -405,7 +465,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             foreach ($k in 'Port0', 'PortX', 'Scope', 'Label') { $R["ag14$k-open"] | Should -BeTrue -Because "the dialog stays open ($k)" }
         }
 
-        It 'UI-AG-15 a scope without this PC: after 5 tries "Installed, but this PC can''t reach the agent on <host>:<port> (<error>). Check firewalls ..."; still marked installed' -Tag 'UI-AG-15' {
+        It 'UI-AG-15 a scope without this PC: after 5 tries "Installed, but this PC can''t reach the agent on [host]:[port] ([error]). Check firewalls ..."; still marked installed' -Tag 'UI-AG-15' {
             NoError 'ag15'
             $R.ag15Done.found | Should -BeTrue
             $rows = $R.ag15Rows -join "`n"
@@ -419,6 +479,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
     Context 'the agent stopped: Test RemoteHub Agent' {
         BeforeAll {
             Step 'ag13' {
+                NeedAgent
                 $R.ag13EntriesBefore = MenuEntries
                 Esc
                 Invoke-LabGuest -Name $dn -ScriptBlock { Stop-Service RemoteHubAgent -Force }
@@ -435,7 +496,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Save 'agent-test' $R
         }
 
-        It 'UI-AG-13 agent stopped: "The RemoteHub Agent on <name> could not be used. <reason>" with "Install / update the agent..."; the entry then reads "Test RemoteHub Agent again"' -Tag 'UI-AG-13' {
+        It 'UI-AG-13 agent stopped: "The RemoteHub Agent on [name] could not be used. [reason]" with "Install / update the agent..."; the entry then reads "Test RemoteHub Agent again"' -Tag 'UI-AG-13' {
             NoError 'ag13'
             $R.ag13 | Should -Match 'The RemoteHub Agent on Device could not be used\.'
             $R.ag13 | Should -Match 'Install / update the agent'
@@ -452,19 +513,19 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Set-LabAgentPolicy -Name $dn -Clear -Values @{ AllowedConsentModes = @('Ask', 'Pin', 'None') } -Rights @{ ConsentBypass = @($admins) }
             Step 'cp13' {
                 Set-LabAgentPolicy -Name $dn -Values @{ DesktopClipboard = 2 }
-                $null = OpenChoose
-                ConnectChosen -Consent 'Connect without asking*'
-                $R.cp13Live = (Live 90).found
-                Start-Sleep -Seconds 3
-                $null = InSession $VmName 'Console' $setImageCode.Replace('@@K@@', '7') -TimeoutSec 240
-                Start-Sleep -Seconds 4
-                $R.cp13Image = "$(InSession $dn 'Console' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
-                $mark = NoticeMark
-                $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin')
-                Start-Sleep -Seconds 6
-                $R.cp13Notices = @(Notices $mark)
-                Shot 'cp13'
-                Set-LabAgentPolicy -Name $dn -Clear -Values @{ AllowedConsentModes = @('Ask', 'Pin', 'None') } -Rights @{ ConsentBypass = @($admins) }
+                try {
+                    $R.cp13Live = LiveDesktop -New
+                    Start-Sleep -Seconds 3
+                    $null = InSession $VmName 'Console' $setImageCode.Replace('@@K@@', '7') -TimeoutSec 240
+                    Start-Sleep -Seconds 4
+                    $R.cp13Image = "$(InSession $dn 'Console' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                    $mark = NoticeMark
+                    $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin')
+                    Start-Sleep -Seconds 6
+                    $R.cp13Notices = @(Notices $mark)
+                    Shot 'cp13'
+                }
+                finally { Set-LabAgentPolicy -Name $dn -Clear -Values @{ AllowedConsentModes = @('Ask', 'Pin', 'None') } -Rights @{ ConsentBypass = @($admins) } }
             }
             Step 'cp14' {
                 CloseTabs
@@ -472,9 +533,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $null = SetFileList $VmName 'Console' @('C:\lab\big\big101.bin')
                 Start-Sleep -Seconds 2
                 $mark = NoticeMark
-                $null = OpenChoose
-                ConnectChosen -Consent 'Connect without asking*'
-                $R.cp14Live = (Live 90).found
+                $R.cp14Live = LiveDesktop -New
                 Start-Sleep -Seconds 10
                 $R.cp14Before = @(Notices $mark)
                 # the same copy while connected: the notice
@@ -485,6 +544,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             }
             Step 'cp15' {
                 # 99 MB through a slow link (10 Mbit/s on the device's adapter), pasted on the device, cancelled here
+                $null = LiveDesktop
                 Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 10000000
                 $paste = $null
                 try {
@@ -494,6 +554,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     Start-Sleep -Seconds 4
                     $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create($pasteCode.Replace('@@DIR@@', 'cp15')))
                     $R.cp15Progress = WaitFor -TimeoutSec 90 -Every 1 { @(Notices $mark | Where-Object { $_ -match 'Copying 1 file to the device' }).Count -gt 0 }
+                    if (-not $R.cp15Progress) { $R.cp15Notices = @(Notices $mark); throw 'no "Copying 1 file to the device" within 90 s' }
                     Start-Sleep -Seconds 3
                     Shot 'cp15-progress'
                     $R.cp15Cancel = Ui 'Cancel' -TimeoutSec 10
@@ -510,7 +571,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             }
             Step 'net03' {
                 # a cut longer than the 30 s a normal session keeps trying (the drop is noticed first, then 30 s of tries)
-                if (-not (Live 3).found) { $null = OpenChoose; ConnectChosen -Consent 'Connect without asking*'; $null = Live 90 }
+                $null = LiveDesktop
                 $mark = NoticeMark
                 $switches = Disconnect-LabNetwork -Name $dn
                 try {
@@ -522,9 +583,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $R.net03Notices = @(Notices $mark)
                 # Stop reconnecting ends it at once
                 Start-Sleep -Seconds 10
-                $null = OpenChoose
-                ConnectChosen -Consent 'Connect without asking*'
-                $R.net03Live2 = (Live 90).found
+                $R.net03Live2 = LiveDesktop -New
                 $switches = Disconnect-LabNetwork -Name $dn
                 try {
                     $R.net03Reconnecting = WaitFor -TimeoutSec 120 -Every 1 { (Ui 'Stop reconnecting' -Value exists -Optional -TimeoutSec 1).found }
@@ -568,13 +627,13 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             @($R.cp15Arrived | Where-Object { $_ -eq "big99.bin=$(99MB)" }) | Should -BeNullOrEmpty
         }
 
-        It 'UI-CP-15 no receipt from the device within 30 s: "Failed - the device didn''t confirm the copy of <what>; it may not have arrived."' -Tag 'UI-CP-15' {
+        It 'UI-CP-15 no receipt from the device within 30 s: "Failed - the device didn''t confirm the copy of [what]; it may not have arrived."' -Tag 'UI-CP-15' {
             # needs a device that gets the whole copy but never confirms it (an agent build that drops the receipt): a
             # network cut or a suspended helper in the lab either stops the copy before the end or races the receipt
             Set-ItResult -Skipped -Because 'needs an agent that receives a copy without confirming it (fault-injection build)'
         }
 
-        It 'UI-NET-03 a cut longer than 30 s: "Connection lost - reconnecting...", "Attempt n - trying for up to 30 s.", then "... couldn''t be restored within 30 s: <error>"; Stop reconnecting ends it at once' -Tag 'UI-NET-03' {
+        It 'UI-NET-03 a cut longer than 30 s: "Connection lost - reconnecting...", "Attempt n - trying for up to 30 s.", then "... couldn''t be restored within 30 s: [error]"; Stop reconnecting ends it at once' -Tag 'UI-NET-03' {
             NoError 'net03'
             $n = $R.net03Notices -join "`n"
             $n | Should -Match 'Connection lost . reconnecting'
@@ -597,15 +656,21 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Step 'ad10-own' {
                 # the connection signs in as Admin, who is signed in at the console: the own session; the policy
                 # doesn't allow None (no policy at all)
+                NeedAgent
                 Set-LabAgentPolicy -Name $dn -Clear
                 SetCredential $device.ConsoleAccount $password
-                $null = OpenChoose
-                $R.ad10OwnSessions = @((Ui '*' -Value list).items | Where-Object { $_ -like 'RadioButton|*' })
-                $null = Ui 'Console*(signed in)*' -Value check
-                $R.ad10Own = Choices @('Connect without asking (they see a banner)', 'Ask them to allow it')
-                Shot 'ad10-own'
-                CloseTabs
-                SetCredential $device.AdminAccount $password
+                # the connection's account back however this ends (the later steps sign in as PSAdmin)
+                try {
+                    $null = OpenChoose
+                    $R.ad10OwnSessions = @((Ui '*' -Value list).items | Where-Object { $_ -like 'RadioButton|*' })
+                    $null = Ui 'Console*(signed in)*' -Value check
+                    $R.ad10Own = Choices @('Connect without asking (they see a banner)', 'Ask them to allow it')
+                    Shot 'ad10-own'
+                }
+                finally {
+                    CloseTabs
+                    SetCredential $device.AdminAccount $password
+                }
             }
             Step 'ad10-locked' {
                 Set-LabAgentPolicy -Name $dn -Clear -Values $policy -Rights $rights
@@ -692,7 +757,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             $R.ad09Connect.enabled | Should -BeFalse
         }
 
-        It 'UI-AG-09 "Sign in automatically as <account>" only for the console''s sign-in screen with the device''s right and without DisableAgentAutoSignIn; ticked when the option is On; View only switches it off' -Tag 'UI-AG-09' {
+        It 'UI-AG-09 "Sign in automatically as [account]" only for the console''s sign-in screen with the device''s right and without DisableAgentAutoSignIn; ticked when the option is On; View only switches it off' -Tag 'UI-AG-09' {
             NoError 'ad10-locked'
             NoError 'ag09'
             $R.ag09On.found | Should -BeTrue
@@ -719,8 +784,10 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $null = Ui 'Disconnect'
                 $R.soAskDisconnect = Box $signOutBox -Button 'Cancel' -TimeoutSec 20
                 $R.soLive1 = (Live 5).found
-                $null = Ui 'Close this tab'
-                $R.soAskTab = Box $signOutBox -Button 'Cancel' -TimeoutSec 20
+                # the tab's own x shows only in the second tab row (more than one tab of the connection,
+                # MainWindow.xaml "Tabs"): missing, it is written down and the rest goes on
+                $x = Ui 'Close this tab' -Optional -TimeoutSec 5
+                $R.soAskTab = if ($x.found) { Box $signOutBox -Button 'Cancel' -TimeoutSec 20 } else { 'no "Close this tab" (one tab of the connection: only the group''s x)' }
                 # Ctrl+W with the focus outside the picture (in the tab, the keys go to the device)
                 $null = Ui 'Device' -Value realclick
                 Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x57
@@ -831,6 +898,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
     Context 'wrong passwords until the agent throttles this PC' {
         BeforeAll {
             Step 'ag16' {
+                NeedAgent
                 RestartAgent
                 SetCredential $device.AdminAccount "$password-wrong"
                 CloseTabs
@@ -852,7 +920,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Save 'throttle' $R
         }
 
-        It 'UI-AG-16 after repeated wrong passwords: "The RemoteHub Agent on <host>:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts."' -Tag 'UI-AG-16' {
+        It 'UI-AG-16 after repeated wrong passwords: "The RemoteHub Agent on [host]:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts."' -Tag 'UI-AG-16' {
             NoError 'ag16'
             ($R.ag16Tries | Select-Object -First 1) | Should -Match 'rejected the sign-in: wrong user name or password'
             ($R.ag16Tries -join "`n") | Should -Match ('The RemoteHub Agent on ' + [regex]::Escape($deviceIp) + ':58732 refuses sign-ins from this PC for a few minutes after too many failed attempts\.')

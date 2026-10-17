@@ -9,6 +9,8 @@
 #   W-NAME-01   WinRM setup script for a computer name: CN / SAN, reuse by CN, a bad name refused
 # Needs: one lab VM (agent MSI under test; A-HAND-07 / A-UNINST-16 need it built with the credential provider,
 # build-installer.ps1 -CredentialProvider). See docs/test-lab-cases.md sections 5, 6, 7 and 8.
+# Every context starts from the checkpoint (Reset-LabVm): each changes the installation itself.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -70,7 +72,7 @@ BeforeAll {
     function Invoke-GuestMsi([string[]]$Arguments, [string]$Log) {
         Invoke-LabGuest -Name $VmName -ArgumentList (, $Arguments), $Log -ScriptBlock {
             param($a, $log)
-            $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList (@($a) + @('/qn', '/norestart', '/l*v', "`"$log`"")) -Wait -PassThru -WindowStyle Hidden
+            $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList ((@($a | ForEach-Object { [string]$_ }) + @('/qn', '/norestart', '/l*v', "`"$log`"")) -join ' ') -Wait -PassThru -WindowStyle Hidden
             $p.ExitCode
         }
     }
@@ -125,6 +127,8 @@ BeforeAll {
 
 AfterAll {
     try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'a-more2-agent-logs') } catch { }
+    # installs, uninstalls, IFEO and WinRM certificates changed: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR', 'P-SES', 'W-NAME' {
@@ -255,14 +259,29 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
                 # installed with automatic sign-in: the policy values are there, so "not touched" means something
                 $install = Install-LabAgent -Name $VmName -AutoSignIn $true
                 Copy-LabFile -Name $VmName -Path $msi -Destination 'C:\LabHand7'
-                $guestMsi = 'C:\LabHand7\' + (Split-Path $msi -Leaf)
                 $code = (Get-LabAgentState -Name $VmName).Product.Code
+                # a maintenance install needs the package under the name it was installed from (else Error 1316):
+                # the copy gets the PackageName Windows Installer has for the product
+                $guestMsi = Invoke-LabGuest -Name $VmName -ArgumentList ('C:\LabHand7\' + (Split-Path $msi -Leaf)), $code -ScriptBlock {
+                    param($copy, $c)
+                    $installer = New-Object -ComObject WindowsInstaller.Installer
+                    $name = $installer.GetType().InvokeMember('ProductInfo', 'GetProperty', $null, $installer, @($c, 'PackageName'))
+                    $target = Join-Path (Split-Path $copy) $name
+                    if ($target -ne $copy) { Move-Item -Path $copy -Destination $target -Force }
+                    $target
+                }
                 $h = [ordered]@{}
                 $h.before = Get-Snapshot
                 $h.remove = Invoke-GuestMsi @('/i', $code, 'REMOVE=CredentialProvider') 'C:\LabHand7\remove.log'
                 $h.afterRemove = Get-Snapshot
                 $h.add = Invoke-GuestMsi @('/i', "`"$guestMsi`"", 'ADDLOCAL=CredentialProvider') 'C:\LabHand7\add.log'
                 $h.afterAdd = Get-Snapshot
+                # msiexec's own words for a failure: the lines around 'Return value 3' and the error lines of both logs
+                $h.logs = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    foreach ($l in 'C:\LabHand7\remove.log', 'C:\LabHand7\add.log') {
+                        [pscustomobject]@{ Log = $l; Lines = @(Select-String -Path $l -Pattern 'Return value 3|Error \d{4}|CustomAction .* returned actual error|failed' -Context 3, 1 -ErrorAction SilentlyContinue | Select-Object -First 8 | ForEach-Object { (@($_.Context.PreContext) + $_.Line) -join ' | ' }) }
+                    }
+                }
                 $h.health = Get-LabAgentHealth -Name $VmName -Pin $install.pin
                 Save 'provider-add-remove' $h
             }
@@ -440,7 +459,7 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             Save 'ps-cant-start' $p
         }
 
-        It 'P-SES-10 PowerShell can''t start (IFEO Debugger to a missing file): 500, log "Could not start PowerShell for <acct>", no event 1000, the session slot released' -Tag 'P-SES-10' {
+        It 'P-SES-10 PowerShell can''t start (IFEO Debugger to a missing file): 500, log "Could not start PowerShell for [acct]", no event 1000, the session slot released' -Tag 'P-SES-10' {
             $p.first.status | Should -Be 500
             $p.second.status | Should -Be 500 -Because 'maxSessions 1: a slot kept by the failed start would answer 503'
             @($p.log | Where-Object { $_ -match "Could not start PowerShell for .*$([regex]::Escape($vm.AdminAccount))" }).Count | Should -Be 2
@@ -467,7 +486,7 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             Save 'by-name' $w
         }
 
-        It 'W-NAME-01 by computer name: CN=<name>, SAN DNS=<fqdn> and DNS=<short>; reused only for the same CN; a name with other characters refused' -Tag 'W-NAME-01' {
+        It 'W-NAME-01 by computer name: CN=[name], SAN DNS=[fqdn] and DNS=[short]; reused only for the same CN; a name with other characters refused' -Tag 'W-NAME-01' {
             foreach ($r in $w.first, $w.again, $w.short) { $r.Failed | Should -BeNullOrEmpty }
             $c1 = $w.firstState.Certificate
             $c1.Subject | Should -Be "CN=$fqdn"

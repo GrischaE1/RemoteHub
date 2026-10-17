@@ -3,6 +3,8 @@
 # the scenarios cause was written with who, from where, what and how long - and that no screen content, keystrokes or
 # clipboard text (the marker strings other scenarios typed and copied) and no password is in any log or event.
 # See docs/test-lab-cases.md section 9.11.
+# The VM itself isn't touched (only the evidence folder is read): no Initialize-LabVm, its reuse state stays as it is.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir

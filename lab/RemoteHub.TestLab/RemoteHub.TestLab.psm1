@@ -40,11 +40,18 @@ function Get-LabVm {
     $cfg = Get-LabConfig
     $overrides = @(if ($cfg.PSObject.Properties['Vms']) { $cfg.Vms })
     $all = @(foreach ($hv in Get-VM -Name $cfg.VmNamePattern | Sort-Object Name) {
+            # "TestAutomation - W11 - 26H2 - en-US" (lane 1) or "... - en-US - 2" (a second VM of the same kind: lane 2).
+            # BaseId is the kind (results are kept per kind), Id the VM itself.
             $parts = $hv.Name -split '\s+-\s+'
-            if ($parts.Count -ne 4) { continue }
+            if ($parts.Count -notin 4, 5) { continue }
+            $base = $parts[1..3] -join '-'
+            $lane = if ($parts.Count -eq 5) { $parts[4] } else { '1' }
             $vm = [ordered]@{
-                Name = $hv.Name; Id = ($parts[1..3] -join '-'); Os = $parts[1]; Version = $parts[2]; Language = $parts[3]
+                Name = $hv.Name; Id = $(if ($lane -eq '1') { $base } else { "$base-$lane" }); BaseId = $base; Lane = $lane
+                Os = $parts[1]; Version = $parts[2]; Language = $parts[3]
             }
+            # Role: "Console" VMs are the admin PC (RemoteHub, the client); W11 / Server VMs are devices (the agent)
+            $vm.Role = if ($parts[1] -eq 'Console') { 'Console' } else { 'Device' }
             foreach ($p in $cfg.Accounts.PSObject.Properties) { $vm[$p.Name] = $p.Value }
             foreach ($o in $overrides | Where-Object Name -eq $hv.Name) {
                 foreach ($p in $o.PSObject.Properties) { $vm[$p.Name] = $p.Value }
@@ -67,6 +74,35 @@ function Get-LabVm {
         if ($found.Count -eq 0) { throw "No lab VM matches '$n' (pattern '$($cfg.VmNamePattern)')." }
         $found
     }
+}
+
+# The other VM a test needs next to its own: by default the device for a test on the admin PC - the Server VM of the
+# same lane (lane 1: "... - en-US", lane 2: "... - en-US - 2"; the runner keeps a lane's VMs together). -Os W11 / Console
+# for another kind. $null when the lab has none.
+function Get-LabDevice {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$For, [string]$Os = 'Server')
+    $me = Get-LabVm $For
+    # only VMs ready for the lab (a checkpoint): one still being set up isn't a device yet
+    $all = @(Get-LabVm | Where-Object { $_.Os -eq $Os -and $_.Name -ne $me.Name -and (Test-LabVmReady $_.Name) })
+    @(@($all | Where-Object Lane -eq $me.Lane) + $all) | Select-Object -First 1   # (strict mode: [0] of an empty list throws)
+}
+
+# Whether a VM is ready for the lab: it has a checkpoint to revert to (a VM still being set up has none).
+function Test-LabVmReady {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    @(Get-VMSnapshot -VMName (Get-LabVm $Name).Name -ErrorAction SilentlyContinue).Count -gt 0
+}
+
+# Whether a VM is the admin PC for RemoteHub (client) tests: a Console VM, or - in a lab without one - any client
+# Windows (not Server), as before.
+function Test-LabConsoleVm {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $vm = Get-LabVm $Name
+    if ($vm.Role -eq 'Console') { return $true }
+    $vm.Os -ne 'Server' -and -not @(Get-LabVm | Where-Object { $_.Role -eq 'Console' -and (Test-LabVmReady $_.Name) }).Count
 }
 
 # Every lab account uses the same password.
@@ -105,11 +141,146 @@ function Reset-LabVm {
         if (-not $snap) { throw "$($vm.Name): no checkpoint to revert to." }
         Write-Verbose "$($vm.Name): reverting to checkpoint '$($snap.Name)' ($($snap.CreationTime))"
         Restore-VMSnapshot -VMSnapshot $snap -Confirm:$false
+        Clear-LabVmState -Name $vm.Name
         # a VM a jump host test left behind the jump host: back on its own switch
         Restore-LabVmNetwork -Name $vm.Name
         if ((Get-VM -Name $vm.Name).State -ne 'Running') { Start-VM -Name $vm.Name }
         Wait-LabVm -Name $vm.Name -TimeoutSec $TimeoutSec
     }
+}
+
+# ------------------------------------------------------------------ reusing a VM between scenario files
+# A scenario file that needs "the agent (and/or RemoteHub) installed, an account signed in" calls Initialize-LabVm
+# instead of Reset-LabVm + Install-LabAgent + Set-LabAutoLogon. With reuse on (the runner sets RHLAB_REUSE=1) the VM is
+# only reverted when it isn't in that state already: the state of the last Initialize-LabVm is kept on the host
+# (LabRoot\state\<Id>.json, with the agent's pin) and as a token in the guest (a revert loses it). Anything that changes
+# the VM outside it - Reset-LabVm, a direct Install-LabAgent / Install-LabClient / Set-LabAutoLogon, a failed file (the
+# runner) - drops the state, so the next file starts from the checkpoint. Before reuse the VM is checked: agent service
+# running and answering with the pin, the policies as they were, the signed-in account's desktop up (no lock / sign-in
+# screen), no RemoteHub left running.
+
+function Get-LabVmStatePath([string]$Name) { Join-Path (Get-LabConfig).LabRoot "state\$((Get-LabVm $Name).Id).json" }
+
+# Forgets what Initialize-LabVm set up on the VM: the next Initialize-LabVm reverts it.
+function Clear-LabVmState {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Remove-Item (Get-LabVmStatePath $Name) -ErrorAction SilentlyContinue
+}
+
+# A file that changed the VM in a way the next one must not see (a policy, an account, a driver): its state is dropped.
+function Set-LabVmDirty {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Clear-LabVmState -Name $Name
+}
+
+$script:LabInitializing = $false
+
+# Reverts and installs as asked, or - reuse on and the VM already so - keeps it. Returns Pin (of the agent), Install
+# (Install-LabAgent's answer, from the first install when reused), Reused, Why (why it reverted).
+function Initialize-LabVm {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        # the agent: installed as Install-LabAgent does by default (plus -AutoSignIn / -VirtualDisplay)
+        [switch]$Agent,
+        [Nullable[bool]]$AutoSignIn,
+        [bool]$VirtualDisplay = $true,
+        # RemoteHub (the client): Install-LabClient, -ClientNetwork = its -Network
+        [switch]$Client,
+        [switch]$ClientNetwork,
+        # the account signed in on the console: User (normaluser), Console (Admin) or '' (none set)
+        [string]$AutoLogon = '',
+        # always from the checkpoint (the file changes the installation itself)
+        [switch]$Clean
+    )
+    $vm = Get-LabVm $Name
+    $agentMsi = if ($Agent) { Get-Item (Get-LabAgentMsi) } else { $null }
+    $clientMsi = if ($Client) { Get-Item (Get-LabClientMsi) } else { $null }
+    $want = [ordered]@{
+        Agent      = $(if ($Agent) { "$($agentMsi.Name)|$($agentMsi.Length)|$($agentMsi.LastWriteTimeUtc.Ticks)|$AutoSignIn|$VirtualDisplay" } else { '' })
+        Client     = $(if ($Client) { "$($clientMsi.Name)|$($clientMsi.Length)|$($clientMsi.LastWriteTimeUtc.Ticks)|$($ClientNetwork.IsPresent)" } else { '' })
+        AutoLogon  = $AutoLogon
+    }
+    $why = $null
+    if ($Clean) { $why = 'the file needs a clean VM' }
+    elseif ($env:RHLAB_REUSE -ne '1') { $why = 'reuse is off' }
+    else {
+        $path = Get-LabVmStatePath $Name
+        $have = if (Test-Path $path) { try { Get-Content $path -Raw | ConvertFrom-Json } catch { $null } } else { $null }
+        if (-not $have) { $why = 'no state from an earlier file' }
+        elseif ($have.Agent -ne $want.Agent -or $have.Client -ne $want.Client -or $have.AutoLogon -ne $want.AutoLogon) { $why = 'set up differently' }
+        else { $why = Test-LabVmState -Name $Name -State $have }
+        if (-not $why) {
+            Write-Verbose "${Name}: reused (set up by an earlier file)"
+            return [pscustomobject]@{ Pin = $have.Pin; Install = $have.Install; Reused = $true; Why = $null }
+        }
+    }
+    Write-Verbose "${Name}: from the checkpoint - $why"
+    $script:LabInitializing = $true
+    try {
+        Reset-LabVm -Name $Name
+        $install = $null; $pin = $null
+        if ($Agent) {
+            $a = @{ Name = $Name; VirtualDisplay = $VirtualDisplay }
+            if ($null -ne $AutoSignIn) { $a.AutoSignIn = $AutoSignIn }
+            $install = Install-LabAgent @a
+            $pin = $install.pin
+        }
+        if ($Client) { $null = Install-LabClient -Name $Name -Network:$ClientNetwork }
+        if ($AutoLogon) { Set-LabAutoLogon -Name $Name -Account $AutoLogon }
+        if ($Agent) { $null = Wait-LabAgent -Name $Name -Pin $pin }
+        $token = [guid]::NewGuid().ToString('N')
+        $policies = Invoke-LabGuest -Name $Name -ArgumentList $token -ScriptBlock {
+            param($t)
+            $null = New-Item -ItemType Directory -Path 'C:\ProgramData\RemoteHubLab' -Force
+            Set-Content 'C:\ProgramData\RemoteHubLab\state-token.txt' $t
+            (Get-ChildItem 'HKLM:\SOFTWARE\Policies\RemoteHub' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $k = $_; $k.Name + '=' + (($k.Property | Sort-Object | ForEach-Object { "$_=$($k.GetValue($_))" }) -join ';') }) -join '|'
+        }
+        $state = [ordered]@{ Vm = $vm.Name }
+        foreach ($k in $want.Keys) { $state[$k] = $want[$k] }
+        $state.Pin = $pin; $state.Install = $install; $state.Token = $token; $state.Policies = "$policies"; $state.Since = (Get-Date).ToString('s')
+        $path = Get-LabVmStatePath $Name
+        $null = New-Item -ItemType Directory -Path (Split-Path $path) -Force
+        $state | ConvertTo-Json -Depth 6 | Set-Content $path -Encoding UTF8
+        [pscustomobject]@{ Pin = $pin; Install = $install; Reused = $false; Why = $why }
+    }
+    finally { $script:LabInitializing = $false }
+}
+
+# Why the VM can't be reused as Initialize-LabVm left it ($null: it can). Also closes a RemoteHub left running.
+function Test-LabVmState {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)]$State)
+    if ((Get-VM -Name (Get-LabVm $Name).Name).State -ne 'Running') { return 'the VM is off' }
+    $user = if ($State.AutoLogon) { Resolve-LabAccount (Get-LabVm $Name) $State.AutoLogon } else { '' }
+    $g = try {
+        Invoke-LabGuest -Name $Name -ArgumentList $State.Token, $user, [bool]$State.Agent -ScriptBlock {
+            param($token, $user, $agent)
+            $r = [ordered]@{}
+            $r.token = (Get-Content 'C:\ProgramData\RemoteHubLab\state-token.txt' -ErrorAction SilentlyContinue | Select-Object -First 1) -eq $token
+            $r.service = if ($agent) { [string](Get-Service RemoteHubAgent -ErrorAction SilentlyContinue).Status } else { 'n/a' }
+            $r.policies = (Get-ChildItem 'HKLM:\SOFTWARE\Policies\RemoteHub' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $k = $_; $k.Name + '=' + (($k.Property | Sort-Object | ForEach-Object { "$_=$($k.GetValue($_))" }) -join ';') }) -join '|'
+            $locked = @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count
+            $desk = if ($user) {
+                @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $user }).Count -gt 0
+            } else { $true }
+            $r.desktop = $desk -and $locked -eq 0
+            # a RemoteHub (client) a file left open: closed, it would answer the next file's first UI step
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            [pscustomobject]$r
+        }
+    }
+    catch { return "the guest doesn't answer ($($_.Exception.Message))" }
+    if (-not $g.token) { return 'reverted since (the token is gone)' }
+    if ($State.Agent -and $g.service -ne 'Running') { return "the agent service is $($g.service)" }
+    if ("$($g.policies)" -ne "$($State.Policies)") { return 'the RemoteHub policies changed' }
+    if (-not $g.desktop) { return "no unlocked desktop for $user" }
+    if ($State.Agent) {
+        try { $null = Wait-LabAgent -Name $Name -Pin $State.Pin -TimeoutSec 30 } catch { return "the agent doesn't answer ($($_.Exception.Message))" }
+    }
+    $null
 }
 
 # Ready = heartbeat OK and PowerShell Direct answers as the admin account twice in a row - right after a revert a
@@ -578,6 +749,8 @@ function Set-LabAutoLogon {
         [string]$Account = 'User',
         [int]$TimeoutSec = 300
     )
+    # set up outside Initialize-LabVm: the VM is no longer what Initialize-LabVm left
+    if (-not $script:LabInitializing) { Clear-LabVmState -Name $Name }
     $vm = Get-LabVm $Name
     $user = Resolve-LabAccount $vm $Account
     Invoke-LabGuest -Name $Name -ArgumentList $user, (Get-LabConfig).Password -ScriptBlock {
@@ -588,6 +761,16 @@ function Set-LabAutoLogon {
         Set-ItemProperty $k -Name DefaultPassword -Value $p
         Set-ItemProperty $k -Name DefaultDomainName -Value $env:COMPUTERNAME
         Remove-ItemProperty $k -Name AutoLogonCount -ErrorAction SilentlyContinue
+        # long scenarios: the signed-in session must not lock or go dark on its own (the person at the device needs its
+        # desktop on screen); a test locks it on purpose when it needs to (Lock-LabSession)
+        powercfg /change monitor-timeout-ac 0 | Out-Null
+        powercfg /change standby-timeout-ac 0 | Out-Null
+        $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+        Set-ItemProperty $sys -Name InactivityTimeoutSecs -Value 0 -Type DWord
+        $ss = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop'
+        $null = New-Item $ss -Force
+        Set-ItemProperty $ss -Name ScreenSaveActive -Value '0'
+        Set-ItemProperty $ss -Name ScreenSaverIsSecure -Value '0'
     }
     Restart-LabVm -Name $Name -TimeoutSec $TimeoutSec
     Wait-LabDesktop -Name $Name -Account $user -TimeoutSec $TimeoutSec
@@ -596,6 +779,8 @@ function Set-LabAutoLogon {
 function Clear-LabAutoLogon {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
+    # set up outside Initialize-LabVm: the VM is no longer what Initialize-LabVm left
+    if (-not $script:LabInitializing) { Clear-LabVmState -Name $Name }
     Invoke-LabGuest -Name $Name -ScriptBlock {
         $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
         Set-ItemProperty $k -Name AutoAdminLogon -Value '0'
@@ -618,14 +803,19 @@ function Wait-LabDesktop {
     try {
         while ((Get-Date) -lt $deadline) {
             # unlocked = the user's explorer runs in a session without LogonUI (other sessions may sit at a lock screen)
-            $unlocked = Invoke-LabGuest -Name $Name -ArgumentList $user -ScriptBlock {
-                param($u)
-                $lockedSessions = @(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId)
-                @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Where-Object {
-                        (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $u -and
-                        $lockedSessions -notcontains $_.SessionId
-                    }).Count -gt 0
+            # right after a restart the guest's PowerShell Direct endpoint may still go away ("The Hyper-V socket target
+            # process has ended"): that is "not yet", not a failure
+            $unlocked = try {
+                Invoke-LabGuest -Name $Name -ArgumentList $user -ScriptBlock {
+                    param($u)
+                    $lockedSessions = @(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId)
+                    @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Where-Object {
+                            (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $u -and
+                            $lockedSessions -notcontains $_.SessionId
+                        }).Count -gt 0
+                }
             }
+            catch [System.Management.Automation.Remoting.PSRemotingTransportException] { $false }
             if ($unlocked -and -not (Get-LabScreenshot -Name $Name -Path $shot).IsBlank) { return }
             Start-Sleep -Seconds 3
         }
@@ -659,8 +849,10 @@ function Invoke-LabInSession {
             "catch { `"ERROR: `$_`" | Set-Content -Path '$out' -Encoding UTF8 } finally { New-Item '$done' | Out-Null }"
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($wrapped))
         $task = "RHLab-$id"
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-            -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc"
+        # through conhost --headless: on Windows 11 a "hidden" powershell.exe still gets a visible Windows Terminal window,
+        # which covers the desktop and takes keys meant for it
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' `
+            -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc"
         $principal = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel $(if ($elevated) { 'Highest' } else { 'Limited' })
         $null = Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Force
         try {
@@ -691,8 +883,14 @@ function Start-LabInSession {
     Invoke-LabGuest -Name $Name -ArgumentList $user, $ScriptBlock.ToString(), $Elevated.IsPresent -ScriptBlock {
         param($u, $code, $elevated)
         $task = "RHLab-bg-$([guid]::NewGuid().ToString('N').Substring(0, 12))"
+        # its process id, for Stop-LabInSession (stopping the task ends conhost, not always the powershell under it)
+        $dir = 'C:\ProgramData\RemoteHubLab\session'
+        $null = New-Item -ItemType Directory -Path $dir -Force
+        icacls $dir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+        $code = "Set-Content '$dir\$task.pid' `$PID`r`n" + $code
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc"
+        # (conhost --headless: no visible console window - see Invoke-LabInSession)
+        $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc"
         $principal = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel $(if ($elevated) { 'Highest' } else { 'Limited' })
         $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries
         $null = Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force
@@ -707,6 +905,12 @@ function Stop-LabInSession {
     Invoke-LabGuest -Name $Name -ArgumentList $Task -ScriptBlock {
         param($t)
         Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+        $pidFile = "C:\ProgramData\RemoteHubLab\session\$t.pid"
+        if (Test-Path $pidFile) {
+            $id = [int](Get-Content $pidFile | Select-Object -First 1)
+            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+            Remove-Item $pidFile -ErrorAction SilentlyContinue
+        }
         Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue
     }
 }
@@ -738,21 +942,79 @@ function Invoke-LabPerson {
             else { Write-Warning "${Name}: '$Text' not found on the agent's window; OCR read: $(@($found.lines) -join ' | ')" }
             return $found
         }
-        $w = @($found | Where-Object { $_.Title -like $Title -or $_.Title -like "RemoteHub*$Title" })[0]
+        $w = @($found | Where-Object { $_.Title -like $Title -or $_.Title -like "RemoteHub*$Title" }) | Select-Object -First 1
         if ($w) { Send-LabMouse -Name $Name -X ($w.X + [int]($w.Width / 2)) -Y ($w.Y + [int]($w.Height / 2)) -Action Move; Start-Sleep -Seconds 2 }
-        return [pscustomobject]@{ before = $w; after = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title)[0] }
+        return [pscustomobject]@{ before = $w; after = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title) | Select-Object -First 1 }
     }
     if ($Do -eq 'locate') { $Do = 'click'; $Value = 'locate' }
-    Copy-LabPerson -Name $Name
-    $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
     $answer = "C:\ProgramData\RemoteHubLab\session\person-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
+    $json = $null
+    # through the person server in the session (RhPerson -Do serve, one PowerShell Direct call); RHLAB_PERSON_SERVER=0
+    # or a server that doesn't come up: a scheduled task per action, as before
+    if ($env:RHLAB_PERSON_SERVER -ne '0') {
+        $req = @{ do = $Do; title = $Title; timeout = $TimeoutSec; out = $answer }
+        if ($Text) { $req.text = $Text }
+        if ($PSBoundParameters.ContainsKey('Value')) { $req.value = $Value }
+        # an error on the way (PowerShell Direct dropped, ...) may come after the server ran the action: no second run of
+        # it the old way (a click done twice opens two dialogs) - the step fails with the error instead
+        try { $json = Invoke-LabPersonServer -Name $Name -Account $Account -Request $req -TimeoutSec $TimeoutSec }
+        catch { throw "RhPerson -Do $Do through the person server in $Account's session failed: $($_.Exception.Message)" }
+        if ($json -eq 'RHLAB-NOANSWER') { throw "RhPerson -Do $Do gave no answer (the person server in $Account's session took the request but didn't answer within $($TimeoutSec + 60) s)" }
+        if ($json) {
+            $s = $json | ConvertFrom-Json
+            if ($s -isnot [array] -and $s.PSObject.Properties['serveError']) { throw "RhPerson -Do $Do gave no answer: ERROR: $($s.serveError)" }
+        }
+    }
+    $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
     $cmd = "& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do $Do -Title $(& $q $Title) -TimeoutSec $TimeoutSec -Out '$answer'"
     if ($Text) { $cmd += " -Text $(& $q $Text)" }
     if ($PSBoundParameters.ContainsKey('Value')) { $cmd += " -Value $(& $q $Value)" }
-    $raw = Invoke-LabInSession -Name $Name -Account $Account -TimeoutSec ($TimeoutSec + 60) -ScriptBlock ([scriptblock]::Create($cmd))
-    $json = Invoke-LabGuest -Name $Name -ArgumentList $answer -ScriptBlock { param($f) if (Test-Path $f) { Get-Content $f -Raw; Remove-Item $f } }
+    if (-not $json) { Copy-LabPerson -Name $Name }
+    foreach ($try in 1..2) {
+        if ($json) { break }
+        $raw = Invoke-LabInSession -Name $Name -Account $Account -TimeoutSec ($TimeoutSec + 60) -ScriptBlock ([scriptblock]::Create($cmd))
+        # RhPerson writes UTF-8 without a BOM: read as UTF-8 (Get-Content would take it as ANSI: a middle dot or an arrow comes out as two or three wrong characters)
+        $json = Invoke-LabGuest -Name $Name -ArgumentList $answer -ScriptBlock { param($f) if (Test-Path $f) { [IO.File]::ReadAllText($f, [Text.Encoding]::UTF8); Remove-Item $f } }
+        # an empty answer (the session's task didn't run) is tried once more; an ERROR from the script is not
+        if ($json -or "$raw".Trim()) { break }
+        Start-Sleep -Seconds 3
+    }
     if (-not $json) { throw "RhPerson -Do $Do gave no answer: $raw" }
-    $json | ConvertFrom-Json
+    $r = $json | ConvertFrom-Json
+    # The banner and the privacy screen are kept out of screen captures (display affinity): the session's OCR sees what
+    # is below them. The console picture shows them - read the window there when the session read nothing.
+    if ($Do -eq 'read' -and $r.found -and -not "$($r.text)".Trim()) {
+        $c = Read-LabConsoleWindow -Name $Name -Window $r.window
+        $r.text = $c.text; $r.lines = $c.lines
+        $r | Add-Member -NotePropertyName source -NotePropertyValue 'console' -Force
+    }
+    elseif ($Do -eq 'click' -and $Value -eq 'locate' -and -not $r.clicked) {
+        $w = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account -Title $Title | Sort-Object { if ($_.Title -eq 'RemoteHub') { 1 } else { 0 } }) | Select-Object -First 1
+        if ($w) {
+            $c = Read-LabConsoleWindow -Name $Name -Window $w
+            $word = $c.words | Where-Object { $_.text -eq $Text -or ($_.text -replace '[^\p{L}\p{Nd}]+.*$', '') -eq $Text -or ($_.text -replace '^[^\p{L}\p{Nd}]+', '') -eq $Text } |
+                Sort-Object { if (($_.line -replace '[^\p{L}\p{Nd} ]', '').Trim() -eq $Text) { 0 } else { 1 } }, { -$_.y } | Select-Object -First 1
+            if ($word) {
+                $r = [pscustomobject]@{ clicked = $true; text = $Text; x = [int]($word.x + $word.w / 2); y = [int]($word.y + $word.h / 2); title = $w.Title; lines = $c.lines; source = 'console' }
+            }
+            else { $r.lines = $c.lines }
+        }
+    }
+    $r
+}
+
+# OCR of one window's area in the console picture (Hyper-V): words with screen coordinates, lines, text.
+function Read-LabConsoleWindow {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)]$Window)
+    $p = Join-Path ([IO.Path]::GetTempPath()) "rhlab-console-$([guid]::NewGuid().ToString('N').Substring(0, 8)).png"
+    try { $null = Get-LabScreenshot -Name $Name -Path $p; $ocr = Get-LabOcr -Path $p } finally { Remove-Item $p -ErrorAction SilentlyContinue }
+    $in = @($ocr.words | Where-Object {
+            $cx = $_.x + $_.w / 2; $cy = $_.y + $_.h / 2
+            $cx -ge $Window.X -and $cx -lt $Window.X + $Window.Width -and $cy -ge $Window.Y -and $cy -lt $Window.Y + $Window.Height })
+    # the OCR line of each word (an older RhPerson gives none: then the words of one row, top to bottom)
+    $lines = if (@($in | Where-Object { $_.PSObject.Properties['line'] -and $_.line }).Count) { @($in | ForEach-Object { $_.line } | Select-Object -Unique) }
+    else { @($in | Group-Object { [int]($_.y / 10) } | Sort-Object { [int]$_.Name } | ForEach-Object { (@($_.Group | Sort-Object x) | ForEach-Object text) -join ' ' }) }
+    [pscustomobject]@{ words = $in; lines = $lines; text = $lines -join "`n" }
 }
 
 # Windows' OCR of a picture file on this PC (a decoded frame, a console screenshot): text and lines.
@@ -809,7 +1071,94 @@ function Copy-LabPerson {
         $d = 'C:\ProgramData\RemoteHubLab'
         $null = New-Item -ItemType Directory -Path "$d\session" -Force
         icacls "$d\session" /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-        [IO.File]::WriteAllText("$d\RhPerson.ps1", $text)
+        # only when it changed: a running RhPerson -Do serve ends when its file is replaced
+        $f = "$d\RhPerson.ps1"
+        if (-not (Test-Path $f) -or [IO.File]::ReadAllText($f) -ne $text) { [IO.File]::WriteAllText($f, $text) }
+    }
+}
+
+# One person action through RhPerson -Do serve in the account's session (started when it isn't running): the script
+# updated if it changed, the request written, the answer waited for - one PowerShell Direct call instead of a scheduled
+# task and a new PowerShell per action. $null when the server didn't come up (the caller then runs the action the old way).
+function Invoke-LabPersonServer {
+    param([string]$Name, [string]$Account, [hashtable]$Request, [int]$TimeoutSec)
+    $user = Resolve-LabAccount (Get-LabVm $Name) $Account
+    $src = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\guest\RhPerson.ps1'))
+    Invoke-LabGuest -Name $Name -ArgumentList $src, $user, ($Request | ConvertTo-Json -Compress), $TimeoutSec -ScriptBlock {
+        param($text, $u, $reqJson, $timeout)
+        $d = 'C:\ProgramData\RemoteHubLab'
+        $null = New-Item -ItemType Directory -Path "$d\session" -Force
+        icacls "$d\session" /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+        $f = "$d\RhPerson.ps1"
+        $q = "$d\session\person-$($u -replace '[\\/:]', '_')"
+        $null = New-Item -ItemType Directory -Path $q -Force
+        # the server's process id while it runs (alive.txt is refreshed between requests, not during a long one)
+        function ServerPid {
+            $line = Get-Content (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $line) { return 0 }
+            $procId = ($line -split ' ', 2)[0]
+            if (-not (Get-Process -Id ([int]$procId) -ErrorAction SilentlyContinue)) { return 0 }
+            [int]$procId
+        }
+        function Fresh { $a = Join-Path $q 'alive.txt'; (Test-Path $a) -and ([datetime]::UtcNow - (Get-Item $a).LastWriteTimeUtc).TotalSeconds -lt 10 }
+        # a new RhPerson: the running server is stopped first (it would quit at its next turn and leave a request behind)
+        if (-not (Test-Path $f) -or [IO.File]::ReadAllText($f) -ne $text) {
+            $old = ServerPid
+            if ($old) {
+                Set-Content (Join-Path $q 'stop.txt') 'new version'
+                $until = (Get-Date).AddSeconds(15)
+                while ((Get-Process -Id $old -ErrorAction SilentlyContinue) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
+                Stop-Process -Id $old -Force -ErrorAction SilentlyContinue
+            }
+            [IO.File]::WriteAllText($f, $text)
+            Remove-Item (Join-Path $q 'alive.txt'), (Join-Path $q 'stop.txt') -ErrorAction SilentlyContinue
+        }
+        function Start-Server {
+            Remove-Item (Join-Path $q 'stop.txt') -ErrorAction SilentlyContinue
+            $task = "RHLab-person-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+            $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$f`" -Do serve -Value `"$q`""
+            $principal = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -MultipleInstances Parallel
+            $null = Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force
+            Start-ScheduledTask -TaskName $task
+            $until = (Get-Date).AddSeconds(60)
+            while (-not ((ServerPid) -and (Fresh)) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 300 }
+            Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+            [bool]((ServerPid) -and (Fresh))
+        }
+        $req = $reqJson | ConvertFrom-Json
+        foreach ($try in 1, 2) {
+            # no server: $null - the caller runs the action the old way
+            if (-not ((ServerPid) -and (Fresh)) -and -not (Start-Server)) { return $null }
+            $serverPid = ServerPid
+            $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
+            $reqFile = Join-Path $q "$id.req.json"
+            [IO.File]::WriteAllText((Join-Path $q "$id.tmp"), $reqJson)
+            Move-Item (Join-Path $q "$id.tmp") $reqFile
+            $until = (Get-Date).AddSeconds($timeout + 60)
+            while (-not (Test-Path $req.out) -and (Get-Date) -lt $until) {
+                Start-Sleep -Milliseconds 150
+                if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) { break }
+            }
+            if (Test-Path $req.out) {
+                Start-Sleep -Milliseconds 50
+                $answer = [IO.File]::ReadAllText($req.out, [Text.Encoding]::UTF8)
+                Remove-Item $req.out -ErrorAction SilentlyContinue
+                return $answer
+            }
+            # never picked up (the server ended before reading it): safe to give to a new server once
+            if ((Test-Path $reqFile) -and $try -eq 1) { Remove-Item $reqFile -ErrorAction SilentlyContinue; continue }
+            Remove-Item $reqFile -ErrorAction SilentlyContinue
+            # a server stuck in a request (a UI Automation call that never returns) would hold every later one: ended,
+            # the next call starts a new one
+            if (Get-Process -Id $serverPid -ErrorAction SilentlyContinue) {
+                Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
+                Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
+            }
+            # the server took the request but gave no answer: said so (not $null - the caller must not run the action again)
+            return 'RHLAB-NOANSWER'
+        }
+        'RHLAB-NOANSWER'
     }
 }
 
@@ -861,7 +1210,8 @@ function Invoke-LabHarness {
     # through the jump host set with Use-LabJump - not for commands that don't go over the network to a device
     # and not for the jump host itself
     $hostAt = [array]::IndexOf(@($Arguments), '--host')
-    $toJump = $hostAt -ge 0 -and $hostAt + 1 -lt @($Arguments).Count -and $Arguments[$hostAt + 1] -eq $script:JumpAddress
+    # (the "jump" command always goes through it - also to the jump host's own address, J-27)
+    $toJump = $Arguments[0] -ne 'jump' -and $hostAt -ge 0 -and $hostAt + 1 -lt @($Arguments).Count -and $Arguments[$hostAt + 1] -eq $script:JumpAddress
     if ($script:JumpArgs -and -not $toJump -and $Arguments[0] -notin 'install', 'enrollment', 'seed', 'share-conflict', 'probe') { $Arguments = @($Arguments) + $script:JumpArgs }
     $psi = New-Object Diagnostics.ProcessStartInfo $exe
     # quote like the C runtime expects (arguments may contain spaces and quotes)
@@ -930,6 +1280,8 @@ function Install-LabAgent {
         [switch]$ViaWinRm,
         [string]$Cert
     )
+    # set up outside Initialize-LabVm: the VM is no longer what Initialize-LabVm left
+    if (-not $script:LabInitializing) { Clear-LabVmState -Name $Name }
     $vm = Get-LabVm $Name
     $cfg = Get-LabConfig
     if (-not $Msi) { $Msi = Get-LabAgentMsi }
@@ -1825,6 +2177,8 @@ function Save-LabAgentEvidence {
 function Install-LabClient {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Msi, [switch]$Network)
+    # set up outside Initialize-LabVm: the VM is no longer what Initialize-LabVm left
+    if (-not $script:LabInitializing) { Clear-LabVmState -Name $Name }
     if (-not $Msi) { $Msi = Get-LabClientMsi }
     Copy-LabFile -Name $Name -Path $Msi -Destination 'C:\LabClient'
     Invoke-LabGuest -Name $Name -ArgumentList (Split-Path $Msi -Leaf), $Network.IsPresent -ScriptBlock {
@@ -1922,11 +2276,15 @@ function Start-LabMockServer {
         $root = 'C:\ProgramData\RemoteHubLab\mock'
         $null = New-Item -ItemType Directory -Path "$root\download" -Force
         [IO.File]::WriteAllText("$root\RhMockServer.ps1", $script)
-        Add-Content "$env:WINDIR\System32\drivers\etc\hosts" "`r`n127.0.0.1 update.remotehub.dev"
-        $cert = New-SelfSignedCertificate -DnsName 'update.remotehub.dev' -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddDays(30)
+        # a second name, dl.untrusted.test: reachable with a valid certificate but not an allowed download host (the
+        # redirect target of C-UPD-08)
+        Add-Content "$env:WINDIR\System32\drivers\etc\hosts" "`r`n127.0.0.1 update.remotehub.dev`r`n127.0.0.1 dl.untrusted.test"
+        $cert = New-SelfSignedCertificate -DnsName 'update.remotehub.dev', 'dl.untrusted.test' -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddDays(30)
         $root2 = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine'); $root2.Open('ReadWrite'); $root2.Add($cert); $root2.Close()
         $null = netsh.exe http add sslcert ipport=0.0.0.0:443 certhash=$($cert.Thumbprint) appid='{4dc3e181-e14b-4a21-b022-59fc669b0914}'
-        $null = netsh.exe http add sslcert hostnameport=update.remotehub.dev:443 certhash=$($cert.Thumbprint) appid='{4dc3e181-e14b-4a21-b022-59fc669b0914}' certstorename=MY
+        foreach ($h in 'update.remotehub.dev', 'dl.untrusted.test') {
+            $null = netsh.exe http add sslcert hostnameport="${h}:443" certhash=$($cert.Thumbprint) appid='{4dc3e181-e14b-4a21-b022-59fc669b0914}' certstorename=MY
+        }
         $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\RhMockServer.ps1`" -Root `"$root`""
         $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
         Start-Sleep -Seconds 3

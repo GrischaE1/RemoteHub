@@ -3,6 +3,7 @@
 # does), the limits, names that try to leave the clipboard folder, reparse points, broken transfers, the user's own
 # rights, the policy levels and view-only. normaluser is signed in and allows PSAdmin. See docs/test-lab-cases.md
 # section 9.9.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -52,15 +53,37 @@ Start-Sleep -Seconds 5
     Add-Type -AssemblyName System.Drawing
     $png = "$data\image.png"; $bmp = New-Object Drawing.Bitmap 64, 48; $g = [Drawing.Graphics]::FromImage($bmp); $g.Clear([Drawing.Color]::FromArgb(10, 200, 30)); $g.Dispose(); $bmp.Save($png, [Drawing.Imaging.ImageFormat]::Png); $bmp.Dispose()
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-clip-agent-logs')
+    # left reusable: the policies cleared, normaluser's clipboard emptied, the files and folders this file made removed.
+    # A reparse point (the junction to drivers\etc, or one that got into the clipboard folder) is removed as a link only,
+    # never followed: the walk below uses .NET, not Remove-Item -Recurse, which follows junctions on PowerShell 5.1.
+    Set-LabAgentPolicy -Name $VmName -Clear
+    $null = Invoke-LabInSession -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; [Windows.Forms.Clipboard]::Clear() }
+    $null = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
+        param($u)
+        function Remove-Tree([string]$p) {
+            if ([IO.File]::Exists($p)) { [IO.File]::SetAttributes($p, 'Normal'); [IO.File]::Delete($p); return }
+            if (-not [IO.Directory]::Exists($p)) { return }
+            if ([IO.File]::GetAttributes($p) -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($p); return }
+            foreach ($d in [IO.Directory]::GetDirectories($p)) { Remove-Tree $d }
+            foreach ($f in [IO.Directory]::GetFiles($p)) { Remove-Tree $f }
+            [IO.Directory]::Delete($p)
+        }
+        # the junction itself first (no recursion: only the link goes)
+        $j = "C:\Users\$u\Documents\withjunction\junction"
+        if ([IO.Directory]::Exists($j)) { [IO.Directory]::Delete($j) }
+        foreach ($p in "C:\Users\$u\Documents\withjunction", 'C:\ProgramData\RemoteHubLab\secret', 'C:\ProgramData\RemoteHubLab\copyme',
+            'C:\ProgramData\RemoteHubLab\big101.bin', "C:\Users\$u\Desktop\Pasted", "C:\Users\$u\Desktop\Aborted",
+            "C:\Users\$u\AppData\Local\Temp\RemoteHub Clipboard") {
+            try { Remove-Tree $p } catch { Write-Warning "${p}: $($_.Exception.Message)" }
+        }
+    }
 }
 
 Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {

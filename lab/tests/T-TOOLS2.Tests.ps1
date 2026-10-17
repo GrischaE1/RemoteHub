@@ -2,6 +2,7 @@
 # with Unicode names and paths over 260 characters, an upload over a file someone holds open, uploads with Defender's
 # real-time scan on, and renaming a registry key with its own ACL. Results are checked on the device over PowerShell
 # Direct. See docs/test-lab-cases.md section 7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -41,17 +42,20 @@ BeforeAll {
 
 AfterAll {
     Remove-Item "\\?\$data" -Recurse -Force -ErrorAction SilentlyContinue
+    # LongPathsEnabled, uploaded files, registry keys and Defender's scan changed, WinRM HTTPS set up: the next file
+    # starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'T2 <VmName>' -Tag Tools, 'T' {
 
     Context 'over <Via>' -ForEach @(@{ Via = 'Agent' }, @{ Via = 'WinRM' }) {
         BeforeAll {
-            Reset-LabVm -Name $VmName
             $pin = $null
             $cert = $null
-            if ($Via -eq 'Agent') { $pin = (Install-LabAgent -Name $VmName).pin }
+            if ($Via -eq 'Agent') { $pin = (Initialize-LabVm -Name $VmName -Agent).Pin }
             else {
+                Reset-LabVm -Name $VmName
                 $null = Invoke-LabSetupScript -Name $VmName
                 $cert = (Get-LabWinRmState -Name $VmName).Certificate.Thumbprint
             }

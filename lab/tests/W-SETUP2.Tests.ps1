@@ -1,6 +1,9 @@
 # W (more) - WinRM set up with RemoteHub's script, seen from elsewhere: a connection from an address outside the
 # allowed list (the other lab VM), a non-RID-500 administrator without LocalAccountTokenFilterPolicy (the difference to
 # the agent, S-AUTH-09), and HTTP with Kerberos by name (domain only). See docs/test-lab-cases.md section 8.
+# Every context starts from the checkpoint (Reset-LabVm): a device without WinRM set up.
+# LabRole: device
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -12,11 +15,17 @@ BeforeAll {
     function Save($name, $data) { $data | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir "w2-$name.json") -Encoding UTF8 }
 }
 
+AfterAll {
+    # WinRM set up, a test administrator added: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
+}
+
 Describe 'W2 <VmName>' -Tag WinRM, 'W' {
 
     Context 'from another address' {
         BeforeAll {
-            $other = @(Get-LabVm | Where-Object Name -ne $vm.Name) | Select-Object -First 1
+            # the other VM of this lane: the Server VM for a client, the W11 VM for a Server
+            $other = Get-LabDevice -For $VmName -Os $(if ($vm.Os -eq 'Server') { 'W11' } else { 'Server' })
             Reset-LabVm -Name $VmName
             $setup = Invoke-LabSetupScript -Name $VmName   # allows this PC only
             $ip = Get-LabVmAddress -Name $VmName
@@ -29,6 +38,7 @@ Describe 'W2 <VmName>' -Tag WinRM, 'W' {
                     try { $t = $c.ConnectAsync($ip, 5986); [bool]($t.Wait(10000) -and $c.Connected) } catch { $false } finally { $c.Close() }
                 }
                 Stop-LabVm -Name $other.Name
+                Set-LabVmDirty -Name $other.Name
             }
             Save 'other-address' @{ Setup = $setup; FromHost = $fromHost; FromOther = $fromOther; Other = $other.Name }
         }

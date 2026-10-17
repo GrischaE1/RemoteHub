@@ -1,6 +1,7 @@
 # D-IN - keyboard and mouse through the agent's remote desktop: what RemoteHub sends (scan codes, mouse at picture
 # coordinates) and what arrives in normaluser's session, recorded by the marker app (RhPerson.ps1 -Do marker: a
 # full-screen, DPI-aware window logging keys, characters, mouse and wheel). See docs/test-lab-cases.md section 9.7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -34,15 +35,15 @@ BeforeAll {
     function Chars($seen) { -join @($seen | Where-Object e -eq 'char' | ForEach-Object c) }
     function Near($a, $b) { [math]::Abs($a - $b) -le 2 }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-in-agent-logs')
+    # normaluser's desktop at 150 % (DPI context, restarted): not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-IN <VmName>' -Tag Desktop, 'D-IN' {

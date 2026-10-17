@@ -6,6 +6,8 @@
 # duration, size, frame rate, a frame). The agent is paired with RemoteHub through its clipboard install (files taken
 # to the device over PowerShell Direct, msiexec there) - no WinRM needed. Client VMs only (2VM; C-REC-06 only on an N
 # edition VM). See docs/test-lab-cases.md section 10.6.
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -14,7 +16,7 @@ param(
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $labVm = Get-LabVm $VmName
-    $isClient = $labVm.Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
     # an N edition (no Media Feature Pack): "W11-26H2-N-en-US"
     $isN = $labVm.Id -match '(^|-)N(-|$)'
 }
@@ -22,8 +24,9 @@ BeforeDiscovery {
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $script:task = $null
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "c-rec-$name.json") -Encoding UTF8 }
@@ -31,8 +34,20 @@ BeforeAll {
     function Ui([string]$Text, [string]$Value = 'click', [string]$Title = 'RemoteHub*', [int]$TimeoutSec = 30, [switch]$Optional) {
         Invoke-LabUi -Name $VmName -Text $Text -Value $Value -Title $Title -TimeoutSec $TimeoutSec -Optional:$Optional
     }
-    # an entry of the connection's context menu ("A>B" = submenu: "Tools", "RemoteHub Agent", "More")
-    function Menu([string]$Entry, [string]$Node = 'Device', [int]$TimeoutSec = 30) { $null = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec }
+    # an entry of the connection's context menu ("A>B" = submenu: "Tools", "RemoteHub Agent", "More"). The right-click
+    # right after a dialog closed ("Recording saved") sometimes opens no menu at all (no menu entries anywhere): once more
+    function Menu([string]$Entry, [string]$Node = 'Device', [int]$TimeoutSec = 30) {
+        $bad = { param($m) -not $m.found -or ($m.PSObject.Properties['error'] -and $m.error) }
+        $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        if ((& $bad $m) -and $m.found -and $m.PSObject.Properties['entries'] -and @($m.entries).Count -eq 0) {
+            Start-Sleep -Seconds 2
+            $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        }
+        if (& $bad $m) {
+            $why = if (-not $m.found) { 'not found' } else { "$($m.error)" + $(if ($m.PSObject.Properties['entries']) { ' - entries: ' + (@($m.entries) -join ', ') }) }
+            throw "UI step failed: '$Node' (menu:$Entry): $why"
+        }
+    }
     # the text of a message box (its window name is the message text), closed with -Button
     function Message([string]$Title = '?*', [string]$Button = 'OK', [int]$TimeoutSec = 120) {
         $m = Ui '*' -Title $Title -Value list -TimeoutSec $TimeoutSec
@@ -47,8 +62,23 @@ BeforeAll {
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
+            # a recording the failed step started is stopped and saved: else the next steps find "Stop recording" where
+            # they want "Record this tab", and the file stays open (Services ran on into C-REC-02..05)
+            try {
+                $s = Ui 'Stop recording and save the video' -Optional -TimeoutSec 20
+                if ($s.found) { $R["$Name-stoppedRecording"] = $true; $null = Message -Button 'Close' -TimeoutSec 60 }
+            }
+            catch { }
         }
     }
+    # the record / stop button of the selected tab. With a long list in the tab (services, processes - refreshed every
+    # few seconds) a UIA pass over the window takes long or fails: up to 60 s, and the search error in the message
+    function RecButton([string]$Text) {
+        $b = Ui $Text -Optional -TimeoutSec 60
+        if (-not $b.found) { throw "UI step failed: '$Text' not found in 60 s$(if ($b.PSObject.Properties['searchError'] -and $b.searchError) { " (last search error: $($b.searchError))" }); windows: $(@($b.windows) -join ', ')" }
+    }
+    # the connection's tabs closed (a long refreshing list in a tab makes every UIA search slow)
+    function CloseAll { foreach ($i in 1..6) { $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5; if (-not $c.found) { break }; Start-Sleep -Seconds 2 } }
     function InSession([string]$Vm, [string]$Account, [string]$Code, [hashtable]$Values = @{}, [switch]$Elevated, [int]$TimeoutSec = 120) {
         foreach ($k in $Values.Keys) { $Code = $Code.Replace("__$($k)__", [string]$Values[$k]) }
         $raw = "$(Invoke-LabInSession -Name $Vm -Account $Account -Elevated:$Elevated -TimeoutSec $TimeoutSec -ScriptBlock ([scriptblock]::Create($Code)))"
@@ -78,6 +108,20 @@ BeforeAll {
             }
         }
     }
+    # what this file leaves on the admin's PC, undone for the next file there: RemoteHub's data of the console account
+    # (connections, paired devices, settings, recordings) and the NTLM delegation policy. Throws when something stays.
+    function Clear-ClientLeftovers {
+        $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+            param($user)
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
+                "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
+            foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+            @($paths | Where-Object { Test-Path $_ })
+        }
+        if (@($left).Count) { throw "${VmName}: still there: $(@($left) -join ', ')" }
+    }
     function AuditText([string]$Node = 'Device') {
         Menu 'More>Audit log*' -Node $Node
         $l = Ui '*' -Title 'Audit log*' -Value list -TimeoutSec 30
@@ -85,12 +129,16 @@ BeforeAll {
         (@($l.items) -join "`n")
     }
     # a tool tab; when the connection's agent wasn't tested yet the menu offers "Test RemoteHub Agent" instead
+    # - only then; any other miss (a slow UIA pass, no menu) is tried once more as it is
     function Open-Tool([string]$Entry) {
         $m = Ui 'Device' -Value "menu:Tools>$Entry" -Optional
         if (-not $m.found -or ($m.PSObject.Properties['error'] -and $m.error)) {
             Key 1B
-            Menu 'Tools>Test RemoteHub Agent*'
-            $null = Message -TimeoutSec 90
+            Start-Sleep -Seconds 1
+            if (@(@($m.entries) | Where-Object { $_ -like 'Test RemoteHub Agent*' }).Count) {
+                Menu 'Tools>Test RemoteHub Agent*'
+                $null = Message -TimeoutSec 90
+            }
             Menu "Tools>$Entry"
         }
     }
@@ -101,7 +149,10 @@ BeforeAll {
             })
     }
     # duration, size and frame rate of MP4 files (Media Foundation through Windows.Media.Editing, as the unit tests
-    # decode them); -Thumb: the last frame saved there
+    # decode them: seconds, width, height, fps, error); -Thumb: the last frame saved there. The editing API wants a
+    # closed file, so each file is also opened the way players do (MediaSource: opened, openError, sourceSeconds) and
+    # its boxes are read: the movie header's and mehd's durations (mvhdSeconds, mehdSeconds), the fragments (moofs) and
+    # the length of the frames in them (fragSeconds, fragFrames), truncated when the last box is cut off (a killed recording)
     function VideoInfo([string[]]$Paths, [string]$Thumb = '') {
         $files = (@($Paths) | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
         @(InSession $VmName Console $code.video @{ FILES = $files; THUMB = $Thumb } -TimeoutSec 240)
@@ -109,13 +160,13 @@ BeforeAll {
     # Record this tab to a video file, the first-time notice accepted, -Seconds later stopped, "Recording saved" closed;
     # -During runs while it records
     function Record([System.Collections.IDictionary]$R, [string]$Key, [int]$Seconds = 10, [scriptblock]$During) {
-        $null = Ui 'Record this tab to a video file' -TimeoutSec 20
+        RecButton 'Record this tab to a video file'
         $R["$Key-notice"] = (Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 8).found
         $t0 = Get-Date
         if ($During) { . $During }
         $left = $Seconds - ((Get-Date) - $t0).TotalSeconds
         if ($left -gt 0) { Start-Sleep -Seconds ([int][math]::Ceiling($left)) }
-        $null = Ui 'Stop recording and save the video' -TimeoutSec 20
+        RecButton 'Stop recording and save the video'
         $R["$Key-saved"] = Message -Button 'Close' -TimeoutSec 60
     }
     # The agent paired with RemoteHub without WinRM: Install RemoteHub Agent... "Copy the installer and the enrollment
@@ -190,11 +241,96 @@ $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRunt
 $null = [Windows.Media.Editing.MediaClip, Windows.Media.Editing, ContentType = WindowsRuntime]
 $null = [Windows.Media.Editing.MediaComposition, Windows.Media.Editing, ContentType = WindowsRuntime]
 $null = [Windows.Graphics.Imaging.ImageStream, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+$null = [Windows.Media.Core.MediaSource, Windows.Media.Core, ContentType = WindowsRuntime]
 $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+$asTaskAction = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncAction' } | Select-Object -First 1
 function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $task.Wait(); $task.Result }
+# the innermost message ("One or more errors occurred." says nothing)
+function Why($e) { $x = $e.Exception; while ($x.InnerException) { $x = $x.InnerException }; "$($e.Exception.Message) / $($x.GetType().Name): $($x.Message)" }
+function U32([byte[]]$b, [long]$i) { [long]$b[$i] * 16777216 + [long]$b[$i + 1] * 65536 + [long]$b[$i + 2] * 256 + [long]$b[$i + 3] }
+function U64([byte[]]$b, [long]$i) { (U32 $b $i) * 4294967296 + (U32 $b ($i + 4)) }
+# the boxes between $from and $to: type, payload start, end; cut = the last one goes past $to
+function Boxes([byte[]]$b, [long]$from, [long]$to) {
+    $p = $from
+    while ($p + 8 -le $to) {
+        $size = U32 $b $p; $hdr = 8
+        $type = [Text.Encoding]::ASCII.GetString($b, $p + 4, 4)
+        if ($size -eq 1) { $size = U64 $b ($p + 8); $hdr = 16 } elseif ($size -eq 0) { $size = $to - $p }
+        if ($size -lt $hdr) { break }
+        [pscustomobject]@{ type = $type; start = $p + $hdr; end = [math]::Min($p + $size, $to); cut = ($p + $size -gt $to) }
+        $p += $size
+    }
+}
+function Child($b, $box, [string[]]$path) { foreach ($t in $path) { if (-not $box) { return }; $box = @(Boxes $b $box.start $box.end | Where-Object type -eq $t)[0] }; $box }
+function Mp4Info([string]$p, $o) {
+    $b = [IO.File]::ReadAllBytes($p)
+    $top = @(Boxes $b 0 $b.Length)
+    $o.boxes = (@($top | Select-Object -First 6 | ForEach-Object type) -join ',') + $(if ($top.Count -gt 6) { ",... ($($top.Count))" })
+    $o.truncated = [bool]($top.Count -and $top[-1].cut)
+    $moov = @($top | Where-Object type -eq 'moov')[0]
+    $scale = 0; $defDur = 0
+    if ($moov) {
+        $mvhd = Child $b $moov 'mvhd'
+        if ($mvhd) {
+            $v = $b[$mvhd.start]
+            $ms = if ($v -eq 1) { U32 $b ($mvhd.start + 20) } else { U32 $b ($mvhd.start + 12) }
+            $md = if ($v -eq 1) { U64 $b ($mvhd.start + 24) } else { U32 $b ($mvhd.start + 16) }
+            if ($ms) { $o.mvhdSeconds = [math]::Round($md / $ms, 2) }
+        }
+        $mdhd = Child $b $moov 'trak', 'mdia', 'mdhd'
+        if ($mdhd) { $scale = if ($b[$mdhd.start] -eq 1) { U32 $b ($mdhd.start + 20) } else { U32 $b ($mdhd.start + 12) } }
+        $mehd = Child $b $moov 'mvex', 'mehd'
+        if ($mehd -and $scale) { $o.mehdSeconds = [math]::Round($(if ($b[$mehd.start] -eq 1) { U64 $b ($mehd.start + 4) } else { U32 $b ($mehd.start + 4) }) / $scale, 2) }
+        $trex = Child $b $moov 'mvex', 'trex'
+        if ($trex) { $defDur = U32 $b ($trex.start + 12) }
+    }
+    $moofs = @($top | Where-Object { $_.type -eq 'moof' -and -not $_.cut })
+    $o.moofs = $moofs.Count
+    $ticks = [long]0; $frames = [long]0
+    foreach ($moof in $moofs) {
+        foreach ($traf in @(Boxes $b $moof.start $moof.end | Where-Object type -eq 'traf')) {
+            $dur = $defDur
+            foreach ($x in @(Boxes $b $traf.start $traf.end)) {
+                $flags = [long]$b[$x.start + 1] * 65536 + [long]$b[$x.start + 2] * 256 + [long]$b[$x.start + 3]
+                if ($x.type -eq 'tfhd') {
+                    $q = $x.start + 8
+                    if ($flags -band 0x01) { $q += 8 }
+                    if ($flags -band 0x02) { $q += 4 }
+                    if ($flags -band 0x08) { $dur = U32 $b $q }
+                }
+                elseif ($x.type -eq 'trun') {
+                    $n = U32 $b ($x.start + 4); $q = $x.start + 8
+                    if ($flags -band 0x01) { $q += 4 }
+                    if ($flags -band 0x04) { $q += 4 }
+                    $per = 4 * (@(0x100, 0x200, 0x400, 0x800) | Where-Object { $flags -band $_ }).Count
+                    for ($k = 0; $k -lt $n; $k++) {
+                        $ticks += $(if ($flags -band 0x100) { U32 $b $q } else { $dur })
+                        $q += $per
+                    }
+                    $frames += $n
+                }
+            }
+        }
+    }
+    $o.fragFrames = $frames
+    if ($scale -and $frames) { $o.fragSeconds = [math]::Round($ticks / $scale, 2) }
+}
 $thumb = '__THUMB__'
 $out = @(foreach ($p in @(__FILES__)) {
         $o = [ordered]@{ name = (Split-Path $p -Leaf); size = (Get-Item $p).Length }
+        try { Mp4Info $p $o } catch { $o.boxError = Why $_ }
+        try {
+            $f = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($p)) ([Windows.Storage.StorageFile])
+            $src = [Windows.Media.Core.MediaSource]::CreateFromStorageFile($f)
+            try {
+                $t = $asTaskAction.Invoke($null, @($src.OpenAsync()))
+                if (-not $t.Wait(30000)) { throw 'MediaSource.OpenAsync: no answer in 30 s' }
+                $o.opened = $src.IsOpen
+                if ($null -ne $src.Duration) { $o.sourceSeconds = [math]::Round(([TimeSpan]$src.Duration).TotalSeconds, 2) }
+            }
+            finally { $src.Dispose() }
+        }
+        catch { $o.opened = $false; $o.openError = Why $_ }
         try {
             $f = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($p)) ([Windows.Storage.StorageFile])
             $clip = Await ([Windows.Media.Editing.MediaClip]::CreateFromFileAsync($f)) ([Windows.Media.Editing.MediaClip])
@@ -204,7 +340,8 @@ $out = @(foreach ($p in @(__FILES__)) {
             if ($v.FrameRate.Denominator) { $o.fps = [math]::Round($v.FrameRate.Numerator / $v.FrameRate.Denominator, 2) }
             if ($thumb) {
                 $comp = New-Object Windows.Media.Editing.MediaComposition
-                $comp.Clips.Add($clip)
+                # (Clips is a WinRT IVector: Windows PowerShell gives it no Add - through the .NET interface)
+                $null = [System.Collections.Generic.ICollection[Windows.Media.Editing.MediaClip]].GetMethod('Add').Invoke($comp.Clips, @(, $clip))
                 $at = [TimeSpan]::FromSeconds([math]::Max(0, $o.seconds - 0.3))
                 $img = Await ($comp.GetThumbnailAsync($at, 0, 0, [Windows.Media.Editing.VideoFramePrecision]::NearestFrame)) ([Windows.Graphics.Imaging.ImageStream])
                 $s = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($img)
@@ -213,7 +350,7 @@ $out = @(foreach ($p in @(__FILES__)) {
                 $o.thumb = $thumb
             }
         }
-        catch { $o.error = "$_" }
+        catch { $o.error = Why $_ }
         [pscustomobject]$o
     })
 'JSON:' + (ConvertTo-Json -Compress -InputObject $out)
@@ -221,7 +358,7 @@ $out = @(foreach ($p in @(__FILES__)) {
 
     $kinds = 'Remote desktop', 'Desktop (agent)', 'PowerShell', 'File transfer', 'Registry', 'Services', 'Processes'
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
             # Remote Desktop on (the firewall group by its resource name - display names are localized)
@@ -229,12 +366,20 @@ $out = @(foreach ($p in @(__FILES__)) {
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so; AfterAll empties RemoteHub's data)
+        $null = Initialize-LabVm -Name $VmName -Client
         # the lab isn't a domain: saved credentials go to RDP only with the NTLM delegation policy (R-RDP-01)
         Allow-NtlmDelegation
-        $null = Install-LabClient -Name $VmName
         $script:task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
+        # the device's RDP certificate is self-signed: without "Connect without warning" the tab stops at Windows' certificate
+        # question (run 20261016-024318: "Disconnected (code 263)" once Esc dismissed it), so nothing is recorded connected
+        Menu 'Edit*'
+        $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
+        $null = Ui 'Security & session' -Title 'Edit connection'
+        $null = Ui 'Server authentication' -Title 'Edit connection' -Value 'choose:Connect without warning'
+        $null = Ui 'Save' -Title 'Edit connection'
+        Start-Sleep -Seconds 2
         $script:pair = [ordered]@{}
         Step $script:pair pair {
             $script:pair.install = Install-AgentByHand 'Device' $device.Name
@@ -247,10 +392,14 @@ $out = @(foreach ($p in @(__FILES__)) {
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
+        # undone for the next file on this VM: RemoteHub's data (connections, paired devices, settings, recordings) and
+        # the NTLM delegation policy; anything that fails: the next file starts from the checkpoint
+        try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }
         try { Save-LabAgentEvidence -Name $device.Name -Destination (Join-Path $EvidenceDir 'c-rec-device-logs') } catch { }
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Stop-LabVm -Name $device.Name
     }
 }
@@ -263,6 +412,11 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             Step $r1 rdp {
                 Menu 'Remote desktop via RDP'
                 $r1.rdpConnected = Wait-RdpTab 90
+                if (-not $r1.rdpConnected) {
+                    # the tab is recorded anyway (C-REC-01 is about the file), but say why RDP didn't connect
+                    Shot 'rdp-not-connected'
+                    $r1.rdpLog = @(DiagLog 'Session [0-9a-f]+: disconnected' | Select-Object -Last 5 | ForEach-Object { "$_" })
+                }
                 Record $r1 'Remote desktop'
             }
             Step $r1 agent {
@@ -304,9 +458,12 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             }
             Shot 'tabs'
             Save 'tabs' $r1
+            # the services and processes lists refresh all the time and slowed every later UIA search past its timeout
+            # (the record button, the menu): the next contexts work in a PowerShell tab of their own
+            CloseAll
         }
 
-        It 'C-REC-01 one MP4 per tab type in Videos\RemoteHub, named "Device - <tab> - <date time>.mp4", each with a duration; audit started / saved' -Tag 'C-REC-01' {
+        It 'C-REC-01 one MP4 per tab type in Videos\RemoteHub, named "Device - [tab] - [date time].mp4", each with a duration; audit started / saved' -Tag 'C-REC-01' {
             foreach ($k in $kinds) {
                 $f = @($r1.info | Where-Object { $_.name -match ('^Device - ' + [regex]::Escape($k) + ' - \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}( \(\d+\))?\.mp4$') })
                 $f.Count | Should -BeGreaterThan 0 -Because "a recording of the $k tab"
@@ -326,10 +483,17 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 $null = Ui 'Recordings' -Title 'Settings'
                 $r2.fps = (Ui 'Frame rate' -Title 'Settings' -Value 'choose:30 fps*').value
                 $r2.size = (Ui 'Video size' -Title 'Settings' -Value 'choose:Full HD*').value
-                $r2.gpu = (Ui 'Capture with the graphics card*' -Title 'Settings' -Value 'toggle-on').value
+                # check, not toggle-on: the name is found on the switch's label text too, which has no Toggle pattern
+                # (toggle-on then does nothing and answers no value); check falls back to the label's parent
+                $g = Ui 'Capture with the graphics card*' -Title 'Settings' -Value check
+                $r2.gpu = $g.value
+                $r2.gpuElement = "$($g.type) '$($g.name)'"
                 $null = Ui 'Save' -Title 'Settings'
             }
             Step $r2 record {
+                # a light tab to record (C-REC-04 records it too)
+                Open-Tool 'PowerShell'
+                $null = Ui 'Stop the running command (Ctrl+C)' -Value exists -Optional -TimeoutSec 60
                 $before = Join-Path $EvidenceDir 'c-rec-gpu-before.png'
                 $null = Get-LabScreenshot -Name $VmName -Path $before
                 $r2.yellowBefore = YellowShare $before
@@ -359,7 +523,8 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             $r2.gpu | Should -Be 'On'
             "$($r2.video.error)" | Should -BeNullOrEmpty
             $r2.video.seconds | Should -BeGreaterThan 0
-            if ($vm.Os -eq 'W11') {
+            # the Console VMs are Windows 11 too
+            if ($vm.Os -in 'W11', 'Console') {
                 (($r2.yellowDuring | Measure-Object -Maximum).Maximum - $r2.yellowBefore) | Should -BeLessThan 0.002 -Because 'a yellow border around the recorded window would add about 1 % of the screen'
             }
         }
@@ -369,7 +534,7 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
         BeforeAll {
             $r4 = [ordered]@{}
             Step $r4 kill {
-                $null = Ui 'Record this tab to a video file' -TimeoutSec 20
+                RecButton 'Record this tab to a video file'
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 5
                 Start-Sleep -Seconds 20
                 Stop-LabClient -Name $VmName -Task $script:task
@@ -382,10 +547,15 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             Save 'kill' $r4
         }
 
+        # The file was never closed: Windows.Media.Editing (MediaClip) refuses such a file ("One or more errors occurred",
+        # as the unit test notes: the editing API wants a closed file), players open it through MediaSource. The duration
+        # is the length of the frames in its complete fragments.
         It 'C-REC-04 Stop-Process -Force while recording: the MP4 opens and has a duration (fragmented MP4)' -Tag 'C-REC-04' {
             $r4.file.Size | Should -BeGreaterThan 0
-            "$($r4.video.error)" | Should -BeNullOrEmpty
-            $r4.video.seconds | Should -BeGreaterThan 0
+            "$($r4.video.openError)" | Should -BeNullOrEmpty
+            $r4.video.opened | Should -BeTrue -Because 'a player opens the file'
+            $r4.video.moofs | Should -BeGreaterThan 0 -Because 'fragments were written while recording'
+            $r4.video.fragSeconds | Should -BeGreaterThan 0
         }
     }
 
@@ -401,10 +571,10 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 $null = Ui 'type:Edit' -Value 'keys:{ENTER}'
                 Start-Sleep -Seconds 5
                 $t0 = Get-Date
-                $null = Ui 'Record this tab to a video file' -TimeoutSec 20
+                RecButton 'Record this tab to a video file'
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 5
                 Start-Sleep -Seconds 12
-                $null = Ui 'Stop recording and save the video' -TimeoutSec 20
+                RecButton 'Stop recording and save the video'
                 $r5.span = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
                 # taken once the stop click has returned: no frame may show a later time
                 $r5.deviceStop = (Get-LabGuestTime -Name $device.Name).ToString('HH:mm:ss')
@@ -424,6 +594,9 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             "$($r5.video.error)" | Should -BeNullOrEmpty
             $r5.video.seconds | Should -BeGreaterThan 0
             $r5.video.seconds | Should -BeLessOrEqual $r5.span
+            # the editing API's duration has been shorter than the frames in the file (10 s for 24 s recorded): the
+            # frames' length and the player's duration aren't longer either
+            foreach ($s in @($r5.video.fragSeconds, $r5.video.sourceSeconds) | Where-Object { $_ }) { $s | Should -BeLessOrEqual $r5.span }
             @($r5.times).Count | Should -BeGreaterThan 0 -Because 'the clock is in the last frame'
             (@($r5.times) | Sort-Object | Select-Object -Last 1) | Should -BeLessOrEqual $r5.deviceStop
         }
@@ -436,7 +609,7 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 $m = Ui 'Device' -Value 'menu:Remote desktop via RDP' -Optional
                 if (-not $m.found -or ($m.PSObject.Properties['error'] -and $m.error)) { Key 1B; Menu 'Connect' }
                 $r6.connected = Wait-RdpTab 90
-                $null = Ui 'Record this tab to a video file' -TimeoutSec 20
+                RecButton 'Record this tab to a video file'
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 10
                 # Dialogs.Info "Recording stopped": "The recording of Device . Remote desktop stopped: ..."
                 $r6.message = Message -Title 'The recording of*' -TimeoutSec 60

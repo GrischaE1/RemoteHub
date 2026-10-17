@@ -4,6 +4,8 @@
 # goes through RemoteHub's own client code with the route set (AgentEndpoint.Via / PsTarget.Via, harness --jump):
 # agent health, PowerShell and tools, the remote desktop, WinRM, RDP's certificate, the local forwarder, installs and
 # updates, shares, the jump host's policy and audit, a dropped tunnel. The jump VM is turned off at the end.
+# LabRole: device
+# LabNeeds: jumphost
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -40,6 +42,8 @@ AfterAll {
     try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'j-target-logs') } catch { }
     Stop-LabJumpHost
     Restore-LabVmNetwork -Name $VmName
+    # moved behind the jump host, agent scoped to it, RDP / WinRM set up: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'J <VmName>' -Tag Jump, 'J' {

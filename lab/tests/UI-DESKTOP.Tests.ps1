@@ -17,6 +17,9 @@
 # Keys inside the tab (typing, Ctrl+V, Ctrl+A, Ctrl+C, Alt+Tab, ...) are pressed on the client's console keyboard.
 # Notices over the picture last 6 s: a watcher in the client session writes every text RemoteHub shows to a log.
 # Client VMs only (2VM). See docs/test-lab-cases.md section 10.5.
+# LabRole: console
+# TimeLimitMin: 120   (many UI steps with RemoteHub and the device, sign-ins and reconnects: > 60 min)
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -24,12 +27,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
     $R = [ordered]@{}
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "ui-desktop-$name.json") -Encoding UTF8 }
@@ -78,15 +82,25 @@ BeforeAll {
     function NoticeMark { @(Notices).Count }
 
     # ---- UI Automation / Win32 code run in a session
-    # the agent tab's picture: the largest Image in RemoteHub's window (screen pixels)
+    # the agent tab's picture: the largest Image in RemoteHub's window (screen pixels). RemoteHub's window is brought to
+    # the front first: a console window of the session's tasks (Windows Terminal ignores -WindowStyle Hidden) came over
+    # it in the run of 16.10.2026, so the click went there and the cropped picture showed that window.
     $rectCode = @'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -Namespace RhLab -Name Fg -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, IntPtr e);'
 $A = [Windows.Automation.AutomationElement]
 $isImg = New-Object Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([Windows.Automation.ControlType]::Image)
 $best = $null; $area = 0
 foreach ($w in @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition))) {
     $n = $w.Current.Name
     if ($n -notlike 'RemoteHub*' -and $n -notlike '* RemoteHub') { continue }
+    $h = [IntPtr]$w.Current.NativeWindowHandle
+    if ($h -ne [IntPtr]::Zero -and [RhLab.Fg]::GetForegroundWindow() -ne $h) {
+        # an Alt tap lets this process set the foreground window
+        [RhLab.Fg]::keybd_event(0x12, 0, 0, [IntPtr]::Zero); [RhLab.Fg]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
+        $null = [RhLab.Fg]::SetForegroundWindow($h)
+        Start-Sleep -Milliseconds 400
+    }
     foreach ($i in @($w.FindAll([Windows.Automation.TreeScope]::Descendants, $isImg))) {
         if ($i.Current.IsOffscreen) { continue }
         $b = $i.Current.BoundingRectangle
@@ -126,18 +140,17 @@ Add-Type -TypeDefinition 'using System; using System.Text; using System.Collecti
     # Notepad's text by WM_GETTEXT (when UI Automation doesn't answer)
     $npCode = @'
 Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class RhN { [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr p, IntPtr a, string c, string t); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, int m, IntPtr w, StringBuilder l); }'
-$h = [RhN]::FindWindowW('Notepad', $null); $e = [RhN]::FindWindowExW($h, [IntPtr]::Zero, 'Edit', $null)
-$sb = New-Object Text.StringBuilder 65536; [void][RhN]::SendMessageW($e, 0x0D, [IntPtr]65536, $sb)
-'NP<' + $sb.ToString() + '>NP'
+$h = [RhN]::FindWindowW('Notepad', $null); $e = if ($h -ne [IntPtr]::Zero) { [RhN]::FindWindowExW($h, [IntPtr]::Zero, 'Edit', $null) } else { [IntPtr]::Zero }
+if ($e -eq [IntPtr]::Zero) { 'NP-NONE' } else { $sb = New-Object Text.StringBuilder 65536; [void][RhN]::SendMessageW($e, 0x0D, [IntPtr]65536, $sb); 'NP<' + $sb.ToString() + '>NP' }
 '@
     # a 200x200 test picture (pattern @@K@@) on the clipboard, or the clipboard's picture compared with it ("0" = equal)
     $patCode = @'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 function Pat([int]$k) { $b = New-Object Drawing.Bitmap 200, 200; for ($y = 0; $y -lt 200; $y++) { for ($x = 0; $x -lt 200; $x++) { $b.SetPixel($x, $y, [Drawing.Color]::FromArgb(255, ($x * $k) % 256, ($y * 3 + $k * 40) % 256, (($x + $y) * 5) % 256)) } }; $b }
-function Diff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return "size $($b.Width)x$($b.Height)" }; $d = 0; for ($y = 0; $y -lt $a.Height; $y++) { for ($x = 0; $x -lt $a.Width; $x++) { $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y); if ($p.R -ne $q.R -or $p.G -ne $q.G -or $p.B -ne $q.B) { $d++ } } }; "$d" }
+function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return "size $($b.Width)x$($b.Height)" }; $d = 0; for ($y = 0; $y -lt $a.Height; $y++) { for ($x = 0; $x -lt $a.Width; $x++) { $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y); if ($p.R -ne $q.R -or $p.G -ne $q.G -or $p.B -ne $q.B) { $d++ } } }; "$d" }
 '@
     $setImageCode = $patCode + "`n[Windows.Forms.Clipboard]::SetImage((Pat @@K@@)); 'set'"
-    $getImageCode = $patCode + "`n`$img = [Windows.Forms.Clipboard]::GetImage(); if (`$img) { `$img = New-Object Drawing.Bitmap `$img }; 'DIFF=' + (Diff (Pat @@K@@) `$img)"
+    $getImageCode = $patCode + "`n`$img = [Windows.Forms.Clipboard]::GetImage(); if (`$img) { `$img = New-Object Drawing.Bitmap `$img }; 'DIFF=' + (PicDiff (Pat @@K@@) `$img)"
     # Explorer's Paste into a folder of the session's user (the shell's own verb); answers "relative path=SHA-256" lines
     $pasteCode = @'
 $f = Join-Path $env:USERPROFILE '@@DIR@@'
@@ -151,6 +164,10 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
     function SetFileList([string]$Vm, [string]$Account, [string[]]$Paths) {
         $add = ($Paths | ForEach-Object { "`$c.Add('" + ($_ -replace "'", "''") + "') | Out-Null" }) -join '; '
         InSession $Vm $Account "Add-Type -AssemblyName System.Windows.Forms; `$c = New-Object System.Collections.Specialized.StringCollection; $add; [Windows.Forms.Clipboard]::SetFileDropList(`$c); 'set'"
+    }
+    # the clipboard's format names only (reading the files would fetch an offered copy - the paste under test)
+    function ClipFormats([string]$Vm, [string]$Account) {
+        @(Lines (InSession $Vm $Account "Add-Type -AssemblyName System.Windows.Forms; @([Windows.Forms.Clipboard]::GetDataObject().GetFormats()) -join '|'"))
     }
     function PasteAt([string]$Vm, [string]$Account, [string]$Dir, [int]$Count, [int]$WaitSec = 120) {
         $out = InSession $Vm $Account ($pasteCode.Replace('@@DIR@@', $Dir).Replace('@@WAIT@@', "$WaitSec").Replace('@@N@@', "$Count")) -TimeoutSec ($WaitSec + 120)
@@ -191,7 +208,26 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
     }
     # keys on the client's console keyboard (real input: RemoteHub's key hook sends them to the device)
     function Combo([int[]]$Codes) { Send-LabKeyCombo -Name $VmName -Codes $Codes; Start-Sleep -Milliseconds 600 }
-    function TypeText([string]$Text) { Send-LabText -Name $VmName -Text $Text; Start-Sleep -Milliseconds 600 }
+    # Text typed key by key (press / release of US-layout virtual keys, Shift where needed) - the way Combo presses keys,
+    # which reached the device in every case. Hyper-V's TypeText through the tab didn't (the run of 16.10.2026 13:55: the
+    # user name and password at the sign-in screen signed nobody in). RemoteHub sends scan codes, so the device's layout
+    # decides the characters: the device is en-US.
+    $usKeys = @{ ' ' = 0x20; '-' = 0xBD; '=' = 0xBB; '[' = 0xDB; ']' = 0xDD; '\' = 0xDC; ';' = 0xBA; "'" = 0xDE; ',' = 0xBC; '.' = 0xBE; '/' = 0xBF; '`' = 0xC0 }
+    $usShifted = @{ '!' = '1'; '@' = '2'; '#' = '3'; '$' = '4'; '%' = '5'; '^' = '6'; '&' = '7'; '*' = '8'; '(' = '9'; ')' = '0'; '_' = '-'; '+' = '='; '{' = '['; '}' = ']'; '|' = '\'; ':' = ';'; '"' = "'"; '<' = ','; '>' = '.'; '?' = '/'; '~' = '`' }
+    function TypeText([string]$Text) {
+        foreach ($ch in $Text.ToCharArray()) {
+            $c = [string]$ch
+            $shift = $false
+            if ($usShifted.ContainsKey($c)) { $shift = $true; $c = $usShifted[$c] }
+            $vk = if ($c -cmatch '^[a-z]$') { [int][char]$c.ToUpperInvariant() }
+            elseif ($c -cmatch '^[A-Z]$') { $shift = $true; [int][char]$c }
+            elseif ($c -match '^[0-9]$') { [int][char]$c }
+            elseif ($usKeys.ContainsKey($c)) { $usKeys[$c] }
+            else { throw "TypeText: no US key for '$c'" }
+            Send-LabKeyCombo -Name $VmName -Codes $(if ($shift) { @(0x10, $vk) } else { @($vk) })
+        }
+        Start-Sleep -Milliseconds 600
+    }
     function Key([string]$Key) { Send-LabKey -Name $VmName -Key $Key; Start-Sleep -Milliseconds 600 }
 
     # the device's Notepad (normaluser's session), maximized, opened on a file; its text
@@ -206,11 +242,47 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         $null = Invoke-LabPerson -Name $dn -Do uia -Title "$leaf*" -Text '*' -Value exists -TimeoutSec 30
         Start-Sleep -Seconds 2
     }
+    # The classic Notepad's edit control by WM_GETTEXT first (definite); UI Automation only when there is no such window.
+    # (UI Automation's read of the edit came back empty for every case in the run of 16.10.2026 13:55 - typed, pasted -
+    # so an empty answer from it proves nothing.)
     function NotepadText {
-        $u = Invoke-LabPerson -Name $dn -Do uia -Title '*Notepad*' -Text 'Text Editor' -Value read -TimeoutSec 15
-        if ($u.found -and $u.PSObject.Properties['value'] -and $null -ne $u.value) { return "$($u.value)" }
         $o = "$(InSession $dn 'User' $npCode)"
-        if ($o -match '(?s)NP<(.*)>NP') { $Matches[1] } else { $null }
+        if ($o -match '(?s)NP<(.*)>NP') { return $Matches[1] }
+        $u = Invoke-LabPerson -Name $dn -Do uia -Title '*Notepad*' -Text 'Text Editor' -Value read -TimeoutSec 15
+        if ($u.found -and $u.PSObject.Properties['value'] -and $null -ne $u.value) { "$($u.value)" } else { $null }
+    }
+    # this PC's (the client's) screen resolution changed in the console session; answers "rc;previous WxH"
+    $clientResCode = @'
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+public static class RhRes {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency, dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettingsW(string d, int m, ref DEVMODE dm);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsW(ref DEVMODE dm, int flags);
+    public static string Set(int w, int h) {
+        var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        if (!EnumDisplaySettingsW(null, -1, ref dm)) return "-99;?";
+        var was = dm.dmPelsWidth + "x" + dm.dmPelsHeight;
+        dm.dmPelsWidth = w; dm.dmPelsHeight = h; dm.dmFields = 0x80000 | 0x100000;
+        return ChangeDisplaySettingsW(ref dm, 0) + ";" + was;
+    }
+}
+"@
+'CRES=' + [RhRes]::Set(@@W@@, @@H@@)
+'@
+    function ClientRes([int]$W, [int]$H) {
+        $o = "$(InSession $VmName 'Console' $clientResCode.Replace('@@W@@', "$W").Replace('@@H@@', "$H"))"
+        Start-Sleep -Seconds 3
+        if ($o -match 'CRES=(-?\d+);(\S+)') { [pscustomobject]@{ Result = [int]$Matches[1]; Was = $Matches[2] } } else { [pscustomobject]@{ Result = $null; Was = $null; Output = $o } }
     }
     function DeviceRes { "$(InSession $dn 'User' "Add-Type -AssemblyName System.Windows.Forms; `$b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; 'RES=' + `$b.Width + 'x' + `$b.Height")" -replace '(?s).*RES=(\d+x\d+).*', '$1' }
 
@@ -225,9 +297,39 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         if ($ViewOnly) { $null = Ui 'View only*' -Value check }
         $null = Ui 'Connect'
     }
-    function Allow([string]$Answer = 'Allow') { Invoke-LabPerson -Name $dn -Do click -Text $Answer -TimeoutSec 60 }
+    # normaluser's answer in the agent's request dialog (OCR + console mouse). The screen capture throws while the session
+    # is still on the lock or sign-in screen ("The handle is invalid" in the run of 16.10.2026 13:55): tried again until
+    # -TimeoutSec.
+    function Allow([string]$Answer = 'Allow', [int]$TimeoutSec = 60) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $r = try { Invoke-LabPerson -Name $dn -Do click -Text $Answer -TimeoutSec 20 } catch { [pscustomobject]@{ clicked = $false; error = "$_" } }
+            if ($r.PSObject.Properties['clicked'] -and $r.clicked) { return $r }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $until)
+        $r
+    }
     function Live([int]$TimeoutSec = 60) { Ui 'Send Ctrl+Alt+Del' -Value exists -TimeoutSec $TimeoutSec -Optional }
     function TabTexts { "$((Ui '*' -Value list -Optional -TimeoutSec 10).items -join "`n")" }
+    # an agent install / update / credential provider progress window (-Title) has finished: "Done" when it worked; its
+    # failure text (or the window gone) ends the wait as well, instead of waiting -TimeoutSec for a "Done" that never
+    # comes (the button stays "Close" then). Answers the last 'Done' lookup.
+    function WaitDone([string]$Title, [int]$TimeoutSec = 600) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            # looked for, not clicked: a click closes the window before its rows are read (empty in the run of 16.10.2026 13:55)
+            $d = Ui 'Done' -Title $Title -Value exists -TimeoutSec 30 -Optional
+            if ($d.found) { return $d }
+            $rows = @((Ui '*' -Title $Title -Value list -Optional -TimeoutSec 5).items)
+            if (-not $rows.Count) { return $d }
+            if (@($rows | Where-Object { $_ -match "^Text\|(Failed|Cancelled|The update didn.t install|The agent didn.t answer again|The device.s agent uses a certificate|Installed, but this PC can.t reach)" }).Count) { return $d }
+        } while ((Get-Date) -lt $until)
+        $d
+    }
+    # the progress window closed whichever way it ended ("Done" or "Close"): it is not modal and would stay over the tab
+    function CloseProgress([string]$Title) {
+        foreach ($b in 'Done', 'Close') { $null = Ui $b -Title $Title -Optional -TimeoutSec 3 }
+    }
     function EditConnection([scriptblock]$Do) {
         Menu 'Edit*'
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
@@ -235,15 +337,42 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         $null = Ui 'Save' -Title 'Edit connection'
         Start-Sleep -Seconds 2
     }
-    # the newest agent update log on the device: its msiexec command line
+    # the newest agent update log on the device: its msiexec command line. Read shared (msiexec may still write it) and
+    # as UTF-16 when it is one; without a command line: the log's path, size and last lines instead.
     function UpdateCommandLine {
         Invoke-LabGuest -Name $dn -ScriptBlock {
             $log = Get-ChildItem 'C:\Users\*\AppData\Local\Temp\RemoteHub-Agent-update.log', 'C:\Windows\Temp\RemoteHub-Agent-update.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-            if ($log) { @(Get-Content $log.FullName -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Command Line:' } | Select-Object -First 3) -join "`n" } else { 'no update log' }
+            if (-not $log) { return 'no update log' }
+            $b = try {
+                $fs = [IO.File]::Open($log.FullName, 'Open', 'Read', 'ReadWrite')
+                try { $ms = New-Object IO.MemoryStream; $fs.CopyTo($ms); $ms.ToArray() } finally { $fs.Dispose() }
+            }
+            catch { return "update log $($log.FullName) not readable: $_" }
+            $t = if ($b.Length -gt 1 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { [Text.Encoding]::Unicode.GetString($b, 2, $b.Length - 2) }
+            elseif ($b.Length -gt 1 -and $b[1] -eq 0) { [Text.Encoding]::Unicode.GetString($b) }
+            else { [Text.Encoding]::Default.GetString($b) }
+            $l = @($t -split "`r?`n")
+            $cmd = @($l | Where-Object { $_ -match 'Command Line:' } | Select-Object -First 3)
+            if ($cmd.Count) { $cmd -join "`n" } else { "no command line in $($log.FullName) ($($b.Length) bytes), last lines:`n" + (@($l | Select-Object -Last 15) -join "`n") }
         }
     }
+    # after an update that didn't end with "Done": what the device shows of it (msiexec still running, Windows
+    # Installer's events, the update logs), the agent's logs and the update log copied into the evidence
+    function UpdateEvidence([string]$Name) {
+        $info = Invoke-LabGuest -Name $dn -ScriptBlock {
+            [ordered]@{
+                msiexec = @(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | ForEach-Object { "$($_.ProcessId) $($_.CommandLine)" })
+                installer = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'MsiInstaller'; StartTime = (Get-Date).AddMinutes(-30) } -MaxEvents 20 -ErrorAction SilentlyContinue | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.Id) $($_.Message)" })
+                logs = @(Get-ChildItem 'C:\Users\*\AppData\Local\Temp\RemoteHub-Agent-update.log', 'C:\Windows\Temp\RemoteHub-Agent-update.log' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+            }
+        }
+        $dir = Join-Path $EvidenceDir "ui-desktop-$Name-device-logs"
+        try { Save-LabAgentEvidence -Name $dn -Destination $dir } catch { }
+        foreach ($f in @($info.logs)) { try { Get-LabFile -Name $dn -Path $f -Destination (Join-Path $dir ($f -replace '^C:\\(Users\\)?([^\\]+)\\.*$', '$2')) } catch { } }
+        $info
+    }
 
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $dn = $device.Name
     $newVer = Get-LabMsiVersion (Get-LabAgentMsi)
     $prevMsi = Get-LabAgentMsi -Previous
@@ -252,7 +381,7 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
     $uni = 'Zeile 1 ' + [char]0xE4 + [char]0xF6 + [char]0xFC + "`r`nLine 2 " + [char]0x2713 + ' ' + [char]0x65E5 + [char]0x672C
     $uni2 = 'Vom Ger' + [char]0xE4 + 't ' + [char]0xDF + "`r`nZweite Zeile " + [char]0x20AC + ' ' + [char]0x2713
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         $setup = [ordered]@{}
         Reset-LabVm -Name $dn
         $deviceIp = Get-LabVmAddress -Name $dn
@@ -262,9 +391,9 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
             Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so)
+        $null = Initialize-LabVm -Name $VmName -Client
         $clientIp = Get-LabVmAddress -Name $VmName
-        $null = Install-LabClient -Name $VmName
         $task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
         # the watcher of RemoteHub's texts
@@ -316,7 +445,11 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
+        # files copied and pasted all over both VMs (a 101 MB one too), the clipboard, keys and the device's console
+        # session: the next file on either starts from the checkpoint
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $dn }
         Shot 'end'
         try { [IO.File]::WriteAllLines((Join-Path $EvidenceDir 'ui-desktop-texts.log'), [string[]]@(Notices)) } catch { }
         if ($watch) { try { Stop-LabInSession -Name $VmName -Task $watch } catch { } }
@@ -342,11 +475,14 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.updateAutoSignIn = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value read -Optional
                 $null = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value uncheck -Optional -TimeoutSec 5
                 $null = Ui 'Update' -Title 'Update RemoteHub Agent'
-                $R.updateDone = Ui 'Done' -Title 'Update RemoteHub Agent' -TimeoutSec 600 -Optional
+                $R.updateDone = WaitDone 'Update RemoteHub Agent'
                 $R.updateRows = (Ui '*' -Title 'Update RemoteHub Agent' -Value list -Optional).items
                 Shot 'update'
-                $null = Ui 'Done' -Title 'Update RemoteHub Agent' -Optional -TimeoutSec 5
+                # a failed update leaves its progress window open (button "Close"): it stayed over the agent tab for the
+                # whole next context in the run of 16.10.2026
+                CloseProgress 'Update RemoteHub Agent'
                 $R.updateCommandLine = UpdateCommandLine
+                if (-not $R.updateDone.found) { $R.updateDevice = UpdateEvidence 'update' }
                 $state = Get-LabAgentState -Name $dn
                 $R.certAfter = $state.Certificate.Sha256
                 $R.versionAfter = $state.Product.Version
@@ -359,7 +495,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             Save 'update' $R
         }
 
-        It 'UI-AG-06 Update RemoteHub Agent... through the running agent: "Updated - RemoteHub Agent <new> is running.", the new version on the shield, same certificate' -Tag 'UI-AG-06' {
+        It 'UI-AG-06 Update RemoteHub Agent... through the running agent: "Updated - RemoteHub Agent [new] is running.", the new version on the shield, same certificate' -Tag 'UI-AG-06' {
             NoError 'update'
             $R.versionBefore | Should -Match "^$([regex]::Escape($prevVer))" -Because 'the previous release was installed first'
             $R.updateDone.found | Should -BeTrue
@@ -447,6 +583,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $mark = NoticeMark
                 $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin', 'C:\lab\clip\f2.bin', 'C:\lab\clip\f3.bin', 'C:\lab\clip\folder')
                 Start-Sleep -Seconds 4
+                # what the device's clipboard offers before the paste (no file reached either way in the run of 16.10.2026 13:55)
+                $R.cp04DeviceClip = ClipFormats $dn 'User'
                 $R.cp04Arrived = @(PasteAt $dn 'User' 'cp04' 5)
                 Start-Sleep -Seconds 3
                 $R.cp04Notices = @(Notices $mark)
@@ -460,6 +598,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $mark = NoticeMark
                 $null = SetFileList $dn 'User' @('C:\Users\Public\cp05\a.txt', 'C:\Users\Public\cp05\b.txt', 'C:\Users\Public\cp05\c.txt', 'C:\Users\Public\cp05\folder')
                 Start-Sleep -Seconds 4
+                $R.cp05ClientClip = ClipFormats $VmName 'Console'
                 $R.cp05Arrived = @(PasteAt $VmName 'Console' 'cp05' 4)
                 Start-Sleep -Seconds 2
                 $R.cp05Notices = @(Notices $mark)
@@ -516,6 +655,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Send Ctrl+Alt+Del'
                 Start-Sleep -Seconds 5
                 $R.sasOptions = Ocr (TabPicture 'sas-options')
+                # Esc for the device: the tab has the focus (in the run of 16.10.2026 it went to another window and the
+                # security options stayed on the device through the Fit to window step)
+                FocusTab 0.5 0.01
                 Esc
                 Start-Sleep -Seconds 4
                 $R.sasBack = Ocr (TabPicture 'sas-back')
@@ -530,12 +672,21 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Change the device*resolution to fit this window'
                 Start-Sleep -Seconds 8
                 $R.fitOnAgain = DeviceRes
-                # a wider tab: the navigation hidden
+                # A larger tab: this PC's screen made larger (1600x900), RemoteHub maximized, the navigation hidden. At
+                # 1024x768 even the tab without navigation (868x496 asked) holds no listed mode of the device but 640x480 -
+                # the agent takes the largest listed mode that fits (ScreenCapture.cs DisplayModes.Choose), so "wider" could
+                # never show (the run of 16.10.2026 13:55).
+                $R.fitClientRes = ClientRes 1600 900
+                $max = Ui 'TitleBarMaximizeButton' -Optional -TimeoutSec 10
                 $null = Ui 'Hide navigation'
                 Start-Sleep -Seconds 8
                 $R.fitWide = DeviceRes
                 Shot 'fit-wide'
                 $null = Ui '*navigation' -Optional
+                # back: the window restored, this PC's own resolution
+                if ($max.found) { $null = Ui 'TitleBarMaximizeButton' -Optional -TimeoutSec 10 }
+                if ($R.fitClientRes.Was -match '^\d+x\d+$') { $wh = $R.fitClientRes.Was -split 'x'; $null = ClientRes ([int]$wh[0]) ([int]$wh[1]) }
+                $null = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 10
                 Start-Sleep -Seconds 4
                 if ($R.fitMonitors.enabled) {
                     # more than one monitor: each one, then all of them (the combo box by its tooltip)
@@ -588,14 +739,19 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Invoke-LabPerson -Name $dn -Do clip-set -Value $R.lockDevText
                 Start-Sleep -Seconds 4
                 $R.lockClientClip = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
-                # the password typed in the tab unlocks; then the tab waits for normaluser's answer
+                # the password typed in the tab unlocks; then the tab waits for normaluser's answer. The field is emptied
+                # first with Backspace as well: if the Ctrl+V above did paste, Ctrl+A + one Backspace left most of it in
+                # front of the password (the run of 16.10.2026 13:55: "The password is incorrect", the device stayed
+                # locked for every later case)
+                FocusTab 0.5 0.01
                 Combo 0x11, 0x41
-                Key 'Back'
+                foreach ($i in 1..60) { Send-LabKey -Name $VmName -Key 'Back' }
                 TypeText $password
                 Key 'Enter'
+                # the request to normaluser comes once the session is unlocked (before that the screen can't be read)
+                $R.lockUnlocked = (WaitFor -TimeoutSec 60 { (LockedCount $dn) -eq 0 })
                 $R.lockAllow = Allow
                 $R.lockLive = Live 90
-                $R.lockUnlocked = (WaitFor -TimeoutSec 60 { (LockedCount $dn) -eq 0 })
                 $R.lockNotices = @(Notices $mark)
                 # unlocked and allowed: copy and paste work again
                 $R.lockAfterText = "after unlock $([guid]::NewGuid().ToString('N').Substring(0, 8))"
@@ -603,6 +759,17 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Start-Sleep -Seconds 4
                 $R.lockAfterClip = Invoke-LabPerson -Name $dn -Do clip-get
             }
+            # whatever happened above: the device unlocked for the next cases (a locked session changes the connect page's
+            # choices - "When someone unlocks or signs in: ask them" - and every later step failed on it), the tab live again
+            try {
+                if ((LockedCount $dn) -gt 0) {
+                    $R.lockCleanup = 'unlocked at the device'
+                    Unlock-LabSession -Name $dn -Account User
+                    $null = Allow -TimeoutSec 30
+                    $null = Live 30
+                }
+            }
+            catch { $R.lockCleanup = "unlock failed: $_" }
             Step 'uac' {
                 FocusTab 0.5 0.01
                 $uac = Start-LabInSession -Name $dn -ScriptBlock { Start-Process cmd.exe -ArgumentList '/k title RHLAB-ELEVATED' -Verb RunAs }
@@ -860,7 +1027,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             @($R.denyEvents).Count | Should -BeGreaterThan 0
         }
 
-        It 'UI-AD-06 Show them a code: the code read at the device and typed into the code box connects; wrong three times - "<n> attempt(s) left." counts down, then refused' -Tag 'UI-AD-06' {
+        It 'UI-AD-06 Show them a code: the code read at the device and typed into the code box connects; wrong three times - "[n] attempt(s) left." counts down, then refused' -Tag 'UI-AD-06' {
             NoError 'pin'
             $R.pinCode | Should -Match '^\d{6}$'
             $R.pinLive.found | Should -BeTrue
@@ -933,7 +1100,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = TabPicture 'signin-desktop'
                 $R.signinNotices = @(Notices $mark)
                 $R.signinEvents = @(Get-LabAgentEvent -Name $dn -Since $since -Id 1102)
-                $R.signinAgentWindows = @(Invoke-LabPerson -Name $dn -Account Admin -Do windows | ForEach-Object Title)
+                # PSAdmin's windows: only when the sign-in worked (a session task needs the account signed in - 90 s lost otherwise)
+                if ($R.signinDesktop) { $R.signinAgentWindows = @(Invoke-LabPerson -Name $dn -Account Admin -Do windows | ForEach-Object Title) }
                 CloseTabs
             }
             Invoke-LabGuest -Name $dn -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name DontDisplayLastUserName -ErrorAction SilentlyContinue }
@@ -1004,10 +1172,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             function Provider([string]$Header, [string]$Button) {
                 Menu "RemoteHub Agent>$Header"
                 $confirm = Message -Button $Button -TimeoutSec 60
-                $done = Ui 'Done' -Title $Header -TimeoutSec 600 -Optional
+                $done = WaitDone $Header
                 $rows = (Ui '*' -Title $Header -Value list -Optional).items
-                $null = Ui 'Done' -Title $Header -Optional -TimeoutSec 5
-                $null = Ui 'Close' -Title $Header -Optional -TimeoutSec 3
+                CloseProgress $Header
                 [pscustomobject]@{ Confirm = $confirm; Done = $done.found; Rows = ($rows -join "`n"); State = (Get-LabAgentState -Name $dn).AutoSignIn }
             }
             Step 'provider-install' {
@@ -1052,11 +1219,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.update0Box = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value read -Optional
                 $null = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value uncheck
                 $null = Ui 'Update' -Title 'Update RemoteHub Agent'
-                $R.update0Done = Ui 'Done' -Title 'Update RemoteHub Agent' -TimeoutSec 600 -Optional
+                $R.update0Done = WaitDone 'Update RemoteHub Agent'
                 $R.update0Rows = (Ui '*' -Title 'Update RemoteHub Agent' -Value list -Optional).items
-                $null = Ui 'Done' -Title 'Update RemoteHub Agent' -Optional -TimeoutSec 5
-                $null = Ui 'Close' -Title 'Update RemoteHub Agent' -Optional -TimeoutSec 3
+                CloseProgress 'Update RemoteHub Agent'
                 $R.update0CommandLine = UpdateCommandLine
+                if (-not $R.update0Done.found) { $R.update0Device = UpdateEvidence 'update0' }
             }
             Save 'provider' $R
         }

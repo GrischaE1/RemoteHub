@@ -10,6 +10,9 @@
 # The RDP control is an ActiveX host without UI Automation inside: what happens in the session is checked on the device
 # (quser), the selected tab by the main window's title ("<tab> . <kind> - RemoteHub").
 # Client VMs only. See docs/test-lab-cases.md section 10.4.
+# LabRole: console
+# TimeLimitMin: 90   (the jump host / several RDP sign-ins and reconnects: > 60 min)
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -17,14 +20,15 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $script:task = $null
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "ui-rdp2-$name.json") -Encoding UTF8 }
@@ -108,6 +112,20 @@ BeforeAll {
             }
         }
     }
+    # what this file leaves on the admin's PC, undone for the next file there: RemoteHub's data of the console account
+    # (connections, settings, audit log) and the NTLM delegation policy. Throws when something stays.
+    function Clear-ClientLeftovers {
+        $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+            param($user)
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
+                "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
+            foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+            @($paths | Where-Object { Test-Path $_ })
+        }
+        if (@($left).Count) { throw "${VmName}: still there: $(@($left) -join ', ')" }
+    }
     function AuditText([string]$Node = 'Device') {
         Menu 'More>Audit log*' -Node $Node
         $l = Ui '*' -Title 'Audit log*' -Value list -TimeoutSec 30
@@ -142,7 +160,7 @@ BeforeAll {
     function Toast([int]$TimeoutSec = 3) { Ui 'Stored password for*' -Title '*' -Value exists -Optional -TimeoutSec $TimeoutSec }
     function Clip { Invoke-LabPerson -Name $VmName -Account Console -Do clip-get }
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         Invoke-LabGuest -Name $device.Name -ScriptBlock {
             $ts = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
@@ -152,9 +170,9 @@ BeforeAll {
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so; AfterAll empties RemoteHub's data)
+        $null = Initialize-LabVm -Name $VmName -Client
         Allow-NtlmDelegation
-        $null = Install-LabClient -Name $VmName
         $script:task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
         # no question about the device's self-signed RDP certificate
@@ -166,9 +184,13 @@ BeforeAll {
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
+        # undone for the next file on this VM; anything that fails: the next file starts from the checkpoint
+        try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }
+        # the device: Remote Desktop on, two sessions per user
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Stop-LabVm -Name $device.Name
     }
 }
@@ -251,7 +273,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             $p.nothingAuditAfter | Should -Be $p.nothingAuditBefore
         }
 
-        It 'R-RDP-10 the toast ''Stored password for "<name>" copied'' / "Press Ctrl+V in the password field, then OK." with Clear now (clipboard emptied at once); it closes when Windows'' dialog closes or the clipboard changes' -Tag 'R-RDP-10' {
+        It 'R-RDP-10 the toast ''Stored password for "[name]" copied'' / "Press Ctrl+V in the password field, then OK." with Clear now (clipboard emptied at once); it closes when Windows'' dialog closes or the clipboard changes' -Tag 'R-RDP-10' {
             $p['clearnow-error'] | Should -BeNullOrEmpty
             $p['dialogcloses-error'] | Should -BeNullOrEmpty
             $p['clipchanges-error'] | Should -BeNullOrEmpty

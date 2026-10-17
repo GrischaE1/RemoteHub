@@ -3,6 +3,7 @@
 # values (SasActions.cs), and put back as they were when the block ends, the connection ends, or - after a helper that
 # was killed - when the service starts. The same on the privacy screen automatic sign-in puts up.
 # The agent MSI must be built with the credential provider (build-installer.ps1 -LabSigning -CredentialProvider).
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -55,11 +56,9 @@ BeforeAll {
     $vm = Get-LabVm $VmName
     $userAccount = $vm.UserAccount
     $consoleAccount = $vm.ConsoleAccount
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName -AutoSignIn $true
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoSignIn $true -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
     $r = [ordered]@{}
 
     # ---- 1. the admin's privacy screen, input blocked; then unblocked while still connected; then the end
@@ -130,6 +129,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-cadhide-agent-logs')
+    # the agent killed, the console account signed in by automatic sign-in, its Ctrl+Alt+Del values: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-CADHIDE <VmName>' -Tag Desktop, 'D-CADHIDE' {

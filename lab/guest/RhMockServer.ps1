@@ -20,7 +20,7 @@ while ($listener.IsListening) {
     try {
         $body = ''
         if ($req.HasEntityBody) { $sr = New-Object IO.StreamReader($req.InputStream, $req.ContentEncoding); $body = $sr.ReadToEnd(); $sr.Dispose() }
-        $entry = [ordered]@{ time = (Get-Date).ToString('o'); method = $req.HttpMethod; path = $req.Url.AbsolutePath; query = $req.Url.Query; agent = $req.UserAgent; body = $body }
+        $entry = [ordered]@{ time = (Get-Date).ToString('o'); method = $req.HttpMethod; host = $req.Url.Host; path = $req.Url.AbsolutePath; query = $req.Url.Query; agent = $req.UserAgent; body = $body }
         Add-Content -Path $log -Value ($entry | ConvertTo-Json -Compress) -Encoding UTF8
         # <Root>\control.json (Set-LabMockControl), read per request: latestStatus / latestDelayMs (for /latest),
         # telemetryStatus (for /telemetry), redirects { "<path>": "<Location>" } (302)
@@ -31,6 +31,8 @@ while ($listener.IsListening) {
         $file = $null; $status = 404; $type = 'application/json'
         $path = $req.Url.AbsolutePath
         $redirect = $(if ((Ctl 'redirects') -and $control.redirects.PSObject.Properties[$path]) { $control.redirects.$path })
+        # the mock also answers as the redirect's target (dl.untrusted.test): there it serves the file, no loop
+        if ($redirect -and ([Uri]$redirect).Host -eq $req.Url.Host) { $redirect = $null }
         if ($redirect) { $res.StatusCode = 302; $res.RedirectLocation = $redirect; continue }
         if ($path -eq '/latest') {
             if (Ctl 'latestDelayMs') { Start-Sleep -Milliseconds ([int](Ctl 'latestDelayMs')) }

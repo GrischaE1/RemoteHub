@@ -1,6 +1,7 @@
 # D-ASK / D-PIN / D-NONE / D-MODES - the question to the user at the device. normaluser is signed in on the console;
 # PSAdmin connects through RemoteHub's desktop client (harness "desktop") and the person at the device (RhPerson.ps1 in
 # normaluser's session: OCR of the agent's dialog, real mouse clicks) answers. See docs/test-lab-cases.md section 9.2.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -20,15 +21,14 @@ BeforeAll {
                 @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed', 'Ended'); timeout = $Wait }, @{ do = 'close' }))
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-consent-agent-logs')
+    # nothing to undo: the context 'own session' reverts the VM (Reset-LabVm), which drops the reuse state
 }
 
 Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES' {

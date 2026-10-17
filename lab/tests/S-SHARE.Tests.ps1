@@ -3,6 +3,7 @@
 # host key confirmed once, FTPS and WebDAV with a self-signed certificate. Every scenario connects, lists, uploads a
 # 3 MB and a small file (subfolder), checks the size, renames, downloads and compares SHA-256, and deletes again.
 # Only for Windows Server VMs (IIS FTP/WebDAV and the SMB shares are set up in the guest). See docs/network-shares.md.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -25,6 +26,11 @@ BeforeAll {
         $ip = Get-LabVmAddress -Name $VmName
         $admin = $vm.AdminAccount
     }
+}
+
+AfterAll {
+    # IIS, OpenSSH, shares and firewall rules set up in the guest: the next file starts from the checkpoint
+    if ($vm.Os -eq 'Server') { Set-LabVmDirty -Name $VmName }
 }
 
 Describe 'S-SHARE <VmName>' -Tag Share, 'S-SHARE' -Skip:(-not $isServer) {

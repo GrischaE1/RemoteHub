@@ -2,6 +2,7 @@
 # defaults) or has comments, a missing certificate, log rotation, what the log says (and never says), who can read it,
 # no outbound connections, and audit entries kept out of the event log by policy. See docs/test-lab-cases.md
 # section 5.5.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -33,14 +34,17 @@ BeforeAll {
         }
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    # -Clean: the log checks read the whole log and the original agent.json - only this install's
+    $init = Initialize-LabVm -Name $VmName -Agent -Clean
+    $install = $init.Install
+    $pin = $init.Pin
     $original = Invoke-LabGuest -Name $VmName -ScriptBlock { [IO.File]::ReadAllText('C:\ProgramData\RemoteHub\Agent\agent.json') }
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'a-cfg-agent-logs')
+    # agent.json, the certificate and the logs changed, auto-logon set: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {

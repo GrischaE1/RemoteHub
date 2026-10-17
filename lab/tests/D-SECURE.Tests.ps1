@@ -3,6 +3,7 @@
 # at the console types with the Hyper-V keyboard; the user's answers come from RhPerson.ps1 in their session; things in
 # the picture are found with OCR on the decoded frame and clicked through the session (harness "click"). The layout's
 # secureDesktop flag and the agent's log say which desktop is shown. See docs/test-lab-cases.md sections 9.5 and 9.6.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -23,15 +24,15 @@ BeforeAll {
     function Get-Sas([datetime]$Since) { @(Get-LabAgentLog -Name $VmName -Since $Since | Where-Object { $_ -match 'Ctrl\+Alt\+Del for' }) }
     function Lock-State { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 } }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-secure-agent-logs')
+    # SoftwareSASGeneration, users switched and signed out at the console, the VM reverted by the last context: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS', 'D-DISC', 'D-RDPSES', 'D-SAS' {

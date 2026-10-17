@@ -11,6 +11,8 @@
 # lab isn't a domain - R-RDP-01). The files are read in the client's session with Windows' Media Foundation
 # (Windows.Media.Editing: duration, frames), frames are read by OCR on the host.
 # Client VMs only. See docs/test-lab-cases.md section 10.6.
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -19,7 +21,7 @@ param(
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $labVm = Get-LabVm $VmName
-    $isClient = $labVm.Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
     # an N edition (no Media Feature Pack) can't record at all (C-REC-06)
     $isN = $labVm.Id -match '(^|-)N(-|$)'
 }
@@ -27,8 +29,9 @@ BeforeDiscovery {
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $script:task = $null
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "c-rec2-$name.json") -Encoding UTF8 }
@@ -36,10 +39,19 @@ BeforeAll {
     function Ui([string]$Text, [string]$Value = 'click', [string]$Title = 'RemoteHub*', [int]$TimeoutSec = 30, [switch]$Optional) {
         Invoke-LabUi -Name $VmName -Text $Text -Value $Value -Title $Title -TimeoutSec $TimeoutSec -Optional:$Optional
     }
-    # an entry of a connection's context menu ("A>B" = submenu, a parent that isn't there is skipped)
+    # an entry of a connection's context menu ("A>B" = submenu, a parent that isn't there is skipped). The right-click
+    # right after a dialog closed sometimes opens no menu at all (no menu entries anywhere): once more
     function Menu([string]$Entry, [string]$Node = 'Device', [int]$TimeoutSec = 30) {
-        $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec
-        if ($m.PSObject.Properties['error'] -and $m.error) { throw "menu: $($m.error) - entries: $(@($m.entries) -join ', ')" }
+        $bad = { param($m) -not $m.found -or ($m.PSObject.Properties['error'] -and $m.error) }
+        $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        if ((& $bad $m) -and $m.found -and $m.PSObject.Properties['entries'] -and @($m.entries).Count -eq 0) {
+            Start-Sleep -Seconds 2
+            $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        }
+        if (& $bad $m) {
+            $why = if (-not $m.found) { 'not found' } else { "$($m.error)" + $(if ($m.PSObject.Properties['entries']) { ' - entries: ' + (@($m.entries) -join ', ') }) }
+            throw "UI step failed: '$Node' (menu:$Entry): $why"
+        }
     }
     # a message box of RemoteHub (owned by the main window): its window name is the message text (or its title) -
     # -Titles the start of the message and the box's title; answers the window name and its texts, then clicks -Button
@@ -70,6 +82,13 @@ BeforeAll {
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
+            # a recording the failed step started is stopped and saved: else the next case finds "Stop recording" where it
+            # wants "Record this tab" (C-REC-08's recording ran on into C-REC-09)
+            try {
+                $s = Ui 'Stop recording and save the video' -Optional -TimeoutSec 3
+                if ($s.found) { $R["$Name-stoppedRecording"] = $true; $null = Box $savedBox -Button 'Close' -TimeoutSec 60 }
+            }
+            catch { }
         }
     }
     function InSession([string]$Vm, [string]$Account, [string]$Code, [hashtable]$Values = @{}, [int]$TimeoutSec = 120) {
@@ -106,6 +125,20 @@ BeforeAll {
                 Set-ItemProperty $l.PSPath -Name '1' -Value 'TERMSRV/*'
             }
         }
+    }
+    # what this file leaves on the admin's PC, undone for the next file there: RemoteHub's data of the console account
+    # (connections, settings, recordings) and the NTLM delegation policy. Throws when something stays.
+    function Clear-ClientLeftovers {
+        $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+            param($user)
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
+                "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
+            foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+            @($paths | Where-Object { Test-Path $_ })
+        }
+        if (@($left).Count) { throw "${VmName}: still there: $(@($left) -join ', ')" }
     }
     function EditConnection([scriptblock]$Do, [string]$Node = 'Device') {
         Menu 'Edit*' -Node $Node
@@ -146,7 +179,14 @@ BeforeAll {
         $R["$Key-notice"] = BoxShown @('Recording saves everything*', 'Record this tab') -TimeoutSec 4
         if ($R["$Key-notice"]) { $null = Box @('Recording saves everything*', 'Record this tab') -Button 'Start recording' }
     }
-    function StopRecording { $null = Ui 'Stop recording and save the video' -TimeoutSec 20 }
+    # stopped: the button clicked, or - when it isn't found but "Recording saved" is up - it was clicked already (an
+    # action of the UI driver run twice: the first click stopped it, the second didn't find the button any more)
+    function StopRecording {
+        $s = Ui 'Stop recording and save the video' -Optional -TimeoutSec 60
+        if (-not $s.found -and -not (BoxShown $savedBox -TimeoutSec 5)) {
+            throw "UI step failed: 'Stop recording and save the video' not found in 60 s and no 'Recording saved'$(if ($s.PSObject.Properties['searchError'] -and $s.searchError) { " (last search error: $($s.searchError))" })"
+        }
+    }
 
     $code = @{}
     $wrt = @'
@@ -179,7 +219,9 @@ $out = @(foreach ($t in @(__TIMES__)) {
         $o = [ordered]@{ at = $t }
         try {
             $comp = New-Object Windows.Media.Editing.MediaComposition
-            $comp.Clips.Add((Clip __FILE__))
+            # Clips is a WinRT IVector: in Windows PowerShell a __ComObject without Add - called through the .NET
+            # interface it is projected to
+            $null = [System.Collections.Generic.ICollection[Windows.Media.Editing.MediaClip]].GetMethod('Add').Invoke($comp.Clips, @(, (Clip __FILE__)))
             $img = Await ($comp.GetThumbnailAsync([TimeSpan]::FromSeconds($t), 0, 0, [Windows.Media.Editing.VideoFramePrecision]::NearestFrame)) ([Windows.Graphics.Imaging.ImageStream])
             $s = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($img)
             $o.path = Join-Path $dir ('frame-' + ([string]$t).Replace('.', '_') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6) + '.img')
@@ -208,7 +250,7 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
     $stem = $stem.Trim(' ', '.')
     if ($stem.Length -gt 80) { $stem = $stem.Substring(0, 80).TrimEnd(' ', '.') }
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
             Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
@@ -221,10 +263,10 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
             if (-not (Get-SmbShare -Name 'rhrec' -ErrorAction SilentlyContinue)) { $null = New-SmbShare -Name 'rhrec' -Path 'C:\rhrec' -FullAccess $everyone }
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so; AfterAll empties RemoteHub's data)
+        $null = Initialize-LabVm -Name $VmName -Client
         Allow-NtlmDelegation
         $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $d = 'C:\ProgramData\RemoteHubLab\session'; $null = New-Item -ItemType Directory -Path $d -Force; icacls $d /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null }
-        $null = Install-LabClient -Name $VmName
         $script:task = Start-LabClient -Name $VmName
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
         # no question about the device's self-signed RDP certificate
@@ -236,9 +278,13 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
+        # undone for the next file on this VM; anything that fails: the next file starts from the checkpoint
+        try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }
+        # the device: Remote Desktop on, the SMB share rhrec
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Stop-LabVm -Name $device.Name
     }
 }
@@ -249,7 +295,8 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
         BeforeAll {
             $r7 = [ordered]@{}
             Step $r7 share {
-                $null = Ui 'Device' -Value 'menu:Add network share*'
+                # "Add network share..." is in the Tools group of the connection's menu (MainWindow.xaml CmAddShare)
+                Menu 'Tools>Add network share*'
                 $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:recshare' -TimeoutSec 30
                 $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhrec'
                 $null = Ui 'Add' -Title 'Add network share to Device'
@@ -268,7 +315,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
             Save 'share' $r7
         }
 
-        It 'C-REC-07 a network-share tab recorded: "<connection> - <share name> - <date time>.mp4", it plays' -Tag 'C-REC-07' {
+        It 'C-REC-07 a network-share tab recorded: "[connection] - [share name] - [date time].mp4", it plays' -Tag 'C-REC-07' {
             $r7['share-error'] | Should -BeNullOrEmpty
             $r7.tab.found | Should -BeTrue
             $r7.video.Name | Should -Match '^Device - recshare - \d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}( \(\d+\))?\.mp4$'
@@ -427,8 +474,12 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
             Step $r11 names {
                 # a connection with the unsafe name; its RDP tab (nothing answers on that TEST-NET address) is recorded
                 New-LabClientConnection -Name $VmName -Display $unsafeName -TargetHost '192.0.2.1'
-                $node = 'Rec11 a*'
-                Menu 'Connect' -Node $node
+                # not through its context menu: the name is wider than the list, and the address line below it is as
+                # wide (a stack panel), so the middle of either text is outside the list - a right-click there opens no
+                # menu. Its tree item selected (UIA SelectionItem of the address text's parent) and Enter in the tree:
+                # Tree_KeyDown opens the selected connection, as Connect does
+                $r11.select = (Ui '192.0.2.1' -Value check).value
+                $null = Ui 'Tree' -Value 'keys:{ENTER}'
                 Start-Sleep -Seconds 5
                 StartRecording $r11 'first'
                 Start-Sleep -Seconds 3

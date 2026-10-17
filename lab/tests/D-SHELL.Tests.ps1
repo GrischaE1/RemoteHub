@@ -4,6 +4,7 @@
 # Per surface: the console's bright share outside the banner strip (covered: < 0.5 %), the admin's picture against the
 # one before (the surface is in it: > 0.5 % of the pixels changed), the overlays' display affinity and z-band.
 # See docs/privacy-mode-design.md, "Spike: UIAccess overlay".
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -118,11 +119,9 @@ public static class RhTok {
     }
 
     $vm = Get-LabVm $VmName
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
     $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
     Start-Sleep -Seconds 6
     $null = Invoke-LabInSession -Name $VmName -ScriptBlock $taskbarButton
@@ -204,6 +203,8 @@ public static class RhTok {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-shell-agent-logs')
+    # a reminder toast and the shell's surfaces opened in normaluser's session: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-SHELL <VmName>' -Tag Desktop, 'D-SHELL' {

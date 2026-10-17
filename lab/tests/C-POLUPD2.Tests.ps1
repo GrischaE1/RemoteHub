@@ -5,8 +5,8 @@
 #             value ignored; a DWORD policy stored as REG_SZ ignored)
 #   C-UPD-06  no valid SHA-256 checksum - nothing requested from the download URL
 #   C-UPD-07  size mismatch (larger than announced / incomplete)
-#   C-UPD-08  untrusted redirect  (Skipped - the mock can't redirect to a reachable, TLS-valid, untrusted host; see the It)
-#   C-UPD-09  update-server errors (404 stable / 404 beta / 500 / bad JSON / lower version; "no answer" needs a slow mock)
+#   C-UPD-08  untrusted redirect (a 302 to dl.untrusted.test - the mock under a second name, TLS-valid, not allowed)
+#   C-UPD-09  update-server errors (404 stable / 404 beta / 500 / bad JSON / lower version / no answer within 15 s)
 #   C-UPD-10  install declined at the open-sessions question (needs an active session: the device VM, 2VM)
 #   C-TEL-03  telemetry off discards local records (install-id deleted under the policy too - a known bug, fails today)
 #   C-CRASH-03 native crash -> app_crash NativeCrash (a synthetic Application Error 1000 event; there is no crash switch)
@@ -15,6 +15,9 @@
 #   C-MSI-09  same-version rebuild (New-LabRebuiltMsi: a copy with a new ProductCode / PackageCode, same version)
 # Needs: the client VM, the lab mock server; C-UPD-10 also the Server VM (device). Release build (telemetry isn't sent
 # from a DEBUG build). Based on lab/tests/C-POLUPD.Tests.ps1 and C-MSI.Tests.ps1. Client VMs only. See section 10.3 / 10.1.
+# TimeLimitMin: 120   (a download, an install and many update checks with client restarts: > 60 min)
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -22,12 +25,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
     $localAppData = "C:\Users\$($vm.ConsoleAccount)\AppData\Local\RemoteHub"
     function Save($name, $data) { $data | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $EvidenceDir "c-polupd2-$name.json") -Encoding UTF8 }
@@ -99,27 +103,22 @@ BeforeAll {
     function Set-MockRaw([string]$Text) {
         Invoke-LabGuest -Name $VmName -ArgumentList $Text -ScriptBlock { param($t) Set-Content 'C:\ProgramData\RemoteHubLab\mock\latest.json' $t -Encoding UTF8 -NoNewline }
     }
-    # a directory named latest.json: it exists (status would be 200) but can't be read as a file -> the mock returns 500
-    function Set-MockServerError {
-        Invoke-LabGuest -Name $VmName -ScriptBlock {
-            $p = 'C:\ProgramData\RemoteHubLab\mock\latest.json'
-            Remove-Item $p -Force -ErrorAction SilentlyContinue
-            $null = New-Item -ItemType Directory -Path $p -Force
-        }
-    }
-    function Clear-MockServerError {
-        Invoke-LabGuest -Name $VmName -ScriptBlock { $p = 'C:\ProgramData\RemoteHubLab\mock\latest.json'; if ((Test-Path $p) -and (Get-Item $p).PSIsContainer) { Remove-Item $p -Recurse -Force } }
-    }
+    # the update server answers /latest with 500 (the mock's control.json; a missing latest.json is only a 404)
+    function Set-MockServerError { Set-LabMockControl -Name $VmName -LatestStatus 500 }
+    function Clear-MockServerError { Set-LabMockControl -Name $VmName -Clear }
     $script:task = $null
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Close-Rh } catch { }
         try { Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force } } catch { }
         try { Stop-LabVm -Name $device.Name } catch { }
+        # policies, the mock server, an updated RemoteHub, telemetry ids here; Remote Desktop turned on at the device
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
     }
 }
 
@@ -205,6 +204,24 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $null = Ui 'Cancel' -Title 'Settings' -Optional
             $u.sizeFiles = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates' -Include *.msi, *.partial -Recurse -ErrorAction SilentlyContinue).Count }
 
+            # C-UPD-08: the allowed URL answers 302 to dl.untrusted.test - the mock under a second name, reachable with a
+            # valid certificate, but not an allowed download host
+            $leaf = Split-Path $current -Leaf
+            Set-LabMockLatest -Name $VmName -Version '99.0.0' -File $leaf
+            Set-LabMockControl -Name $VmName -Redirects @{ "/download/$leaf" = "https://dl.untrusted.test/download/$leaf" }
+            Clear-Requests
+            Settings-Page 'Updates & privacy'
+            $null = Ui 'Check for updates now' -Title 'Settings'
+            $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
+            Start-Sleep -Seconds 15
+            $u.redirect = WinText 'RemoteHub updates'
+            $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
+            $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
+            $null = Ui 'Cancel' -Title 'Settings' -Optional
+            Set-LabMockControl -Name $VmName -Clear
+            $u.redirectHosts = @(Get-LabMockRequests -Name $VmName | Where-Object path -like '/download/*' | ForEach-Object host)
+            $u.redirectFiles = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates' -Include *.msi, *.partial -Recurse -ErrorAction SilentlyContinue).Count }
+
             # C-UPD-09: the server errors and a lower version (Check for updates now re-fetches live)
             Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $current -Leaf) -None
             $u.err404stable = CheckNow
@@ -216,7 +233,12 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $u.errBadJson = CheckNow
             Set-LabMockLatest -Name $VmName -Version '0.0.1' -File (Split-Path $current -Leaf)
             $u.lower = CheckNow
-            # "no answer in 15 s" is not checked: the mock has no way to stall a request for 15 s (wished-for change below).
+            # no answer within 15 s: the mock holds /latest for 25 s
+            Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $current -Leaf)
+            Set-LabMockControl -Name $VmName -LatestDelayMs 25000
+            $u.slow = CheckNow
+            Set-LabMockControl -Name $VmName -Clear
+            Start-Sleep -Seconds 15   # the held request ends before the next one
             Save 'updates' $u
         }
 
@@ -248,11 +270,10 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
         }
 
         It 'C-UPD-08 untrusted redirect: an allowed URL redirecting to an untrusted host is refused' -Tag 'C-UPD-08' {
-            Set-ItResult -Skipped -Because ('the lab mock can redirect, but the client follows the redirect over HTTPS: ' +
-                'the only reachable host with a trusted certificate is update.remotehub.dev (a subdomain of the trusted ' +
-                'remotehub.dev), so there is no reachable, TLS-valid host OUTSIDE the allow-list to redirect to. ' +
-                'Wished-for change: Start-LabMockServer provisions a second cert + hosts entry + 443 SNI binding for an ' +
-                'untrusted test host (e.g. dl.untrusted.test) and RhMockServer answers a configured path with a 302 to it.')
+            # the redirect was followed (the request reached the untrusted name) and then refused
+            $u.redirectHosts | Should -Contain 'dl.untrusted.test' -Because 'the client followed the 302 (precondition)'
+            $u.redirect | Should -Match "The download was redirected to an address that isn't trusted\."
+            $u.redirectFiles | Should -Be 0 -Because 'nothing from the untrusted host is kept'
         }
 
         It 'C-UPD-09 update-server errors: 404 stable/beta, 500, bad JSON, a lower version' -Tag 'C-UPD-09' {
@@ -263,6 +284,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $u.err500 | Should -Match "Couldn't check for updates"
             $u.errBadJson | Should -Match "an answer RemoteHub doesn't understand\."
             $u.lower | Should -Match 'RemoteHub is up to date'
+            $u.slow | Should -Match "The update server didn't answer in time\."
         }
     }
 
@@ -296,10 +318,11 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $deadline = (Get-Date).AddSeconds(120)
             do {
                 Start-Sleep -Seconds 3
-                $m = Ui '*' -Title 'Install update' -Value list -Optional -TimeoutSec 3
+                # the question's window is named by its text in UI Automation (the shown title is "Install update")
+                $m = Ui '*' -Title '*still connected*' -Value list -Optional -TimeoutSec 3
                 if ($m.found) { $i.confirm = ($m.items -join "`n"); break }
             } while ((Get-Date) -lt $deadline)
-            $null = Ui 'Cancel' -Title 'Install update' -Optional -TimeoutSec 10
+            $null = Ui 'Cancel' -Title '*still connected*' -Optional -TimeoutSec 10
             Start-Sleep -Seconds 3
             $i.status = WinText 'RemoteHub updates'
             $i.installEnabled = Ui 'Download and install' -Title 'RemoteHub updates' -Value exists -Optional -TimeoutSec 5
@@ -394,9 +417,14 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Clear-Requests
             Restart-Client
             Start-Sleep -Seconds 25
+            # every telemetry event that arrived (run 20261016-024318: no app_crash - was anything sent at all?)
+            $c.all = @(Requests '/telemetry' | ForEach-Object json | ForEach-Object event)
+            $c.pending = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -ErrorAction SilentlyContinue | ForEach-Object Name) }
             $c.events = @(Requests '/telemetry' | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' })
             Close-Rh
-            Save 'crash03' @{ injected = $c.injected; events = $c.events; version = $currentVersion }
+            # why nothing may have arrived: is the mock running, what did it get, what does RemoteHub's log say
+            $c.why = Invoke-LabGuest -Name $VmName -ScriptBlock { [ordered]@{ mock = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -match 'RhMockServer').Count; requests = @(Get-Content 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { ($_ | ConvertFrom-Json).path }); diag = @(Get-Content 'C:\Users\Admin\AppData\Roaming\RemoteHub\logs\remotehub.log' -Tail 25 -ErrorAction SilentlyContinue) } }
+            Save 'crash03' @{ why = $c.why;  injected = $c.injected; events = $c.events; all = $c.all; pending = $c.pending; version = $currentVersion }
 
             # ---- C-CRASH-04: seven recent crash files + one older than 30 days, telemetry on; the newest 5 are sent
             Reset-LabVm -Name $VmName
@@ -419,9 +447,11 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Clear-Requests
             Restart-Client
             Start-Sleep -Seconds 25
+            $q.all = @(Requests '/telemetry' | ForEach-Object json | ForEach-Object event)
             $q.sent = @(Requests '/telemetry' | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' } | ForEach-Object message)
             $q.left = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -Filter 'crash-*.json' -ErrorAction SilentlyContinue | ForEach-Object Name).Count }
             Close-Rh
+            $q.why = Invoke-LabGuest -Name $VmName -ScriptBlock { [ordered]@{ mock = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -match 'RhMockServer').Count; requests = @(Get-Content 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { ($_ | ConvertFrom-Json).path }); diag = @(Get-Content 'C:\Users\Admin\AppData\Roaming\RemoteHub\logs\remotehub.log' -Tail 25 -ErrorAction SilentlyContinue) } }
             Save 'crash04' $q
         }
 
@@ -491,7 +521,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
         }
 
         It 'C-MSI-09 a rebuilt MSI with the same version replaces the installed one (AllowSameVersionUpgrades): exit 0, one Apps entry' -Tag 'C-MSI-09' {
-            if ($m.PSObject.Properties['rebuildError'] -or -not $m.PSObject.Properties['second']) { Set-ItResult -Skipped -Because "no second same-version MSI: New-LabRebuiltMsi failed ($($m.rebuildError))"; return }
+            # ($m is an ordered dictionary: its keys are not PSObject properties)
+            if ($m.Contains('rebuildError') -or -not $m.Contains('second')) { Set-ItResult -Skipped -Because "no second same-version MSI: New-LabRebuiltMsi failed ($($m.rebuildError))"; return }
             $m.first.Exit | Should -BeIn 0, 3010
             $m.second.Exit | Should -BeIn 0, 3010 -Because 'AllowSameVersionUpgrades lets the rebuild replace the installed product'
             @($m.arpSecond).Count | Should -Be 1 -Because 'one entry in Apps (a major upgrade, not a second product)'

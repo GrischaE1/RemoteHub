@@ -120,8 +120,11 @@ internal static class LabJump
     //   text      a text message;  garbled  a 2-byte binary frame;  unknown  frame type 99;  duplicate  Open twice with id 1
     //   drain     Open, then Close, then wait up to --wait s (default 75) for the agent's Reset
     // Answers opened, reset, resetAfterSeconds, ended (the tunnel closed or aborted), closeStatus, the frames received.
-    private static async Task<object> Raw(JumpRoute route, string host, int port, Dictionary<string, string> o, CancellationToken ct)
+    private static async Task<object> Raw(JumpRoute route, string host, int port, Dictionary<string, string> o, CancellationToken outer)
     {
+        // its own time limit: "drain" waits longer than the command's default 60 s
+        using var rawLimit = new CancellationTokenSource(TimeSpan.FromSeconds(int.Parse(o.GetValueOrDefault("wait") ?? "75") + 60));
+        var ct = rawLimit.Token;
         var expected = RemoteHub.Agent.AgentProtocol.NormalizeFingerprint(route.Endpoint.Fingerprint);
         using var ws = new System.Net.WebSockets.ClientWebSocket();
         ws.Options.RemoteCertificateValidationCallback = (_, cert, _, _) => cert is not null && RemoteHub.Agent.AgentProtocol.Fingerprint(cert.GetRawCertData()) == expected;

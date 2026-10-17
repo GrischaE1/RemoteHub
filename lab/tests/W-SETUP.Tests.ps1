@@ -1,6 +1,8 @@
 # W - RemoteHub's WinRM setup script (RemotingSetup.BuildScript, "Set up on the target..."), run in the guest as the
 # admin account the way an admin runs it, and the HTTPS connection RemoteHub then makes: fetch the certificate, compare
 # its thumbprint, connect pinned to it (the trust prompt itself is W-TRUST-01, 2VM). See docs/test-lab-cases.md section 8.
+# Every context starts from the checkpoint (Reset-LabVm): a device without WinRM HTTPS set up.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -25,6 +27,12 @@ BeforeAll {
         $line = @($run.Output) | Where-Object { $_ -match 'Certificate thumbprint:\s+([0-9A-F ]+)' } | Select-Object -First 1
         if ($line -match 'Certificate thumbprint:\s+([0-9A-F ]+)') { $Matches[1] -replace '\s', '' }
     }
+}
+
+AfterAll {
+    # WinRM listeners, certificates, firewall rules and LocalAccountTokenFilterPolicy changed: the next file starts from
+    # the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'W-SETUP <VmName>' -Tag WinRM, 'W' {

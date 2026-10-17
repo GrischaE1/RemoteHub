@@ -2,6 +2,8 @@
 # (never "updated"), and the old agent keeps running with its identity. Three ways to fail: a package that refuses to
 # install (false launch condition, same version), an upgrade whose enrollment step fails after the old version was
 # removed (rollback), and a file that isn't a package at all. See docs/test-lab-cases.md section 5.3.
+# Every case starts from the checkpoint (Reset-LabVm) with the previous release.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -57,6 +59,8 @@ BeforeAll {
 
 AfterAll {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    # the previous release installed and failed updates tried: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-UPDFAIL <VmName>' -Tag Agent, 'A-UPDFAIL' {

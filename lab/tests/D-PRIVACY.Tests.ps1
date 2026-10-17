@@ -2,6 +2,7 @@
 # still coming; optionally the device's own mouse and keyboard blocked), apps hidden by policy, and what the user at the
 # device hides (screen from the banner, apps from the question). normaluser is signed in and allows PSAdmin
 # (RhPerson.ps1). See docs/test-lab-cases.md section 9.11a.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -30,16 +31,17 @@ BeforeAll {
         $sum / $n
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
     $old = $vm.Version -eq '1809'
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-priv-agent-logs')
+    # left reusable: the policies cleared, the notepad closed
+    Set-LabAgentPolicy -Name $VmName -Clear
+    $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
 }
 
 Describe 'D-PRIV <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {

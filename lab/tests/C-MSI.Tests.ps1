@@ -2,6 +2,7 @@
 # first start without .NET, the .rdp association, upgrade from the previous release and from RDP Manager (same upgrade
 # code), downgrade, uninstall, a standard user. The packages come from LabRoot\client (Start-LabRun.ps1). Client VMs
 # only. See docs/test-lab-cases.md section 10.1.
+# LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -9,12 +10,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     function Save($name, $data) { $data | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir "c-msi-$name.json") -Encoding UTF8 }
     $msi = Get-LabClientMsi
     $version = (Split-Path $msi -Leaf) -replace '^RemoteHub-(.+)-x64\.msi$', '$1'
@@ -46,6 +48,11 @@ BeforeAll {
             }
         }
     }
+}
+
+AfterAll {
+    # installs, upgrades, downgrades and uninstalls: the next file starts from the checkpoint
+    if ($isClient) { Set-LabVmDirty -Name $VmName }
 }
 
 Describe 'C-MSI <VmName>' -Tag Client, 'C-MSI' -Skip:(-not $isClient) {
