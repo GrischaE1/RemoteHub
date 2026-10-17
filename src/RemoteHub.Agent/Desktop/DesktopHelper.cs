@@ -184,7 +184,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         _userHide = DesktopScreenHide.Valid(init.UserHidden);
                         _alwaysHidden = (init.AlwaysHidden ?? []).Select(AppIds.Normalize).ToHashSet();
                         ChooseApps((init.HiddenApps ?? []).Select(AppIds.Normalize).ToHashSet(), report: false);
-                        _privacy = _privacy with { User = _userHide, HiddenApps = _hiddenApps.Count };
+                        _privacy = _privacy with { User = _userHide }; // the counts ChooseApps just set
                         // Before the question: the user can pick apps to hide before anything is sent.
                         ui.OfferHideApps(_chosenApps, _alwaysHidden, chosen => ChooseApps(chosen, report: _begun));
                         // Nothing from the admin while the user has hidden their screen – also not on the secure desktop.
@@ -329,15 +329,24 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         _hiddenApps = all;
         _privacyChanged = true;
         _keyFrameRequested = true;
+        var (byUser, byPolicy) = HiddenCounts(chosen, _alwaysHidden);
         if (!report)
         {
             // Before the session began (picked in the question): it goes out with the first report.
-            lock (_privacyLock) _privacy = _privacy with { HiddenApps = all.Count };
+            lock (_privacyLock) _privacy = _privacy with { HiddenApps = byUser, PolicyHiddenApps = byPolicy };
             return;
         }
         _ = Send(DesktopWire.Json((DesktopMessage)HelperMessage.HiddenApps, new HelperHiddenApps([.. chosen]), HelperJson.Default.HelperHiddenApps));
-        Report(p => p with { HiddenApps = all.Count, Regions = all.Count == 0 ? null : p.Regions, Reason = "" });
+        Report(p => p with { HiddenApps = byUser, PolicyHiddenApps = byPolicy, Regions = all.Count == 0 ? null : p.Regions, Reason = "" });
     }
+
+    /// <summary>
+    /// How many apps the user hides and how many the policy does. Both are masked alike, but only the user's choice is
+    /// reported as theirs – on the banner, to RemoteHub and in the audit (DesktopUserHid) – so an app the policy hides
+    /// doesn't read as one the user hid. An app in both lists counts as the policy's: the user can't show it anyway.
+    /// </summary>
+    internal static (int ByUser, int ByPolicy) HiddenCounts(IReadOnlySet<string> chosen, IReadOnlySet<string> always) =>
+        (chosen.Count(a => !always.Contains(a)), always.Count);
 
     /// <summary>What was just copied comes from a hidden app: it isn't sent to RemoteHub.</summary>
     private bool CopiedInHiddenApp()

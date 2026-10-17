@@ -94,10 +94,11 @@ Privacy = 14,
 public sealed record DesktopPrivacyScreen(bool On, string Style /* "Black" | "Message" */, bool BlockLocalInput);
 
 /// <param name="User">"None" | "Black" | "Blur" – what the person at the device hid.</param>
-/// <param name="HiddenApps">How many apps are hidden (never which).</param>
-/// <param name="Regions">Hidden rectangles in picture pixels (after scaling), for the viewer's "Hidden" labels.</param>
+/// <param name="HiddenApps">How many apps the user hides (never which) – not the ones the policy hides.</param>
+/// <param name="PolicyHiddenApps">How many apps the policy `HiddenApps` always hides (never which); 0 from older agents.</param>
+/// <param name="Regions">Hidden rectangles in picture pixels (after scaling), the user's and the policy's apps alike, for the viewer's "Hidden" labels.</param>
 /// <param name="Screen">State of the admin's privacy screen: "Off" | "Black" | "Message"; "" if it couldn't be shown (then <paramref name="Reason"/>).</param>
-public sealed record DesktopPrivacy(string User, int HiddenApps, DesktopRect[] Regions, string Screen, bool LocalInputBlocked, string Reason = "");
+public sealed record DesktopPrivacy(string User, int HiddenApps, DesktopRect[] Regions, string Screen, bool LocalInputBlocked, string Reason = "", int PolicyHiddenApps = 0);
 ```
 
 On the helper side, `HelperMessage.PrivacyScreen = 109` carries the admin's command (service → helper). `DesktopMessage.Privacy` is added to the forward list in `DesktopEndpoint.HelperLoop` (≈ line 610).
@@ -423,7 +424,7 @@ The list is a new component with no equivalent in the helper today. It is drawn 
 - **PIN dialog:** a button [Hide apps…] Secondary next to Deny. The picker applies the selection while the PIN is still being read out, so it is in place before the first frame.
 - Because the selection is in place before `HelperMessage.Begin`, the first frame the admin receives is already masked.
 
-**While apps are hidden:** the banner heading gets a suffix, " · 2 apps hidden", and the pill shows the same.
+**While apps are hidden:** the banner heading gets a suffix, " · 2 apps hidden", and the pill shows the same. It counts only the apps the user picked: apps the policy hides (§8) are masked as well, but the user didn't hide them, so they aren't in the suffix, in `DesktopPrivacy.HiddenApps` or in the `DesktopUserHid` audit (§9). They are counted apart in `DesktopPrivacy.PolicyHiddenApps`.
 
 ### 7.2 What an "app" is
 
@@ -493,8 +494,8 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 
 ### 7.8 Admin view
 
-- Hidden regions arrive as `DesktopPrivacy.Regions`. The viewer draws each one as a hatched rectangle in `SessionAreaBrush` with the centred label "Hidden by the user" (a `Canvas` layer above `_screen`, scaled like `_cursorLayer`).
-- The header gets `_privacyBadge` with the text "2 apps hidden by the user". There are no app names, and the regions carry no names.
+- Hidden regions arrive as `DesktopPrivacy.Regions`. The viewer draws each one as a hatched rectangle in `SessionAreaBrush` with a centred label (a `Canvas` layer above `_screen`, scaled like `_cursorLayer`). A region doesn't say whose app it covers, so the label is "Hidden by the user" when only the user hides apps, "Hidden by IT policy" when only the policy does, and "Hidden" when both do. An older agent doesn't send `PolicyHiddenApps`; its regions keep "Hidden by the user".
+- The header gets `_privacyBadge` with the text "2 apps hidden by the user", and "1 app hidden by IT policy" for the policy's apps. There are no app names, and the regions carry no names.
 
 ## 8. Rights and policy
 
@@ -516,7 +517,7 @@ These events go through `o.Log.Audit` in the same format as the existing desktop
 | Event | When | Text |
 |---|---|---|
 | `DesktopPrivacyScreen` | Admin turns it on or off | "Desktop: CONTOSO\admin from 10.0.0.5 turned the privacy screen on (black, local input blocked) in session 2" |
-| `DesktopUserHid` | User hides or shows the screen, or changes hidden apps | "Desktop: the user in session 2 hid their screen (blur)" / "… hid 2 apps" – **count only, no app names** |
+| `DesktopUserHid` | User hides or shows the screen, or changes hidden apps | "Desktop: the user in session 2 hid their screen (blur)" / "… hid 2 apps" – **count only, no app names**; apps the policy hides are not counted and don't write this event |
 | `DesktopPrivacyRefused` | Command refused (right, policy, OS build, affinity check) | with reason |
 
 ## 10. Compatibility

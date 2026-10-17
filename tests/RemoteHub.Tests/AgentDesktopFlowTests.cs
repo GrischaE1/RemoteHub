@@ -719,15 +719,45 @@ public class AgentDesktopFlowTests
         // The helper's window gets the apps to offer from its own thread – it may be a moment after "Connected".
         var ui = OfferedOn(d, 0);
         Assert.Equal([@"c:\apps\vault.exe"], ui.OfferedAlways!);
-        WaitFor(() => LastPrivacy(first)?.HiddenApps == 1, "the policy's app counted");
+        // The policy's app isn't the user's: counted apart, not on the banner and not audited as the user hiding it.
+        WaitFor(() => !first.Privacy.IsEmpty, "the first privacy report");
+        Assert.Equal((0, 1), (first.Privacy.First().HiddenApps, first.Privacy.First().PolicyHiddenApps));
+        Assert.Equal(0, ui.Shown?.HiddenApps ?? 0);
+        Assert.DoesNotContain(A.AuditEvent.DesktopUserHid, d.Audits);
         ui.Chosen!(Set(Secret));
-        WaitFor(() => LastPrivacy(first)?.HiddenApps == 2, "the user's app counted too");
+        WaitFor(() => LastPrivacy(first) is { HiddenApps: 1, PolicyHiddenApps: 1 }, "the user's app counted as theirs");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopUserHid), "audit entry for the user's app");
+        Assert.Equal(1, ui.Shown!.HiddenApps);
 
         using var second = await Connect(d);
         second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
         second.Next(DesktopStatusState.Connected);
         Assert.Equal([Secret], OfferedOn(d, 1).OfferedHidden!);
-        WaitFor(() => LastPrivacy(second)?.HiddenApps == 2, "both still hidden in the new connection");
+        WaitFor(() => LastPrivacy(second) is { HiddenApps: 1, PolicyHiddenApps: 1 }, "both still hidden in the new connection, still apart");
+    }
+
+    [Fact]
+    public async Task Apps_only_the_policy_hides_are_masked_but_never_reported_or_audited_as_the_users()
+    {
+        var policy = PrivacyPolicy();
+        policy = new A.AgentPolicy { PrivacyScreen = policy.PrivacyScreen, Rights = policy.Rights, HiddenApps = [Secret] };
+        await using var d = await StartDevice(policy: policy);
+        d.Apps.Windows = [Win(1, Secret, 10, 10, 110, 110), Win(2, Notes, 150, 10, 300, 200)];
+        using var v = await Connect(d);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+
+        // Still covered in the picture, and clicks into it are dropped.
+        WaitFor(() => LastPrivacy(v) is { Regions.Length: > 0 }, "the policy's app covered");
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 50, 50, 0)));
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 200, 50, 0)));
+        WaitFor(() => d.Input.Mouse.Count == 1, "the click outside");
+        Assert.Equal(200, d.Input.Mouse.Single().X);
+
+        // But none of it is the user's: every report says so, the banner has no "app hidden" and there is no 1105.
+        Assert.All(v.Privacy, p => Assert.Equal((0, 1), (p.HiddenApps, p.PolicyHiddenApps)));
+        Assert.Equal(0, d.Helpers.Uis.Single().Shown?.HiddenApps ?? 0);
+        Assert.DoesNotContain(A.AuditEvent.DesktopUserHid, d.Audits);
     }
 
     /// <summary>The helper window number <paramref name="index"/>, once it has been offered the apps to hide.</summary>
