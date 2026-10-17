@@ -684,70 +684,88 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
-    /// <summary>A clipboard change that couldn't be read yet (its sequence number, 0 for none) and how often it was tried.</summary>
-    private uint _unreadSequence;
-    private int _unreadTries;
+    /// <summary>Attempts at reading the current change (one per timer tick, never a waiting loop).</summary>
+    private int _readTries;
 
+    private const int ClipboardTimer = 2;
+
+    /// <summary>
+    /// WM_CLIPBOARDUPDATE: the clipboard is read 200 ms after the last change, not at once. A program copying through
+    /// OLE (Windows Forms, PowerShell's Set-Clipboard) announces its data first and renders it right after; reading in
+    /// between makes Windows ask that program to render while it is itself waiting to open the clipboard – the copy
+    /// fails there ("Requested Clipboard operation did not succeed") and the data never arrives here. A burst of
+    /// changes (announced, rendered) is read once, after it settled.
+    /// </summary>
     private void OnClipboard()
     {
-        var sequence = GetClipboardSequenceNumber();
-        if (sequence == _ownSequence) return;               // what we put there ourselves
-        if (GetClipboardOwner() == _messageWindow) return;  // still ours (e.g. an offer that was just pasted): never sent back
-        if (VirtualFiles.IsCurrent(_virtual)) return;       // our virtual files (OLE owns the clipboard for us)
-        if (sequence != _unreadSequence) _unreadTries = 0;
-        _unreadSequence = 0; // set again below only if this change can't be read yet
+        _readTries = 0;
+        SetTimer(_messageWindow, ClipboardTimer, 200, IntPtr.Zero); // restarts the wait on every change
+    }
+
+    private void ReadAgain()
+    {
+        KillTimer(_messageWindow, ClipboardTimer);
+        ReadClipboard();
+    }
+
+    /// <summary>
+    /// Reads the settled clipboard: one OpenClipboard, the bytes copied out, closed again at once – the events go out
+    /// afterwards. If another program holds the clipboard, this gives way and tries again on the timer (100 ms, up to
+    /// 30 times) instead of waiting while holding anything. Reading never changes the clipboard, so it can't set off
+    /// another WM_CLIPBOARDUPDATE.
+    /// </summary>
+    private void ReadClipboard()
+    {
         try
         {
-            // Files first: a program may put the paths as text next to a file list; what was copied is the files.
-            if (IsClipboardFormatAvailable(CF_HDROP))
+            if (GetClipboardSequenceNumber() == _ownSequence) return; // what we put there ourselves
+            if (GetClipboardOwner() == _messageWindow) return;        // still ours (e.g. an offer that was just pasted): never sent back
+            if (VirtualFiles.IsCurrent(_virtual)) return;             // our virtual files (OLE owns the clipboard for us)
+            // Data a program announced but hasn't rendered yet is rendered on request: GetClipboardData sends the owner
+            // WM_RENDERFORMAT and waits – holding the clipboard open – until that program's thread takes it. A copier
+            // that is busy (Windows Forms waiting to open the clipboard for its own flush, a script still running)
+            // never takes it, every other program's copy then fails, and the read gets nothing. So the owner must
+            // answer first; a busy one is given time and asked again, never waited for with the clipboard open.
+            var owner = GetClipboardOwner();
+            var busy = owner != IntPtr.Zero && SendMessageTimeoutW(owner, 0 /* WM_NULL */, 0, 0, 0x0001 | 0x0002 /* SMTO_BLOCK | SMTO_ABORTIFHUNG */, 100, out _) == 0;
+            if (busy || !OpenClipboard(_messageWindow))
             {
-                IReadOnlyList<string>? files = null;
-                if (OpenClipboardRetry())
-                {
-                    try { files = ReadFiles(); }
-                    finally { CloseClipboard(); }
-                }
-                // The copying program may still hold the clipboard or not have rendered the list yet (Windows Forms
-                // renders its copy right after announcing it): read again shortly instead of losing the copy.
-                if (files is null) { ReadAgainLater(sequence, "a file list"); return; }
-                _lastClipboard = "";
-                ClipboardContent?.Invoke(new HelperClipboard(Files: files));
+                if (++_readTries <= 30) SetTimer(_messageWindow, ClipboardTimer, 100, IntPtr.Zero);
+                else Noted?.Invoke($"clipboard: a copy at the device could not be read ({(busy ? "the copying program didn't answer" : "another program kept the clipboard open")} for 3 s)");
                 return;
             }
-            if (!IsClipboardFormatAvailable(13))
-            {
-                HelperClipboard? image = null;
-                if (OpenClipboardRetry())
-                {
-                    try { image = ReadImage(); }
-                    finally { CloseClipboard(); }
-                }
-                if (image is not null)
-                {
-                    _lastClipboard = "";
-                    ClipboardContent?.Invoke(image);
-                }
-                return;
-            }
-            if (!OpenClipboardRetry()) { ReadAgainLater(sequence, "text"); return; }
-            string? text = null;
+            IReadOnlyList<string>? files = null;
+            HelperClipboard? image = null;
+            string? text = null, why = null, formats = null;
             try
             {
-                var data = GetClipboardData(13);
-                if (data != IntPtr.Zero)
-                {
-                    var p = (char*)GlobalLock(data);
-                    if (p != null)
-                    {
-                        try { text = new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
-                        finally { GlobalUnlock(data); }
-                    }
-                }
+                // Files first: a program may put the paths as text next to a file list; what was copied is the files.
+                if (IsClipboardFormatAvailable(CF_HDROP)) files = ReadFiles(out why);
+                else if (IsClipboardFormatAvailable(13)) text = ReadText();
+                else if ((image = ReadImage()) is null) formats = Formats();
             }
             finally { CloseClipboard(); }
-            if (text is null || text == _lastClipboard) return;
-            _lastClipboard = text;
-            ClipboardChanged?.Invoke(text);
+
+            if (files is not null)
+            {
+                _lastClipboard = "";
+                ClipboardContent?.Invoke(new HelperClipboard(Files: files));
+            }
+            else if (why is not null) Noted?.Invoke($"clipboard: a file list copied at the device could not be read ({why})");
+            else if (image is not null)
+            {
+                _lastClipboard = "";
+                ClipboardContent?.Invoke(image);
+            }
+            else if (text is not null)
+            {
+                if (text == _lastClipboard) return;
+                _lastClipboard = text;
+                ClipboardChanged?.Invoke(text);
+            }
+            // Nothing RemoteHub takes: only the format numbers go to the log, so a copy that should have arrived can be
+            // told apart from one that was never seen.
+            else if (formats is not null and not "none") Noted?.Invoke($"clipboard: a copy at the device with nothing to send (formats {formats})");
         }
         catch (Exception ex)
         {
@@ -756,25 +774,15 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         }
     }
 
-    private const int ClipboardTimer = 2;
-
-    /// <summary>Tries the same clipboard change again in 250 ms, up to 8 times (2 s); then notes it for the log.</summary>
-    private void ReadAgainLater(uint sequence, string what)
+    /// <summary>CF_UNICODETEXT, at most 1,000,000 characters (the clipboard is open).</summary>
+    private static string? ReadText()
     {
-        if (++_unreadTries <= 8)
-        {
-            _unreadSequence = sequence;
-            SetTimer(_messageWindow, ClipboardTimer, 250, IntPtr.Zero);
-            return;
-        }
-        Noted?.Invoke($"clipboard: {what} copied at the device could not be read within 2 s");
-    }
-
-    /// <summary>The retry timer: only while nothing newer was copied (a newer change brings its own WM_CLIPBOARDUPDATE).</summary>
-    private void ReadAgain()
-    {
-        KillTimer(_messageWindow, ClipboardTimer);
-        if (_unreadSequence != 0 && GetClipboardSequenceNumber() == _unreadSequence) OnClipboard();
+        var data = GetClipboardData(13);
+        if (data == IntPtr.Zero) return null;
+        var p = (char*)GlobalLock(data);
+        if (p == null) return null;
+        try { return new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
+        finally { GlobalUnlock(data); }
     }
 
     // =====================================================================
@@ -1753,6 +1761,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr hwnd, ref POINT pt);
     [DllImport("user32.dll")] private static extern nint SetTimer(IntPtr hwnd, nint id, uint ms, IntPtr proc);
     [DllImport("user32.dll")] private static extern bool KillTimer(IntPtr hwnd, nint id);
+    [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(IntPtr hwnd, uint msg, nint wParam, nint lParam, uint flags, uint timeout, out nint result);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern uint GetDpiForSystem();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hwnd);
@@ -1776,7 +1785,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("user32.dll")] private static extern bool CloseClipboard();
     [DllImport("user32.dll")] private static extern bool EmptyClipboard();
     [DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
-    [DllImport("user32.dll")] private static extern IntPtr GetClipboardData(uint format);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr GetClipboardData(uint format);
     [DllImport("user32.dll")] private static extern IntPtr SetClipboardData(uint format, IntPtr data);
     [DllImport("kernel32.dll")] private static extern IntPtr GlobalAlloc(uint flags, nuint bytes);
     [DllImport("kernel32.dll")] private static extern IntPtr GlobalFree(IntPtr mem);

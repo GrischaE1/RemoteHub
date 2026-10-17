@@ -168,8 +168,26 @@ internal sealed unsafe partial class Win32HelperUi
     /// can't be read (not rendered yet, malformed). The clipboard is open. The list comes from the user's programs, so
     /// it is parsed here within the bytes Windows hands over – not with DragQueryFile, which trusts the header's offset.
     /// </summary>
-    private static IReadOnlyList<string>? ReadFiles() =>
-        Read(CF_HDROP) is { } drop ? DropFileList(drop, DesktopProtocol.MaxTransferItems) : null;
+    private static IReadOnlyList<string>? ReadFiles(out string why)
+    {
+        why = "";
+        if (Read(CF_HDROP) is not { } drop)
+        {
+            why = $"no data, error {Marshal.GetLastPInvokeError()}";
+            return null;
+        }
+        if (DropFileList(drop, DesktopProtocol.MaxTransferItems) is { } files) return files;
+        why = $"no usable path in {drop.Length} bytes";
+        return null;
+    }
+
+    /// <summary>The formats on the clipboard as numbers (the clipboard is open) – for the log, never their contents.</summary>
+    private static string Formats()
+    {
+        var list = new List<uint>();
+        for (var f = EnumClipboardFormats(0); f != 0 && list.Count < 32; f = EnumClipboardFormats(f)) list.Add(f);
+        return list.Count == 0 ? "none" : string.Join(", ", list);
+    }
 
     /// <summary>
     /// The paths in a DROPFILES block: the header (offset of the list, wide or ANSI), then the paths, each ending in \0,
@@ -303,6 +321,7 @@ internal sealed unsafe partial class Win32HelperUi
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
     [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
+    [DllImport("user32.dll")] private static extern uint EnumClipboardFormats(uint format);
     [DllImport("ole32.dll")] private static extern int CreateStreamOnHGlobal(IntPtr memory, bool deleteOnRelease, out IntPtr stream);
     [DllImport("gdiplus.dll")] private static extern int GdipCreateBitmapFromStream(IntPtr stream, out nint bitmap);
     [DllImport("gdiplus.dll")] private static extern int GdipGetImageWidth(nint image, out uint width);

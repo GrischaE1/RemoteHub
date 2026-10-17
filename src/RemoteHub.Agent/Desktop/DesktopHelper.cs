@@ -164,7 +164,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         var token = linked.Token;
         ui.ClipboardChanged += text => { if (_begun && Level >= DesktopClipboardLevel.Text && !CopiedInHiddenApp()) _ = Send(DesktopWire.Text(DesktopMessage.Clipboard, text)); };
-        ui.ClipboardContent += content => { if (_begun && !CopiedInHiddenApp()) SendClipboard(content); };
+        ui.ClipboardContent += content =>
+        {
+            if (!_begun) return;
+            if (!CopiedInHiddenApp()) SendClipboard(content);
+            else if (content.Files is not null) Note("clipboard: files copied at the device – not sent: copied in an app the user hid");
+        };
         var capture = new Thread(() => CaptureLoop(token)) { IsBackground = true, Name = "Desktop capture" };
         var inject = new Thread(() => InputLoop(token)) { IsBackground = true, Name = "Desktop input" };
         try
@@ -502,7 +507,13 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private void SendClipboard(HelperClipboard content)
     {
         var need = content.Files is not null ? DesktopClipboardLevel.Files : DesktopClipboardLevel.Images;
-        if (Level < need) return;
+        if (Level < need)
+        {
+            if (content.Files is not null) Note($"clipboard: files copied at the device – not sent: the clipboard level is {Level}");
+            return;
+        }
+        // Before the files are looked at (as the user): a copy that never gets further still leaves this line.
+        if (content.Files is not null) Note($"clipboard: {content.Files.Count} path(s) copied at the device – reading them as the signed-in user");
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         var id = Interlocked.Increment(ref _transferIds);
@@ -526,8 +537,15 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 if (_init?.OfferToViewer == true)
                 {
                     // Names and sizes only: RemoteHub's clipboard offers them; the data goes when someone pastes there.
-                    _offered = new OfferedOut(o, content.Files is not null);
-                    SendSync(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                    // One copy often brings two clipboard changes (announced, then rendered), so two of these threads
+                    // race: only the newest copy is offered, and it is the last offer RemoteHub sees – else RemoteHub
+                    // asks for an id that is no longer the one kept here.
+                    lock (_offerGate)
+                    {
+                        if (cancel.IsCancellationRequested) return; // a newer copy came meanwhile
+                        _offered = new OfferedOut(o, content.Files is not null);
+                        SendSync(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                    }
                     return;
                 }
                 SendOutgoing(o, content.Files is not null, cancel);
@@ -547,13 +565,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
 
     /// <summary>What was copied here and offered to RemoteHub, until it's pasted there (or something else is copied).</summary>
     private volatile OfferedOut? _offered;
+    private readonly object _offerGate = new();
 
     private sealed record OfferedOut(ClipboardTransfer.Outgoing Outgoing, bool Files);
 
     /// <summary>Pasted in RemoteHub: what was offered goes now (in the background, like a direct copy).</summary>
     private void SendOffered(int id)
     {
-        if (_offered is not { } offered || offered.Outgoing.Transfer.Id != id) return;
+        if (_offered is not { } offered || offered.Outgoing.Transfer.Id != id)
+        {
+            // An older offer (a newer copy replaced it): answered, so RemoteHub's paste doesn't wait for nothing.
+            TransferFailed(id, "A newer copy replaced it.");
+            return;
+        }
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         new Thread(() =>

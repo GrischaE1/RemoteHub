@@ -1310,6 +1310,32 @@ public partial class AgentDesktopFlowTests
     }
 
     [Fact]
+    public async Task One_copy_seen_twice_at_the_device_is_sent_for_the_last_offer_RemoteHub_got()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        var offers = new System.Collections.Concurrent.ConcurrentQueue<DesktopTransfer>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferOffer) offers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); };
+        v.Start(ActiveUser.Id, DesktopConsent.None, features: [DesktopFeatures.TransferOnPaste]);
+        v.Next(DesktopStatusState.Connected);
+        // Windows Forms' SetImage brings two clipboard changes (announced, then rendered): two offers race. Whichever
+        // RemoteHub sees last is the one its paste asks for, and it must be sent – in run 20261017-160133 the older id
+        // arrived last and its request was ignored.
+        for (var round = 0; round < 20; round++)
+        {
+            var before = offers.Count;
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
+            WaitFor(() => offers.Count > before, "offer from the device");
+            await Task.Delay(100); // a second offer, if any, is in
+            var last = offers.Last();
+            v.Client.Send(DesktopWire.Text(DesktopMessage.TransferRequest, last.Id.ToString()));
+            WaitFor(() => v.Transfers.Any(t => t.Id == last.Id) || v.TransferEnds.Any(e => e.Id == last.Id && !e.Ok), "answer to the request");
+            Assert.Contains(v.Transfers, t => t.Id == last.Id);
+        }
+    }
+
+    [Fact]
     public async Task An_older_RemoteHub_still_gets_copies_from_the_device_right_away()
     {
         await using var d = await StartDevice();
