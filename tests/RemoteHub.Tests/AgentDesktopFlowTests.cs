@@ -1704,6 +1704,115 @@ public partial class AgentDesktopFlowTests
         Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
     }
 
+    private const string LostAnswer = "The sign-in screen didn't take the sign-in. If it shows a message (for example after a failed attempt), click OK and try again.";
+
+    [Fact]
+    public async Task A_lost_answer_after_Windows_signed_the_account_in_still_covers_the_session_and_applies_the_end_action()
+    {
+        // Lab C-END-10: LogonUI signs the account in and releases the provider before its result reaches the service.
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), null), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var signsIn = SignsIn(d.Sessions, SidOf("admin"));
+        broker.Answer = r => { signsIn(r); return A.AutoSignInResult.Lost(A.AutoSignInFailure.Timeout, LostAnswer); };
+        var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+        Assert.Equal(A.AutoSignInEndActions.Lock, v.Next(DesktopStatusState.SignedIn).EndAction);
+        Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInRefused, d.Audits);
+        WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
+        var helperInNewSession = d.Helpers.SessionIds.IndexOf(3);
+        WaitFor(() => d.Helpers.Uis.Count > helperInNewSession, "the new session's helper UI");
+        Assert.NotNull(d.Helpers.Uis[helperInNewSession].SignedInRemotely); // no ordinary banner
+        if (A.DesktopEndpoint.PrivacyScreenSupported)
+            WaitFor(() => !d.Helpers.Uis[helperInNewSession].Screens.IsEmpty, "the privacy screen in the new session");
+
+        v.Dispose(); // RemoteHub closes the tab: the session gets its end action
+        WaitFor(() => d.Sessions.Disconnects.Contains(3), "lock");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    [Fact]
+    public async Task A_lost_answer_without_the_account_on_the_console_is_a_failure_and_signs_nobody_out()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var polls = A.DesktopEndpoint.ConsoleUserPolls;
+        A.DesktopEndpoint.ConsoleUserPolls = 2; // nobody signs in here: don't wait the full 30 s for it
+        try
+        {
+            var broker = new FakeAutoSignIn();
+            await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+            broker.Answer = _ => A.AutoSignInResult.Lost(A.AutoSignInFailure.NoProvider, "The connection to the credential provider broke: Pipe is broken.");
+            using var v = await Connect(d);
+            v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+            v.Next(DesktopStatusState.SignInReady);
+            v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+            Assert.Contains("Pipe is broken", v.Next(DesktopStatusState.SignInFailed).Message);
+            Assert.Contains(A.AuditEvent.AutoSignInRefused, d.Audits);
+            Assert.DoesNotContain(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+            Assert.Empty(d.Sessions.LogOffs);
+            Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
+        }
+        finally { A.DesktopEndpoint.ConsoleUserPolls = polls; }
+    }
+
+    [Fact]
+    public async Task A_lost_answer_with_someone_else_on_the_console_is_a_failure_and_leaves_their_session_alone()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var someoneElse = SignsIn(d.Sessions, "S-1-5-21-9-9-9-500", @"TEST\someone");
+        broker.Answer = r => { someoneElse(r); return A.AutoSignInResult.Lost(A.AutoSignInFailure.Timeout, LostAnswer); };
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+        Assert.Equal(LostAnswer, v.Next(DesktopStatusState.SignInFailed).Message);
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.Empty(d.Sessions.LogOffs); // not this sign-in's session: only a confirmed sign-in signs another account out
+    }
+
+    [Theory]
+    [InlineData(false)] // Windows' answer arrives after the connection has gone
+    [InlineData(true)]  // ... or is lost, and the console shows the account
+    public async Task A_sign_in_that_completes_after_the_connection_ended_still_gets_the_end_action(bool answerLost)
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), null), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var signsIn = SignsIn(d.Sessions, SidOf("admin"));
+        using var ticketOut = new ManualResetEventSlim();
+        using var connectionGone = new ManualResetEventSlim();
+        broker.Answer = r =>
+        {
+            ticketOut.Set();         // the ticket is with the provider ...
+            connectionGone.Wait(30000); // ... while RemoteHub closes the connection
+            var answer = signsIn(r);
+            return answerLost ? A.AutoSignInResult.Lost(A.AutoSignInFailure.NoProvider, "The connection to the credential provider broke: Pipe is broken.") : answer;
+        };
+        var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.True(ticketOut.Wait(15000), "the sign-in should reach the broker");
+
+        v.Dispose(); // RemoteHub closes the tab before Windows has answered
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopEnded), "the connection's end");
+        connectionGone.Set();
+
+        WaitFor(() => d.Sessions.Disconnects.Contains(3), "the end action (lock) on the new session");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
+        Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
     // ---- phase 4: after the sign-in (design §9)
 
     private static A.AgentPolicy WithEndAction(A.AgentPolicy p, string? endAction) => new()

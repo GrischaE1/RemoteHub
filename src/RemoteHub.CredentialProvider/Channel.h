@@ -23,7 +23,8 @@ namespace rhcp
         Channel& operator=(const Channel&) = delete;
         ~Channel();
 
-        // Asks the thread to end. It closes the pipe, wipes the ticket and exits without waiting for anything.
+        // Asks the thread to end. It still sends a result LogonUI has already reported (within the write's own time
+        // limit), then closes the pipe, wipes the ticket and exits. The caller never waits for the thread.
         void Stop();
 
         // Who CredentialsChanged goes to; null clears it (UnAdvise).
@@ -49,12 +50,32 @@ namespace rhcp
         static DWORD WINAPI ThreadMain(void* parameter);
         void Run();
         void Serve(HANDLE pipe);
+        bool SendPendingResult(HANDLE pipe, bool& sent);
         void ClearTicket(bool notify);
         void NotifyChanged();
 
         struct State;
         std::unique_ptr<State> _s;
     };
+
+    // What woke the pipe thread while it waits for the next message (Channel::Serve).
+    enum class Wake { Result, Stop, Message, Failed };
+
+    // Waits for a result to send, the stop or the next message – in that order when several are signalled. The result
+    // comes first because after a successful sign-in LogonUI calls ReportResult and releases the provider (Stop) right
+    // after it: with the stop first, the thread left without sending the result, and the service never learnt that the
+    // account was signed in (lab C-END-10, credential-provider-design.md §8.2).
+    inline Wake WaitServe(HANDLE result, HANDLE stop, HANDLE message, DWORD timeoutMs)
+    {
+        const HANDLE waits[3] = { result, stop, message };
+        switch (WaitForMultipleObjects(3, waits, FALSE, timeoutMs))
+        {
+        case WAIT_OBJECT_0: return Wake::Result;
+        case WAIT_OBJECT_0 + 1: return Wake::Stop;
+        case WAIT_OBJECT_0 + 2: return Wake::Message;
+        default: return Wake::Failed;
+        }
+    }
 
     // The module handle of this DLL (set in DllMain); used to find the agent's folder.
     extern HMODULE Module;

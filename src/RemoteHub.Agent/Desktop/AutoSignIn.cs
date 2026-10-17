@@ -33,7 +33,16 @@ public sealed record AutoSignInRequest(int Session, string Domain, string User, 
 /// <param name="Status">Windows' NTSTATUS from LogonUI (0 = signed in); 0 when it never got that far.</param>
 public sealed record AutoSignInResult(bool Ok, string Code, string Message, int Status = 0, int Substatus = 0)
 {
+    /// <summary>
+    /// The ticket went to the provider but Windows' answer never came back (the pipe ended, broke or timed out), so the
+    /// account may be signed in all the same. The caller looks at the console before calling it a failure (§6.3).
+    /// </summary>
+    public bool Unconfirmed { get; init; }
+
     public static AutoSignInResult Failed(string code, string message) => new(false, code, message);
+
+    /// <summary>A failure after the ticket went out: see <see cref="Unconfirmed"/>.</summary>
+    public static AutoSignInResult Lost(string code, string message) => new(false, code, message) { Unconfirmed = true };
 }
 
 /// <summary>Why an automatic sign-in didn't happen – the reason codes RemoteHub gets with SignInFailed.</summary>

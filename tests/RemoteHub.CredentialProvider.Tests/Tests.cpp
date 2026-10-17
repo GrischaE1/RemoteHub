@@ -1,5 +1,6 @@
 // Unit tests for the credential provider's pipe messages and logon packing (no test framework: plain checks, exit
 // code = number of failures). With "--corpus <dir>" it also writes well-formed messages there as seeds for the fuzzer.
+#include "../../src/RemoteHub.CredentialProvider/Channel.h"
 #include "../../src/RemoteHub.CredentialProvider/Logon.h"
 #include "../../src/RemoteHub.CredentialProvider/Wire.h"
 
@@ -199,6 +200,31 @@ namespace
         CHECK(PackInteractiveLogon(domain, 7, user, 5, password, 6, nullptr, &bytes) == E_POINTER);
     }
 
+    // C-END-10: LogonUI reports the result and releases the provider (the stop) right after it; the pipe thread must
+    // still see the result first, or the service never learns that the account was signed in.
+    void ResultWinsOverStop()
+    {
+        g_test = "ResultWinsOverStop";
+        const HANDLE result = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        const HANDLE stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        const HANDLE message = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        CHECK(result != nullptr && stop != nullptr && message != nullptr);
+        if (result != nullptr && stop != nullptr && message != nullptr)
+        {
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Failed); // nothing signalled: the time limit
+            SetEvent(message);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Message);
+            SetEvent(stop);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Stop);   // a stop still wins over the next message ...
+            SetEvent(result);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Result); // ... but not over a result to send
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Stop);   // the result event resets once taken
+        }
+        if (result != nullptr) CloseHandle(result);
+        if (stop != nullptr) CloseHandle(stop);
+        if (message != nullptr) CloseHandle(message);
+    }
+
     void FindsNegotiate()
     {
         g_test = "FindsNegotiate";
@@ -240,6 +266,7 @@ int main(int argc, char** argv)
     WriterLimits();
     PacksInteractiveLogon();
     FindsNegotiate();
+    ResultWinsOverStop();
     std::printf(g_failures == 0 ? "All credential provider tests passed.\n" : "%d check(s) failed.\n", g_failures);
     return g_failures;
 }

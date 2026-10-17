@@ -116,11 +116,13 @@ namespace rhcp
             return ExpectedServerPath(expected) && SameText(image, expected) && IsSystem(process.Value);
         }
 
-        // Waits for an overlapped operation; false on stop, timeout or failure (the operation is then cancelled).
+        // Waits for an overlapped operation; false on stop, timeout or failure (the operation is then cancelled). A null
+        // stop means only the time limit ends the wait.
         bool Await(HANDLE pipe, OVERLAPPED& ov, HANDLE stop, DWORD timeoutMs, DWORD& transferred)
         {
             const HANDLE waits[2] = { stop, ov.hEvent };
-            const DWORD r = WaitForMultipleObjects(2, waits, FALSE, timeoutMs);
+            const DWORD r = stop != nullptr ? WaitForMultipleObjects(2, waits, FALSE, timeoutMs)
+                : WaitForSingleObject(ov.hEvent, timeoutMs) == WAIT_OBJECT_0 ? WAIT_OBJECT_0 + 1 : WAIT_TIMEOUT;
             if (r == WAIT_OBJECT_0 + 1 && GetOverlappedResult(pipe, &ov, &transferred, FALSE)) return true;
             CancelIoEx(pipe, &ov);
             GetOverlappedResult(pipe, &ov, &transferred, TRUE);
@@ -335,6 +337,23 @@ namespace rhcp
         ClearTicket(false);
     }
 
+    // Sends the result LogonUI reported, if one waits (sent = true then). The stop doesn't cut this write short – only
+    // its own time limit does – so a provider released right after ReportResult still delivers it (§8.2). False when
+    // the write failed.
+    bool Channel::SendPendingResult(HANDLE pipe, bool& sent)
+    {
+        AcquireSRWLockExclusive(&_s->Lock);
+        sent = _s->ResultPending;
+        ResultMessage result = _s->Result;
+        _s->ResultPending = false;
+        ReleaseSRWLockExclusive(&_s->Lock);
+        if (!sent) return true;
+        uint8_t out[64];
+        const size_t n = WriteResult(result, out, sizeof(out));
+        ClearTicket(false); // §8.2: the ticket is gone after ReportResult, whatever the outcome
+        return n != 0 && WriteMessage(pipe, nullptr, out, n);
+    }
+
     // One connection: Pending -> Claim -> Ticket -> (LogonUI) -> Result, any number of times. Anything unexpected ends it.
     void Channel::Serve(HANDLE pipe)
     {
@@ -359,36 +378,31 @@ namespace rhcp
             ResetEvent(readDone.Value);
             if (!ReadFile(pipe, buffer, sizeof(buffer), nullptr, &ov) && GetLastError() != ERROR_IO_PENDING) return;
 
-            // Wait for the message, the stop, or LogonUI's result to send.
+            // Wait for LogonUI's result to send, the stop, or the message (WaitServe's order).
             DWORD read = 0;
             bool gotMessage = false;
             for (;;)
             {
-                const HANDLE waits[3] = { stop, readDone.Value, _s->ResultEvent.Value };
                 const DWORD timeout = phase == Phase::AwaitTicket ? TicketTimeoutMs : INFINITE;
-                const DWORD r = WaitForMultipleObjects(3, waits, FALSE, timeout);
-                if (r == WAIT_OBJECT_0 + 1)
+                const Wake wake = WaitServe(_s->ResultEvent.Value, stop, readDone.Value, timeout);
+                if (wake == Wake::Message)
                 {
                     // ERROR_MORE_DATA (a message over 4 KB) fails here and ends the connection.
                     gotMessage = GetOverlappedResult(pipe, &ov, &read, FALSE) != FALSE;
                     break;
                 }
-                if (r == WAIT_OBJECT_0 + 2)
+                if (wake == Wake::Result)
                 {
-                    AcquireSRWLockExclusive(&_s->Lock);
-                    const bool send = _s->ResultPending;
-                    ResultMessage result = _s->Result;
-                    _s->ResultPending = false;
-                    ReleaseSRWLockExclusive(&_s->Lock);
-                    if (!send) continue;
-                    uint8_t out[64];
-                    const size_t n = WriteResult(result, out, sizeof(out));
-                    ClearTicket(false); // §8.2: the ticket is gone after ReportResult, whatever the outcome
-                    phase = Phase::Idle;
-                    if (n == 0 || !WriteMessage(pipe, stop, out, n)) break;
+                    bool sent = false;
+                    if (!SendPendingResult(pipe, sent)) break;
+                    if (sent) phase = Phase::Idle;
                     continue;
                 }
-                break; // stop, timeout or failure
+                // Stop, timeout or failure. A result reported just before still goes out: it is the only way the
+                // service learns that the account was signed in (C-END-10).
+                bool sent = false;
+                SendPendingResult(pipe, sent);
+                break;
             }
             if (!gotMessage)
             {

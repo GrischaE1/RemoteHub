@@ -387,6 +387,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 o.Log.Audit(AuditEvent.DesktopEnded, $"Desktop session ended: {identity.Account} from {source} after {(DateTime.UtcNow - started):hh\\:mm\\:ss} – {what} ({_endReason})");
             // A session automatic sign-in created (§9.2): ended on purpose → its end action; dropped → its screen stays covered
             // by this helper for a while (a continued connection takes over), then it is signed out.
+            // A sign-in still under way confirms its session after this point and applies the end action itself.
+            lock (_autoSignedLock) _autoSignClosed = true;
             if (_autoSigned is { } mine && _resume?.TakenOver != true)
             {
                 if (_lost && _helper is { } cover && _helperSession == mine.Session)
@@ -418,6 +420,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     // aborted the WebSocket, which could drop that status (seen as "connection lost" in RemoteHub).
     private readonly TaskCompletionSource _endRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private (int Session, string EndAction)? _autoSigned; // the session automatic sign-in created, while this connection owns it
+    private readonly object _autoSignedLock = new();     // _autoSigned against _autoSignClosed: exactly one side applies the end action
+    private bool _autoSignClosed;                          // the connection's end has run; a sign-in confirmed later ends its session itself
     private bool _screenByService;                         // the privacy screen is the service's (automatic sign-in), not the admin's
     private volatile bool _autoSignInPending;              // the sign-in went to Windows; its session isn't confirmed yet
     private IDesktopHelper? _parkedHelper;                 // the dropped connection's helper, ended once this one covers the screen
@@ -517,6 +521,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 result = await o.Desktop!.AutoSignIn!.SignInAsync(new AutoSignInRequest(sessionId, domain, user, identity.UserSid!, secret,
                     () => RecheckAutoSignIn(sessionId), o.Desktop.SecureAttention), ct);
             }
+            // The ticket went out but Windows' answer was lost (lab C-END-10: LogonUI signed the account in and went away
+            // before the provider sent the result). Fail safe: if the console now has this account's session, it is the
+            // one this sign-in created and gets the cover and the end action like any other; otherwise it failed.
+            var lost = !result.Ok && result.Unconfirmed;
+            // Not cancelled with the connection: once the ticket has gone out, the outcome must be known even when nobody is connected.
+            var (console, sid) = result.Ok || lost ? await ConsoleUser() : (null, null);
+            if (lost && string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
+            {
+                o.Log.Write($"Automatic sign-in: Windows' answer didn't arrive ({result.Code}), but console session {console} has the account – treated as signed in");
+                result = new AutoSignInResult(true, "", "Signed in.");
+            }
             if (!result.Ok)
             {
                 if (result.Code == AutoSignInFailure.Windows)
@@ -528,14 +543,6 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             }
 
             // §6.3: the console's new session must belong to exactly this account – otherwise it is signed out at once.
-            int? console = null;
-            string? sid = null;
-            for (var i = 0; i < 60 && sid is null; i++)
-            {
-                console = o.Desktop.Sessions.ConsoleSessionId();
-                sid = console is { } c ? o.Desktop.Sessions.UserSid(c) : null;
-                if (sid is null) await Task.Delay(500, ct);
-            }
             if (!string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
             {
                 if (console is { } wrong && sid is not null) o.Desktop.Sessions.LogOff(wrong);
@@ -547,9 +554,24 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 return;
             }
             o.Desktop.AutoSigned.Signed(console!.Value, sid!, identity.Account, endAction);
-            _autoSigned = (console.Value, endAction);
             o.Log.Audit(AuditEvent.AutoSignInSucceeded, $"Automatic sign-in: {identity.Account} from {source} signed in to console session {console} " +
-                $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")})");
+                $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")}" +
+                $"{(lost ? "; Windows' answer was lost, the console session confirmed it" : "")})");
+            // Hand the session to the connection's end – unless that has already run (the connection ended while the
+            // sign-in was under way). Then nothing else will give the session its end action, so it gets it here, as the
+            // end would have: a drop with nothing covering the screen signs out, an end on purpose takes the end action.
+            bool closed;
+            lock (_autoSignedLock)
+            {
+                closed = _autoSignClosed;
+                if (!closed) _autoSigned = (console.Value, endAction);
+            }
+            if (closed)
+            {
+                o.Desktop.AutoSigned.EndOnPurpose(console.Value, o.Log, _lost ? "connection lost, nothing to cover the screen" : _endReason,
+                    _lost ? AutoSignInEndActions.SignOut : null);
+                return;
+            }
             await SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(DesktopStatusState.SignedIn, $"Signed in as {identity.Account}.", EndAction: endAction),
                 DesktopJson.Default.DesktopStatus), ct);
         }
@@ -561,6 +583,23 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             try { await Status(DesktopStatusState.SignInFailed, "The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
         }
         finally { _autoSignInPending = false; } // confirmed (_autoSigned from now on), failed or undone
+    }
+
+    /// <summary>How long the console's new session gets to show its user after a sign-in (§6.3), in polls of 500 ms; tests shorten it.</summary>
+    internal static int ConsoleUserPolls = 60;
+
+    /// <summary>The console session and its user's SID, once Windows reports one (up to 30 s); the SID is null if it never does.</summary>
+    private async Task<(int? Console, string? Sid)> ConsoleUser()
+    {
+        int? console = null;
+        string? sid = null;
+        for (var i = 0; i < ConsoleUserPolls && sid is null; i++)
+        {
+            console = o.Desktop!.Sessions.ConsoleSessionId();
+            sid = console is { } c ? o.Desktop.Sessions.UserSid(c) : null;
+            if (sid is null) await Task.Delay(500);
+        }
+        return (console, sid);
     }
 
     /// <summary>Right before the ticket goes out (§6.2): the policy and right still allow it, and the console is still waiting.</summary>
