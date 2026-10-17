@@ -971,7 +971,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var size = DesktopWire.ReadText(m).Split(' ');
                         if (size.Length == 2 && int.TryParse(size[0], out var vw) && int.TryParse(size[1], out var vh))
                         {
-                            var shown = await Task.Run(() => VirtualDisplay.Show(vw, vh, resizeOnly: _virtualShown), ct);
+                            var resizeOnly = _virtualShown;
+                            var (shown, recovered) = await Task.Run(() => (VirtualDisplay.Show(vw, vh, resizeOnly, out var r), r), ct);
+                            if (recovered is not null) o.Log.Write($"Desktop: session {_helperSession}: {recovered}");
                             if (shown is null && !_virtualShown) _virtualShown = true;
                             o.Log.Write($"Desktop: session {_helperSession}: virtual monitor {(shown is null ? $"on at {VirtualDisplay.Normalize(vw, vh).W}×{VirtualDisplay.Normalize(vw, vh).H}" : "not switched on: " + shown)}");
                         }

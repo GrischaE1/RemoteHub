@@ -173,8 +173,12 @@ default on). The driver – the third-party Virtual Display Driver (MIT, IddCx, 
 unchanged and hash-checked) – is installed with the device switched off; the service switches it on at the viewer's
 window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml`, reloaded through its control pipe on a resize),
 the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the service switches it off when the last
-connection that asked for it ends (and at service start). Uninstall removes device, driver package, settings and the
-publisher trust (Trusted Publishers – only if the agent added it).
+connection that asked for it ends (and at service start). After a restart of the device Windows may no longer report
+the switched-off device (pnputil: *Disconnected*, enabling fails with 1167 "not connected"); switching it on then
+rescans the devices and, if that doesn't bring it back, removes the device node and creates it again from the
+hash-checked files as at install, keeps the new instance ID in `virtual-display.txt` and logs what it repaired.
+Uninstall removes device (also one Windows no longer reports), driver package, settings and the publisher trust
+(Trusted Publishers – only if the agent added it).
 
 Other files in the same folder (SYSTEM and Administrators only): `autosignin.json` – the sessions automatic sign-in
 created (session, SID, account, end action; no secrets), so a session left open by a crash is dealt with at the next

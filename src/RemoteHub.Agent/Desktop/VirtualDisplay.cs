@@ -55,11 +55,18 @@ internal static class VirtualDisplay
         {
             var d = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(l => l.Split('=', 2)).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
-            return d.TryGetValue("instance", out var id) && id.Length > 0
+            return d.TryGetValue("instance", out var id) && ValidInstanceId(id)
                 ? new State(id, d.GetValueOrDefault("oem") ?? "", d.GetValueOrDefault("trustAdded") == "1")
                 : null;
         }
     }
+
+    /// <summary>
+    /// A device instance ID as SetupAPI generates it (<c>ROOT\DISPLAY\0000</c>). The ID goes to pnputil on its command
+    /// line, so anything else (quotes, spaces, a changed state file) is refused rather than passed on.
+    /// </summary>
+    internal static bool ValidInstanceId(string id) =>
+        id.Length is > 0 and <= 200 && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '\\' or '&' or '_' or '-' or '.' or '{' or '}' or '#');
 
     private static State? Load()
     {
@@ -67,7 +74,11 @@ internal static class VirtualDisplay
         catch { return null; }
     }
 
-    public static bool Installed => Load() is { } s && Native.Exists(s.InstanceId);
+    /// <summary>
+    /// The agent installed the virtual display. Not whether its device is there now: after a restart Windows may no
+    /// longer report the switched-off device (D-VD-05), and <see cref="Show(int, int, bool)"/> then creates it again.
+    /// </summary>
+    public static bool Installed => Load() is not null;
 
     // ------------------------------------------------------------------ install / remove
 
@@ -91,10 +102,16 @@ internal static class VirtualDisplay
         }
         var inf = Path.Combine(FilesFolder, InfName);
         var oem = Native.AddDriverPackage(inf);
-        var instance = previous is { } p && Native.Exists(p.InstanceId) ? p.InstanceId : Native.CreateRootDevice(inf, HardwareId);
+        string instance;
+        if (previous is { } p && Native.Exists(p.InstanceId)) instance = p.InstanceId;
+        else
+        {
+            // A device node from before that Windows no longer reports would otherwise stay behind as a dead second monitor.
+            if (previous is { } old && Native.Known(old.InstanceId)) Pnputil(["/remove-device", old.InstanceId], out _);
+            instance = Native.CreateRootDevice(inf, HardwareId);
+        }
         Native.UpdateDriver(inf, HardwareId);
-        Directory.CreateDirectory(AgentConfig.Folder);
-        File.WriteAllText(StateFile, new State(instance, oem, trustAdded).Serialize());
+        Save(new State(instance, oem, trustAdded));
         WriteSettings(1920, 1080);
         SetEnabled(instance, false);
         return $"Virtual display installed (device {instance}, driver package {oem}{(trustAdded ? ", publisher trusted" : "")}) – switched on only while a connection needs it";
@@ -108,7 +125,7 @@ internal static class VirtualDisplay
             var s = Load();
             if (s is null) return null;
             var notes = new List<string>();
-            if (Native.Exists(s.InstanceId) && Pnputil($"/remove-device \"{s.InstanceId}\"") != 0) notes.Add("device not removed");
+            if (Native.Known(s.InstanceId) && Pnputil(["/remove-device", s.InstanceId], out _) != 0) notes.Add("device not removed");
             if (s.OemInf.Length > 0 && !Native.RemoveDriverPackage(s.OemInf)) notes.Add($"driver package {s.OemInf} not removed");
             if (s.TrustAdded)
                 try
@@ -147,11 +164,16 @@ internal static class VirtualDisplay
     /// Switches the virtual monitor on at <paramref name="width"/> × <paramref name="height"/> for one more connection,
     /// or resizes it (the driver reloads its settings). Null on success, else why not.
     /// </summary>
-    public static string? Show(int width, int height, bool resizeOnly = false)
+    public static string? Show(int width, int height, bool resizeOnly = false) => Show(width, height, resizeOnly, out _);
+
+    /// <inheritdoc cref="Show(int, int, bool)"/>
+    /// <param name="recovered">What had to be repaired to switch it on (for the log), else null.</param>
+    public static string? Show(int width, int height, bool resizeOnly, out string? recovered)
     {
+        recovered = null;
         lock (Gate)
         {
-            if (Load() is not { } s || !Native.Exists(s.InstanceId)) return "the virtual display isn't installed";
+            if (Load() is not { } s) return "the virtual display isn't installed";
             (width, height) = Normalize(width, height);
             try
             {
@@ -159,16 +181,18 @@ internal static class VirtualDisplay
                 WriteSettings(width, height);
                 if (_shownBy == 0)
                 {
-                    // Some devices can't be switched (on Hyper-V VMs pnputil answers "not supported") and stay on: then the
-                    // running driver re-reads its settings instead – the window's size – through its control pipe.
                     if (resizeOnly)
                     {
                         if (!Native.IsStarted(s.InstanceId)) return "the virtual display is off";
                         Reload();
                     }
                     else
-                        try { SetEnabled(s.InstanceId, true); }
-                        catch (InvalidOperationException) when (Native.IsStarted(s.InstanceId)) { Reload(); }
+                    {
+                        var on = SwitchOn(new WindowsDevice(), s.InstanceId);
+                        recovered = on.Recovered;
+                        // Hide, Reset and Remove act on the device that exists now.
+                        if (on.InstanceId != s.InstanceId) Save(s with { InstanceId = on.InstanceId });
+                    }
                 }
                 else Reload();
                 if (!resizeOnly) _shownBy++;
@@ -177,6 +201,99 @@ internal static class VirtualDisplay
             }
             catch (Exception ex) { return ex.Message; }
         }
+    }
+
+    /// <summary>What switching the device on needs from Windows – separate so the recovery can be tested without a driver.</summary>
+    internal interface IDevice
+    {
+        /// <summary>Windows reports the device now (it is in the device tree).</summary>
+        bool Present(string instance);
+        /// <summary>The device is on and its driver runs.</summary>
+        bool Started(string instance);
+        /// <summary>pnputil's exit code; <paramref name="said"/>: why it failed.</summary>
+        int SetEnabled(string instance, bool on, out string said);
+        /// <summary>Windows enumerates its devices again (<c>pnputil /scan-devices</c>).</summary>
+        void Rescan();
+        /// <summary>Removes the device node, also one Windows no longer reports; false if it stays.</summary>
+        bool Remove(string instance);
+        /// <summary>Creates the device and installs its driver, as at install (which starts it); returns its instance ID.</summary>
+        string Create();
+        /// <summary>The running driver re-reads its settings.</summary>
+        void Reload();
+    }
+
+    /// <summary>The device's instance ID once it is on (a new one when it had to be created again), and what was repaired.</summary>
+    internal sealed record SwitchedOn(string InstanceId, string? Recovered);
+
+    /// <summary>
+    /// Switches the device on. Some devices can't be switched (on Hyper-V VMs pnputil answers "not supported") and stay
+    /// on: then the running driver re-reads its settings – the window's size – through its control pipe instead.
+    /// After a restart of the device Windows may no longer report the switched-off device, and enabling it fails with
+    /// 1167 "The device is not connected" (D-VD-05, Windows 11 and Server 2025): then Windows enumerates its devices
+    /// again, and if that doesn't bring it back the device node is removed and created again as at install, which
+    /// starts it. Throws when nothing switched it on.
+    /// </summary>
+    internal static SwitchedOn SwitchOn(IDevice device, string instance)
+    {
+        string why;
+        if (device.Present(instance))
+        {
+            var exit = device.SetEnabled(instance, true, out var said);
+            if (exit == 0) return new(instance, null);
+            if (device.Started(instance)) { device.Reload(); return new(instance, null); }
+            why = Failed(exit, said);
+        }
+        else why = "the device isn't there";
+
+        device.Rescan();
+        if (device.Present(instance) && device.SetEnabled(instance, true, out _) == 0)
+            return new(instance, $"virtual display device {instance} came back with a device rescan ({why})");
+
+        try
+        {
+            var removed = device.Remove(instance);
+            var created = device.Create();
+            if (!device.Started(created))
+            {
+                var exit = device.SetEnabled(created, true, out var said);
+                if (exit != 0 && !device.Started(created)) throw new InvalidOperationException($"the new device {created} didn't start ({Failed(exit, said)})");
+            }
+            return new(created, $"virtual display device created again as {created} ({instance}: {why}{(removed ? "" : "; its old device node couldn't be removed")})");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException($"The virtual display couldn't be switched on ({why}); creating its device again failed: {ex.Message}", ex);
+        }
+    }
+
+    private static string Failed(int exit, string said) => $"pnputil exit code {exit}{(said.Length > 0 ? ": " + said : "")}";
+
+    /// <summary>The device as Windows has it: config manager, pnputil and SetupAPI.</summary>
+    private sealed class WindowsDevice : IDevice
+    {
+        public bool Present(string instance) => Native.Exists(instance);
+        public bool Started(string instance) => Native.IsStarted(instance);
+        public int SetEnabled(string instance, bool on, out string said) => Pnputil([on ? "/enable-device" : "/disable-device", instance], out said);
+        public void Rescan() => Pnputil(["/scan-devices"], out _);
+        public bool Remove(string instance) => !Native.Known(instance) || Pnputil(["/remove-device", instance], out _) == 0;
+
+        public string Create()
+        {
+            // The same hash-checked files as at install: nothing else from the agent's folder is installed as a driver.
+            VerifyFiles(FilesFolder);
+            var inf = Path.Combine(FilesFolder, InfName);
+            var instance = Native.CreateRootDevice(inf, HardwareId);
+            Native.UpdateDriver(inf, HardwareId);
+            return instance;
+        }
+
+        public void Reload() => VirtualDisplay.Reload();
+    }
+
+    private static void Save(State state)
+    {
+        Directory.CreateDirectory(AgentConfig.Folder);
+        File.WriteAllText(StateFile, state.Serialize());
     }
 
     /// <summary>The size the virtual monitor gets for a window: even, 800×600 to 7680×4320.</summary>
@@ -204,8 +321,8 @@ internal static class VirtualDisplay
 
     private static void SetEnabled(string instance, bool on)
     {
-        var exit = Pnputil($"/{(on ? "enable" : "disable")}-device \"{instance}\"", out var said);
-        if (exit != 0) throw new InvalidOperationException($"The virtual display couldn't be switched {(on ? "on" : "off")} (pnputil exit code {exit}{(said.Length > 0 ? ": " + said : "")}).");
+        var exit = Pnputil([on ? "/enable-device" : "/disable-device", instance], out var said);
+        if (exit != 0) throw new InvalidOperationException($"The virtual display couldn't be switched {(on ? "on" : "off")} ({Failed(exit, said)}).");
     }
 
     /// <summary>The driver's settings: one monitor, the window's size first, a few common sizes, 60 Hz.</summary>
@@ -241,20 +358,28 @@ internal static class VirtualDisplay
         pipe.Flush();
     }
 
-    private static int Pnputil(string arguments) => Pnputil(arguments, out _);
-
-    /// <summary>Runs pnputil; <paramref name="said"/>: its last lines (why it failed), on one line.</summary>
-    private static int Pnputil(string arguments, out string said)
+    /// <summary>
+    /// Runs pnputil; <paramref name="said"/>: its last lines (why it failed), on one line. The arguments go as a list,
+    /// so an instance ID always stays one argument.
+    /// </summary>
+    private static int Pnputil(string[] arguments, out string said)
     {
-        using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "pnputil.exe"), arguments)
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "pnputil.exe"))
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
-        })!;
-        var output = p.StandardOutput.ReadToEnd() + "\n" + p.StandardError.ReadToEnd();
+        };
+        foreach (var a in arguments) start.ArgumentList.Add(a);
+        using var p = Process.Start(start)!;
+        var error = p.StandardError.ReadToEndAsync(); // both at once: a full stderr pipe would otherwise stall pnputil
+        var output = p.StandardOutput.ReadToEnd() + "\n" + error.GetAwaiter().GetResult();
         p.WaitForExit();
-        said = string.Join(" ", output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).TakeLast(2));
+        said = LastLines(output);
         return p.ExitCode;
     }
+
+    /// <summary>pnputil's last two lines on one line – where it says why it failed.</summary>
+    internal static string LastLines(string output) =>
+        string.Join(" ", output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).TakeLast(2));
 
     /// <summary>SetupAPI / config manager: driver package, root-enumerated device.</summary>
     private static class Native
@@ -276,6 +401,9 @@ internal static class VirtualDisplay
         }
 
         public static bool Exists(string instanceId) => CM_Locate_DevNodeW(out _, instanceId, 0) == 0;
+
+        /// <summary>The device node is registered, whether or not Windows reports it now (CM_LOCATE_DEVNODE_PHANTOM).</summary>
+        public static bool Known(string instanceId) => CM_Locate_DevNodeW(out _, instanceId, 1) == 0;
 
         /// <summary>The device is on and its driver runs (DN_STARTED).</summary>
         public static bool IsStarted(string instanceId) =>
