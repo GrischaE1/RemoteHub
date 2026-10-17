@@ -62,7 +62,7 @@ RemoteHub (operator PC)                               Device
   - Events 4624 and 4625 are written to the Security log.
 - **UAC:** for an administrator, the agent uses the full linked token. LocalSystem is allowed to obtain it.
   - Deliberately more permissive than WinRM: WinRM gives local administrators other than the built-in Administrator only a filtered token (UAC remote restrictions) unless `LocalAccountTokenFilterPolicy=1`. The agent gives them full rights without that setting, so local accounts (LAPS) work for admin tasks out of the box.
-- **Windows' answer:** errors 1326, 1327, 1330, 1331 and 1909 (wrong password, restriction, expired password, disabled, locked out) → 401; 1385 (logon type not granted) → 403. Any other Windows error → 500 and isn't counted by the throttle (§4.3). **Finding:** that includes 1793 (account expired) and 1907 (password must be changed) – they should be refusals (401), not 500 (`WindowsShell.cs`).
+- **Windows' answer** (`SignInRefusal.cs`): Windows refusing the account → 401 – errors 1326 (wrong password), 1317 (no such user), 1355 (no such domain), 1327 (account restriction, e.g. a blank password), 1328 (logon hours), 1329 (workstation), 1330 (password expired), 1907 (password must be changed), 1331 (disabled), 1793 (account expired) and 1909 (locked out). The account may not sign in this way → 403 – 1385 (logon type not granted) and 1935 (authentication firewall). Windows can't check the account → 500 and isn't counted by the throttle (§4.3) – 1311 (no domain controller), 1786–1789 (trust relationship) and any other error. Each refusal is audited as event 2000 with the reason and the Windows error number, never the password.
 - **Allowed accounts:** each right is granted to Windows groups of the device (§7.1). Default: the groups in `allowedGroups` (local Administrators, `S-1-5-32-544`) get PowerShell, Desktop, SecureDesktop, PrivacyScreen and Tunnel; DesktopViewOnly, ConsentBypass and AutoSignIn go to nobody. The policy subkey `Rights` replaces the groups of a right. Entries are SIDs or names, resolved on the device. In RemoteHub's install dialog only the English name "Administrators" is turned into the SID (`AgentInstaller.ParseGroups`); a localized name ("Administratoren") is passed on as typed and must resolve on the device.
 - **PowerShell runs as the signed-in user,** with their profile and environment, in a job object that is killed when the session ends. Rights and auditing are the same as with PowerShell remoting, except for the UAC point above.
 - Kerberos and NTLM aren't used. Kerberos doesn't work across untrusted forests, and NTLM is deprecated by Microsoft.
@@ -144,7 +144,7 @@ Out of scope for v1. The design keeps it possible:
   | 403 | account has none of the groups of the right, or network logon denied |
   | 404 | `/v1/desktop` or `/v1/tunnel` turned off by policy |
   | 429 | too many failed sign-ins from this address |
-  | 500 | PowerShell could not start; or a Windows sign-in error the agent doesn't map (e.g. 1793, 1907 – see the finding in §4.2) |
+  | 500 | PowerShell could not start; or Windows couldn't check the account (no domain controller, broken trust, an unknown error – §4.2) |
   | 503 | session limit reached, or no free sign-in slot within 30 s (8 sign-ins at once) |
 
 - Messages are at most 16 MB. WebSocket keep-alive: a ping every 30 s; no answer within 30 s ends the connection (and its PowerShell).
@@ -246,7 +246,7 @@ agent.json at its first start, unless IT changed them since.
 |---|---|
 | Custom transport in RemoteHub (`Remoting/AgentTransport.cs`) | done, tested |
 | Agent host: TLS, health, sign-in on upgrade, throttle, tunnel, log (`src/RemoteHub.Agent`) | done, tested with a test sign-in and in the lab (S-AUTH, S-THR) |
-| Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); errors 1793 / 1907 give 500 (§4.2) |
+| Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); Windows errors mapped in `SignInRefusal.cs` (§4.2) |
 | Connection setting "Connect through: PowerShell remoting (WinRM) / RemoteHub Agent" plus device data (`AgentDevice`) | done |
 | Enrollment generator (`AgentEnrollment.cs`), `.rhagent` import (`RemoteHubAgent.exe enroll`), cleanup on uninstall | done, tested (import itself needs LocalSystem) |
 | Agent MSI: service, delayed start, recovery, firewall rule | done |

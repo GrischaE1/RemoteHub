@@ -281,13 +281,16 @@ internal static class AgentErrors
             // Agents since 0.18.12: the device's policy PowerShellEnabled = 0 (older agents never answer 404 here).
             HttpStatusCode.NotFound => $"PowerShell, files, registry, services and processes are turned off on {where} by a policy on the device " +
                                        "(PowerShellEnabled). The remote desktop may still be available.",
+            // Older agents answered 500 instead for an expired account and a password that must be changed (Windows errors 1793, 1907).
             HttpStatusCode.Unauthorized => $"The RemoteHub Agent on {where} rejected the sign-in: wrong user name or password, or the account is " +
-                                           "disabled, locked or its password expired. Use an account of that device or its domain.",
+                                           "disabled, locked or expired, or its password has expired or must be changed. Use an account of that " +
+                                           "device or its domain. The reason is in the agent's log on the device.",
             HttpStatusCode.Forbidden => $"The account is not allowed to use the RemoteHub Agent on {where}: it must be an administrator there " +
                                         "(or a member of a group the agent was configured to allow), and network sign-in must not be denied by policy.",
             HttpStatusCode.TooManyRequests => $"The RemoteHub Agent on {where} refuses sign-ins from this PC for a few minutes after too many failed attempts.",
             HttpStatusCode.ServiceUnavailable => $"The RemoteHub Agent on {where} has reached its limit of simultaneous sessions.",
-            HttpStatusCode.InternalServerError => $"The RemoteHub Agent on {where} could not start PowerShell. Details are in the agent's log on the device.",
+            HttpStatusCode.InternalServerError => $"The RemoteHub Agent on {where} could not check the sign-in with Windows (for example, no domain " +
+                                                  "controller answered) or could not start PowerShell. Details are in the agent's log on the device.",
             _ when ex is OperationCanceledException => $"No answer from a RemoteHub Agent on {where} in time. Check that the agent is installed and running, " +
                                                        "and that a firewall allows the port.",
             _ => $"Could not connect to the RemoteHub Agent on {where}: {ex.GetBaseException().Message}",

@@ -1772,9 +1772,9 @@ P2 · How: H PS · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 5. Read the Application log.
 
 **Expected:**
-- Step 2: 401, event 2000 with Windows' message for error 1331 (account disabled).
-- Step 4: 401, event 2000 with Windows' message for error 1330 (password expired).
-- Note: only errors 1326, 1327, 1330, 1331, 1909 (→ 401) and 1385 (→ 403) are mapped. "User must change password at next logon" (error 1907, e.g. `PasswordExpired = 1`) is not mapped and gives HTTP 500 "could not start PowerShell". The case must create a real 1330 or the code must map 1907.
+- Step 2: 401, event 2000 "The account is disabled. (Windows error 1331)".
+- Step 4: 401, event 2000 with the reason and the Windows error: 1330 "The password has expired.", or 1907 "The password must be changed before the account can sign in." for "User must change password at next logon" (e.g. `PasswordExpired = 1`). An expired account (1793) gets 401 "The account has expired." as well.
+- Note: the agent maps every refusal of the account to 401 and only "Windows couldn't check the account" (no domain controller, broken trust, unknown errors) to 500 (`SignInRefusal.cs`, agent-spec §4.2).
 
 #### S-AUTH-09 · Non-RID-500 admin gets a full token
 P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`

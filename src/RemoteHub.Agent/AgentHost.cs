@@ -127,12 +127,7 @@ public static class AgentHost
                 {
                     if (auth.Outcome != AuthOutcome.Error) gate.Failed(source);
                     o.Log.Audit(AuditEvent.SignInRefused, $"Refused {user} from {source}: {auth.Reason}");
-                    ctx.Response.StatusCode = auth.Outcome switch
-                    {
-                        AuthOutcome.BadCredentials => StatusCodes.Status401Unauthorized,
-                        AuthOutcome.NotAllowed => StatusCodes.Status403Forbidden,
-                        _ => StatusCodes.Status500InternalServerError,
-                    };
+                    ctx.Response.StatusCode = SignInRefusal.HttpStatus(auth.Outcome);
                     return null;
                 }
                 gate.Succeeded(source);

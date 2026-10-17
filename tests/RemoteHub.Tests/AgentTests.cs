@@ -34,6 +34,8 @@ public class AgentTests
             {
                 (@".\tester", "secret") => new A.AuthResult(A.AuthOutcome.Ok, "", new A.ShellIdentity("TEST\\tester")),
                 (@".\guest", "secret") => A.AuthResult.Fail(A.AuthOutcome.NotAllowed, "not allowed"),
+                (@".\expired", "secret") => A.SignInRefusal.FromWin32(1793), // ERROR_ACCOUNT_EXPIRED
+                (@".\nodc", "secret") => A.SignInRefusal.FromWin32(1311),    // ERROR_NO_LOGON_SERVERS
                 _ => A.AuthResult.Fail(A.AuthOutcome.BadCredentials, "bad"),
             };
         }
@@ -157,6 +159,20 @@ public class AgentTests
         var good = Target(a);
         ex = await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(good)));
         Assert.Contains("too many failed attempts", PsRemoting.Explain(ex, good)); // blocked, even with the right password
+        Assert.Empty(a.Launcher.Started);
+    }
+
+    [Fact]
+    public async Task An_expired_account_is_refused_as_a_sign_in_and_a_missing_domain_controller_as_an_error()
+    {
+        await using var a = await StartAgent();
+        var expired = Target(a, user: "expired");
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(expired)));
+        Assert.Contains("rejected the sign-in", PsRemoting.Explain(ex, expired)); // 401, not 500
+
+        var noDc = Target(a, user: "nodc");
+        ex = await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(noDc)));
+        Assert.Contains("could not check the sign-in with Windows", PsRemoting.Explain(ex, noDc));
         Assert.Empty(a.Launcher.Started);
     }
 

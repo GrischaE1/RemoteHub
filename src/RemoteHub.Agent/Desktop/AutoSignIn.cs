@@ -214,22 +214,49 @@ public sealed class AutoSignInGate(int maxAttempts = 3, TimeSpan? window = null,
     }
 }
 
-/// <summary>What Windows' answer means for the operator (never the input, never more than the reason).</summary>
+/// <summary>
+/// What Windows' answer from LogonUI means for the operator (never the input, never more than the reason). Windows often
+/// reports a refusal as the general STATUS_LOGON_FAILURE or STATUS_ACCOUNT_RESTRICTION with the actual reason in the
+/// substatus – a disabled account, for example, as 0xC000006E / 0xC0000072 – so the substatus is read first.
+/// </summary>
 public static class AutoSignInStatus
 {
-    public static string Describe(int status, int substatus) => (uint)status switch
+    // ntstatus.h
+    public const uint LogonFailure = 0xC000006D, AccountRestriction = 0xC000006E, NoSuchUser = 0xC0000064, WrongPassword = 0xC000006A,
+        InvalidLogonHours = 0xC000006F, InvalidWorkstation = 0xC0000070, PasswordExpired = 0xC0000071, AccountDisabled = 0xC0000072,
+        AccountExpired = 0xC0000193, PasswordMustChange = 0xC0000224, AccountLockedOut = 0xC0000234, LogonTypeNotGranted = 0xC000015B,
+        NoLogonServers = 0xC000005E, TrustedRelationshipFailure = 0xC000018D, TimeDifferenceAtDc = 0xC0000133,
+        SmartCardLogonRequired = 0xC00002FA, AuthenticationFirewallFailed = 0xC0000413;
+
+    public static string Describe(int status, int substatus)
     {
-        0xC000006D when (uint)substatus == 0xC0000064 => "The account doesn't exist on the device.",
-        0xC000006D or 0xC000006A => "The password was wrong (the stored password may be out of date).",
-        0xC0000234 => "The account is locked.",
-        0xC0000071 or 0xC0000224 => "The password has expired and must be changed at the device.",
-        0xC0000072 => "The account is disabled.",
-        0xC0000193 => "The account has expired.",
-        0xC000015B => "The account may not sign in on this device's screen (\"Allow log on locally\").",
-        0xC000006F => "The account may not sign in at this time of day.",
-        0xC0000070 => "The account may not sign in on this device.",
-        0xC000006E => "The account can't sign in this way (it may need a smart card or Windows Hello).",
-        0xC0000413 => "The sign-in was blocked by the domain's authentication firewall.",
-        _ => $"Windows refused the sign-in (0x{status:X8}).",
+        var s = (uint)status;
+        if (s is LogonFailure or AccountRestriction && (uint)substatus != s && Specific((uint)substatus) is { } reason) return reason;
+        return Specific(s) ?? s switch
+        {
+            LogonFailure => "The password was wrong (the stored password may be out of date).",
+            AccountRestriction => "Account restrictions prevent this sign-in (for example a blank password, or the account needs a smart card or Windows Hello).",
+            _ => $"Windows refused the sign-in (0x{status:X8}).",
+        };
+    }
+
+    /// <summary>A status that names the reason itself; null for the general ones and anything unknown.</summary>
+    private static string? Specific(uint status) => status switch
+    {
+        NoSuchUser => "The account doesn't exist on the device.",
+        WrongPassword => "The password was wrong (the stored password may be out of date).",
+        AccountLockedOut => "The account is locked.",
+        PasswordExpired or PasswordMustChange => "The password has expired and must be changed at the device.",
+        AccountDisabled => "The account is disabled.",
+        AccountExpired => "The account has expired.",
+        LogonTypeNotGranted => "The account may not sign in on this device's screen (\"Allow log on locally\").",
+        InvalidLogonHours => "The account may not sign in at this time of day.",
+        InvalidWorkstation => "The account may not sign in on this device.",
+        SmartCardLogonRequired => "The account must sign in with a smart card.",
+        AuthenticationFirewallFailed => "The sign-in was blocked by the domain's authentication firewall.",
+        NoLogonServers => "No domain controller could be reached to check the account.",
+        TrustedRelationshipFailure => "The device's trust relationship with its domain failed.",
+        TimeDifferenceAtDc => "The device's clock differs too much from the domain controller's.",
+        _ => null,
     };
 }
