@@ -282,15 +282,21 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     {
         if (_banner is not { Handle: var h } || h == IntPtr.Zero || !GetWindowRect(h, out var r)) return;
         var over = x >= r.Left && x < r.Right && y >= r.Top && y < r.Bottom;
-        if (over && Volatile.Read(ref _bannerPassThrough) == 0)
+        if (over)
         {
+            // Set before every event, not only the first: the UI thread may just have made it clickable again.
+            LocalPointerWatch.AdminAt(x, y);
             SetClickThrough(h, true);
-            Volatile.Write(ref _bannerPassThrough, 1);
-            LocalPointerWatch.Start(() => Post(BannerClickableAgain));
+            if (Interlocked.Exchange(ref _bannerPassThrough, 1) == 0)
+                LocalPointerWatch.Start(() =>
+                {
+                    Volatile.Write(ref _bannerPassThrough, 0);
+                    Post(BannerClickableAgain);
+                });
         }
-        else if (!over && Interlocked.Exchange(ref _bannerPassThrough, 0) == 1)
+        else
         {
-            SetClickThrough(h, false);
+            if (Interlocked.Exchange(ref _bannerPassThrough, 0) == 1) SetClickThrough(h, false);
             LocalPointerWatch.Stop();
         }
     }
@@ -298,9 +304,9 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     /// <summary>UI thread: the user's own mouse moved – the banner is theirs to click again.</summary>
     private void BannerClickableAgain()
     {
-        if (Interlocked.Exchange(ref _bannerPassThrough, 0) == 0) return;
+        // The watch keeps running (re-armed by the admin's next event over the banner); it stops when their pointer leaves.
+        if (Volatile.Read(ref _bannerPassThrough) == 1) return; // the admin's pointer made it click-through again since
         if (_banner is { Handle: var h } && h != IntPtr.Zero) SetClickThrough(h, false);
-        LocalPointerWatch.Stop();
     }
 
     /// <summary>Clicks go through the (layered) window to what is below it, or not.</summary>
