@@ -55,13 +55,54 @@ public class RemotingSetupTests
     }
 
     [Fact]
-    public void Without_local_admins_the_script_only_checks_and_warns()
+    public void Without_local_admins_the_script_keeps_the_previous_value_and_warns()
     {
         var s = RemotingSetup.BuildScript("Lab", "192.168.1.50", ["192.168.1.20"], true, new DateTime(2026, 10, 7), allowLocalAdmins: false);
         Parser.ParseInput(s, out _, out var errors);
         Assert.Empty(errors);
-        Assert.DoesNotContain("Set-ItemProperty -Path $UacKey", s);
+        Assert.DoesNotContain("-Value 1", s);
         Assert.Contains("LocalAccountTokenFilterPolicy is not 1", s);
+        // Enable-PSRemoting sets the value to 1 on client editions: it is read before and put back after, even on failure.
+        var read = s.IndexOf("$Uac.GetValueNames()", StringComparison.Ordinal);
+        var enable = s.IndexOf("Enable-PSRemoting -Force", StringComparison.Ordinal);
+        var restore = s.IndexOf("} finally {", StringComparison.Ordinal);
+        Assert.True(read >= 0 && read < enable && enable < restore, "LocalAccountTokenFilterPolicy is not saved before and restored after Enable-PSRemoting");
+        Assert.Contains("Remove-ItemProperty -Path $UacKey -Name LocalAccountTokenFilterPolicy", s);
+    }
+
+    /// <summary>
+    /// Runs the HTTP script with the system cmdlets stubbed and $UacKey pointing at a temporary HKCU key; the stubbed
+    /// Enable-PSRemoting sets LocalAccountTokenFilterPolicy = 1 as it does on Windows client editions (finding W-NONADMIN-01).
+    /// </summary>
+    [Theory]
+    [InlineData(false, null, null)]
+    [InlineData(false, 0, 0)]
+    [InlineData(false, 1, 1)]
+    [InlineData(true, null, 1)]
+    [InlineData(true, 0, 1)]
+    public void LocalAccountTokenFilterPolicy_changes_only_when_local_admins_are_allowed(bool allowLocalAdmins, int? before, int? after)
+    {
+        var key = $@"Software\RemoteHub-Tests\latfp-{Guid.NewGuid():N}";
+        using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(key))
+            if (before is { } b) k.SetValue("LocalAccountTokenFilterPolicy", b, Microsoft.Win32.RegistryValueKind.DWord);
+        try
+        {
+            var s = RemotingSetup.BuildScript("Lab", "srv01", ["192.168.1.20"], false, new DateTime(2026, 10, 7), allowLocalAdmins)
+                .Replace("#Requires -RunAsAdministrator", "")
+                .Replace(@"'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'", $@"'HKCU:\{key}'");
+            var stubs = string.Join("\n",
+                "function Enable-PSRemoting { Set-ItemProperty -Path $UacKey -Name LocalAccountTokenFilterPolicy -Type DWord -Value 1 }",
+                "function Set-Service { }", "function Get-NetFirewallRule { }", "function Disable-NetFirewallRule { }",
+                "function Remove-NetFirewallRule { }", "function New-NetFirewallRule { }", "function Test-WSMan { }");
+            using var ps = PowerShell.Create();
+            ps.AddScript(stubs + "\n" + s);
+            ps.Invoke();
+            Assert.Empty(ps.Streams.Error); // HadErrors is also set by the script's own -ErrorAction SilentlyContinue reads
+            using var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(key)!;
+            Assert.Equal(after, (int?)k.GetValue("LocalAccountTokenFilterPolicy"));
+            Assert.Equal(after != 1, ps.Streams.Warning.Any(w => w.Message.Contains("LocalAccountTokenFilterPolicy is not 1")));
+        }
+        finally { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(key, throwOnMissingSubKey: false); }
     }
 
     /// <summary>

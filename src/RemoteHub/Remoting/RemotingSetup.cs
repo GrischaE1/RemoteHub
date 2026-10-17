@@ -161,7 +161,7 @@ public static class RemotingSetup
     /// The setup script for the target: HTTPS with a certificate made there, or HTTP (domain / Kerberos) only.
     /// <paramref name="allowLocalAdmins"/>: local administrators keep their admin rights over the network
     /// (LocalAccountTokenFilterPolicy = 1) – without it WinRM refuses them where UAC remote restrictions are on; otherwise
-    /// the script only checks and warns.
+    /// the script keeps the value the target had (Enable-PSRemoting would set it to 1 on client editions) and only warns.
     /// </summary>
     public static string BuildScript(string connectionName, string host, string[] allowFrom, bool https, DateTime now, bool allowLocalAdmins = true)
     {
@@ -174,11 +174,12 @@ public static class RemotingSetup
             ? ", a certificate made here in LocalMachine\\My (its key never leaves this computer), an HTTPS listener on 5986, a firewall rule for 5986"
             : ", a firewall rule for 5985") + " allowing only the addresses below.");
         sb.AppendLine("# Enable-PSRemoting also turns on Windows' own WinRM HTTP rule for everyone: if it wasn't on before, it is turned off again.");
-        if (allowLocalAdmins)
-            sb.AppendLine("# Local administrators keep their admin rights over the network (LocalAccountTokenFilterPolicy = 1) - needed for local accounts where UAC remote restrictions are on.");
+        sb.AppendLine(allowLocalAdmins
+            ? "# Local administrators keep their admin rights over the network (LocalAccountTokenFilterPolicy = 1) - needed for local accounts where UAC remote restrictions are on."
+            : "# LocalAccountTokenFilterPolicy stays as it was: Enable-PSRemoting sets it to 1 on Windows client editions, so the script puts the previous value back (or removes it if it wasn't set).");
         sb.AppendLine("# Undo: Disable-PSRemoting -Force; Remove-NetFirewallRule -Name " + (https ? RuleHttps : RuleHttp) +
                       (https ? $"; remove the HTTPS listener (Get-ChildItem WSMan:\\localhost\\Listener) and the certificate '{CertificateName}' in LocalMachine\\My" : "") +
-                      (allowLocalAdmins ? "; set LocalAccountTokenFilterPolicy back to 0 (HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System)." : "."));
+                      (allowLocalAdmins ? "; set LocalAccountTokenFilterPolicy back to what it was - 0, or remove it if it wasn't set (HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System)." : "."));
         sb.AppendLine("$DryRun = $false");
         sb.AppendLine($"$AllowFrom = @({sources})   # address(es) RemoteHub connects from");
         sb.AppendLine("$ErrorActionPreference = 'Stop'");
@@ -186,11 +187,28 @@ public static class RemotingSetup
         sb.AppendLine();
         sb.AppendLine("# Windows' own WinRM HTTP rules that are on already (e.g. set up by IT) are left alone.");
         sb.AppendLine("$BuiltinOn = @(try { Get-NetFirewallRule -Name 'WINRM-HTTP-In-TCP*' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' } | ForEach-Object { $_.Name } } catch { })");
+        sb.AppendLine("$UacKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'");
         sb.AppendLine("Step 'Enable PowerShell remoting (WinRM service, automatic start)' {");
-        sb.AppendLine("    Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null");
+        if (allowLocalAdmins)
+            sb.AppendLine("    Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null");
+        else
+        {
+            // On client editions Enable-PSRemoting sets LocalAccountTokenFilterPolicy = 1 itself, which gives every local admin
+            // a full token over the network although that option was left off: put back exactly what was there (value and
+            // kind, or no value) – also when Enable-PSRemoting fails halfway.
+            sb.AppendLine("    # On Windows client editions Enable-PSRemoting sets LocalAccountTokenFilterPolicy = 1: keep the value this computer had.");
+            sb.AppendLine("    $Uac = Get-Item -Path $UacKey");
+            sb.AppendLine("    $LatfpHad = $Uac.GetValueNames() -contains 'LocalAccountTokenFilterPolicy'");
+            sb.AppendLine("    if ($LatfpHad) { $LatfpValue = $Uac.GetValue('LocalAccountTokenFilterPolicy'); $LatfpKind = $Uac.GetValueKind('LocalAccountTokenFilterPolicy') }");
+            sb.AppendLine("    try {");
+            sb.AppendLine("        Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null");
+            sb.AppendLine("    } finally {");
+            sb.AppendLine("        if ($LatfpHad) { Set-ItemProperty -Path $UacKey -Name LocalAccountTokenFilterPolicy -Type $LatfpKind -Value $LatfpValue }");
+            sb.AppendLine("        else { Remove-ItemProperty -Path $UacKey -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue }");
+            sb.AppendLine("    }");
+        }
         sb.AppendLine("    Set-Service -Name WinRM -StartupType Automatic");
         sb.AppendLine("}");
-        sb.AppendLine("$UacKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System'");
         if (allowLocalAdmins)
         {
             sb.AppendLine("Step 'Let local administrators use their admin rights over the network (LocalAccountTokenFilterPolicy = 1)' {");
