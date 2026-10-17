@@ -91,8 +91,9 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
         It 'POL-01 gpedit.msc reads the template without an error and shows both branches under RemoteHub' -Tag 'POL-01' {
             $t.window.found | Should -BeTrue
             $t.error.found | Should -Not -BeTrue -Because "a template the editor can't read shows an 'Administrative Templates' error dialog"
-            $t.tree | Should -Match 'RemoteHub . connecting from this PC'
-            $t.tree | Should -Match 'RemoteHub Agent . connections to this device'
+            # whole items: "RemoteHub Agent features" (under the console) must not count as the agent's branch
+            $t.tree | Should -Match '(?m)^RemoteHub Console\s*$'
+            $t.tree | Should -Match '(?m)^RemoteHub Agent\s*$'
         }
     }
 

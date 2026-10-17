@@ -349,7 +349,7 @@ and *Settings → Policies* flags the conflict.
 | | Console (`…\RemoteHub`, subkeys) | Agent (`…\RemoteHub\Agent`) |
 |---|---|---|
 | Governs | What the person at **this PC** may do on other devices | What anyone may do **on this device** through its agent |
-| Template category | *RemoteHub – connecting from this PC* | *RemoteHub Agent – connections to this device* |
+| Template category | *RemoteHub Console* | *RemoteHub Agent* |
 | Class | Machine and User | Machine |
 
 - A device with both installed reads both independently. The console on that device connecting to its own agent
@@ -471,7 +471,7 @@ These stay out of the template, for the reasons given:
 
 ```
 RemoteHub
-├─ RemoteHub – connecting from this PC        (Machine and User)
+├─ RemoteHub Console        (Machine and User)
 │  ├─ Features                     §5: RDP, RemoteHub Agent, PowerShell remoting, Connections, Jump hosts and shares, Passwords and import/export
 │  ├─ General                      §6.1
 │  ├─ Updates and usage data       §6.2
@@ -483,7 +483,7 @@ RemoteHub
 │  ├─ Agent remote desktop         §6.8
 │  ├─ Agent installation           §6.9
 │  └─ Connection settings          §7, sub-groups Display, Devices and resources, Security, Remoting and agent
-└─ RemoteHub Agent – connections to this device    (Machine)
+└─ RemoteHub Agent    (Machine)
    ├─ Features                     §9.1
    ├─ Access rights                §9.2
    ├─ Remote desktop               §9.3

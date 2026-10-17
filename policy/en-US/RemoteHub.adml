@@ -11,23 +11,23 @@
 
       <!-- Categories -->
       <string id="Cat_RemoteHub">RemoteHub</string>
-      <string id="Cat_Console">RemoteHub – connecting from this PC</string>
+      <string id="Cat_Console">RemoteHub Console</string>
       <string id="Cat_Console_Help">Settings of RemoteHub, the console: what the person at this PC may do on other devices.
 
 They are read from HKLM or HKCU\Software\Policies\RemoteHub; the computer's value wins. A value set here can't be changed in RemoteHub, and Settings → Policies lists every value in effect.
 
-The devices themselves are protected by the RemoteHub Agent's policy (RemoteHub Agent – connections to this device) and by Windows.</string>
+The devices themselves are protected by the RemoteHub Agent's policy (the category RemoteHub Agent) and by Windows.</string>
       <string id="Cat_Console_Storage">Settings storage</string>
       <string id="Cat_Console_Updates">Updates and usage data</string>
       <string id="Cat_Console_Recordings">Recordings</string>
       <string id="Cat_Console_Logs">Logs</string>
       <string id="Cat_Console_Agent">RemoteHub Agent features</string>
-      <string id="Cat_Agent">RemoteHub Agent – connections to this device</string>
+      <string id="Cat_Agent">RemoteHub Agent</string>
       <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
 
 They are read from HKLM\Software\Policies\RemoteHub\Agent for every connection, so a change applies without restarting the service, and they win over the agent's agent.json. If the key exists but can't be read, the agent allows nothing until it can.
 
-On a device with RemoteHub installed too, these policies don't affect what RemoteHub on this device may do on other devices: that is RemoteHub – connecting from this PC.</string>
+On a device with RemoteHub installed too, these policies don't affect what RemoteHub on this device may do on other devices: that is the category RemoteHub Console.</string>
       <string id="Cat_Agent_Features">Features</string>
       <string id="Cat_Agent_Rights">Access rights</string>
       <string id="Cat_Agent_Desktop">Remote desktop</string>
@@ -100,7 +100,7 @@ Registry: AuditRetentionDays (REG_DWORD).</string>
       <string id="Console_DisableAgentAutoSignIn">Turn off automatic sign-in through the agent</string>
       <string id="Console_DisableAgentAutoSignIn_Help">Enabled: RemoteHub never signs in automatically on a device where nobody is signed in. The connection setting "Sign in automatically when nobody is signed in" is greyed out.
 
-Disabled or Not configured: users can turn it on per connection. The device must allow it too: RemoteHub Agent – connections to this device → Automatic sign-in.
+Disabled or Not configured: users can turn it on per connection. The device must allow it too: RemoteHub Agent → Automatic sign-in.
 
 Registry: DisableAgentAutoSignIn (REG_DWORD) = 1.</string>
 
@@ -291,7 +291,7 @@ Registry: HiddenApps (REG_MULTI_SZ).</string>
       <string id="Agent_NoUserBehavior">When nobody is signed in</string>
       <string id="Agent_NoUserBehavior_Help">What a remote desktop shows on this device's console when nobody is signed in:
 - Show the sign-in screen: the admin signs in on the sign-in screen.
-- Allow automatic sign-in: RemoteHub may sign in with the connection's account. It also needs the credential provider (installed with the agent's AUTOSIGNIN option), "Who may sign in automatically", and RemoteHub must not have it turned off (RemoteHub – connecting from this PC → Turn off automatic sign-in through the agent).
+- Allow automatic sign-in: RemoteHub may sign in with the connection's account. It also needs the credential provider (installed with the agent's AUTOSIGNIN option), "Who may sign in automatically", and RemoteHub must not have it turned off (RemoteHub Console → Turn off automatic sign-in through the agent).
 
 Not configured: the sign-in screen, unless the agent was installed with automatic sign-in allowed.
 
