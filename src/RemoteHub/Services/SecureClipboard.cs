@@ -13,16 +13,15 @@ public static class SecureClipboard
 {
     private const uint CF_UNICODETEXT = 13;
     private const uint GMEM_MOVEABLE = 0x0002;
+    private static readonly TimeSpan RetryAfter = TimeSpan.FromSeconds(5);
 
     private static uint _ourSequence;
     private static System.Windows.Threading.DispatcherTimer? _timer;
-    private static IntPtr _owner;
 
     public static bool HoldsSecret => _ourSequence != 0 && GetClipboardSequenceNumber() == _ourSequence;
 
     public static bool CopySecret(IntPtr ownerHwnd, string secret, TimeSpan clearAfter)
     {
-        _owner = ownerHwnd;
         if (!OpenWithRetry(ownerHwnd)) return false;
         try
         {
@@ -47,11 +46,17 @@ public static class SecureClipboard
     {
         _timer?.Stop();
         if (!HoldsSecret) { _ourSequence = 0; return; }
-        if (OpenWithRetry(_owner))
+        // Opened without an owner: the window that copied may be gone by now (the remoting setup dialog is usually
+        // closed before the timeout), and OpenClipboard fails for a destroyed window (error 1400). Emptying needs none.
+        if (!OpenWithRetry(IntPtr.Zero))
         {
-            EmptyClipboard();
-            CloseClipboard();
+            // Another program holds the clipboard: the secret is still there, so keep it marked as ours and try again
+            // shortly – auto-lock and exit can still clear it too.
+            if (_timer != null) { _timer.Interval = RetryAfter; _timer.Start(); }
+            return;
         }
+        try { EmptyClipboard(); }
+        finally { CloseClipboard(); }
         _ourSequence = 0;
     }
 
