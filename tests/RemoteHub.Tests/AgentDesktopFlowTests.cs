@@ -1105,6 +1105,86 @@ public class AgentDesktopFlowTests
     }
 
     [Fact]
+    public async Task A_token_presented_right_after_the_user_disconnected_asks_again()
+    {
+        await using var d = await StartDevice();
+        using var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        WaitFor(() => d.Helpers.Uis.Count == 1 && d.Helpers.Uis[0].Disconnect is not null, "banner");
+        d.Helpers.Uis[0].Disconnect!();
+        first.Next(DesktopStatusState.Ended);
+
+        // At once, while the first connection is still in its close handshake (D-BAN-05): the user's end stands.
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        Assert.Equal(DesktopStatusState.WaitingForUser, second.Next(DesktopStatusState.WaitingForUser).State);
+        second.Next(DesktopStatusState.Connected);
+        Assert.Equal(1, d.Helpers.Uis[1].Asked);
+        Assert.DoesNotContain(A.AuditEvent.DesktopResumed, d.Audits);
+    }
+
+    [Fact]
+    public async Task A_token_presented_right_after_an_idle_end_asks_again()
+    {
+        var policy = new A.AgentPolicy
+        {
+            IdleTimeout = TimeSpan.FromSeconds(2),
+            Rights = new Dictionary<A.AgentRight, IReadOnlyList<string>> { [A.AgentRight.Desktop] = [Admins] },
+        };
+        await using var d = await StartDevice(policy: policy);
+        using var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        first.Next(DesktopStatusState.Ended);
+
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        second.Next(DesktopStatusState.WaitingForUser);
+        Assert.Equal(1, WaitForAsked(d, 1));
+        Assert.DoesNotContain(A.AuditEvent.DesktopResumed, d.Audits);
+    }
+
+    private static int WaitForAsked(Device d, int ui)
+    {
+        WaitFor(() => d.Helpers.Uis.Count > ui && d.Helpers.Uis[ui].Asked > 0, "the user being asked");
+        return d.Helpers.Uis[ui].Asked;
+    }
+
+    [Fact]
+    public async Task A_revoked_token_cannot_be_taken()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        entry.Revoke();
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.False(owner.IsCancellationRequested); // the ended connection isn't touched
+    }
+
+    [Fact]
+    public async Task An_end_on_purpose_during_a_takeover_wins_over_the_token()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        // The old connection is ending on purpose just as the takeover cancels it: it revokes instead of releasing.
+        owner.Token.Register(entry.Revoke);
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.True(entry.Revoked);
+        Assert.False(entry.TakenOver); // the old connection writes its end entry and runs the end action
+    }
+
+    [Fact]
+    public async Task A_dropped_connection_keeps_its_token_for_the_window()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        entry.Release();
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin2"));
+        Assert.Same(entry, await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin")); // single use
+    }
+
+    [Fact]
     public async Task Images_and_files_are_copied_both_ways()
     {
         await using var d = await StartDevice();

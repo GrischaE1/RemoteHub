@@ -228,6 +228,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         _lost = !IsProtocolError(error);
                         _endReason = (_lost ? "connection lost: " : "invalid message from RemoteHub: ") + error.Message;
                     }
+                    // Closed by RemoteHub or an invalid message: ended on purpose, so the token goes now rather than after the
+                    // close handshake, which waits up to 2 s. A receive that ended because this connection was cancelled (a
+                    // takeover by a new connection) is no such end.
+                    if (!_lost && !ct.IsCancellationRequested) _resume?.Revoke();
                     break;
                 }
                 if (ended == watch && await IdleCheck(ct)) break;
@@ -335,6 +339,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
             }
         }
+        // Already ended on purpose (the token is revoked) when the connection broke, e.g. while the end was being reported:
+        // it stays ended on purpose – it may not be continued, and a session automatic sign-in created gets its end action.
+        catch (Exception ex) when ((ex is OperationCanceledException or WebSocketException or IOException or InvalidDataException) && _resume?.Revoked == true) { }
         catch (OperationCanceledException)
         {
             _lost = true;
@@ -385,8 +392,13 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             _parkedHelper?.Dispose();
             _helper?.Dispose();
             if (_virtualShown) VirtualDisplay.Hide(); // switched off with the last connection that needed it
-            // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not.
-            if (_resume is { } r) { if (_lost) r.Release(_autoSigned is not null ? AutoSignInSessions.HoldAfterDrop : null); else r.Revoke(); }
+            // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not – that
+            // was revoked when the end was reported. A takeover still under way (nothing revoked it) is let through.
+            if (_resume is { } r)
+            {
+                if (_lost || r.TakenOver) r.Release(_autoSigned is not null ? AutoSignInSessions.HoldAfterDrop : null);
+                else r.Revoke();
+            }
             if (_signInRequest.Task.IsCompletedSuccessfully) _signInRequest.Task.Result.Dispose(); // sent but never used
         }
     }
@@ -983,8 +995,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         return new HelperExit(false, "the desktop helper ended");
     }
 
-    private Task Status(string state, string message, CancellationToken ct, int attempts = 0, string? resume = null) =>
-        SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(state, message, attempts, resume), DesktopJson.Default.DesktopStatus), ct);
+    private Task Status(string state, string message, CancellationToken ct, int attempts = 0, string? resume = null)
+    {
+        // An end is final: the token is void before RemoteHub – or anyone else holding the token – can learn of the end.
+        if (state is DesktopStatusState.Ended or DesktopStatusState.Denied or DesktopStatusState.Failed) _resume?.Revoke();
+        return SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(state, message, attempts, resume), DesktopJson.Default.DesktopStatus), ct);
+    }
 
     private async Task SendWs(byte[] m, CancellationToken ct)
     {
@@ -1043,7 +1059,15 @@ internal static class DesktopResume
         public string Token => token;
         public string Account => account;
         public string AllowedBy { get; private set; } = allowedBy;
-        public bool TakenOver { get; set; }
+        private readonly Lock _gate = new();
+        private bool _revoked, _takenOver;
+
+        /// <summary>A new connection took the session over while this one still looked alive.</summary>
+        public bool TakenOver { get { lock (_gate) return _takenOver; } }
+
+        /// <summary>Ended on purpose: the token can't continue anything, not even a takeover that had already begun.</summary>
+        public bool Revoked { get { lock (_gate) return _revoked; } }
+
         internal DateTime? ExpiresUtc;
         internal readonly TaskCompletionSource Ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal CancellationTokenSource Owner => owner;
@@ -1069,11 +1093,27 @@ internal static class DesktopResume
             Ended.TrySetResult();
         }
 
-        /// <summary>Ended on purpose: not usable.</summary>
+        /// <summary>
+        /// Ended on purpose: not usable. The endpoint calls it before the end is reported, so the token doesn't outlive the
+        /// user's (or RemoteHub's) decision during the close handshake. It also wins over a takeover that has begun but not
+        /// finished: as far as the user is concerned the end came first, so the new connection is asked again.
+        /// </summary>
         public void Revoke()
         {
-            Entries.TryRemove(token, out _);
+            lock (_gate) { _revoked = true; _takenOver = false; }
+            Entries.TryRemove(new KeyValuePair<string, Entry>(token, this));
             Ended.TrySetResult();
+        }
+
+        /// <summary>Marks the takeover – unless the connection was already ended on purpose.</summary>
+        internal bool TryTakeOver()
+        {
+            lock (_gate)
+            {
+                if (_revoked) return false;
+                _takenOver = true;
+                return true;
+            }
         }
     }
 
@@ -1098,11 +1138,12 @@ internal static class DesktopResume
         if (e.ExpiresUtc is { } x && x < DateTime.UtcNow) return null;
         if (e.ExpiresUtc is null)
         {
-            // The old connection hasn't noticed yet: end it, then continue here.
-            e.TakenOver = true;
+            // The old connection hasn't noticed yet: end it, then continue here – unless it is being ended on purpose (the
+            // user's Disconnect, a refusal, idle, RemoteHub's close), which no token may skip.
+            if (!e.TryTakeOver()) return null;
             try { e.Owner.Cancel(); } catch (ObjectDisposedException) { }
             await Task.WhenAny(e.Ended.Task, Task.Delay(TimeSpan.FromSeconds(5)));
         }
-        return e;
+        return e.Revoked ? null : e; // ended on purpose while it was being taken over
     }
 }

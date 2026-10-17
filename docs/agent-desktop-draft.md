@@ -156,7 +156,7 @@ Defaults: the groups in `agent.json` (`AllowedGroups`, Administrators) get `Powe
 
 - `Connected` carries a **resume token**: random, single-use, for the same Windows account, in the service's memory only. After a drop it can be used for **1 minute** (2 minutes for a session automatic sign-in created). Presented with `Start.Resume`, the new connection continues without asking again while the user who allowed it is still the one signed in; what the user hid and the admin's privacy screen carry over (`DesktopResumed`, 1103).
 - If the old connection still looks alive on the device (a dead network isn't noticed at once), the new one **takes it over**: the old one is ended and doesn't write its own end entry.
-- A connection that ends on purpose (RemoteHub, the user, idle, refused) or with a **protocol error** (a message that makes no sense) revokes the token.
+- A connection that ends on purpose (RemoteHub, the user, idle, refused) or with a **protocol error** (a message that makes no sense) revokes the token **at once** – before the `Ended`, `Denied` or `Failed` status is sent, not after the close handshake. A new connection that presents the token afterwards is asked again (`WaitingForUser`). A takeover that has begun when the end on purpose comes is refused too: the end wins.
 - **Known issue:** a drop that the agent notices first (its receive is cancelled rather than failing) is taken as "closed by RemoteHub" (`DesktopEndpoint.cs` ≈ 220–230): the token is revoked, and an automatically signed-in session gets its end action instead of staying covered. Intended: any drop not ended on purpose keeps the token for its window.
 
 ### 4.7 Clipboard
