@@ -218,9 +218,35 @@ public static class Enrollment
         Netsh(FirewallAddArguments(Environment.ProcessPath!, port, remoteAddresses));
     }
 
+    /// <summary>
+    /// At service start: moves the inbound rule to the port the agent listens on (policy ListenPort can change it), keeping
+    /// its address scope. Null when nothing changed; otherwise what happened, for the log.
+    /// </summary>
+    public static string? SetFirewallPort(int port)
+    {
+        try
+        {
+            var (code, rule) = Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true);
+            if (code != 0) return $"Firewall: no rule \"{FirewallRuleName}\" – port {port} isn't opened by the agent";
+            if (RulePorts(rule).All(p => p == port.ToString(System.Globalization.CultureInfo.InvariantCulture))) return null;
+            Netsh($"advfirewall firewall set rule name=\"{FirewallRuleName}\" new localport={port}");
+            return $"Firewall: rule \"{FirewallRuleName}\" moved to port {port}";
+        }
+        catch (Exception ex) { return $"Firewall: rule \"{FirewallRuleName}\" not moved to port {port}: {ex.Message}"; }
+    }
+
+    /// <summary>The "LocalPort:" lines of <c>netsh advfirewall firewall show rule</c> (English output; other languages: none found → set anyway).</summary>
+    internal static IEnumerable<string> RulePorts(string netshOutput)
+    {
+        var ports = netshOutput.Split('\n').Select(l => l.Trim())
+            .Where(l => l.StartsWith("LocalPort:", StringComparison.OrdinalIgnoreCase))
+            .Select(l => l["LocalPort:".Length..].Trim()).ToList();
+        return ports.Count > 0 ? ports : [""];
+    }
+
     private static void Netsh(string arguments, bool allowFailure = false) => Run("netsh.exe", arguments, allowFailure);
 
-    private static void Run(string exe, string arguments, bool allowFailure = false)
+    private static (int Code, string Output) Run(string exe, string arguments, bool allowFailure = false)
     {
         using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, exe), arguments)
         {
@@ -229,6 +255,7 @@ public static class Enrollment
         var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
         p.WaitForExit();
         if (p.ExitCode != 0 && !allowFailure) throw new InvalidOperationException($"{exe} {arguments.Split(' ')[0]} failed: " + output.Trim());
+        return (p.ExitCode, output);
     }
 
     private static int Cleanup(AgentLog log)

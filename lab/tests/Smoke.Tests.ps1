@@ -1,4 +1,7 @@
 # SMOKE - revert, console, accounts, auto-logon. Proves the lab itself works on a VM before any RemoteHub scenario.
+# Always from the checkpoint (Reset-LabVm, not Initialize-LabVm): SMOKE-01 checks the state right after the revert.
+# Runs on every kind (Console VMs too): every case checks the lab VM itself, none needs the agent.
+# LabRole: any
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -8,6 +11,11 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
     Reset-LabVm -Name $VmName
+}
+
+AfterAll {
+    # auto-logon changed, a session locked and unlocked: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'SMOKE <VmName>' -Tag Smoke {

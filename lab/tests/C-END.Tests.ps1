@@ -13,6 +13,7 @@
 #    otherwise signed out; the cover ending sooner signs out at once (no banner since 0.18.10 - SignedInRemotely);
 #  - the service killed: autosignin.json is dealt with at the next start (dropped -> signed out, else the end action).
 # Every sign-in starts from the sign-in screen with a restarted agent (the rate limit is 3 per account in 15 minutes).
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -156,15 +157,18 @@ public static class RhLabWts {
         $x
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName -AutoSignIn $true
-    $pin = $install.pin
+    # -Clean: the sessions and autosignin.json must be only this file's (no earlier automatic sign-ins)
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoSignIn $true -Clean
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-end-agent-logs')
+    # the console account signed out / locked, the agent killed: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'C-END <VmName>' -Tag Agent, 'C-END' {

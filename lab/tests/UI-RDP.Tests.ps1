@@ -7,6 +7,9 @@
 # database). The RDP control is an ActiveX host without UI Automation inside: what happens in the session is checked on
 # the device (quser, LogonUI / explorer per session, code in PSAdmin's RDP session) and by OCR of the client's screen.
 # Client VMs only (2VM + the jump host VM). See docs/test-lab-cases.md sections 10.4, 10.5, 9.13.
+# LabRole: console
+# TimeLimitMin: 120   (many UI steps with RemoteHub and the device, sign-ins and reconnects: > 60 min)
+# LabNeeds: lane, jumphost
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -14,14 +17,15 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $script:task = $null
     $script:jump = $null
     $script:rdpFile = $null
@@ -121,6 +125,14 @@ BeforeAll {
                 Set-ItemProperty $l.PSPath -Name '1' -Value 'TERMSRV/*'
             }
         }
+    }
+    # the connection's Edit dialog: -Do picks tabs and values, then Save (as UI-RDP2 / C-REC2)
+    function EditConnection([scriptblock]$Do, [string]$Node = 'Device') {
+        Menu 'Edit*' -Node $Node
+        $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
+        & $Do
+        $null = Ui 'Save' -Title 'Edit connection'
+        Start-Sleep -Seconds 2
     }
     # the connection's audit log window (Audit log...), its rows as text
     function AuditText([string]$Node = 'Device') {
@@ -297,7 +309,7 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
     $cpOut = 'C:\ProgramData\RemoteHubLab\cp-out'
     $cpIn = 'C:\ProgramData\RemoteHubLab\session\cp-in'
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $computer = Invoke-LabGuest -Name $device.Name -ScriptBlock {
             # Remote Desktop on (the firewall group by its resource name - display names are localized)
@@ -306,16 +318,27 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
             $env:COMPUTERNAME
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
-        $null = Install-LabClient -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so; no NTLM delegation policy - R-RDP-01)
+        $null = Initialize-LabVm -Name $VmName -Client
         $script:task = Start-LabClient -Name $VmName
         # credentials for this item, "Local account on the target computer (.\user)" ticked: .\PSAdmin
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
+        # no question about the device's self-signed RDP certificate: with "Warn" (the default, AuthenticationLevel 2)
+        # the RDP control stops at "The identity of the remote computer cannot be verified" and nothing here answers it
+        # (Esc on it ends the tab with "Disconnected (code 263)"). Also goes into the exported .rdp (R-RDP-08).
+        EditConnection {
+            $null = Ui 'Security & session' -Title 'Edit connection'
+            $null = Ui 'Server authentication' -Title 'Edit connection' -Value 'choose:Connect without warning'
+        }
     }
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
+        # the auto logon changed, an older RemoteHub installed, the NTLM policy, .rdp files: the next file starts from
+        # the checkpoint; the device: Remote Desktop on, an agent, moved behind the jump host
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Shot 'end'
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
         try { Stop-LabJumpHost } catch { }
@@ -439,7 +462,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             @($c.device.Rdp).Count | Should -BeGreaterThan 0
         }
 
-        It 'R-RDP-02 local account .\PSAdmin: signed in as <DEVICE>\PSAdmin' -Tag 'R-RDP-02' {
+        It 'R-RDP-02 local account .\PSAdmin: signed in as [DEVICE]\PSAdmin' -Tag 'R-RDP-02' {
             "$($c.whoami)" | Should -Be "$computer\$($device.AdminAccount)"
         }
 

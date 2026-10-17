@@ -61,10 +61,11 @@ internal enum HelperMessage : byte
 /// The session automatic sign-in created for the admin: no banner (nobody at the device owns the session, there is nothing
 /// for them to hide or end); the privacy screen says who is working.
 /// </param>
+/// <param name="PrivacyHeading">The privacy screen's heading from the device's policy (PrivacyScreenMessage); null: the built-in one.</param>
 internal sealed record HelperInit(string Account, string Device, string Consent, string Pin, int TimeoutSeconds, bool ViewOnly,
     bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text,
     bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false, string UserHidden = DesktopScreenHide.None,
-    string[]? HiddenApps = null, string[]? AlwaysHidden = null, bool SignedInRemotely = false);
+    string[]? HiddenApps = null, string[]? AlwaysHidden = null, bool SignedInRemotely = false, string? PrivacyHeading = null);
 
 internal sealed record HelperHiddenApps(string[] Apps);
 
@@ -189,6 +190,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         // Nothing from the admin while the user has hidden their screen – also not on the secure desktop.
                         input.Allowed = secure => !_held && _userHide == DesktopScreenHide.None && (secure ? init.SecureDesktop : !init.HoldUserDesktop);
                         if (init.Gdi) screen.PreferGdi(); // the GPU picture stood still earlier in this connection
+                        ui.SetPrivacyHeading(init.PrivacyHeading);
                         StartConsent(_init);
                         break;
                     case (byte)HelperMessage.Begin when _init is not null && !_begun:

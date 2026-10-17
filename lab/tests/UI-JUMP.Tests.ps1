@@ -8,6 +8,9 @@
 # Needs: a client VM, the Server VM, the jump host VM. The jump VM is turned off and the device's network restored at
 # the end (AfterAll). The tree's geometry comes from UI Automation rectangles (a local probe, $probeCode); drag and drop
 # is real mouse input in the session (mouse_event), a dropped .rdp file comes from a small WinForms drag source there.
+# LabRole: console
+# TimeLimitMin: 120   (the jump host / several RDP sign-ins and reconnects: > 60 min)
+# LabNeeds: lane, jumphost
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -15,14 +18,15 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $password = (Get-LabConfig).Password
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    $device = Get-LabDevice -For $VmName
     $script:task = $null
     $script:jump = $null
     # the results of every context (filled by their BeforeAll, read by the Its of later contexts too)
@@ -50,13 +54,39 @@ BeforeAll {
             $title = if ($e.found) { $e.window } else { $null }
             if ($title) { $m = Ui '*' -Title $title -Value list -TimeoutSec 5 -Optional }
         }
-        if ($title -and $m.found) { $null = Ui $Button -Title $title -Optional -TimeoutSec 10 }
+        if ($title -and $m.found) {
+            $b = Ui $Button -Title $title -Optional -TimeoutSec 10
+            # no such button (another dialog than expected - "Delete all" on a connection without items in the run of
+            # 16.10.2026 13:55): closed anyway, so it doesn't block the next step's menus
+            if (-not $b.found) { foreach ($x in 'Cancel', 'Close', 'OK') { if ((Ui $x -Title $title -Optional -TimeoutSec 2).found) { break } } }
+        }
         "$($m.window)`n" + (@($m.items) -join "`n")
     }
+    # RemoteHub's dialogs still open (owned windows of the main window), closed through UI Automation's WindowPattern.
+    # A modal one left by an earlier step blocks every right-click menu (the run of 16.10.2026 13:55: the jump host's
+    # password dialog of the first step stayed open, the tree was then built in the wrong place and most cases failed).
+    $dialogCode = @'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$AE = [Windows.Automation.AutomationElement]
+$TS = [Windows.Automation.TreeScope]
+$isWin = New-Object Windows.Automation.PropertyCondition ($AE::ControlTypeProperty), ([Windows.Automation.ControlType]::Window)
+$closed = @()
+foreach ($m in @($AE::RootElement.FindAll($TS::Children, $isWin) | Where-Object { $_.Current.Name -like 'RemoteHub*' -or $_.Current.Name -like '* RemoteHub' })) {
+    foreach ($w in @($m.FindAll($TS::Descendants, $isWin))) {
+        $p = $null
+        if ($w.TryGetCurrentPattern([Windows.Automation.WindowPattern]::Pattern, [ref]$p)) { $closed += "$($w.Current.Name)"; try { $p.Close() } catch { } }
+    }
+}
+@{ closed = @($closed) }
+'@
+    function Clear-Dialogs { try { @((InSession $dialogCode -TimeoutSec 60).closed) } catch { @("check failed: $_") } }
     function Key([string]$Hex) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value $Hex }
     # each section on its own: a failing step is written down (error, screenshot, open dialogs) and the next one runs;
     # dot-sourced, so the result dictionary is filled
+    # Every step starts without dialogs left by an earlier one (written down as "<step>-leftover").
     function Step([System.Collections.IDictionary]$Into, [string]$Name, [scriptblock]$Do) {
+        $left = @(Clear-Dialogs)
+        if ($left.Count) { $Into["$Name-leftover"] = $left; Start-Sleep -Seconds 1 }
         try { . $Do }
         catch {
             $Into["$Name-error"] = "$_"
@@ -70,7 +100,7 @@ BeforeAll {
     function InSession([string]$Code, [hashtable]$Values = @{}, [int]$TimeoutSec = 120, [string]$On = $VmName, [string]$Account = 'Console') {
         foreach ($k in $Values.Keys) { $Code = $Code.Replace("__$($k)__", [string]$Values[$k]) }
         $out = "C:\ProgramData\RemoteHubLab\session\ui-jump-$([guid]::NewGuid().ToString('N')).json"
-        $text = "`$r = & {`n$Code`n}`nConvertTo-Json -InputObject `$r -Depth 8 -Compress | Set-Content -LiteralPath '$out' -Encoding UTF8"
+        $text = "`$r = & {`n$Code`n}`n`$j = if (`$null -eq `$r) { 'null' } else { ConvertTo-Json -InputObject `$r -Depth 8 -Compress }`nSet-Content -LiteralPath '$out' -Encoding UTF8 -Value `$j"
         $raw = Invoke-LabInSession -Name $On -Account $Account -TimeoutSec $TimeoutSec -ScriptBlock ([scriptblock]::Create($text))
         $answer = Invoke-LabGuest -Name $On -ArgumentList $out -ScriptBlock { param($f) if (Test-Path $f) { Get-Content -LiteralPath $f -Raw; Remove-Item -LiteralPath $f } }
         if (-not $answer) { throw "session code gave no answer: $raw" }
@@ -151,28 +181,37 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $AE = [Windows.Automation.AutomationElement]
 $TS = [Windows.Automation.TreeScope]
 $all = [Windows.Automation.Condition]::TrueCondition
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -Namespace RhLab -Name Tip -MemberDefinition '[DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, int d, IntPtr e);'
+$b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+function Go([int]$x, [int]$y) { [RhLab.Tip]::mouse_event(0x8001, [int]($x * 65535 / ($b.Width - 1)), [int]($y * 65535 / ($b.Height - 1)), 0, [IntPtr]::Zero) }
+# the pointer onto the item from here, then the tooltip looked for until it shows (WPF hides it again after 5 s: read
+# from the lab host after a new session task it was gone - empty in the run of 16.10.2026 13:55)
+Go (__X__ + 4) (__Y__ + 1); Start-Sleep -Milliseconds 300; Go __X__ __Y__
 $ids = @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object Id)
 $tips = @()
-foreach ($t in $AE::RootElement.FindAll($TS::Children, $all)) {
-    $c = $t.Current
-    if ($ids -notcontains $c.ProcessId) { continue }
-    if ($c.Name -like 'RemoteHub*' -or $c.Name -like '* RemoteHub') { continue }
-    $tips += @($c.Name) + @($t.FindAll($TS::Descendants, $all) | ForEach-Object { $_.Current.Name })
-}
-@{ tips = @($tips | Where-Object { $_ }) }
+$until = (Get-Date).AddSeconds(8)
+do {
+    Start-Sleep -Milliseconds 400
+    $tips = @()
+    foreach ($t in $AE::RootElement.FindAll($TS::Children, $all)) {
+        $c = $t.Current
+        if ($ids -notcontains $c.ProcessId) { continue }
+        if ($c.Name -like 'RemoteHub*' -or $c.Name -like '* RemoteHub') { continue }
+        $tips += @($c.Name) + @($t.FindAll($TS::Descendants, $all) | ForEach-Object { $_.Current.Name })
+    }
+    $tips = @($tips | Where-Object { $_ })
+} while (-not $tips.Count -and (Get-Date) -lt $until)
+Go 1010 700
+@{ tips = $tips }
 '@
-    # the tooltip of a tree item: the pointer (console mouse) rests on its name
+    # the tooltip of a tree item: the item clicked, the pointer moved onto its name in the session ($tipCode)
     function Tip([string]$Text) {
         $h = TreeHit (Probe @($Text)) $Text
         if (-not $h -or -not $h.rect) { return "not in the tree: $Text" }
         $x = [int]($h.rect.x + [math]::Min($h.rect.w / 2, 20)); $y = [int]($h.rect.y + $h.rect.h / 2)
         $null = Ui $Text -Value realclick
-        Send-LabMouse -Name $VmName -X ($x + 4) -Y ($y + 1) -Action Move
-        Start-Sleep -Milliseconds 300
-        Send-LabMouse -Name $VmName -X $x -Y $y -Action Move
-        Start-Sleep -Seconds 2
-        $t = InSession $tipCode
-        Send-LabMouse -Name $VmName -X 1010 -Y 700 -Action Move
+        $t = InSession $tipCode @{ X = $x; Y = $y }
         (@($t.tips) -join "`n")
     }
     # drag and drop with the left button held, real input in the session (WPF's drag starts after a few pixels)
@@ -242,7 +281,10 @@ Go $x1 $y1; Start-Sleep -Milliseconds 800
         } while ((Get-Date) -lt $until)
         $false
     }
-    function Close-Tabs { foreach ($i in 1..3) { $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3 }; Start-Sleep -Seconds 2 }
+    # every UI call costs 15-20 s (session task, UI Automation): stops at the first lookup that finds no tab
+    function Close-Tabs {
+        foreach ($i in 1..3) { $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3; if (-not $c.found) { break }; Start-Sleep -Seconds 2 }
+    }
     # PSAdmin signed out on the device, so a session afterwards is a new one
     function Clear-DeviceSessions {
         $null = Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
@@ -268,6 +310,22 @@ Go $x1 $y1; Start-Sleep -Milliseconds 800
                 Set-ItemProperty $l.PSPath -Name '1' -Value 'TERMSRV/*'
             }
         }
+    }
+    # what this file leaves on the admin's PC, undone for the next file there: RemoteHub's data of the console account
+    # (the tree, paired agents, settings), the dropped .rdp files and the NTLM delegation policy. Throws when something
+    # stays.
+    function Clear-ClientLeftovers {
+        $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+            param($user)
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
+                "C:\Users\$user\Videos\RemoteHub", 'C:\Users\Public\dropA.rdp', 'C:\Users\Public\dropB.rdp',
+                'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
+            foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+            @($paths | Where-Object { Test-Path $_ })
+        }
+        if (@($left).Count) { throw "${VmName}: still there: $(@($left) -join ', ')" }
     }
     # The agent paired with RemoteHub on a VM without WinRM (as UI-RDP): RemoteHub's clipboard install, the two staged
     # files taken from this PC's clipboard to the VM over PowerShell Direct and msiexec run there. RemoteHub's
@@ -326,7 +384,7 @@ Add-Type -AssemblyName System.Windows.Forms
         if ($S.ContainsKey('Path')) { $null = Ui $S.PathLabel -Title $Title -Value "setnext:$($S.Path)" }
     }
 
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $computer = Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
             param($admin)
@@ -341,8 +399,8 @@ Add-Type -AssemblyName System.Windows.Forms
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28502' -ErrorAction SilentlyContinue   # File and Printer Sharing
             $env:COMPUTERNAME
         }
-        Reset-LabVm -Name $VmName
-        $null = Install-LabClient -Name $VmName
+        # RemoteHub installed (kept from an earlier file when it left the VM so; AfterAll empties RemoteHub's data)
+        $null = Initialize-LabVm -Name $VmName -Client
         Allow-NtlmDelegation
         $script:task = Start-LabClient -Name $VmName
         $script:jump = Start-LabJumpHost
@@ -363,13 +421,17 @@ Add-Type -AssemblyName System.Windows.Forms
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         Save 'results' $R
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
+        # undone for the next file on this VM; anything that fails: the next file starts from the checkpoint
+        try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }
         try { Save-LabAgentEvidence -Name 'JumpHost' -Destination (Join-Path $EvidenceDir 'ui-jump-jumphost-logs') } catch { }
         try { Stop-LabJumpHost } catch { }
         try { Restore-LabVmNetwork -Name $device.Name } catch { }
+        # the device: Remote Desktop on, the SMB share rhjump, moved behind the jump host
+        if ($device) { Set-LabVmDirty -Name $device.Name }
         Stop-LabVm -Name $device.Name
     }
 }
@@ -382,7 +444,10 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Step $p first {
                 Clear-DeviceSessions
                 $p.thumb1 = RdpThumb
-                $null = Menu 'Connect' -Node 'Behind'
+                # tried once more after a lookup that got no answer (the run of 16.10.2026 13:55: the person server took
+                # this step's request and didn't answer within 90 s; nothing was open afterwards)
+                try { $null = Menu 'Connect' -Node 'Behind' }
+                catch { $p.connectRetry = "$_"; $null = Clear-Dialogs; $null = Menu 'Connect' -Node 'Behind' }
                 # the jump host's account has no stored password: asked, kept in memory
                 $p.ask = (Ui 'No password is stored for*' -Title 'Jump host' -Value read -TimeoutSec 60).name
                 $null = Ui 'type:Edit' -Title 'Jump host' -Value "set:$password"
@@ -571,7 +636,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             $t.orphanConnect | Should -Match 'Orphan is reached through Lonely, but Lonely has no RemoteHub Agent\. Install it there \(right-click Lonely . Install RemoteHub Agent.\), or move Orphan out of Lonely to connect directly\.'
         }
 
-        It 'J-20 Duplicate a jump host: "<n> (copy)" without the items under it, its agent cleared; a copied child''s RDP certificate pin cleared' -Tag 'J-20' {
+        It 'J-20 Duplicate a jump host: "[n] (copy)" without the items under it, its agent cleared; a copied child''s RDP certificate pin cleared' -Tag 'J-20' {
             $t.copy | Should -BeTrue
             $t.copyItems | Should -Be 0
             $t.copyAgent.error | Should -Match "no menu entry 'Update RemoteHub Agent"
@@ -610,6 +675,8 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $null = Menu 'Open' -Node 'SmbBehind'
                 # the jump host's password was entered before: not asked again for another tab
                 $s.jumpAsk = (Ui 'No password is stored for*' -Title 'Jump host' -Value exists -Optional -TimeoutSec 10).found
+                # asked anyway (J-18 fails on it): answered, so the share tab and the next steps can still be checked
+                if ($s.jumpAsk) { $null = Ui 'type:Edit' -Title 'Jump host' -Value "set:$password"; $null = Ui 'Connect' -Title 'Jump host' }
                 $b = Ui 'SMB ? RemoteHub client ? via JumpHost' -Value exists -Optional -TimeoutSec 90
                 $s.badge = $b.found
                 $s.badgeName = "$($b.name)"
@@ -639,7 +706,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Save 'shares' $s
         }
 
-        It 'J-16 a share tab through the jump host says "<description> . via JumpHost"' -Tag 'J-16' {
+        It 'J-16 a share tab through the jump host says "[description] . via JumpHost"' -Tag 'J-16' {
             $s.badge | Should -BeTrue
             $s.badgeName | Should -Match '^SMB . RemoteHub client . via JumpHost$'
         }
@@ -679,7 +746,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Save 'credentials' $c
         }
 
-        It 'J-18 none: "No credentials are set for the jump host <j> ..."; no stored password: asked once ("... kept in memory only."), then reused for the next connect and another tab' -Tag 'J-18' {
+        It 'J-18 none: "No credentials are set for the jump host [j] ..."; no stored password: asked once ("... kept in memory only."), then reused for the next connect and another tab' -Tag 'J-18' {
             $c.none | Should -Match 'No credentials are set for the jump host JumpHost\. Its RemoteHub Agent signs in with a Windows account of JumpHost'
             $R.rdp.ask | Should -Match ('No password is stored for \S*' + [regex]::Escape($script:jump.User) + ' on the jump host JumpHost\. Enter it to connect to Behind through it . it is kept in memory only\.')
             $R.rdp.askAgain | Should -BeFalse

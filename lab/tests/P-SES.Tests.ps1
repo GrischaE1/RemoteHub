@@ -1,6 +1,7 @@
 # P-SES - RemoteHub's PowerShell connection through the agent (PsRemoting.Open with an AgentEndpoint, the same code the
 # PowerShell tab uses): the session itself, what ending it does on the device, the session limit, tab completion.
 # The device side is checked over PowerShell Direct. See docs/test-lab-cases.md section 7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -21,10 +22,15 @@ BeforeAll {
 
 Describe 'P-SES <VmName>' -Tag Agent, 'P-SES' {
     BeforeAll {
-        Reset-LabVm -Name $VmName
-        $install = Install-LabAgent -Name $VmName
-        $pin = $install.pin
+        $init = Initialize-LabVm -Name $VmName -Agent
+        $install = $init.Install
+        $pin = $init.Pin
         $guestNow = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Date).AddSeconds(-5) }
+    }
+
+    AfterAll {
+        # the probe value P-SES-02 wrote; the processes it started are ended by the agent - the VM stays reusable
+        Invoke-LabGuest -Name $VmName -ScriptBlock { Remove-Item HKCU:\Software\RemoteHubLab -Recurse -Force -ErrorAction SilentlyContinue; Get-Process notepad, ping -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
     }
 
     Context 'one session' {

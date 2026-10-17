@@ -2,6 +2,7 @@
 # through RemoteHub's desktop client (harness "desktop", DesktopHarness.cs). Connections to the console account's own
 # session need no question; PSAdmin connecting to it would be asked (that is D-ASK). See docs/test-lab-cases.md
 # section 9.1.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -33,13 +34,15 @@ BeforeAll {
         }
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
+    $init = Initialize-LabVm -Name $VmName -Agent
+    $install = $init.Install
+    $pin = $init.Pin
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-con-agent-logs')
+    # normaluser's disconnected session, the auto logon set and cleared, the group 'RH Others': not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {

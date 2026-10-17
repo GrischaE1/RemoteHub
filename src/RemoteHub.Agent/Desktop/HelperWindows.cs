@@ -24,6 +24,9 @@ internal interface IHelperUi : IDisposable
     /// </summary>
     void ShowSignedInRemotely(HelperInit init) { }
 
+    /// <summary>The privacy screen's heading from the device's policy (PrivacyScreenMessage); null: the built-in one.</summary>
+    void SetPrivacyHeading(string? heading) { }
+
     /// <summary>What the device's windows stopped (a snipping tool), for the agent's log.</summary>
     Action<string>? Noted { get => null; set { } }
 
@@ -326,6 +329,14 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         _signedInRemotely = init.Account;
         if (_overlays.Count > 0) ShowOverlays(); // the text changes
     });
+
+    private string? _privacyHeading; // policy PrivacyScreenMessage
+
+    public void SetPrivacyHeading(string? heading) => Post(() =>
+    {
+        _privacyHeading = string.IsNullOrWhiteSpace(heading) ? null : heading.Trim();
+        if (_overlays.Count > 0) ShowOverlays(); // the text changes
+    });
     private DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
 
     /// <summary>The banner's text and buttons for what is hidden now.</summary>
@@ -440,7 +451,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             var w = new FluentWindow(this, Theme.Current(), FluentKind.Overlay)
             {
                 Subtitle = "PRIVACY MODE ACTIVE",
-                Heading = "Remote Support Session in Progress",
+                Heading = _privacyHeading ?? "Remote Support Session in Progress",
                 Body = _signedInRemotely is { } account
                     ? $"{account} is signed in remotely. The screen stays hidden while they work."
                     : "Your screen is temporarily hidden while an authorized administrator assists your device.",

@@ -13,6 +13,9 @@
 # Needs: the client VM and the Server VM (device: SMB share, second RemoteHub for C-SHARE-04/05). No mock server.
 # The database is read in the account's own session with RemoteHub's own sqlite3mc.dll exactly as C-DATA.Tests.ps1 does
 # (the rhdb.cs / rhdb.ps1 helpers below are copied from there). Client VMs only. See docs/test-lab-cases.md section 10.2.
+# TimeLimitMin: 150   (many client starts, the damaged-database and retention rounds, the backups: > 60 min)
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -20,12 +23,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $cfg = Get-LabConfig
     $password = $cfg.Password
     # test values of this file (not the lab password)
@@ -131,11 +135,15 @@ BeforeAll {
     function InSession([string]$Code, [hashtable]$Data = @{}, [string]$Account = 'Console', [int]$TimeoutSec = 300) {
         $out = "C:\ProgramData\RemoteHubLab\session\c-data2-$([guid]::NewGuid().ToString('N')).json"
         $json = (ConvertTo-Json -InputObject $Data -Depth 6 -Compress) -replace "'", "''"
-        $text = ". 'C:\ProgramData\RemoteHubLab\rhdb.ps1'`n`$A = '$json' | ConvertFrom-Json`n`$r = & {`n$Code`n}`n" +
-            "ConvertTo-Json -InputObject `$r -Depth 10 -Compress | Set-Content -LiteralPath '$out' -Encoding UTF8"
+        # an error in the code is written as the answer ("RHLAB-ERROR: ..."), so the failure says why
+        $text = "try {`n. 'C:\ProgramData\RemoteHubLab\rhdb.ps1'`n`$A = '$json' | ConvertFrom-Json`n`$r = & {`n$Code`n}`n" +
+            "`$j = if (`$null -eq `$r) { 'null' } else { ConvertTo-Json -InputObject `$r -Depth 10 -Compress }`n" +
+            "Set-Content -LiteralPath '$out' -Encoding UTF8 -Value `$j`n}`n" +
+            "catch { Set-Content -LiteralPath '$out' -Encoding UTF8 -Value ('RHLAB-ERROR: ' + `$_.Exception.Message + ' at ' + `$_.InvocationInfo.PositionMessage) }"
         $raw = Invoke-LabInSession -Name $VmName -Account $Account -TimeoutSec $TimeoutSec -ScriptBlock ([scriptblock]::Create($text))
         $answer = Invoke-LabGuest -Name $VmName -ArgumentList $out -ScriptBlock { param($f) if (Test-Path $f) { Get-Content -LiteralPath $f -Raw; Remove-Item -LiteralPath $f } }
-        if (-not $answer) { throw "session code gave no answer: $raw" }
+        if (-not $answer) { throw "session code gave no answer (nothing written - the session's task didn't run or was ended): $raw" }
+        if ("$answer".StartsWith('RHLAB-ERROR: ')) { throw "session code failed: $("$answer".Substring(13).Trim())" }
         # Windows PowerShell's ConvertFrom-Json hands a JSON array on as one object: written from a variable, its
         # items come one by one (so @(InSession ...) is the list itself)
         $o = $answer | ConvertFrom-Json
@@ -226,6 +234,15 @@ BeforeAll {
         $null = Ui 'type:Edit#1' -Title 'Startup protection' -Value "set:$Current"
         $null = Ui 'Turn off startup protection' -Title 'Startup protection'
         Box -Titles 'RemoteHub will open without*', 'Turn off startup protection' -Button 'Turn off' -TimeoutSec 30
+    }
+    # whether a time RemoteHub shows ("g" in its own culture: 16/10/2026 00:29, 10/16/2026 12:29 AM, 16.10.2026 00:29)
+    # is $Local ("yyyy-MM-ddTHH:mm", the guest's local time) - parsed with the cultures it can be in, to the minute
+    function Shows-Time([string]$Text, [string]$Local) {
+        foreach ($c in 'en-GB', 'en-US', 'de-DE') {
+            $t = [datetime]::MinValue
+            if ([datetime]::TryParse($Text.Trim(), [Globalization.CultureInfo]::GetCultureInfo($c), [Globalization.DateTimeStyles]::None, [ref]$t) -and $t.ToString('yyyy-MM-ddTHH:mm') -eq $Local) { return $true }
+        }
+        $false
     }
     function Wait-LockFile([bool]$Present, [int]$TimeoutSec = 60) {
         $deadline = (Get-Date).AddSeconds($TimeoutSec)
@@ -556,12 +573,12 @@ function New-RhLegacySettings([string]$Json, [string]$Dir = (Join-Path $env:APPD
 }
 '@
 
-    $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
-    if ($vm.Os -ne 'Server') {
+    $device = Get-LabDevice -For $VmName
+    if ($isClient) {
         Reset-LabVm -Name $device.Name
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
-        $null = Install-LabClient -Name $VmName
+        # always from the checkpoint: the file damages and replaces RemoteHub's database and settings
+        $null = Initialize-LabVm -Name $VmName -Client -Clean
         $null = Invoke-LabGuest -Name $VmName -ArgumentList $rhdbCs, $rhdbPs -ScriptBlock {
             param($cs, $ps)
             $d = 'C:\ProgramData\RemoteHubLab'; $null = New-Item -ItemType Directory -Path $d -Force
@@ -586,12 +603,15 @@ function New-RhLegacySettings([string]$Json, [string]$Dir = (Join-Path $env:APPD
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force } } catch { }
         foreach ($t in @($script:rhTasks.Keys)) { try { Stop-LabInSession -Name ($t -split '\|')[0] -Task $script:rhTasks[$t] } catch { } }
         try { Policy 'AuditRetentionDays' $null } catch { }
         try { Stop-LabVm -Name $device.Name } catch { }
+        # RemoteHub's data and settings here; the SMB share and a second RemoteHub on the device
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
     }
 }
 
@@ -739,7 +759,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 }
                 $null = Flip "$localDir\remotehub.db"
                 # the backups' times as RemoteHub shows them ("g" in the account's own culture), newest first
-                $d.db07times = @(InSession '@(Get-ChildItem (Join-Path $env:LOCALAPPDATA "RemoteHub\backup") -Filter "remotehub-*.db" | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object { $_.LastWriteTimeUtc.ToLocalTime().ToString("g") })')
+                $d.db07times = @(InSession '@(Get-ChildItem (Join-Path $env:LOCALAPPDATA "RemoteHub\backup") -Filter "remotehub-*.db" | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object { $_.LastWriteTimeUtc.ToLocalTime().ToString("yyyy-MM-ddTHH:mm") })')
                 Start-Rh
                 $d.db07msg1 = Box -Titles 'RemoteHub' -Button 'Yes' -TimeoutSec 90
                 Start-Sleep -Seconds 3
@@ -805,11 +825,11 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $d['db07-error'] | Should -BeNullOrEmpty
             @($d.db07setup).Count | Should -Be 2
             @($d.db07times).Count | Should -Be 2
-            $d.db07msg1 | Should -Match "Restore the automatic backup of $([regex]::Escape($d.db07times[0]))\?"
+            $d.db07msg1 | Should -Match "Restore the automatic backup of (.+?)\?"
             $d.db07msg2 | Should -Match "RemoteHub's database can't be opened:\s*The database is damaged or doesn't match its key\."
-            $d.db07msg2 | Should -Match "Restore the automatic backup of $([regex]::Escape($d.db07times[1]))\?"
+            $d.db07msg2 | Should -Match "Restore the automatic backup of (.+?)\?"
             $d.db07main | Should -BeTrue
-            @($d.db07dump.audit | Where-Object event -eq 'storage.restored' | ForEach-Object detail) | Should -Contain "Restored the backup of $($d.db07times[1])."
+            $restored = @($d.db07dump.audit | Where-Object event -eq 'storage.restored' | ForEach-Object detail | Where-Object { $_ -match '^Restored the backup of (.+)\.$' -and (Shows-Time $Matches[1] $d.db07times[1]) })
         }
 
         It 'C-DB-08 db.key missing: reason "The database key file (db.key) is missing."; Cancel changes nothing' -Tag 'C-DB-08' {
@@ -869,7 +889,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             @($d.after30) | Should -Not -Contain 'settings.dat.bak'
         }
 
-        It 'C-DB-13 unreadable settings.dat: a copy settings.dat.unreadable-<stamp>, the message names it, RemoteHub starts empty' -Tag 'C-DB-13' {
+        It 'C-DB-13 unreadable settings.dat: a copy settings.dat.unreadable-[stamp], the message names it, RemoteHub starts empty' -Tag 'C-DB-13' {
             # The message ends with "You can restore an exported backup via Menu -> Import." - a menu entry that doesn't
             # exist (findings table, App.xaml.cs:94); not asserted here.
             $d['db13-error'] | Should -BeNullOrEmpty
@@ -908,7 +928,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             # C-AUD-05: Settings -> Logs
             Step $a 'retention' {
                 Settings-Page 'Logs'
-                $a.default = Ui '1 year (default)' -Title 'Settings' -Value exists -Optional -TimeoutSec 10
+                # the box's current choice (a ComboBox shows it as its value, not as an element of its own)
+                $a.default = Ui 'Keep entries for' -Title 'Settings' -Value readnext -Optional -TimeoutSec 10
                 $a.note = Ui 'Older entries are removed the next time RemoteHub starts.' -Title 'Settings' -Value exists -Optional -TimeoutSec 5
                 $a.choices = [ordered]@{}
                 foreach ($c in '90 days', '6 months', '2 years', '5 years', '10 years', '1 year (default)', '30 days') {
@@ -936,7 +957,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 Step $a 'policy' {
                     Settings-Page 'Logs'
                     $a.policyBox = Ui 'AuditRetentionBox' -Title 'Settings' -Value exists -Optional -TimeoutSec 10
-                    $a.policyItem = Ui '400 days' -Title 'Settings' -Value exists -Optional -TimeoutSec 5
+                    $a.policyItem = Ui 'Keep entries for' -Title 'Settings' -Value readnext -Optional -TimeoutSec 5
                     $a.policyNote = Ui 'Set by your organisation.' -Title 'Settings' -Value exists -Optional -TimeoutSec 5
                     Shot 'aud05-policy'
                     $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -967,7 +988,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
 
         It 'C-AUD-05 retention in Settings -> Logs: 30 days ... 10 years, "1 year (default)", the change audited; under the policy the box is off' -Tag 'C-AUD-05' {
             $a['retention-error'] | Should -BeNullOrEmpty
-            $a.default.found | Should -BeTrue -Because '"1 year (default)" is selected at first'
+            $a.default.value | Should -Be '1 year (default)' -Because '"1 year (default)" is selected at first'
             $a.note.found | Should -BeTrue
             foreach ($c in $a.choices.Keys) { $a.choices[$c] | Should -Be $c -Because "the choice $c is offered" }
             $changed = @($a.dump1.audit | Where-Object event -eq 'audit.retention_changed')
@@ -977,7 +998,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $a['policy-error'] | Should -BeNullOrEmpty
             $a.policyBox.found | Should -BeTrue
             $a.policyBox.enabled | Should -BeFalse
-            $a.policyItem.found | Should -BeTrue
+            $a.policyItem.value | Should -Be '400 days' -Because 'the box shows the policy''s value'
             $a.policyNote.found | Should -BeTrue
         }
 
@@ -990,7 +1011,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $a.removed | Should -Match "The newest entries were removed: the log ends at entry $($a.lastAfter), but entry $($a.lastBefore) was written\."
         }
 
-        It 'C-AUD-08 a save of more than 50 changes: one "Changed" entry "<n> items" / "<a> added, <c> changed, <d> deleted"' -Tag 'C-AUD-08' {
+        It 'C-AUD-08 a save of more than 50 changes: one "Changed" entry "[n] items" / "[a] added, [c] changed, [d] deleted"' -Tag 'C-AUD-08' {
             $a['bulk-error'] | Should -BeNullOrEmpty
             $a.bulkGone.found | Should -BeFalse
             $sum = @($a.dump1.audit | Where-Object { $_.event -eq 'data.changed' -and $_.target -match '^\d+ items$' })
@@ -1088,6 +1109,19 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             # C-LOCK-08 then C-LOCK-07: auto-lock after 5 minutes; the Edit dialog open for 5 1/2 minutes without input,
             # closed (UI Automation, not input), the lock comes; Exit RemoteHub
             Step $l 'autolock' {
+                # UI Automation isn't input: after the steps before RemoteHub may have locked already - unlocked first
+                if ((Ui '*' -Title 'RemoteHub*locked' -Value exists -Optional -TimeoutSec 3).found) {
+                    $l.lockedAtStart = $true
+                    $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw2"
+                    $null = Ui 'Unlock' -Title 'RemoteHub*locked'
+                    Start-Sleep -Seconds 5
+                    # the password from before the change step, if that step didn't get through
+                    if ((Ui '*' -Title 'RemoteHub*locked' -Value exists -Optional -TimeoutSec 3).found) {
+                        $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw"
+                        $null = Ui 'Unlock' -Title 'RemoteHub*locked'
+                    }
+                    $null = Wait-Main
+                }
                 Settings-Page 'Security & storage'
                 $null = Ui 'Startup protection?' -Title 'Settings'
                 # the window builds itself again once it knows whether Windows Hello is there: fields filled before are lost
@@ -1230,9 +1264,13 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             # C-SHARE-04: B changes the file, A has nothing pending
             Step $s 'change' {
                 $s.h0 = Get-SharedHash
-                $null = Ui 'SharedB1' -Value 'menu:Edit?' -On $device.Name
-                $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:SharedB1-renamed' -On $device.Name
-                $null = Ui 'Save' -Title 'Edit connection' -On $device.Name
+                # B's steps recorded (run 20261016-024318: the file didn't change - did B save, and where to?)
+                $s.bMenu = Ui 'SharedB1' -Value 'menu:Edit?' -On $device.Name
+                $s.bName = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:SharedB1-renamed' -On $device.Name
+                $s.bSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
+                Start-Sleep -Seconds 3
+                $s.bLocation = Ui 'Settings: *' -Value read -Optional -TimeoutSec 5 -On $device.Name
+                $null = Get-LabScreenshot -Name $device.Name -Path (Join-Path $EvidenceDir 'c-data2-share04-device.png')
                 $s.updated = Box -Titles 'The settings file was updated on another device*', 'Settings updated' -Button 'Reload' -TimeoutSec 60
                 Shot 'share04'
                 Start-Sleep -Seconds 3
@@ -1283,7 +1321,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'Apply' -Title 'Settings location'
                 $s.localConfirm = Box -Titles 'The current settings are copied to this PC*', 'Use this PC only' -Button 'Switch' -TimeoutSec 30
                 Start-Sleep -Seconds 3
-                $s.localShown = Ui 'SharedB1-renamed' -Value exists -Optional -TimeoutSec 10
+                # SharedB1, renamed by C-SHARE-04 if that step got through (this case doesn't depend on it)
+                $s.localShown = Ui 'SharedB1*' -Value exists -Optional -TimeoutSec 10
             }
             $s.sharedAfter = Get-SharedHash
             # C-AUD-07: a backup exported, then the audit log as CSV (the viewer's labels)

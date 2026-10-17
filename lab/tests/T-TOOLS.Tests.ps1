@@ -2,6 +2,7 @@
 # (RemoteFs, FileUploader/FileDownloader, RemoteRegistry, RemoteServices, RemoteProcesses), once over the RemoteHub
 # Agent and once over WinRM HTTPS set up with RemoteHub's script. Results are checked on the device over PowerShell
 # Direct. Each It name carries the transport in brackets. See docs/test-lab-cases.md section 7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -41,18 +42,21 @@ BeforeAll {
 
 AfterAll {
     Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
+    # files, registry values, services and processes changed on the device, WinRM HTTPS set up: the next file starts
+    # from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'T <VmName>' -Tag Tools, 'T' {
 
     Context 'over <Via>' -ForEach @(@{ Via = 'Agent' }, @{ Via = 'WinRM' }) {
         BeforeAll {
-            Reset-LabVm -Name $VmName
             $pin = $null
             if ($Via -eq 'Agent') {
-                $pin = (Install-LabAgent -Name $VmName).pin
+                $pin = (Initialize-LabVm -Name $VmName -Agent).Pin
             }
             else {
+                Reset-LabVm -Name $VmName
                 # RemoteHub's setup script with local admins allowed (PSAdmin is not the built-in Administrator). The
                 # session is pinned to the listener's certificate read over PowerShell Direct instead of trusting it on
                 # this PC: the lab account can't answer the Windows prompt (the prompt itself is W-TRUST-01, 2VM).

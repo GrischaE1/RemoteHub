@@ -24,6 +24,7 @@ public sealed class AgentInstallDialog : FluentWindow
     private readonly CheckBox _newIdentity, _useAfter, _virtualDisplay, _autoSignIn;
     private readonly TextBlock _autoSignInHint;
     private readonly bool? _hadProvider;
+    private readonly bool _portByPolicy; // the device's policy ListenPort decides the port
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
@@ -31,8 +32,11 @@ public sealed class AgentInstallDialog : FluentWindow
     /// <param name="localAddress">The address the device sees connections from (this PC, or the jump host in the device's network).</param>
     /// <param name="jumpHost">The jump host the device is reached through, or null.</param>
     /// <param name="credentialProvider">RemoteHub's agent package contains the credential provider (automatic sign-in).</param>
-    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress, string? jumpHost = null, bool credentialProvider = false)
+    /// <param name="managed">What the device's policy decides (<see cref="AgentManaged"/>, from its health): those options are greyed out or explained.</param>
+    public AgentInstallDialog(Connection c, bool remotingAvailable, bool agentReachable, string? localAddress, string? jumpHost = null, bool credentialProvider = false,
+        IReadOnlyCollection<string>? managed = null)
     {
+        managed ??= [];
         var existing = c.Agent;
         _hadProvider = existing?.CredentialProvider;
         var installed = existing is { Status: AgentStatus.Installed };
@@ -69,7 +73,11 @@ public sealed class AgentInstallDialog : FluentWindow
         _options.Children.Add(_newIdentity);
 
         _label = Field("Device label", existing?.Label is { Length: > 0 } l ? l : c.Name, "Shown in the agent's log and the certificate.");
-        _port = Field("Port", (existing?.Port ?? AgentProtocol.DefaultPort).ToString(), "TCP port the agent listens on (default 58732).");
+        _port = Field("Port", (existing?.Port ?? AgentProtocol.DefaultPort).ToString(), managed.Contains(AgentManaged.Port)
+            ? "Set by the device's policy (ListenPort) – the agent listens on that port whatever is entered here."
+            : "TCP port the agent listens on (default 58732).");
+        _portByPolicy = managed.Contains(AgentManaged.Port);
+        if (_portByPolicy) PolicyLock.Apply(_port); // a setting the device decides: greyed out, not hidden
         _groups = Field("Allowed accounts", "Administrators",
             "Members of these groups on the device may connect (comma-separated group names or SIDs). \"Administrators\" works in any Windows language.");
         _firewall = Field("Allow connections from", "",
@@ -91,7 +99,9 @@ public sealed class AgentInstallDialog : FluentWindow
         _options.Children.Add(_virtualDisplay);
         _options.Children.Add(Muted("Without a monitor, Windows often offers only 640×480. The agent then adds a virtual monitor at the size of " +
                                     "the RemoteHub window while you're connected (open-source driver by VirtualDrivers, signed by SignPath " +
-                                    "Foundation, which the device then trusts as a driver publisher). Unchecked: not installed, or removed.", 26, 2, 0, 0));
+                                    "Foundation, which the device then trusts as a driver publisher). Unchecked: not installed, or removed." +
+                                    (managed.Contains(AgentManaged.VirtualDisplay) ? " The device's policy (VirtualDisplay) decides when it is used; this only installs or removes the driver." : ""),
+                                    26, 2, 0, 0));
         _autoSignIn = new CheckBox
         {
             Content = "Allow automatic sign-in (installs a credential provider)",
@@ -103,7 +113,9 @@ public sealed class AgentInstallDialog : FluentWindow
         _autoSignInHint = Muted("When nobody is signed in on the device, RemoteHub can sign in with the connection's credentials (remote desktop " +
                                 "through the agent). Installs a sign-in component and allows it for the allowed accounts – a policy IT has set " +
                                 "on the device stays as it is. Anyone at the device can see the session while you work. Silent installs only; " +
-                                "unchecked after it was installed: removed.", 26, 2, 0, 0);
+                                "unchecked after it was installed: removed." +
+                                (managed.Contains(AgentManaged.AutoSignIn) ? " The device's policy decides whether and for whom automatic sign-in is allowed; this only installs or removes the sign-in component." : ""),
+                                26, 2, 0, 0);
         _autoSignInHint.Visibility = _autoSignIn.Visibility;
         _options.Children.Add(_autoSignInHint);
         _options.Children.Add(new TextBlock { Text = "How", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 14, 0, 6) });
@@ -154,7 +166,8 @@ public sealed class AgentInstallDialog : FluentWindow
     {
         // A new certificate needs the enrollment fields; a plain update keeps the device's settings.
         var fresh = _newIdentity.IsChecked == true;
-        _label.IsEnabled = _port.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
+        _label.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
+        _port.IsEnabled = fresh && !_portByPolicy;
         // AUTOSIGNIN goes on msiexec's command line: only the silent ways can pass it.
         if (_autoSignIn is not null) _autoSignIn.IsEnabled = _viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true;
     }

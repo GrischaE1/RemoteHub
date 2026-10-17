@@ -2,6 +2,7 @@
 # on a client VM against the lab's update.remotehub.dev inside the VM (RhMockServer.ps1: hosts entry, trusted
 # certificate, /latest from a file, /telemetry and every request logged). RemoteHub runs in the console account's
 # session, driven by UI Automation. Client VMs only. See docs/test-lab-cases.md section 10.3.
+# LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -9,12 +10,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "c-polupd-$name.json") -Encoding UTF8 }
     function Ui([string]$Text, [string]$Value = 'click', [string]$Title = 'RemoteHub*', [int]$TimeoutSec = 30, [switch]$Optional) {
         Invoke-LabUi -Name $VmName -Text $Text -Value $Value -Title $Title -TimeoutSec $TimeoutSec -Optional:$Optional
@@ -42,7 +44,11 @@ BeforeAll {
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') { Stop-LabClient -Name $VmName -Task $script:task }
+    if ($isClient) {
+        # policies, the mock server, an updated RemoteHub, telemetry ids: the next file starts from the checkpoint
+        Set-LabVmDirty -Name $VmName
+        Stop-LabClient -Name $VmName -Task $script:task
+    }
 }
 
 Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -Skip:(-not $isClient) {

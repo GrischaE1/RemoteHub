@@ -7,6 +7,7 @@
 # Known product bug: D-HIDE-03 - apps hidden by the policy HiddenApps are counted as hidden by the user (first Privacy
 #        message hiddenApps=1, banner "1 app hidden", 1105 "the user ... hides 1 app(s)"; DesktopHelper.cs:177-179,
 #        DesktopEndpoint.cs:762-763). Tested for the correct behaviour: fails until fixed.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -35,7 +36,12 @@ BeforeAll {
         try { for ($y = 0; $y -lt $b.Height; $y += 8) { for ($x = 0; $x -lt $b.Width; $x += 8) { $c = $b.GetPixel($x, $y); $sum += 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B; $n++ } } } finally { $b.Dispose() }
         $sum / $n
     }
-    function Resolution { Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" } }
+    # the console's resolution as Hyper-V's video head has it (what the device's monitor shows, whatever session asks)
+    function Resolution {
+        $heads = @(Get-CimAssociatedInstance -InputObject (Get-LabCimVm $VmName) -ResultClassName Msvm_VideoHead)
+        $head = @($heads | Where-Object EnabledState -eq 2) + $heads | Select-Object -First 1
+        "$(@($head.CurrentHorizontalResolution)[0])x$(@($head.CurrentVerticalResolution)[0])"
+    }
     # the foreground window in normaluser's session: title, process and window class
     function Foreground {
         $code = @'
@@ -61,11 +67,12 @@ $name = (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName
     function Snippers { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process SnippingTool, ScreenClippingHost, ScreenSketch -ErrorAction SilentlyContinue | ForEach-Object ProcessName) } }
     function SnipLog([datetime]$Since) { @(Get-LabAgentLog -Name $VmName -Since $Since | Where-Object { $_ -match 'Privacy screen: .* (was closed|couldn''t be closed)' }) }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
+    # the console's resolution at the start: the context 'monitors' changes it through Fit, the agent puts it back when
+    # the connection ends - AfterAll checks that
+    $startResolution = Resolution
     $old = $vm.Version -eq '1809'
     $markerTitle = 'RemoteHub lab marker'
 }
@@ -74,6 +81,13 @@ AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-priv2-agent-logs')
+    # left reusable: the snipping tools and the notepad closed, Search / a window switcher still open closed with Esc,
+    # the policies cleared. The resolution Fit changed is put back by the agent at the end of the connection; if it
+    # isn't (a bug, or a connection still open), the VM isn't reused.
+    $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process SnippingTool, ScreenClippingHost, ScreenSketch, notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
+    $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
+    Set-LabAgentPolicy -Name $VmName -Clear
+    if ((Resolution) -ne $startResolution) { Set-LabVmDirty -Name $VmName }
 }
 
 Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
@@ -86,6 +100,12 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
                 Start-Sleep -Seconds 3
                 $marker = Start-LabMarker -Name $VmName
+                # the notepad minimized (still in Alt+Tab's list): else it stays in front of the marker and gets the keys
+                $null = Invoke-LabInSession -Name $VmName -ScriptBlock {
+                    Add-Type -Namespace RhLab -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c);'
+                    Get-Process notepad -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { [void][RhLab.Win]::ShowWindow($_.MainWindowHandle, 6) }
+                }
+                Start-Sleep -Seconds 1
                 $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value 'before the snips'
                 $o = Out 'snip'
                 # the device's mouse and keyboard stay usable (blockLocalInput false): the device's own keys are tested too

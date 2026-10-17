@@ -1,6 +1,8 @@
 # A-UNINST - install the agent like RemoteHub does, then uninstall it like Windows does (msiexec /x, which runs
 # "RemoteHubAgent.exe cleanup"). Checks: rule, certificate, config removed; logs stay; nothing answers on the port;
 # the Ctrl+Alt+Del setting the agent turned on is back as it was. See docs/test-lab-spec.md section 9.
+# Always from the checkpoint (Reset-LabVm): the state before the install is the baseline.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -21,6 +23,8 @@ BeforeAll {
 AfterAll {
     Get-LabFile -Name $VmName -Path 'C:\ProgramData\RemoteHub\Agent\logs', $uninstall.Log `
         -Destination (Join-Path $EvidenceDir 'a-uninst-logs')
+    # the agent uninstalled: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-UNINST <VmName>' -Tag Agent, 'A-UNINST' {

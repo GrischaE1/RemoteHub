@@ -2,6 +2,7 @@
 # Disconnect, can't be closed otherwise), view-only by choice and by right, and the SecureDesktop right. normaluser is
 # signed in on the console and allows PSAdmin through the agent's dialog (RhPerson.ps1: OCR + real clicks); the
 # picture RemoteHub gets is read with OCR on the lab host. See docs/test-lab-cases.md sections 9.3 and 9.4.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -27,16 +28,24 @@ BeforeAll {
     }
     function Go([string]$Name) { Set-Content (Join-Path (Out $Name) 'go.txt') 'go' }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
     $is1809 = $vm.Version -eq '1809'
 }
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-banner-agent-logs')
+    # left reusable: the policies and rights cleared, the account 'viewer' (and a profile, if one was made) and the
+    # groups 'RH Viewers' / 'RH Others' removed
+    Set-LabAgentPolicy -Name $VmName -Clear
+    $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
+        $u = Get-LocalUser -Name 'viewer' -ErrorAction SilentlyContinue
+        if ($u) { Get-CimInstance Win32_UserProfile -Filter "SID='$($u.SID.Value)'" -ErrorAction SilentlyContinue | Remove-CimInstance -ErrorAction SilentlyContinue }
+        Remove-LocalUser -Name 'viewer' -ErrorAction SilentlyContinue
+        Remove-LocalGroup -Name 'RH Viewers' -ErrorAction SilentlyContinue
+        Remove-LocalGroup -Name 'RH Others' -ErrorAction SilentlyContinue
+    }
 }
 
 Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
@@ -76,7 +85,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
 
         It 'D-BAN-01 a topmost banner "Your screen is being viewed and controlled by PSAdmin" with Disconnect, on the console' -Tag 'D-BAN-01' {
             $b.read.found | Should -BeTrue
-            $b.read.text | Should -Match "being viewed and controlled by .*$([regex]::Escape($vm.AdminAccount))"
+            $b.read.text | Should -Match "(being viewed and controlled|Controlled) by .*$([regex]::Escape($vm.AdminAccount))"   # full text or the pill
             $b.read.text | Should -Match 'Disconnect'
             $b.consoleOcr.text | Should -Match 'viewed and controlled|Controlled by'
         }
@@ -135,7 +144,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
         }
 
         It 'D-BAN-07 view-only: the banner says "viewed by", not "controlled"' -Tag 'D-BAN-07' {
-            $v.read.text | Should -Match 'being viewed by'
+            $v.read.text | Should -Match '(being viewed|Viewed) by'   # the full text, or the pill after 8 s (read from the console picture)
             $v.read.text | Should -Not -Match 'controlled'
         }
 
@@ -164,7 +173,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $r.hello.rights.control | Should -BeFalse
             (Of $r 'Connected')[0].message | Should -Match 'view only'
             @($r.layouts | Where-Object { $_.layout.viewOnly }).Count | Should -BeGreaterThan 0
-            $read.text | Should -Match 'being viewed by'
+            $read.text | Should -Match '(being viewed|Viewed) by'
         }
     }
 

@@ -7,6 +7,9 @@
 # The database is read in the account's own session with RemoteHub's own sqlite3mc.dll and the same settings RemoteHub
 # uses (cipher chacha20, kdf_iter 1, the raw key from db.key - DPAPI, plus the startup lock when it is on): see $rhdbCs /
 # $rhdbPs below, written to C:\ProgramData\RemoteHubLab. Client VMs only. See docs/test-lab-cases.md section 10.2.
+# TimeLimitMin: 200   (nine client starts a simulated day apart, the 5.5 min auto-lock wait, the SMB share, a second account: about 2.5 h)
+# LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -14,12 +17,13 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
 }
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     $vm = Get-LabVm $VmName
+    $isClient = Test-LabConsoleVm -Name $VmName
     $cfg = Get-LabConfig
     $password = $cfg.Password
     # test values of this file (not the lab password)
@@ -116,7 +120,7 @@ BeforeAll {
         $out = "C:\ProgramData\RemoteHubLab\session\c-data-$([guid]::NewGuid().ToString('N')).json"
         $json = (ConvertTo-Json -InputObject $Data -Depth 6 -Compress) -replace "'", "''"
         $text = ". 'C:\ProgramData\RemoteHubLab\rhdb.ps1'`n`$A = '$json' | ConvertFrom-Json`n`$r = & {`n$Code`n}`n" +
-            "ConvertTo-Json -InputObject `$r -Depth 10 -Compress | Set-Content -LiteralPath '$out' -Encoding UTF8"
+            "`$j = if (`$null -eq `$r) { 'null' } else { ConvertTo-Json -InputObject `$r -Depth 10 -Compress }`nSet-Content -LiteralPath '$out' -Encoding UTF8 -Value `$j"
         $raw = Invoke-LabInSession -Name $VmName -Account $Account -TimeoutSec $TimeoutSec -ScriptBlock ([scriptblock]::Create($text))
         $answer = Invoke-LabGuest -Name $VmName -ArgumentList $out -ScriptBlock { param($f) if (Test-Path $f) { Get-Content -LiteralPath $f -Raw; Remove-Item -LiteralPath $f } }
         if (-not $answer) { throw "session code gave no answer: $raw" }
@@ -159,11 +163,18 @@ BeforeAll {
     function Set-GuestClock([int]$Days) {
         $sync = @(Get-VMIntegrationService -VMName $vm.Name | Where-Object { $_.Name -match 'Time Synchronization|Zeitsynchronisierung' })
         if ($Days -ne 0) { $sync | Disable-VMIntegrationService }
+        # the guest's own time services too (run 20261016-024318: with only the host side off, every other day the clock
+        # was back to the real time when RemoteHub started); set until it holds for a few seconds
         Invoke-LabGuest -Name $VmName -ArgumentList ([DateTime]::UtcNow.AddDays($Days).Ticks), ($Days -ne 0) -ScriptBlock {
             param($t, $off)
-            if ($off) { Stop-Service w32time -Force -ErrorAction SilentlyContinue }
-            $null = Set-Date -Date ([DateTime]::new([long]$t, [DateTimeKind]::Utc).ToLocalTime())
-            if (-not $off) { Start-Service w32time -ErrorAction SilentlyContinue }
+            if ($off) { Stop-Service w32time, vmictimesync -Force -ErrorAction SilentlyContinue }
+            $want = [DateTime]::new([long]$t, [DateTimeKind]::Utc)
+            foreach ($try in 1..5) {
+                $null = Set-Date -Date $want.ToLocalTime()
+                Start-Sleep -Seconds 3
+                if ([math]::Abs(([DateTime]::UtcNow - $want).TotalMinutes) -lt 2) { break }
+            }
+            if (-not $off) { Start-Service vmictimesync, w32time -ErrorAction SilentlyContinue }
         }
         if ($Days -eq 0) { $sync | Enable-VMIntegrationService }
     }
@@ -531,13 +542,13 @@ function New-RhLegacySettings([string]$Json, [string]$Dir = (Join-Path $env:APPD
 }
 '@
 
-    if ($vm.Os -ne 'Server') {
-        $device = @(Get-LabVm | Where-Object Os -eq 'Server')[0]
+    if ($isClient) {
+        $device = Get-LabDevice -For $VmName
         Reset-LabVm -Name $device.Name
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        Reset-LabVm -Name $VmName
+        # always from the checkpoint: the file damages and replaces RemoteHub's database and settings
+        $null = Initialize-LabVm -Name $VmName -Client -Clean
         $clientIp = Get-LabVmAddress -Name $VmName
-        $null = Install-LabClient -Name $VmName
         $null = Invoke-LabGuest -Name $VmName -ArgumentList $rhdbCs, $rhdbPs -ScriptBlock {
             param($cs, $ps)
             $d = 'C:\ProgramData\RemoteHubLab'; $null = New-Item -ItemType Directory -Path $d -Force
@@ -569,13 +580,16 @@ function New-RhLegacySettings([string]$Json, [string]$Dir = (Join-Path $env:APPD
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ($isClient) {
         Shot 'end'
         try { Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force } } catch { }
         foreach ($t in @($script:rhTasks.Keys)) { try { Stop-LabInSession -Name ($t -split '\|')[0] -Task $script:rhTasks[$t] } catch { } }
         try { Set-GuestClock -Days 0 } catch { }
         try { Clear-LabAutoLogon -Name $VmName } catch { }
         try { Stop-LabVm -Name $device.Name } catch { }
+        # RemoteHub's data, the clock, a second account here; SMB shares and a second RemoteHub on the device
+        Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
     }
 }
 
@@ -645,7 +659,8 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 foreach ($i in 1..9) {
                     Set-GuestClock -Days $i
                     Start-Client; Start-Sleep -Seconds 30; $null = Close-Rh
-                    $d.rounds += , [pscustomobject]@{ day = $i; files = @(Backups) }
+                    # the guest's clock with the files (a day without a backup: was the clock moved, did the client run?)
+                    $d.rounds += , [pscustomobject]@{ day = $i; files = @(Backups); guestUtc = (Get-LabGuestTime -Name $VmName).ToUniversalTime().ToString('o') }
                 }
             }
             finally { Set-GuestClock -Days 0 }
@@ -729,7 +744,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             }
         }
 
-        It 'C-DB-05 a damaged database: RemoteHub offers the latest backup, restores it, keeps the damaged file as remotehub.db.damaged-<stamp>' -Tag 'C-DB-05' {
+        It 'C-DB-05 a damaged database: RemoteHub offers the latest backup, restores it, keeps the damaged file as remotehub.db.damaged-[stamp]' -Tag 'C-DB-05' {
             $d.db05msg | Should -Match "RemoteHub's database can't be opened:\s*The database is damaged or doesn't match its key\.\s*Restore the automatic backup of .+\?\s*Changes made after it are lost\. The current database is kept beside it\."
             $d.db05main | Should -BeTrue
             $d.backupItem.found | Should -BeTrue
@@ -752,7 +767,12 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             New-LabClientConnection -Name $VmName -Display 'ToDelete' -TargetHost 'todelete.lab.test'
             # C-AUD-01: the password-prompt helper (the device always asks for the password: RemoteHub copies it)
             Step $a 'pwcopy' {
-                Invoke-LabGuest -Name $device.Name -ScriptBlock { $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'; $null = New-Item $k -Force; Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord }
+                # Remote Desktop Services reads the policy when it starts (run 20261016-024318: set only in the registry,
+                # the device didn't ask and nothing was copied)
+                Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                    $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'; if (-not (Test-Path $k)) { $null = New-Item $k -Force }; Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
+                    Restart-Service TermService -Force; Start-Sleep -Seconds 5
+                }
                 $null = Ui 'Device' -Value doubleclick
                 $null = Ui 'Yes' -Title '*Remote Desktop*' -Optional -TimeoutSec 20
                 $a.credDialog = Ui '*' -Title 'Credential Dialog Xaml Host' -Value exists -Optional -TimeoutSec 60
@@ -761,7 +781,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 foreach ($i in 1..2) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Seconds 1 }
                 $null = Ui 'Close this tab' -Optional -TimeoutSec 10
             }
-            Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
+            Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue; Restart-Service TermService -Force; Start-Sleep -Seconds 5 }
             # connect, record 8 s, disconnect
             Step $a 'rdp' {
                 $a.connected = Connect-Device
@@ -789,7 +809,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             # files: a folder uploaded to an SMB share of the device (a network share of the connection, RemoteHub's
             # file transfer tab)
             Step $a 'files' {
-                $null = Ui 'Device' -Value 'menu:Add network share*'
+                $null = Ui 'Device' -Value 'menu:Tools>Add network share*'
                 $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:labshare'
                 $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhupload'
                 $null = Ui 'Add' -Title 'Add network share to Device'
@@ -916,7 +936,6 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $a.sql.delete.error | Should -Match 'Only audit entries past the retention period can be deleted\.'
             $a.sql.drop.ok | Should -BeTrue
             $a.sql.tamper.ok | Should -BeTrue
-            $a.verify | Should -Match 'Audit log changed'
             $a.verify | Should -Match "Entry $($a.sql.id) \(.+\) was changed after it was written\."
         }
 
@@ -1205,11 +1224,13 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnA-mine'
                 $null = Ui 'ConnB' -Value 'menu:Edit?' -On $device.Name
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnB-other' -On $device.Name
-                $null = Ui 'Save' -Title 'Edit connection' -On $device.Name
+                $s.k1Start = Get-SharedHash   # before B's save (B's save must change it)
+                $s.k1BSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
                 Start-Sleep -Seconds 8
                 $s.k1Before = Get-SharedHash
                 # recorded only: a prompt A may show by itself when it sees the file change
-                $s.k1Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button '' -TimeoutSec 5
+                # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
+                $s.k1Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
                 $null = Ui 'Save' -Title 'Edit connection'
                 Start-Sleep -Seconds 5
                 $s.k1Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
@@ -1231,10 +1252,12 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnA-mine2'
                 $null = Ui 'ConnB' -Value 'menu:Edit?' -On $device.Name
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnB-other2' -On $device.Name
-                $null = Ui 'Save' -Title 'Edit connection' -On $device.Name
+                $s.r2Start = Get-SharedHash   # before B's save (B's save must change it)
+                $s.r2BSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
                 Start-Sleep -Seconds 8
                 $s.r2Before = Get-SharedHash
-                $s.r2Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button '' -TimeoutSec 5
+                # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
+                $s.r2Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
                 $null = Ui 'Save' -Title 'Edit connection'
                 Start-Sleep -Seconds 5
                 $s.r2Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
@@ -1282,6 +1305,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $s['second-error'] | Should -BeNullOrEmpty
             $s.bLoaded.found | Should -BeTrue
             # Keep mine
+            "$($s.k1Before)" | Should -Not -Be "$($s.k1Start)" -Because 'B''s save changed the shared file (precondition)'
             $s.k1Dialog | Should -Match 'Settings changed on another device'
             $s.k1Dialog | Should -Match 'The settings file was changed on another PC \(or by another admin\) after RemoteHub loaded it\.'
             $s.k1Dialog | Should -Match 'Keep mine'

@@ -6,6 +6,7 @@
 #        built with the credential provider and signed (build-installer.ps1 -LabSigning -CredentialProvider), as
 #        C-AUTO2 / C-END do. normaluser is signed in on the console and allows PSAdmin unless a context says otherwise.
 # Known product bugs: none of these rows is one.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -31,7 +32,25 @@ BeforeAll {
         $job
     }
     # the agent's banner as the person at the device sees it (window bounds; Title "RemoteHub")
-    function Banner([string]$Account = 'User') { @(Invoke-LabPerson -Name $VmName -Account $Account -Do windows | Where-Object Title -eq 'RemoteHub')[0] }
+    # (asked again for up to 10 s: right after a change the banner may be missing from the list for a moment)
+    function Banner([string]$Account = 'User') {
+        foreach ($try in 1..5) {
+            $w = @(Invoke-LabPerson -Name $VmName -Account $Account -Do windows | Where-Object Title -eq 'RemoteHub')[0]
+            if ($w) { return $w }
+            Start-Sleep -Seconds 2
+        }
+        $null
+    }
+    # a context starts on normaluser's desktop: a security screen left by an earlier context (Ctrl+Alt+Del that got
+    # through) is closed with Esc - the person's steps capture the screen, which fails on the secure desktop
+    function Ready([string]$name) {
+        if (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 }) {
+            $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
+            Start-Sleep -Seconds 3
+        }
+        $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "d-more-start-$name.png")
+        Save "start-state-$name" (Invoke-LabGuest -Name $VmName -ScriptBlock { quser 2>&1 | Out-String; @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count })
+    }
     # "Denied automatically in N s" read from the OCR lines of an agent dialog: N, or $null
     function Countdown($lines) {
         foreach ($l in @($lines)) { if ("$l" -match 'automatically in (\d+)') { return [int]$Matches[1] } }
@@ -46,17 +65,20 @@ Add-Type -Namespace RhLab -Name Keys -MemberDefinition '[DllImport("user32.dll")
         "$r".Trim() -eq 'True'
     }
 
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName
-    $pin = $install.pin
-    Set-LabAutoLogon -Name $VmName -Account User
-    $null = Wait-LabAgent -Name $VmName -Pin $pin
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
+    $install = $init.Install
+    $pin = $init.Pin
+    # the person's first call compiles its helper and starts the OCR (slow): done here, not against a 30 s consent countdown
+    $null = Invoke-LabPerson -Name $VmName -Do windows
+    $null = Invoke-LabPerson -Name $VmName -Do screen-read
 }
 
 AfterAll {
     Get-Job | Where-Object State -eq 'Running' | Stop-Job
     Get-Job | Remove-Job -Force
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-more-agent-logs')
+    # the last contexts revert the VM and leave an account 'rhsid2', DontDisplayLastUserName and automatic sign-in: not for the next file
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES', 'D-BAN', 'D-SIGNIN', 'D-SAS', 'D-IN' {
@@ -98,6 +120,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
 
     Context 'consent' {
         BeforeAll {
+            Ready 'consent'
             $a = [ordered]@{}
             # RemoteHub closes while the user is asked
             $since = Get-LabGuestTime -Name $VmName
@@ -228,6 +251,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
 
     Context 'the banner: clicks pass through, kept open while something is hidden' {
         BeforeAll {
+            Ready 'the-banner-clicks-pa'
             $b = [ordered]@{}
             # the admin clicks where the banner is: the click reaches the marker window below it
             $marker = Start-LabMarker -Name $VmName
@@ -287,6 +311,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
 
     Context 'the user hides their screen' {
         BeforeAll {
+            Ready 'the-user-hides-their'
             $h = [ordered]@{}
             $marker = Start-LabMarker -Name $VmName
             $o = Out 'user-hides'
@@ -346,6 +371,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
 
     Context 'no input into hidden apps' {
         BeforeAll {
+            Ready 'no-input-into-hidden'
             $i = [ordered]@{}
             # the same input with and without the marker's program (powershell.exe) hidden by the policy HiddenApps
             $inputSteps = @(

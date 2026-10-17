@@ -9,6 +9,7 @@
 #  3. A wrong password: Windows refuses it, the reason reaches RemoteHub, the console stays at the sign-in screen.
 #  4. The right password: signed in, the console account's desktop, audit 1106.
 #  5. The password never appears in the agent's log or the Application log.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -38,8 +39,9 @@ BeforeAll {
     }
 
     # ---- 1. Installed with the option: the policy values are the agent's; IT can still turn it off
-    Reset-LabVm -Name $VmName
-    $install = Install-LabAgent -Name $VmName -AutoSignIn $true
+    # -Clean: the policy values must be the ones the install itself just wrote
+    $init = Initialize-LabVm -Name $VmName -Agent -AutoSignIn $true -Clean
+    $install = $init.Install
     $policyAfterInstall = Invoke-LabGuest -Name $VmName -ScriptBlock {
         [pscustomobject]@{
             Behavior = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue).NoUserBehavior
@@ -95,6 +97,8 @@ BeforeAll {
 
 AfterAll {
     Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-auto-agent') -ErrorAction SilentlyContinue
+    # the console was signed out and in again by the credential provider: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'C-AUTO <VmName>' -Tag Agent, 'C-AUTO' {

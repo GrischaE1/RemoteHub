@@ -2,6 +2,8 @@
 # (AgentInstaller.StartUpdateThroughAgent + WaitForRestartAsync, the verdict of MainWindow.RunAgentInstall), with a
 # new device certificate, over remoting; the same version again; and a downgrade. The previous release comes from
 # LabRoot\msi\previous, the build under test from LabRoot\msi. See docs/test-lab-cases.md section 5.3.
+# Every context starts from the checkpoint (Reset-LabVm) with the previous release.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -25,6 +27,11 @@ BeforeAll {
         } while ((Get-Date) -lt $until)
         $left
     }
+}
+
+AfterAll {
+    # updated / downgraded agents: the next file starts from the checkpoint
+    Set-LabVmDirty -Name $VmName
 }
 
 Describe 'A-UPD <VmName>' -Tag Agent, 'A-UPD' {
