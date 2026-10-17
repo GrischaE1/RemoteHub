@@ -67,13 +67,13 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private bool _updatingMonitors;
     private Point _lastMouse = new(-1, -1);
 
-    private readonly Action<bool> _rememberFit;
+    private readonly Action<DesktopResolution> _rememberResolution;
 
     public AgentDesktopView(AgentDesktopSession session, Action reconnect, Action close, Action useRdp,
-        Func<DesktopQualityPreset> defaultQuality, Action<DesktopQualityPreset, string> remember, Func<bool> fitToWindow, Action<bool> rememberFit,
+        Func<DesktopQualityPreset> defaultQuality, Action<DesktopQualityPreset, string> remember, Func<DesktopResolution> resolution, Action<DesktopResolution> rememberResolution,
         Func<bool>? autoSignInPreferred = null, Func<string?>? autoSignInEndAction = null)
     {
-        _rememberFit = rememberFit;
+        _rememberResolution = rememberResolution;
         _autoSignInPreferred = autoSignInPreferred ?? (() => false);
         _autoSignInEndAction = autoSignInEndAction ?? (() => null);
         _session = session;
@@ -90,15 +90,17 @@ public sealed class AgentDesktopView : Border, IRecordableView
         _privacy.Click += (_, _) => { var m = PrivacyMenu(); m.PlacementTarget = _privacy; m.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom; m.IsOpen = true; };
         _privacyBadge.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         _winKey = RemoteToolChrome.Tool(SymbolRegular.Grid24, "Press the Windows key (Start menu)", PressWindowsKey);
-        _fit = RemoteToolChrome.Tool(SymbolRegular.ScaleFit24, "", () => session.FitToWindow = !session.FitToWindow);
+        _fit = RemoteToolChrome.Tool(SymbolRegular.ScaleFit24, "", () => { });
+        _fit.Click += (_, _) => { var m = ResolutionMenu(); m.PlacementTarget = _fit; m.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom; m.IsOpen = true; };
         _fit.Margin = new Thickness(0, 0, 4, 0);
+        System.Windows.Automation.AutomationProperties.SetName(_fit, "Device resolution");
         _infoButton = RemoteToolChrome.Tool(SymbolRegular.DataUsage24, "", () => { _showInfo = !_showInfo; _savePreferences(_showInfo, _keyCombinations); Refresh(); });
         _infoButton.Margin = new Thickness(0, 0, 4, 0);
         _keysButton = RemoteToolChrome.Tool(SymbolRegular.KeyCommand24, "", () => { _keyCombinations = !_keyCombinations; _savePreferences(_showInfo, _keyCombinations); UpdateKeyHook(); Refresh(); });
         _keysButton.Margin = new Thickness(0, 0, 4, 0);
         // Disabled while the user at the device hides their screen – the tooltip says why.
         foreach (var b in new[] { _cad, _winKey }) ToolTipService.SetShowOnDisabled(b, true);
-        session.FitToWindow = fitToWindow();
+        session.Resolution = resolution();
         _resizeDebounce.Tick += (_, _) => { _resizeDebounce.Stop(); ReportSize(); };
         _content.SizeChanged += (_, _) => { _resizeDebounce.Stop(); _resizeDebounce.Start(); };
 
@@ -688,9 +690,9 @@ public sealed class AgentDesktopView : Border, IRecordableView
             case nameof(SessionBase.AccentBrush):
                 UpdateFrame();
                 break;
-            case nameof(AgentDesktopSession.FitToWindow):
+            case nameof(AgentDesktopSession.Resolution):
                 UpdateFitButton();
-                _rememberFit(_session.FitToWindow);
+                _rememberResolution(_session.Resolution);
                 break;
             case nameof(AgentDesktopSession.Quality):
                 _quality.SelectedItem = _quality.Items.OfType<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, _session.Quality));
@@ -802,10 +804,42 @@ public sealed class AgentDesktopView : Border, IRecordableView
 
     private void UpdateFitButton()
     {
-        _fit.Appearance = _session.FitToWindow ? ControlAppearance.Primary : ControlAppearance.Secondary;
-        _fit.ToolTip = _session.FitToWindow
-            ? "The device's resolution follows this window (back to its own when you disconnect). Click to keep the device's resolution."
-            : "Change the device's resolution to fit this window";
+        var r = _session.Resolution;
+        _fit.Appearance = r.Kind == DesktopResolutionKind.Device ? ControlAppearance.Secondary : ControlAppearance.Primary;
+        _fit.ToolTip = r.Kind switch
+        {
+            DesktopResolutionKind.Fit => "The device's resolution follows this window (back to its own when you disconnect). Click to choose another.",
+            DesktopResolutionKind.Fixed => $"The device runs at {r.Label} – the picture is scaled to this window (back to its own resolution when you disconnect). Click to choose another.",
+            _ => "Change the device's resolution – to fit this window, or larger to see more of the screen",
+        };
+    }
+
+    /// <summary>The device's resolution: its own, this window's size or a fixed one (larger than the window too – the picture is scaled down).</summary>
+    private System.Windows.Controls.ContextMenu ResolutionMenu()
+    {
+        var current = _session.Resolution;
+        // The choice that is on shows a tick in place of its icon, as in the privacy screen's menu.
+        System.Windows.Controls.MenuItem Choice(DesktopResolution r, SymbolRegular icon, string? label = null) =>
+            RemoteToolChrome.Item(label ?? r.Label, r == current ? SymbolRegular.Checkmark24 : icon, () => _session.Resolution = r);
+        var m = new System.Windows.Controls.ContextMenu();
+        m.Items.Add(Choice(DesktopResolution.Device, SymbolRegular.Desktop24));
+        m.Items.Add(Choice(DesktopResolution.Fit, SymbolRegular.ScaleFit24));
+        m.Items.Add(new Separator());
+        foreach (var r in DesktopResolution.Presets) m.Items.Add(Choice(r, SymbolRegular.Resize24));
+        if (current.Kind == DesktopResolutionKind.Fixed && !DesktopResolution.Presets.Contains(current)) m.Items.Add(Choice(current, SymbolRegular.Resize24));
+        m.Items.Add(new Separator());
+        m.Items.Add(RemoteToolChrome.Item("Custom resolution…", SymbolRegular.Edit24, ChooseCustomResolution));
+        return m;
+    }
+
+    private void ChooseCustomResolution()
+    {
+        var initial = _session.Resolution.Kind == DesktopResolutionKind.Fixed ? _session.Resolution.Label : "2560 × 1600";
+        var dlg = new InputDialog("Custom resolution", "Width × height in pixels for the device – larger than this window too, the picture is scaled down. The display may only offer a size close to it.",
+            initial) { Owner = Window.GetWindow(this) };
+        if (dlg.ShowDialog() != true) return;
+        if (DesktopResolution.Parse(dlg.Value) is { Kind: DesktopResolutionKind.Fixed } r) _session.Resolution = r;
+        else _session.ShowNotice($"That is not a valid resolution – enter width × height, from {DesktopProtocol.MinFitWidth} × {DesktopProtocol.MinFitHeight} up to {DesktopProtocol.MaxFitWidth} × {DesktopProtocol.MaxFitHeight}.");
     }
 
     private void UpdateFrame()

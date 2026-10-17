@@ -34,6 +34,69 @@ public sealed record DesktopQualityPreset(string Id, string Label, int FramesPer
     public static DesktopQualityPreset Find(string? id) => All.FirstOrDefault(p => p.Id == id) ?? Default;
 }
 
+public enum DesktopResolutionKind { Device, Fit, Fixed }
+
+/// <summary>
+/// The resolution the device runs at during an agent desktop session: its own, the tab's size, or a fixed size – larger
+/// than the tab too, the picture is then scaled down to fit. Stored as <see cref="Id"/> ("device", "fit", "2560x1440").
+/// </summary>
+public sealed record DesktopResolution(DesktopResolutionKind Kind, int Width = 0, int Height = 0)
+{
+    public static readonly DesktopResolution Device = new(DesktopResolutionKind.Device);
+    public static readonly DesktopResolution Fit = new(DesktopResolutionKind.Fit);
+
+    /// <summary>The fixed sizes the toolbar offers.</summary>
+    public static readonly DesktopResolution[] Presets =
+    [
+        new(DesktopResolutionKind.Fixed, 1920, 1080),
+        new(DesktopResolutionKind.Fixed, 2560, 1440),
+        new(DesktopResolutionKind.Fixed, 3840, 2160),
+    ];
+
+    public string Id => Kind switch
+    {
+        DesktopResolutionKind.Fit => "fit",
+        DesktopResolutionKind.Fixed => $"{Width}x{Height}",
+        _ => "device",
+    };
+
+    public string Label => Kind switch
+    {
+        DesktopResolutionKind.Fit => "Fit to this window",
+        DesktopResolutionKind.Fixed => $"{Width} × {Height}",
+        _ => "The device's own resolution",
+    };
+
+    /// <summary>
+    /// "device", "fit" or a size such as "2560x1440" / "2560 × 1440"; null when it isn't one, or the size is outside what
+    /// the agent accepts (<see cref="DesktopProtocol.ValidFitSize"/>) – rejected rather than changed. Odd sizes are made even.
+    /// </summary>
+    public static DesktopResolution? Parse(string? text)
+    {
+        var t = text?.Trim() ?? "";
+        if (t.Equals("device", StringComparison.OrdinalIgnoreCase)) return Device;
+        if (t.Equals("fit", StringComparison.OrdinalIgnoreCase)) return Fit;
+        var parts = t.Split(['x', 'X', '×', '*', ' '], StringSplitOptions.RemoveEmptyEntries);
+        var number = System.Globalization.NumberStyles.None;
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts.Length != 2 || !int.TryParse(parts[0], number, culture, out var w) || !int.TryParse(parts[1], number, culture, out var h)) return null;
+        if (w > DesktopProtocol.MaxFitWidth || h > DesktopProtocol.MaxFitHeight) return null;
+        var (vw, vh) = DesktopProtocol.ValidFitSize(w, h);
+        return vw == 0 ? null : new DesktopResolution(DesktopResolutionKind.Fixed, vw, vh);
+    }
+
+    /// <summary>The remembered choice; settings from before the menu only have the fit-to-window switch.</summary>
+    public static DesktopResolution FromSettings(string? id, bool fitToWindow) => Parse(id) ?? (fitToWindow ? Fit : Device);
+
+    /// <summary>The size to ask the device for (FitWidth/FitHeight), (0, 0) for its own; the window in device pixels.</summary>
+    public (int Width, int Height) Request(int windowWidth, int windowHeight) => Kind switch
+    {
+        DesktopResolutionKind.Fit => DesktopProtocol.ValidFitSize(windowWidth, windowHeight),
+        DesktopResolutionKind.Fixed => DesktopProtocol.ValidFitSize(Width, Height),
+        _ => (0, 0),
+    };
+}
+
 /// <summary>Where the tab is in the connect flow (what the view shows).</summary>
 /// <summary>Where the tab is in the connect flow (what the view shows). Reconnecting: the connection dropped, the picture stays.</summary>
 public enum DesktopPhase { Idle, Connecting, Choose, Waiting, Pin, Live, Reconnecting, Ended }
@@ -262,25 +325,33 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     private (int Width, int Height) _window;
 
-    /// <summary>The device's resolution follows the tab (like RDP's dynamic resolution); restored when the session ends.</summary>
-    [ObservableProperty] private bool _fitToWindow = true;
+    /// <summary>
+    /// The device's resolution: its own, following the tab (like RDP's dynamic resolution) or a fixed size; the device
+    /// goes back to its own when the session ends.
+    /// </summary>
+    [ObservableProperty] private DesktopResolution _resolution = DesktopResolution.Fit;
 
-    partial void OnFitToWindowChanged(bool value) => SendSettings();
+    partial void OnResolutionChanged(DesktopResolution value) => SendSettings();
 
     /// <summary>Size of the picture area in device pixels (the view reports it, debounced).</summary>
     public void WindowSizeChanged(int width, int height)
     {
         if (_window == (width, height)) return;
         _window = (width, height);
-        if (FitToWindow) SendSettings();
+        if (Resolution.Kind == DesktopResolutionKind.Fit) SendSettings();
+    }
+
+    /// <summary>The Settings message for now; view-only and the picture of all monitors keep the device's resolution (the agent checks too).</summary>
+    internal DesktopSettings CurrentSettings()
+    {
+        var (w, h) = !ViewOnly && Layout?.Monitor != DesktopProtocol.AllMonitors ? Resolution.Request(_window.Width, _window.Height) : (0, 0);
+        return new DesktopSettings(Layout?.Monitor ?? 0, Quality.FramesPerSecond, Quality.Quality, w, h);
     }
 
     private void SendSettings()
     {
         if (Phase != DesktopPhase.Live) return;
-        var (w, h) = FitToWindow && !ViewOnly && Layout?.Monitor != DesktopProtocol.AllMonitors ? _window : (0, 0);
-        _client?.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(Layout?.Monitor ?? 0, Quality.FramesPerSecond, Quality.Quality, w & ~1, h & ~1),
-            DesktopJson.Default.DesktopSettings));
+        _client?.Send(DesktopWire.Json(DesktopMessage.Settings, CurrentSettings(), DesktopJson.Default.DesktopSettings));
     }
 
     // ---- this PC's clipboard: sent as soon as it changes (text), while the tab controls the device
@@ -988,7 +1059,8 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     private DispatcherTimer? _noticeTimer;
 
-    private void ShowNotice(string text)
+    /// <summary>A short note over the picture for a few seconds (also for the view's own messages).</summary>
+    public void ShowNotice(string text)
     {
         Notice = text;
         _noticeTimer?.Stop();

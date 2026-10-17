@@ -666,12 +666,23 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.fitMonitors = Ui 'Monitor of the device' -Value read -Optional -TimeoutSec 10
                 $R.fitOn = DeviceRes
                 $R.fitTipOn = (Ui '*follows this window*' -Value exists -Optional -TimeoutSec 10).found
+                # the resolution button opens a menu (a popup window of its own, hence -Title '*')
                 $null = Ui '*follows this window*'
+                $null = Ui '*own resolution' -Title '*'
                 Start-Sleep -Seconds 8
                 $R.fitOff = DeviceRes
-                $null = Ui 'Change the device*resolution to fit this window'
+                $null = Ui 'Change the device*resolution*'
+                $null = Ui 'Fit to this window' -Title '*'
                 Start-Sleep -Seconds 8
                 $R.fitOnAgain = DeviceRes
+                # larger than the tab: the device gets the size (or the nearest it offers), the picture is scaled down
+                $null = Ui '*follows this window*'
+                $null = Ui '3840*2160' -Title '*'
+                $R.fitLargeChanged = WaitFor -TimeoutSec 30 -Every 2 { $R.fitLarge = DeviceRes; $R.fitLarge -ne $R.fitOnAgain }
+                Shot 'fit-large'
+                $null = Ui 'The device runs at *'
+                $null = Ui 'Fit to this window' -Title '*'
+                Start-Sleep -Seconds 8
                 # A larger tab: this PC's screen made larger (1600x900), RemoteHub maximized, the navigation hidden. At
                 # 1024x768 even the tab without navigation (868x496 asked) holds no listed mode of the device but 640x480 -
                 # the agent takes the largest listed mode that fits (ScreenCapture.cs DisplayModes.Choose), so "wider" could
@@ -811,12 +822,14 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             # the German layout case needs a de-DE device and characters the Hyper-V keyboard can't type (ASCII only)
         }
 
-        It 'UI-AD-03 Fit to window: the device''s resolution follows the tab (wider tab - wider), off - its own, back after disconnect; monitors as the device has them' -Tag 'UI-AD-03' {
+        It 'UI-AD-03 Resolution menu: fit to window follows the tab (wider tab - wider), the device''s own, 3840x2160 larger than the tab, back after disconnect; monitors as the device has them' -Tag 'UI-AD-03' {
             NoError 'fit'
             NoError 'end'
             $R.fitTipOn | Should -BeTrue -Because 'Fit to window is on by default'
             $R.fitOn | Should -Not -Be $R.resBefore
             $R.fitOff | Should -Be $R.resBefore
+            $R.fitLargeChanged | Should -BeTrue -Because "3840x2160 changes the device's resolution (now $($R.fitLarge))"
+            [int]($R.fitLarge -split 'x')[0] | Should -BeGreaterThan ([int]($R.fitOnAgain -split 'x')[0]) -Because 'the chosen size is larger than the tab'
             [int]($R.fitWide -split 'x')[0] | Should -BeGreaterThan ([int]($R.fitOnAgain -split 'x')[0])
             $R.resAfter | Should -Be $R.resBefore
             if ($R.fitMonitors.enabled) {

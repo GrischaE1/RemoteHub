@@ -660,9 +660,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     var s = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings);
                     var all = s.Monitor == DesktopProtocol.AllMonitors;
                     // Changing the device's resolution is control: not for view-only, and not for the picture of all monitors.
-                    var fit = !_viewOnly && !all && s.FitWidth >= 320 && s.FitHeight >= 200;
+                    var (fitWidth, fitHeight) = _viewOnly || all ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight);
                     _settings = new DesktopSettings(all ? DesktopProtocol.AllMonitors : Math.Max(0, s.Monitor), Math.Clamp(s.FramesPerSecond, 1, policy.MaxFramesPerSecond),
-                        Math.Clamp(s.Quality, 1, policy.MaxQuality), fit ? Math.Min(s.FitWidth, 7680) : 0, fit ? Math.Min(s.FitHeight, 4320) : 0);
+                        Math.Clamp(s.Quality, 1, policy.MaxQuality), fitWidth, fitHeight);
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
                     break;
                 case DesktopMessage.Ack or DesktopMessage.KeyFrameRequest when _live:

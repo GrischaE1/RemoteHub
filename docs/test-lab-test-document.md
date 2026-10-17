@@ -5534,7 +5534,7 @@ P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – 
 **Expected:**
 - Notepad on the device holds exactly the typed text, also the German characters.
 
-#### UI-AD-03 · Monitor / All monitors / Fit to window
+#### UI-AD-03 · Monitor / All monitors / Resolution menu
 P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Preconditions:** Device with two monitors (or a virtual second display); agent desktop connected.
@@ -5542,12 +5542,14 @@ P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab –
 **Steps:**
 1. Note the device's resolution (PS Direct).
 2. FlaUI: pick "Monitor 2 · <w>×<h>" in the monitor box; then "All monitors · <w>×<h>".
-3. Turn "Fit to window" on; resize the RemoteHub window; read the device resolution.
-4. Disconnect; read the device resolution.
+3. In the resolution menu pick "The device's own resolution", then "Fit to this window"; resize the RemoteHub window; read the device resolution.
+4. Pick "3840 × 2160"; read the device resolution; back to "Fit to this window".
+5. Disconnect; read the device resolution.
 
 **Expected:**
 - Each choice changes the picture to that monitor / all monitors.
-- With Fit to window the device resolution follows the tab (as in D-MON / D-FIT).
+- With Fit to this window the device resolution follows the tab (as in D-MON / D-FIT); with the device's own it stays as it was.
+- With 3840 × 2160 the device runs wider than the tab (that size or the nearest it offers) and the picture is scaled down to fit.
 - After disconnect the original resolution is back.
 
 #### UI-AD-04 · Key combinations

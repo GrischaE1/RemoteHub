@@ -367,8 +367,10 @@ public sealed class UiState
     /// <summary>Remote desktop through the agent: picture preset (see <see cref="Remoting.DesktopQualityPreset"/>) and the last consent mode.</summary>
     public string AgentDesktopQuality { get; set; } = "Admin";
     public string? AgentDesktopConsent { get; set; }
-    /// <summary>The device's resolution follows the tab (restored when the session ends).</summary>
+    /// <summary>The device's resolution follows the tab (restored when the session ends). Kept in step with <see cref="AgentDesktopResolution"/> for older versions.</summary>
     public bool AgentDesktopFitToWindow { get; set; } = true;
+    /// <summary>The device's resolution during a session: "device", "fit" or "2560x1440" (see <see cref="Remoting.DesktopResolution"/>); null = from <see cref="AgentDesktopFitToWindow"/>.</summary>
+    public string? AgentDesktopResolution { get; set; }
     /// <summary>The connection info over the agent desktop's picture.</summary>
     public bool AgentDesktopShowInfo { get; set; }
     /// <summary>Alt+Tab, the Windows key and its combinations go to the device while its tab has the focus.</summary>

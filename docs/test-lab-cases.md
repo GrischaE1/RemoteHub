@@ -848,7 +848,7 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 |---|---|---|---|---|---|
 | UI-AD-01 | Open | *Remote desktop* opens the agent tab, session picker lists the device's sessions, Connected; tab picture equals a console screenshot of the device | U C | 1 | ◐ |
 | UI-AD-02 | Control | click into the tab and type → Notepad on the device gets the text (incl. German layout case) | U S | 1 | ◐ |
-| UI-AD-03 | Monitor / All monitors / Fit to window | each choice changes the picture and the device resolution as in D-MON / D-FIT; resolution restored on disconnect | U PS | 2 | ◐ |
+| UI-AD-03 | Monitor / All monitors / Resolution menu | each choice changes the picture and the device resolution as in D-MON / D-FIT: *Fit to this window* follows the tab, *The device's own resolution* keeps it, *3840 × 2160* makes it larger than the tab (scaled down); resolution restored on disconnect | U PS | 2 | ◐ |
 | UI-AD-04 | Key combinations | Alt+Tab and Win+R in the tab go to the device; Win+L stays local | U S | 2 | ◐ |
 | UI-AD-05 | Ask | user Allows (OCR + console mouse on the device) → tab connects; Denies → "The user at the device didn't allow it." | U S | 1 | ◐ |
 | UI-AD-06 | Show them a code | code read on the device, typed into RemoteHub's PIN box → connected; wrong → "That code isn't right. Try again." with "2 attempt(s) left." / "1 attempt(s) left.", then "The code was entered wrong too often." | U S | 1 | ◐ |

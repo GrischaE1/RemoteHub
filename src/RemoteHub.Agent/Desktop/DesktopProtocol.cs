@@ -37,6 +37,16 @@ public static class DesktopProtocol
     /// <summary>Largest picture the H.264 encoder takes; a larger "all monitors" picture is scaled down.</summary>
     public const int MaxVideoWidth = 4096, MaxVideoHeight = 2304;
 
+    /// <summary>Resolutions RemoteHub may ask the device for (<see cref="DesktopSettings.FitWidth"/>): the virtual display's range at most.</summary>
+    public const int MinFitWidth = 320, MinFitHeight = 200, MaxFitWidth = 7680, MaxFitHeight = 4320;
+
+    /// <summary>
+    /// A requested resolution as the agent applies it: even, at most <see cref="MaxFitWidth"/> × <see cref="MaxFitHeight"/>;
+    /// (0, 0) – the device's own – when either side is below the minimum (or negative).
+    /// </summary>
+    public static (int Width, int Height) ValidFitSize(int width, int height) =>
+        width < MinFitWidth || height < MinFitHeight ? (0, 0) : (Math.Min(width, MaxFitWidth) & ~1, Math.Min(height, MaxFitHeight) & ~1);
+
     /// <summary>Clipboard images and files: at most this much per copy, sent in chunks of <see cref="TransferChunkBytes"/>.</summary>
     public const long MaxTransferBytes = 100L * 1024 * 1024;
     public const int MaxTransferItems = 1000;
@@ -288,7 +298,8 @@ public sealed record DesktopLayout(DesktopMonitor[] Monitors, int Monitor, int W
 
 /// <summary>
 /// RemoteHub changes the monitor or the quality during the session. FitWidth/FitHeight (pixels, 0 = off): set the shown
-/// monitor's resolution to the viewer's window (the nearest mode the display supports); it is restored at the end.
+/// monitor's resolution to this size – the viewer's window, or a size the admin chose, larger than the window too (the
+/// nearest mode the display supports, checked with <see cref="DesktopProtocol.ValidFitSize"/>); it is restored at the end.
 /// </summary>
 public sealed record DesktopSettings(int Monitor, int FramesPerSecond, int Quality, int FitWidth = 0, int FitHeight = 0);
 
