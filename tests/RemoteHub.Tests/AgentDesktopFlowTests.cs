@@ -21,7 +21,7 @@ namespace RemoteHub.Tests;
 /// Remote desktop through the agent, end to end on this PC: the agent's endpoint with its real relay and the real
 /// desktop helper logic (in-process, with a generated screen and recorded input) against RemoteHub's client.
 /// </summary>
-public class AgentDesktopFlowTests
+public partial class AgentDesktopFlowTests
 {
     private const string Admins = "S-1-5-32-544", Users = "S-1-5-32-545";
 

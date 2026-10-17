@@ -228,6 +228,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         _lost = !IsProtocolError(error);
                         _endReason = (_lost ? "connection lost: " : "invalid message from RemoteHub: ") + error.Message;
                     }
+                    else if (fromClient.IsCanceled)
+                    {
+                        // The agent noticed the drop first: the keep-alive timeout or the aborted request ends the pending
+                        // receive with an OperationCanceledException, so the loop ends cancelled, not faulted. Nothing here
+                        // cancels it on purpose – only a takeover by a new connection, which continues the session too.
+                        _lost = true;
+                        _endReason = _resume?.TakenOver == true ? "continued in a new connection" : "connection lost";
+                    }
                     // Closed by RemoteHub or an invalid message: ended on purpose, so the token goes now rather than after the
                     // close handshake, which waits up to 2 s. A receive that ended because this connection was cancelled (a
                     // takeover by a new connection) is no such end.

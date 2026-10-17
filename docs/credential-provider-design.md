@@ -395,7 +395,7 @@ Privacy mode (0.18.3) provides what v2 had to leave out: an overlay on the devic
   - **How to lock:** `WTSDisconnectSession` on the session, on client Windows and Server alike. On client Windows the console then shows the lock screen; on Server the console session is disconnected and the console goes back to the sign-in screen. Either way the session's programs keep running and the next sign-in of the account reconnects to it. The audit says "locked" in both cases. `LockWorkStation` from the helper isn't used.
   - **Every action checks the owner first:** the session must still belong to the account (by SID); otherwise nothing is done and only the log says so.
   - **Audit 1107:** "Automatic sign-in session *n* of *account* locked / signed out (*reason*)" ("couldn't be locked / signed out" when Windows refused). Reasons: "closed by RemoteHub", the idle reason ("no mouse or keyboard input for …"), "connection lost and not continued in time", "the screen cover ended after the connection dropped", "connection lost, nothing to cover the screen", "the agent restarted while it was open".
-  - **Known bug:** when the agent notices a drop first (its read of the WebSocket ends without an error), the connection counts as "closed by RemoteHub": the session is locked at once instead of getting the 2-minute cover below, and a resume can't continue in it (lab C-END-15, D-RES-10; `DesktopEndpoint` main loop, where `fromClient` ends without a fault).
+  - A drop the agent notices first (the keep-alive timeout or the aborted request cancels its read of the WebSocket rather than failing it) is a drop too, not "closed by RemoteHub": the session gets the 2-minute cover below, and a resume continues in it (lab C-END-06, C-END-15, D-RES-10).
 - **A dropped connection: covered for 2 minutes, then signed out** (decided, §15 Q8). For a session created by automatic sign-in (the connection is "lost" in `DesktopEndpoint`'s terms, so a resume token was released):
   - **The helper keeps running** in the session for 2 minutes, with the privacy screen and the local input block as they were. It sends no frames and accepts no admin input; it only holds the overlay.
   - **No banner** (see above): the overlay stays as it is until the session is signed out or a resumed connection takes over.
@@ -664,7 +664,6 @@ The questions from v1 were decided by the owner on 2026-10-13. Q5 was reopened b
 ## 16. Not done yet (0.18.11)
 
 - **Release signing certificate** (phase 0). Until it exists the provider ships only to lab VMs.
-- **Known bug:** a drop the agent notices first counts as "closed by RemoteHub" and locks the session at once instead of the 2-minute cover (§9.2, lab C-END-15).
 - **1104 for the service's privacy screen** names the admin as the one who turned it on (§9.1, product finding, C-END-14).
 - **`AUTOSIGNIN=1` on a package without the provider** still writes the policy values (§5, product gap).
 - RemoteHub: the notice before the start when the device can't hide its screen (§9.1); asking for the password when none is stored (§10.2); the jump host in the `agent.auto_sign_in` audit entries (§10.2).

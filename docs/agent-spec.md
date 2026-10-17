@@ -148,7 +148,7 @@ Out of scope for v1. The design keeps it possible:
   | 503 | session limit reached, or no free sign-in slot within 30 s (8 sign-ins at once) |
 
 - Messages are at most 16 MB. WebSocket keep-alive: a ping every 30 s; no answer within 30 s ends the connection (and its PowerShell).
-- **Known issue:** a PowerShell session ended by the keep-alive timeout is logged as "PowerShell ended" instead of "connection lost" (`AgentHost.cs`, `Tunnel.RunAsync`).
+- A PowerShell session ended by a drop is logged as "connection lost" (1001), whichever side of the relay notices it first: a receive cancelled by the keep-alive timeout or by the aborted request is a drop, not "closed by RemoteHub" or "PowerShell ended".
 - Versioned through the path (`/v1`). The contract lives in `src/RemoteHub.Agent/AgentProtocol.cs`, which is compiled into both sides.
 
 ## 7. Configuration: `%ProgramData%\RemoteHub\Agent\agent.json`
