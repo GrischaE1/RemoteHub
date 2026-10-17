@@ -1447,11 +1447,12 @@ public partial class MainWindow : FluentWindow
                 ui.AgentDesktopConsent = consent;
                 _vm.RequestSave();
             },
-            () => ui.AgentDesktopFitToWindow,
-            fit =>
+            () => DesktopResolution.FromSettings(ui.AgentDesktopResolution, ui.AgentDesktopFitToWindow),
+            resolution =>
             {
-                if (ui.AgentDesktopFitToWindow == fit) return;
-                ui.AgentDesktopFitToWindow = fit;
+                if (ui.AgentDesktopResolution == resolution.Id) return;
+                ui.AgentDesktopResolution = resolution.Id;
+                ui.AgentDesktopFitToWindow = resolution.Kind == DesktopResolutionKind.Fit;
                 _vm.RequestSave();
             },
             () => Inheritance.ResolveOptions(c, _vm.Data).AgentAutoSignIn == true,

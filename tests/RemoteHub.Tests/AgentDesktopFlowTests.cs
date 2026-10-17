@@ -1407,6 +1407,28 @@ public class AgentDesktopFlowTests
         }
     }
 
+    [Fact]
+    public async Task A_resolution_larger_than_the_window_is_applied_within_limits_and_restored_on_disconnect()
+    {
+        await using var d = await StartDevice();
+        var v = await Connect(d);
+        int restores;
+        try
+        {
+            v.Start(ActiveUser.Id, DesktopConsent.None);
+            v.Next(DesktopStatusState.Connected);
+            v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, 3840, 2160), DesktopJson.Default.DesktopSettings));
+            WaitFor(() => d.Helpers.Screens[0].Fits.Contains((3840, 2160)), "the chosen resolution");
+            // From the wire, untrusted: far too large is limited to what the virtual display takes.
+            v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, int.MaxValue, 99999), DesktopJson.Default.DesktopSettings));
+            WaitFor(() => d.Helpers.Screens[0].Fits.Contains((DesktopProtocol.MaxFitWidth, DesktopProtocol.MaxFitHeight)), "the largest resolution");
+            Assert.DoesNotContain(d.Helpers.Screens[0].Fits, f => f.Item1 > DesktopProtocol.MaxFitWidth || f.Item2 > DesktopProtocol.MaxFitHeight || f.Item1 <= 0 || f.Item2 <= 0);
+            restores = d.Helpers.Screens[0].Restores; // a size is set: nothing restores it until the end
+        }
+        finally { v.Dispose(); }
+        WaitFor(() => d.Helpers.Screens[0].Restores > restores, "the device's own resolution back after disconnecting");
+    }
+
     [Theory]
     [InlineData(1600, 900, 1600, 900)]   // listed: exact
     [InlineData(1700, 950, 1600, 900)]   // largest that fits

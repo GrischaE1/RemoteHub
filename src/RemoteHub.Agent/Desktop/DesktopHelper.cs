@@ -205,7 +205,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)DesktopMessage.Settings when _begun:
                         var s = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings);
                         (_monitor, _fps, _quality) = (s.Monitor, Math.Clamp(s.FramesPerSecond, 1, 60), Math.Clamp(s.Quality, 1, 100));
-                        _fit = _init?.ViewOnly != false ? (0, 0) : (s.FitWidth, s.FitHeight);
+                        _fit = _init?.ViewOnly != false ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight); // the service checked it too
                         _settingsChanged = true;
                         break;
                     case (byte)DesktopMessage.Ack when _begun:
