@@ -515,7 +515,14 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 // Files are read as the signed-in user: only what they may read themselves.
                 if (content.Image is { } image) o = ClipboardTransfer.Image(id, image, content.Png);
                 else SessionUser.Run(() => o = ClipboardTransfer.Files(id, content.Files!, out error));
-                if (o is null) { TransferFailed(id, error ?? "Nothing to copy."); return; }
+                if (o is null)
+                {
+                    if (content.Files is not null) Note($"clipboard: {content.Files.Count} path(s) copied at the device – not sent: {error ?? "nothing to copy"}");
+                    TransferFailed(id, error ?? "Nothing to copy.");
+                    return;
+                }
+                if (content.Files is not null)
+                    Note($"clipboard: files copied at the device ({o.Transfer.Items.Length} item(s), {o.Transfer.Total} bytes) – {(_init?.OfferToViewer == true ? "offered to RemoteHub" : "sent to RemoteHub")}");
                 if (_init?.OfferToViewer == true)
                 {
                     // Names and sizes only: RemoteHub's clipboard offers them; the data goes when someone pastes there.
@@ -528,6 +535,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                // Impersonating the user can fail in ways the file APIs don't (SecurityException): refused, not a helper crash.
+                Note($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+                TransferFailed(id, "The copied files can't be read on the device.");
             }
         }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
     }
@@ -549,6 +562,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                Note($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+                TransferFailed(id, "The copied files can't be read on the device.");
             }
         }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
     }

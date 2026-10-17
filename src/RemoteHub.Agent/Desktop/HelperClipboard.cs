@@ -155,28 +155,67 @@ internal sealed unsafe partial class Win32HelperUi
         if (SetClipboardData(format, memory) == IntPtr.Zero) GlobalFree(memory);
     }
 
-    /// <summary>The clipboard holds no text: an image or files? (clipboard is open)</summary>
-    private HelperClipboard? ReadOther()
+    /// <summary>The clipboard holds no text and no files: an image? (clipboard is open)</summary>
+    private HelperClipboard? ReadImage()
     {
         if (IsClipboardFormatAvailable(PngFormat) && Read(PngFormat) is { } png) return new HelperClipboard(png, Png: true);
         if (IsClipboardFormatAvailable(CF_DIB) && Read(CF_DIB) is { } dib && DibToBmp(dib) is { } bmp) return new HelperClipboard(bmp);
-        if (IsClipboardFormatAvailable(CF_HDROP))
-        {
-            var h = GetClipboardData(CF_HDROP);
-            if (h == IntPtr.Zero) return null;
-            var files = new List<string>();
-            var count = DragQueryFileW(h, 0xFFFFFFFF, null, 0);
-            for (uint i = 0; i < count && i < DesktopProtocol.MaxTransferItems; i++)
-            {
-                var length = DragQueryFileW(h, i, null, 0);
-                var buffer = new char[length + 1];
-                fixed (char* b = buffer) DragQueryFileW(h, i, b, length + 1);
-                files.Add(new string(buffer, 0, (int)length));
-            }
-            return files.Count > 0 ? new HelperClipboard(Files: files) : null;
-        }
         return null;
     }
+
+    /// <summary>
+    /// Files copied at the device (CF_HDROP), at most <see cref="DesktopProtocol.MaxTransferItems"/>; null when the list
+    /// can't be read (not rendered yet, malformed). The clipboard is open. The list comes from the user's programs, so
+    /// it is parsed here within the bytes Windows hands over – not with DragQueryFile, which trusts the header's offset.
+    /// </summary>
+    private static IReadOnlyList<string>? ReadFiles() =>
+        Read(CF_HDROP) is { } drop ? DropFileList(drop, DesktopProtocol.MaxTransferItems) : null;
+
+    /// <summary>
+    /// The paths in a DROPFILES block: the header (offset of the list, wide or ANSI), then the paths, each ending in \0,
+    /// the list in another \0. Only fully qualified local or UNC paths are kept – no device paths (<c>\\.\</c>,
+    /// <c>\\?\</c>) and nothing relative to the helper's own folder. Null if the block is malformed or holds no usable path;
+    /// stops after <paramref name="max"/> paths.
+    /// </summary>
+    internal static List<string>? DropFileList(byte[] drop, int max)
+    {
+        if (drop.Length < 20) return null;
+        var offset = BitConverter.ToUInt32(drop, 0);
+        var wide = BitConverter.ToInt32(drop, 16) != 0;
+        if (offset < 20 || offset >= drop.Length) return null;
+        var files = new List<string>();
+        var at = (int)offset;
+        while (files.Count < max)
+        {
+            // Each path must end inside the block: an unterminated list is refused, not read past its end.
+            int end;
+            string path;
+            if (wide)
+            {
+                end = at;
+                while (end + 1 < drop.Length && (drop[end] | drop[end + 1]) != 0) end += 2;
+                if (end + 1 >= drop.Length) return null;
+                path = System.Text.Encoding.Unicode.GetString(drop, at, end - at);
+                end += 2;
+            }
+            else
+            {
+                end = Array.IndexOf(drop, (byte)0, at);
+                if (end < 0) return null;
+                fixed (byte* p = drop) path = Marshal.PtrToStringAnsi((IntPtr)(p + at), end - at);
+                end += 1;
+            }
+            if (path.Length == 0) break; // the empty string that ends the list
+            if (UsablePath(path)) files.Add(path);
+            at = end;
+        }
+        return files.Count > 0 ? files : null;
+    }
+
+    private static bool UsablePath(string path) =>
+        path.Length < 32_767 && path.IndexOf('\0') < 0 && Path.IsPathFullyQualified(path) &&
+        !path.StartsWith(@"\\.\", StringComparison.Ordinal) && !path.StartsWith(@"\\?\", StringComparison.Ordinal) &&
+        !path.StartsWith("//", StringComparison.Ordinal);
 
     private static byte[]? Read(uint format)
     {
@@ -264,7 +303,6 @@ internal sealed unsafe partial class Win32HelperUi
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
     [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern uint DragQueryFileW(IntPtr drop, uint index, char* file, uint length);
     [DllImport("ole32.dll")] private static extern int CreateStreamOnHGlobal(IntPtr memory, bool deleteOnRelease, out IntPtr stream);
     [DllImport("gdiplus.dll")] private static extern int GdipCreateBitmapFromStream(IntPtr stream, out nint bitmap);
     [DllImport("gdiplus.dll")] private static extern int GdipGetImageWidth(nint image, out uint width);

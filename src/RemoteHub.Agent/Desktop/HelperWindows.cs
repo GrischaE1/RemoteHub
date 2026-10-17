@@ -670,6 +670,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                         case WM_RENDERFORMAT: ui.Render((uint)wParam); return 0;
                         case WM_RENDERALLFORMATS: return 0; // the helper ends: an offer not pasted yet is gone, nothing is fetched
                         case WM_DESTROYCLIPBOARD: ui.OfferEnded(); return 0;
+                        case WM_TIMER when wParam == ClipboardTimer: ui.ReadAgain(); return 0;
                         case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); if (ui._screen.BlockLocalInput) ui.HideSasActions(); return 0;
                     }
                 if (ui._windows.TryGetValue(hwnd, out var w))
@@ -683,45 +684,97 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    /// <summary>A clipboard change that couldn't be read yet (its sequence number, 0 for none) and how often it was tried.</summary>
+    private uint _unreadSequence;
+    private int _unreadTries;
+
     private void OnClipboard()
     {
-        if (GetClipboardSequenceNumber() == _ownSequence) return; // what we put there ourselves
-        if (GetClipboardOwner() == _messageWindow) return;        // still ours (e.g. an offer that was just pasted): never sent back
-        if (VirtualFiles.IsCurrent(_virtual)) return;             // our virtual files (OLE owns the clipboard for us)
-        if (!IsClipboardFormatAvailable(13))
-        {
-            HelperClipboard? other = null;
-            if (OpenClipboardRetry())
-            {
-                try { other = ReadOther(); }
-                finally { CloseClipboard(); }
-            }
-            if (other is not null)
-            {
-                _lastClipboard = "";
-                ClipboardContent?.Invoke(other);
-            }
-            return;
-        }
-        if (!OpenClipboardRetry()) return;
-        string? text = null;
+        var sequence = GetClipboardSequenceNumber();
+        if (sequence == _ownSequence) return;               // what we put there ourselves
+        if (GetClipboardOwner() == _messageWindow) return;  // still ours (e.g. an offer that was just pasted): never sent back
+        if (VirtualFiles.IsCurrent(_virtual)) return;       // our virtual files (OLE owns the clipboard for us)
+        if (sequence != _unreadSequence) _unreadTries = 0;
+        _unreadSequence = 0; // set again below only if this change can't be read yet
         try
         {
-            var data = GetClipboardData(13);
-            if (data != IntPtr.Zero)
+            // Files first: a program may put the paths as text next to a file list; what was copied is the files.
+            if (IsClipboardFormatAvailable(CF_HDROP))
             {
-                var p = (char*)GlobalLock(data);
-                if (p != null)
+                IReadOnlyList<string>? files = null;
+                if (OpenClipboardRetry())
                 {
-                    try { text = new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
-                    finally { GlobalUnlock(data); }
+                    try { files = ReadFiles(); }
+                    finally { CloseClipboard(); }
+                }
+                // The copying program may still hold the clipboard or not have rendered the list yet (Windows Forms
+                // renders its copy right after announcing it): read again shortly instead of losing the copy.
+                if (files is null) { ReadAgainLater(sequence, "a file list"); return; }
+                _lastClipboard = "";
+                ClipboardContent?.Invoke(new HelperClipboard(Files: files));
+                return;
+            }
+            if (!IsClipboardFormatAvailable(13))
+            {
+                HelperClipboard? image = null;
+                if (OpenClipboardRetry())
+                {
+                    try { image = ReadImage(); }
+                    finally { CloseClipboard(); }
+                }
+                if (image is not null)
+                {
+                    _lastClipboard = "";
+                    ClipboardContent?.Invoke(image);
+                }
+                return;
+            }
+            if (!OpenClipboardRetry()) { ReadAgainLater(sequence, "text"); return; }
+            string? text = null;
+            try
+            {
+                var data = GetClipboardData(13);
+                if (data != IntPtr.Zero)
+                {
+                    var p = (char*)GlobalLock(data);
+                    if (p != null)
+                    {
+                        try { text = new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
+                        finally { GlobalUnlock(data); }
+                    }
                 }
             }
+            finally { CloseClipboard(); }
+            if (text is null || text == _lastClipboard) return;
+            _lastClipboard = text;
+            ClipboardChanged?.Invoke(text);
         }
-        finally { CloseClipboard(); }
-        if (text is null || text == _lastClipboard) return;
-        _lastClipboard = text;
-        ClipboardChanged?.Invoke(text);
+        catch (Exception ex)
+        {
+            // WndProc would swallow it: a copy that silently never arrives is what this line is for.
+            Noted?.Invoke($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+        }
+    }
+
+    private const int ClipboardTimer = 2;
+
+    /// <summary>Tries the same clipboard change again in 250 ms, up to 8 times (2 s); then notes it for the log.</summary>
+    private void ReadAgainLater(uint sequence, string what)
+    {
+        if (++_unreadTries <= 8)
+        {
+            _unreadSequence = sequence;
+            SetTimer(_messageWindow, ClipboardTimer, 250, IntPtr.Zero);
+            return;
+        }
+        Noted?.Invoke($"clipboard: {what} copied at the device could not be read within 2 s");
+    }
+
+    /// <summary>The retry timer: only while nothing newer was copied (a newer change brings its own WM_CLIPBOARDUPDATE).</summary>
+    private void ReadAgain()
+    {
+        KillTimer(_messageWindow, ClipboardTimer);
+        if (_unreadSequence != 0 && GetClipboardSequenceNumber() == _unreadSequence) OnClipboard();
     }
 
     // =====================================================================
