@@ -181,6 +181,29 @@ public static class Enrollment
         store.Certificates.Cast<X509Certificate2>().Where(c => c.FriendlyName == AgentEnrollment.CertificateFriendlyName && c.Subject.Contains("O=RemoteHub Agent"));
 
     /// <summary>
+    /// The enrolled identity without agent.json (docs/agent-spec.md §7.2): the agent's certificate – exactly one with its
+    /// key, as the enrollment leaves it; its CN is the device ID – and the single port of the agent's firewall rule.
+    /// Null when the certificate isn't unambiguous: the service then doesn't start rather than guess.
+    /// </summary>
+    internal static (string DeviceId, string Thumbprint, int? Port)? InstalledIdentity()
+    {
+        using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+        store.Open(OpenFlags.ReadOnly);
+        var found = Ours(store).Where(c => c.HasPrivateKey).ToList();
+        if (found.Count != 1) return null;
+        var deviceId = found[0].GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        if (!Guid.TryParse(deviceId, out _)) return null;
+        int? port = null;
+        try
+        {
+            var (code, rule) = Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true);
+            if (code == 0 && RulePorts(rule).Distinct().ToList() is [var only] && int.TryParse(only, out var p)) port = p;
+        }
+        catch { /* no rule: the default port */ }
+        return (deviceId, found[0].Thumbprint, port);
+    }
+
+    /// <summary>
     /// Only SYSTEM and Administrators – also as owner, and for everything already in the folder: a folder or file a user
     /// created there before the install keeps neither that user as owner nor permissions of its own. Users can't read
     /// the logs (accounts and source addresses).
@@ -266,6 +289,9 @@ public static class Enrollment
             foreach (var c in Ours(store).ToList()) store.Remove(c);
         }
         try { File.Delete(AgentConfig.DefaultPath); } catch { /* not there */ }
+        // The last good copy too: a later install without an enrollment file must not bring back this device's settings.
+        try { File.Delete(AgentConfig.BackupPath(AgentConfig.DefaultPath)); } catch { /* not there */ }
+        try { File.Delete(AgentConfig.DamagedPath(AgentConfig.DefaultPath)); } catch { /* not there */ }
         try { File.Delete(Path.Combine(AgentConfig.Folder, "autosignin.json")); } catch { /* not there */ }
         SecureAttention.Remove();
         try { log.Write(AutoSignInSetup.Off()); } catch (Exception ex) { log.Write("Automatic sign-in policy not removed: " + ex.Message); }

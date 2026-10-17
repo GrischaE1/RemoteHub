@@ -116,7 +116,7 @@ RemoteHub (operator PC)                               Device
   5. Delete the `.rhagent` file (if that fails, the log says to delete it by hand).
   6. Virtual display and automatic sign-in as chosen (their failure doesn't fail the install).
 
-  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json`, `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
+  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json` with its backup `agent.json.bak` (§7.2), `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
 - **Firewall:** inbound rule "RemoteHub Agent" for the agent program and its port (TCP, all profiles), limited to the remote addresses given in the enrollment, or Any if none are given.
 - **Port in use:** the agent logs a clear error and doesn't start. It never moves silently to another port.
 
@@ -224,6 +224,37 @@ agent.json, default). Health (`/v1/health`) lists in `managed` which of RemoteHu
 Automatic sign-in as chosen at install is in agent.json (`noUserBehavior`, `autoSignInGroups`) since 0.18.12; the policy
 values win. Older versions wrote it into this key (recorded in `autosignin.policy`); the service moves those values to
 agent.json at its first start, unless IT changed them since.
+
+### 7.2 Writing and damage
+
+A device that loses power at the wrong moment must not end up unreachable (lab finding A-CFG-JSON: agent.json was
+zero-filled after a hard power-off, and the service didn't start).
+
+- **Writes are atomic and durable.** agent.json, `autosignin.json`, `virtual-display.txt` and the records in
+  `rdp-minimized-*.txt` and `sas-actions-*.txt` are written to a temporary file in the same folder, flushed to the disk
+  and only then put in place (`DurableFile`): a power loss leaves the old file or the new one, never a torn one. The
+  temporary file inherits the folder's ACL (§5.3); an existing file is replaced with `ReplaceFile`, which keeps that
+  file's own ACL.
+- **A last good copy.** Every save of agent.json also writes `agent.json.bak`, once agent.json itself has been
+  replaced. At every service start a readable and valid agent.json refreshes the backup, so a hand edit becomes the last
+  good copy too.
+- **At service start, a damaged agent.json** – one that isn't a configuration at all: empty, zero-filled, cut off, not
+  JSON – is kept as `agent.json.damaged`, and:
+  - with a readable backup, the service starts with the backup and writes it back to agent.json. Log and Application
+    log: event 2300 (warning), saying what couldn't be read and that the backup was used.
+  - without one, the service starts with a fresh install's defaults – never more than a fresh install allows: the
+    device's own certificate (the single agent certificate in LocalMachine\My; its CN is the device ID), the port the
+    agent's firewall rule opens (else the default port), allowed groups the local Administrators, automatic sign-in
+    off, default limits. The defaults aren't saved, and automatic sign-in isn't read from the file again while the
+    service runs. Event 3300 (error) says so at every start, until agent.json is repaired or the agent is installed
+    again with the enrollment file. The Administrators get no access they couldn't give themselves – they can edit
+    agent.json. Policy values still win over the defaults, as over agent.json. Without a single agent certificate the
+    service doesn't start, and the log says to install it again.
+- **Not treated as damage:** a file that reads but holds an invalid value (a port of 0, no allowed groups) is what
+  someone wrote. Replacing it with an older copy could undo a restriction they made, so the service refuses to start
+  and logs why, as before. A missing agent.json means the device isn't enrolled (uninstall deletes it).
+- **Limit:** the backup can be older than a hand edit made since the last service start or save. Whoever narrows
+  `allowedGroups` by hand restarts the service, which makes the edit the last good copy.
 
 ## 8. Logging
 

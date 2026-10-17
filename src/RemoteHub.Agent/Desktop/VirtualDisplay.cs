@@ -292,8 +292,8 @@ internal static class VirtualDisplay
 
     private static void Save(State state)
     {
-        Directory.CreateDirectory(AgentConfig.Folder);
-        File.WriteAllText(StateFile, state.Serialize());
+        // In one step: a torn file loses the instance ID, and with it the switch and the removal of the device.
+        DurableFile.WriteAllText(StateFile, state.Serialize());
     }
 
     /// <summary>The size the virtual monitor gets for a window: even, 800×600 to 7680×4320.</summary>

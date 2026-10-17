@@ -15,12 +15,14 @@ if (args.Length > 0 && args[0] == "desktop") return DesktopHelperProgram.Run();
 
 try
 {
-    var config = AgentConfig.Load(AgentConfig.DefaultPath);
+    // A damaged agent.json falls back to its last good copy, else a fresh install's defaults (docs/agent-spec.md §7.2).
+    var config = AgentConfig.LoadForService(AgentConfig.DefaultPath, Enrollment.InstalledIdentity);
     log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), config.LogRetentionDays)
     {
         EventLogEnabled = () => AgentPolicy.Load(config).AuditToEventLog,
         RetentionDays = () => AgentPolicy.Load(config).LogRetentionDays,
     };
+    if (config.Recovery is { } recovery) log.Audit(config.IsSafeDefaults ? AuditEvent.ConfigDefaults : AuditEvent.ConfigRestored, recovery);
     // Automatic sign-in values an older version wrote into the policy key move to agent.json (once; docs/admx-design.md §11.3).
     if (AutoSignInSetup.Migrate(config) is { } moved) log.Write(moved);
     // The port: policy ListenPort, else agent.json; read only here. The firewall rule follows it.
