@@ -205,7 +205,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         catch { running = []; }
         var items = running.Select(a =>
         {
-            var locked = offer.Always.Contains(a.Id);
+            var locked = AppIds.IsHidden(offer.Always, a.Id, a.Exe);
             var detail = locked ? "Always hidden (IT policy)" : a.Windows == 1 ? "1 window" : $"{a.Windows} windows";
             return new PickItem(a.Id, a.Name, detail, a.Icon, locked || offer.Hidden.Contains(a.Id), locked);
         }).ToList();

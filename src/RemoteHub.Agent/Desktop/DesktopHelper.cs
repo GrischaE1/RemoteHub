@@ -353,7 +353,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         var hidden = _hiddenApps;
         if (hidden.Count == 0) return false;
-        try { return hidden.Contains(apps.ClipboardOwnerApp()); }
+        try { return AppIds.IsHidden(hidden, apps.ClipboardOwnerApp()); }
         catch { return true; } // unknown: not sent
     }
 
@@ -679,7 +679,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         var hidden = _hiddenApps;
         if (hidden.Count == 0) return false;
-        try { return hidden.Contains(apps.ForegroundApp()); }
+        try { return AppIds.IsHidden(hidden, apps.ForegroundApp()); }
         catch { return true; }
     }
 

@@ -47,10 +47,18 @@ internal readonly record struct ScreenRect(int Left, int Top, int Right, int Bot
 /// <param name="Opaque">Covers what is below it in the picture: not layered, not click-through, not kept out of captures.</param>
 /// <param name="Shell">A shell surface that shows other apps' content (thumbnails, Alt+Tab, Task View, notifications).</param>
 /// <param name="Unresolved">A Store app's frame whose app couldn't be found out.</param>
-internal sealed record AppWindow(IntPtr Handle, string App, ScreenRect Bounds, bool Opaque, bool Shell = false, bool Unresolved = false);
+/// <param name="Exe">The full path of its program, normalised (<see cref="AppIds.Normalize"/>); "" if unknown.</param>
+internal sealed record AppWindow(IntPtr Handle, string App, ScreenRect Bounds, bool Opaque, bool Shell = false, bool Unresolved = false, string Exe = "");
 
 /// <summary>A running app as the user picks it: one row per app, however many windows it has.</summary>
-internal sealed record RunningApp(string Id, string Name, int Windows, IntPtr Icon);
+/// <param name="Exe">The full path of its program, so a policy entry naming a Store app by path finds it too.</param>
+internal sealed record RunningApp(string Id, string Name, int Windows, IntPtr Icon, string Exe = "");
+
+/// <summary>Which app a window belongs to (<see cref="AppIds"/>), its program's path, and whether that is a Store frame whose app couldn't be found out.</summary>
+internal readonly record struct AppIdentity(string App, string Exe = "", bool Unresolved = false)
+{
+    public static readonly AppIdentity None = new("");
+}
 
 /// <summary>The windows of the desktop the calling thread is on (the real ones, or a test double).</summary>
 internal interface IAppWindows
@@ -61,11 +69,11 @@ internal interface IAppWindows
     /// <summary>Apps with a window the user can switch to (as in Alt+Tab), for the picker.</summary>
     IReadOnlyList<RunningApp> Running();
 
-    /// <summary>The app of the window that has the keyboard ("" if none or not an app).</summary>
-    string ForegroundApp();
+    /// <summary>The app of the window that has the keyboard (<see cref="AppIdentity.None"/> if none or not an app).</summary>
+    AppIdentity ForegroundApp();
 
-    /// <summary>The app that put what is on the clipboard there ("" if unknown).</summary>
-    string ClipboardOwnerApp();
+    /// <summary>The app that put what is on the clipboard there (<see cref="AppIdentity.None"/> if unknown).</summary>
+    AppIdentity ClipboardOwnerApp();
 }
 
 /// <summary>
@@ -77,7 +85,64 @@ internal static class AppIds
 {
     public const string Packaged = "aumid:";
 
-    public static string Normalize(string id) => id.Trim().ToLowerInvariant();
+    private const string PackagesFolder = @"\windowsapps\";
+
+    /// <summary>
+    /// One spelling per app, so a policy entry and the path Windows reports compare equal: lower case, no quotes,
+    /// backslashes, <c>..</c> and doubled separators resolved.
+    /// </summary>
+    public static string Normalize(string id)
+    {
+        var s = id.Trim().Trim('"').Trim();
+        if (s.StartsWith(Packaged, StringComparison.OrdinalIgnoreCase)) return s.ToLowerInvariant();
+        s = s.Replace('/', '\\');
+        if (s.Length > 6 && s.StartsWith(@"\\?\", StringComparison.Ordinal) && s[5] == ':') s = s[4..];
+        try { if (Path.IsPathFullyQualified(s)) s = Path.GetFullPath(s); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { /* kept as written: matches only itself */ }
+        return s.ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// For a program in a Store package's folder (<c>…\WindowsApps\Name_Version_Arch_Resource_Publisher\…</c>): the
+    /// package family and the path inside the package, e.g. <c>microsoft.windowsnotepad_8wekyb3d8bbwe\notepad\notepad.exe</c>;
+    /// "" for anything else. The folder carries the version, so the path an admin copied stops matching with the
+    /// app's next update – this key doesn't change with it.
+    /// </summary>
+    internal static string PackageKey(string path)
+    {
+        var at = path.IndexOf(PackagesFolder, StringComparison.OrdinalIgnoreCase);
+        if (at < 0) return "";
+        var rest = path.AsSpan(at + PackagesFolder.Length);
+        var slash = rest.IndexOf('\\');
+        if (slash <= 0 || slash == rest.Length - 1) return "";
+        var parts = rest[..slash].ToString().Split('_');
+        // A package full name: Name_Version_Architecture_ResourceId_PublisherId (the resource id is mostly empty);
+        // names can't contain '_', so anything else isn't a package folder.
+        if (parts.Length != 5 || parts[0].Length == 0 || parts[1].Length == 0 || parts[4].Length == 0) return "";
+        return string.Concat(parts[0], "_", parts[4], rest[slash..].ToString()).ToLowerInvariant();
+    }
+
+    /// <summary>An entry naming a Store app: by AppUserModelID, or by a program in its package's folder.</summary>
+    internal static bool IsPackaged(string id) => id.StartsWith(Packaged, StringComparison.Ordinal) || PackageKey(id).Length > 0;
+
+    /// <summary>
+    /// Whether a window of <paramref name="app"/> is to be hidden: listed by its app id (an <c>aumid:</c> entry, or the
+    /// path for a classic program), by its program's path – which is how an admin names a Store app they found with
+    /// Task Manager or <c>Get-Process</c> – or by that path in any version of the same package. A Store frame whose
+    /// app couldn't be found out counts as hidden while any Store app is (fails closed). <paramref name="hidden"/>
+    /// holds normalised entries.
+    /// </summary>
+    public static bool IsHidden(IReadOnlySet<string> hidden, string app, string exe, bool unresolved = false)
+    {
+        if (hidden.Count == 0) return false;
+        if (unresolved) return hidden.Any(IsPackaged);
+        if (app.Length == 0) return false; // the shell, the helper: never an app, even if their program is listed
+        if (hidden.Contains(app) || exe.Length > 0 && hidden.Contains(exe)) return true;
+        var key = PackageKey(exe);
+        return key.Length > 0 && hidden.Any(h => PackageKey(h) == key);
+    }
+
+    public static bool IsHidden(IReadOnlySet<string> hidden, AppIdentity a) => IsHidden(hidden, a.App, a.Exe, a.Unresolved);
 }
 
 internal sealed unsafe class WindowsAppWindows : IAppWindows
@@ -111,14 +176,14 @@ internal sealed unsafe class WindowsAppWindows : IAppWindows
             var (app, exe) = Identify(h, pid, cls, out var unresolved);
             var shell = ShellClasses.Contains(cls) || cls == "Windows.UI.Core.CoreWindow" && exe.EndsWith(@"\shellexperiencehost.exe", StringComparison.Ordinal);
             var opaque = pid != _self && (ex & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == 0 && GetWindowDisplayAffinity(h, out var affinity) && affinity == 0;
-            list.Add(new AppWindow(h, app, bounds, opaque, shell, unresolved));
+            list.Add(new AppWindow(h, app, bounds, opaque, shell, unresolved, exe));
         }
         return list;
     }
 
     public IReadOnlyList<RunningApp> Running()
     {
-        var apps = new Dictionary<string, (string Name, int Count, IntPtr Icon)>();
+        var apps = new Dictionary<string, (string Name, int Count, IntPtr Icon, string Exe)>();
         var h = GetTopWindow(IntPtr.Zero);
         for (var n = 0; h != IntPtr.Zero && n < 10_000; n++, h = GetWindow(h, GW_HWNDNEXT))
         {
@@ -134,28 +199,29 @@ internal sealed unsafe class WindowsAppWindows : IAppWindows
             var (app, exe) = Identify(h, pid, ClassName(h), out _);
             if (app.Length == 0) continue;
             if (apps.TryGetValue(app, out var a)) apps[app] = a with { Count = a.Count + 1, Icon = a.Icon != IntPtr.Zero ? a.Icon : Icon(h) };
-            else apps[app] = (DisplayName(app, exe, title), 1, Icon(h));
+            else apps[app] = (DisplayName(app, exe, title), 1, Icon(h), exe);
         }
-        return apps.Select(a => new RunningApp(a.Key, a.Value.Name, a.Value.Count, a.Value.Icon))
+        return apps.Select(a => new RunningApp(a.Key, a.Value.Name, a.Value.Count, a.Value.Icon, a.Value.Exe))
             .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
     }
 
-    public string ForegroundApp() => AppOf(GetForegroundWindow());
+    public AppIdentity ForegroundApp() => AppOf(GetForegroundWindow());
 
-    public string ClipboardOwnerApp()
+    public AppIdentity ClipboardOwnerApp()
     {
         var owner = GetClipboardOwner();
         return owner != IntPtr.Zero ? AppOf(owner) : ForegroundApp();
     }
 
-    private string AppOf(IntPtr h)
+    private AppIdentity AppOf(IntPtr h)
     {
-        if (h == IntPtr.Zero) return "";
+        if (h == IntPtr.Zero) return AppIdentity.None;
         // A child window (clipboard owners often are one): the app of its top-level window.
         var root = GetAncestor(h, 2 /* GA_ROOT */);
         if (root != IntPtr.Zero) h = root;
         GetWindowThreadProcessId(h, out var pid);
-        return Identify(h, pid, ClassName(h), out _).App;
+        var (app, exe) = Identify(h, pid, ClassName(h), out var unresolved);
+        return new AppIdentity(app, exe, unresolved);
     }
 
     /// <summary>The app of a window, and its program's path ("" for both when it isn't an app).</summary>
@@ -320,13 +386,12 @@ internal sealed class AppMask(IAppWindows windows)
             (_last, _lastWindows) = ([], []);
             return [];
         }
-        var packaged = hidden.Any(h => h.StartsWith(AppIds.Packaged, StringComparison.Ordinal));
         var masked = new List<ScreenRect>();
         var covers = new List<ScreenRect>();
         var seen = new List<(IntPtr, ScreenRect)>();
         foreach (var w in windows.Visible()) // topmost first
         {
-            var hide = w.Shell || w.Unresolved && packaged || w.App.Length > 0 && hidden.Contains(w.App);
+            var hide = w.Shell || AppIds.IsHidden(hidden, w.App, w.Exe, w.Unresolved);
             if (hide)
             {
                 if (!w.Shell) seen.Add((w.Handle, w.Bounds));

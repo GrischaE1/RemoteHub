@@ -198,7 +198,7 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `DesktopIdleTimeoutMinutes` | DWORD | 0–1440, 0 = never (0) |
 | `AuditToEventLog` | DWORD | 0: audit only in the log file (1) |
 | `PrivacyScreen` | DWORD | 0 not allowed, 1 allowed, 2 allowed and may block the device's mouse and keyboard (2) |
-| `HiddenApps` | MULTI_SZ | programs (full path) or Store apps (`aumid:` + AppUserModelID) never shown to an admin (none) |
+| `HiddenApps` | MULTI_SZ | programs (full path) or Store apps (`aumid:` + AppUserModelID, or their program's path under `WindowsApps`, matched in any version of the package) never shown to an admin (none) |
 | `TunnelEnabled` | DWORD | 0: never a jump host (on) |
 | `TunnelTargets`, `TunnelPorts` | MULTI_SZ | where jump connections may go: ranges and names / ports (anywhere except the device's own loopback, link-local and multicast; every port) |
 | `MaxTunnelStreams` | DWORD | 1–1024 streams per jump connection (64) |

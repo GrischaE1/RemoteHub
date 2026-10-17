@@ -436,6 +436,8 @@ The selection holds **app identities**, not windows, so new windows of the same 
 | Packaged / UWP app | AppUserModelID | `ApplicationFrameWindow` → child `Windows.UI.Core.CoreWindow` → its PID → `GetApplicationUserModelId` |
 | Explorer | Only File Explorer windows (`CabinetWClass`), never the shell | class + image path `explorer.exe` |
 
+A window is hidden when its identity **or** its image path is in the list – an admin typically copies a Store app's path from Task Manager or `Get-Process` (D-HIDE-01). Paths are compared normalised (lower case, no quotes, `/` as `\`, `..` resolved). For an image path in a package folder (`…\WindowsApps\Name_Version_Arch_Resource_Publisher\…`) the comparison uses the package family (`Name_Publisher`) and the path inside the package, as the folder name changes with every update. A Store frame whose app can't be found out is covered while any Store app is listed, by AUMID or by such a path.
+
 **Name and icon:** the name comes from `FileDescription` in the version resource (fallback: file name), or the package display name. The icon comes from `WM_GETICON` / `GCLP_HICON`, with `SHGetFileInfo` as a fallback.
 
 **Rows offered:** apps with at least one window that would appear in Alt+Tab:
@@ -504,7 +506,7 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 | `AgentRight.PrivacyScreen` | Right (subkey `Rights`) | `config.AllowedGroups` (same as `Desktop`) | May turn on the privacy screen (Phase 1). Also needs `Desktop` (not view-only). |
 | `PrivacyScreen` | DWORD | 2 (see §14, Q2) | 0 – privacy screen off; 1 – allowed, local input stays usable; 2 – allowed, including blocking local input |
 | `PrivacyScreenMessage` | REG_SZ | (built-in text) | Replaces the heading on the Message overlay, e.g. "Contoso IT is working on this PC" |
-| `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. |
+| `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. A packaged app's window is hidden by its AUMID or by its image path; an image path under `…\WindowsApps\<package full name>\` matches by package family and the path inside the package, so it still matches after the app updates and its versioned folder changes (§7.2). |
 
 The person at the device can always hide the screen and pick apps (§6.3). There is deliberately no policy to turn that off (but see §12, Q5).
 

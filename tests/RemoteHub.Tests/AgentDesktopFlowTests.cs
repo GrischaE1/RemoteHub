@@ -202,8 +202,8 @@ public class AgentDesktopFlowTests
         public volatile string Foreground = "", ClipboardOwner = "";
         public IReadOnlyList<A.AppWindow> Visible() => Windows;
         public IReadOnlyList<A.RunningApp> Running() => Windows.Where(w => w.App.Length > 0).GroupBy(w => w.App).Select(g => new A.RunningApp(g.Key, g.Key, g.Count(), IntPtr.Zero)).ToList();
-        public string ForegroundApp() => Foreground;
-        public string ClipboardOwnerApp() => ClipboardOwner;
+        public A.AppIdentity ForegroundApp() => new(Foreground);
+        public A.AppIdentity ClipboardOwnerApp() => new(ClipboardOwner);
     }
 
     private sealed class Input : A.IInputSink
