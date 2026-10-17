@@ -242,6 +242,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     if (!_lost && !ct.IsCancellationRequested) _resume?.Revoke();
                     break;
                 }
+                // The aborted request (a drop) or a takeover cancels the helper's loop too, often before the receive: that
+                // is no helper ending, and starting a new helper for a connection that is gone only delays the end.
+                ct.ThrowIfCancellationRequested();
                 if (ended == watch && await IdleCheck(ct)) break;
                 if (ended == watch && _live) await PausedCheck(desktop, ct);
                 var target = session.Console ? desktop.Sessions.ConsoleSessionId() ?? _helperSession : _helperSession;

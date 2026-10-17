@@ -23,11 +23,12 @@ public partial class AgentDesktopFlowTests
         public required A.AgentPolicy Policy;
         public readonly ConcurrentQueue<(A.AuditEvent Id, string Message)> Audits = new();
 
-        public (ScriptedSocket Socket, Task Run) Connect(string user = "admin")
+        /// <param name="aborted">The request's RequestAborted: cancelled when the server sees the connection reset.</param>
+        public (ScriptedSocket Socket, Task Run) Connect(string user = "admin", CancellationToken aborted = default)
         {
             var ws = new ScriptedSocket();
             var identity = new A.ShellIdentity(@"TEST\" + user, default, [Admins, Users], SidOf(user));
-            return (ws, new A.DesktopEndpoint(Options, identity, Policy, "127.0.0.1").RunAsync(ws, CancellationToken.None));
+            return (ws, new A.DesktopEndpoint(Options, identity, Policy, "127.0.0.1").RunAsync(ws, aborted));
         }
 
         public string Ended() => Audits.Single(a => a.Id == A.AuditEvent.DesktopEnded).Message;
@@ -88,6 +89,39 @@ public partial class AgentDesktopFlowTests
         Assert.Equal(0, d.Helpers.Uis[1].Asked); // no new question (no WaitingForUser)
         Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.DesktopResumed);
         second.Close();
+    }
+
+    [Fact]
+    public async Task An_aborted_request_is_lost_without_restarting_the_helper_and_a_later_close_still_revokes()
+    {
+        var d = StartDirect();
+        using var aborted = new CancellationTokenSource();
+        var (first, run) = d.Connect(aborted: aborted.Token);
+        SendStart(first, ActiveUser.Id, DesktopConsent.Ask);
+        var token = NextStatus(first, DesktopStatusState.Connected).Resume!;
+
+        // The server saw the connection reset: the receive and the helper's loop are both cancelled (lab D-RES-10, where
+        // the helper's loop came first and was logged as "the desktop helper ended – starting it again").
+        aborted.Cancel();
+        await run.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.EndsWith("(connection lost)", d.Ended());
+        Assert.Equal(1, d.Helpers.Started);
+
+        // Continued with the token: nobody is asked (both fixes together: the drop releases it, nothing revokes it).
+        var (second, secondRun) = d.Connect();
+        SendStart(second, ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        var next = NextStatus(second, DesktopStatusState.Connected).Resume!;
+        Assert.Equal(0, d.Helpers.Uis[1].Asked);
+        Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.DesktopResumed);
+
+        // Ended on purpose this time: the new token goes with it.
+        second.Close();
+        await secondRun.WaitAsync(TimeSpan.FromSeconds(15));
+        var (third, _) = d.Connect();
+        SendStart(third, ActiveUser.Id, DesktopConsent.Ask, resume: next);
+        NextStatus(third, DesktopStatusState.Connected);
+        Assert.Equal(1, d.Helpers.Uis[2].Asked);
+        third.Close();
     }
 
     [Fact]
