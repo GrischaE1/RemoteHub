@@ -16,6 +16,412 @@ namespace RemoteHub.Tests;
 [Collection("Clipboard")]
 public class HelperClipboardFilesTests
 {
+    /// <summary>
+    /// The lab's copy (run 20261018-112637): Windows PowerShell's Set-Clipboard -Path in a script that goes on running
+    /// and then ends. Its OLE copy isn't rendered for other programs while the script runs, and once it ends only
+    /// "DataObject" is left on the clipboard: the helper must get the files while the script still runs.
+    /// </summary>
+    [SkippableFact]
+    public void Files_copied_by_a_script_that_keeps_running_reach_the_helper()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "rh-script-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "from a script");
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        var notes = new ConcurrentQueue<string>();
+        ui.ClipboardContent += got.Enqueue;
+        ui.Noted = notes.Enqueue;
+        try
+        {
+            using var script = Process.Start(new ProcessStartInfo("powershell.exe",
+                $"-NoProfile -NonInteractive -Command \"Set-Clipboard -Path '{file}'; Start-Sleep -Seconds 4; 'done'\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+            var ok = SpinWait.SpinUntil(() => !got.IsEmpty, 6000);
+            script.WaitForExit(10000);
+            Assert.True(ok, "no file list from a running script; notes: " + string.Join(" | ", notes));
+            Assert.Contains(got, c => c.Files is { } f && f.SequenceEqual([file]));
+        }
+        finally
+        {
+            ClearClipboard();
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// Copies <paramref name="file"/> as Explorer's Copy does: the shell's own data object for the item
+    /// (IShellItem → BHID_DataObject), put on the clipboard with OleSetClipboard and never flushed – the copying
+    /// thread keeps running a message loop and renders on request. Null when there is no clipboard here.
+    /// </summary>
+    private static (Thread Thread, Action Stop)? ExplorerCopy(string file)
+    {
+        var ready = new ManualResetEventSlim();
+        var ok = false;
+        uint threadId = 0;
+        var t = new Thread(() =>
+        {
+            OleInitialize(0);
+            var iidItem = new Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+            var bhid = new Guid("B8C0BD9F-ED24-455C-83E6-D5390C4FE8C4");
+            var iidData = new Guid("0000010e-0000-0000-C000-000000000046");
+            if (SHCreateItemFromParsingName(file, 0, ref iidItem, out var item) == 0)
+            {
+                nint data = 0;
+                unsafe
+                {
+                    // IShellItem::BindToHandler is its fourth vtable entry.
+                    var bind = (delegate* unmanaged[Stdcall]<nint, nint, Guid*, Guid*, nint*, int>)(*(*(nint**)item + 3));
+                    var b = bhid; var i = iidData;
+                    if (bind(item, 0, &b, &i, &data) != 0) data = 0;
+                }
+                System.Runtime.InteropServices.Marshal.Release(item);
+                if (data != 0)
+                {
+                    ok = OleSetClipboard(data) == 0;
+                    System.Runtime.InteropServices.Marshal.Release(data);
+                }
+            }
+            threadId = GetCurrentThreadId();
+            ready.Set();
+            if (ok) System.Windows.Forms.Application.Run(); // the copier stays and answers, as Explorer does
+            OleSetClipboard(0);
+            OleUninitialize();
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.IsBackground = true;
+        t.Start();
+        ready.Wait(5000);
+        if (!ok) { t.Join(2000); return null; }
+        return (t, () => { PostThreadMessage(threadId, 0x0012 /* WM_QUIT */, 0, 0); t.Join(3000); });
+    }
+
+    [System.Runtime.InteropServices.DllImport("ole32.dll")] private static extern int OleInitialize(nint reserved);
+    [System.Runtime.InteropServices.DllImport("ole32.dll")] private static extern void OleUninitialize();
+    [System.Runtime.InteropServices.DllImport("ole32.dll")] private static extern int OleSetClipboard(nint dataObject);
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SHCreateItemFromParsingName(string path, nint bindContext, ref Guid iid, out nint item);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool PostThreadMessage(uint thread, uint msg, nint w, nint l);
+
+    [SkippableFact]
+    public void Files_copied_as_Explorer_copies_them_reach_the_helper()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "rh-explorer-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "copied in Explorer");
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        var notes = new ConcurrentQueue<string>();
+        ui.ClipboardContent += got.Enqueue;
+        ui.Noted = notes.Enqueue;
+        var copy = ExplorerCopy(file);
+        try
+        {
+            Skip.If(copy is null, "no clipboard (or no shell) in this session");
+            Assert.True(SpinWait.SpinUntil(() => !got.IsEmpty, 5000), "no file list from Explorer's copy; notes: " + string.Join(" | ", notes));
+            Assert.Contains(got, c => c.Files is { } f && f.SequenceEqual([file]));
+        }
+        finally
+        {
+            copy?.Stop();
+            ClearClipboard();
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// The helper's OLE read on its own: the file list of an unflushed OLE copy (Explorer's, and Windows Forms' with
+    /// copy: false) comes from the copying program's data object, as the user's own programs get it.
+    /// </summary>
+    [SkippableFact]
+    public void The_OLE_read_gets_the_files_of_an_unflushed_copy()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "rh-ole-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "unflushed");
+        var copy = ExplorerCopy(file);
+        try
+        {
+            Skip.If(copy is null, "no clipboard (or no shell) in this session");
+            IReadOnlyList<string>? files = null;
+            var why = "";
+            var reader = new Thread(() => files = A.Win32HelperUi.OleClipboardFiles(out why));
+            reader.SetApartmentState(ApartmentState.STA);
+            reader.Start();
+            Assert.True(reader.Join(5000), "the OLE read didn't return");
+            Assert.True(files is not null, why);
+            Assert.Equal(new[] { file }, files);
+
+            // Windows Forms without flushing (Clipboard.SetDataObject(data, copy: false)), the copier still running.
+            copy.Value.Stop();
+            copy = null;
+            var ready = new ManualResetEventSlim();
+            var winforms = new Thread(() =>
+            {
+                var data = new System.Windows.Forms.DataObject();
+                data.SetFileDropList(new StringCollection { file });
+                System.Windows.Forms.Clipboard.SetDataObject(data, false);
+                ready.Set();
+                var until = Stopwatch.StartNew();
+                while (until.ElapsedMilliseconds < 3000) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(10); }
+            });
+            winforms.SetApartmentState(ApartmentState.STA);
+            winforms.Start();
+            ready.Wait(5000);
+            files = null;
+            reader = new Thread(() => files = A.Win32HelperUi.OleClipboardFiles(out why));
+            reader.SetApartmentState(ApartmentState.STA);
+            reader.Start();
+            Assert.True(reader.Join(5000), "the OLE read didn't return");
+            Assert.True(files is not null, why);
+            Assert.Equal(new[] { file }, files);
+            winforms.Join();
+        }
+        finally
+        {
+            copy?.Stop();
+            ClearClipboard();
+            File.Delete(file);
+        }
+    }
+    /// <summary>
+    /// Exactly the lab's copy: a short-lived powershell.exe started from another process runs Set-Clipboard -Path and
+    /// ends at once. The helper must offer the file.
+    /// </summary>
+    [SkippableFact]
+    public void Files_copied_by_a_short_lived_Set_Clipboard_reach_the_helper()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "rh-shortlived-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "short-lived");
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        var notes = new ConcurrentQueue<string>();
+        ui.ClipboardContent += got.Enqueue;
+        ui.Noted = notes.Enqueue;
+        try
+        {
+            using (var script = Process.Start(new ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -Command \"Set-Clipboard -Path '{file}'\"")
+                   { UseShellExecute = false, CreateNoWindow = true })!)
+                script.WaitForExit(15000);
+            Assert.True(SpinWait.SpinUntil(() => got.Any(c => c.Files is not null), 6000), "no file list; notes: " + string.Join(" | ", notes));
+            Assert.Contains(got, c => c.Files is { } f && f.SequenceEqual([file]));
+        }
+        finally
+        {
+            ClearClipboard();
+            File.Delete(file);
+        }
+    }
+
+    /// <summary>
+    /// Puts only "DataObject" on the clipboard – what the LocalSystem helper was shown for a file copy on Windows 11
+    /// 26H2 (lab runs 20261018-112637 to -133341) – from a thread that keeps answering until <paramref name="stop"/>.
+    /// </summary>
+    private static Thread DataObjectOnly(ManualResetEventSlim stop, Action announced)
+    {
+        var t = new Thread(() =>
+        {
+            var window = CreateWindowExW(0, "STATIC", "", 0, 0, 0, 0, 0, -3 /* HWND_MESSAGE */, 0, 0, 0);
+            if (OpenClipboard(window))
+            {
+                EmptyClipboard();
+                SetClipboardData(RegisterClipboardFormatW("DataObject"), Global(new byte[8]));
+                CloseClipboard();
+                announced();
+            }
+            while (!stop.IsSet) { System.Windows.Forms.Application.DoEvents(); Thread.Sleep(10); }
+            DestroyWindow(window);
+        }) { IsBackground = true };
+        t.Start();
+        return t;
+    }
+
+    [SkippableFact]
+    public void A_copy_the_helper_is_not_shown_is_read_as_the_user()
+    {
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        ui.ClipboardContent += got.Enqueue;
+        var asked = 0;
+        ui.UserFileReader = () =>
+        {
+            Interlocked.Increment(ref asked);
+            return new A.ClipboardFilesReader.Result([@"C:\Users\someone\a.txt", @"D:\b.txt"], "");
+        };
+        using var stop = new ManualResetEventSlim();
+        var announced = false;
+        var copier = DataObjectOnly(stop, () => announced = true);
+        try
+        {
+            Skip.IfNot(SpinWait.SpinUntil(() => announced, 3000), "no clipboard in this session");
+            Assert.True(SpinWait.SpinUntil(() => !got.IsEmpty, 5000), "the user's reader wasn't asked");
+            Assert.Equal(new[] { @"C:\Users\someone\a.txt", @"D:\b.txt" }, got.Single().Files);
+            Assert.Equal(1, asked);
+        }
+        finally
+        {
+            stop.Set();
+            copier.Join(3000);
+            ClearClipboard();
+        }
+    }
+
+    /// <summary>
+    /// Two copies the helper isn't shown, the second while the reader still reads the first (lab run 20261018-152145,
+    /// D-CLIP-16: neither arrived): the second is read next and offered; the first, out of date by then, is not.
+    /// </summary>
+    [SkippableFact]
+    public void A_second_copy_while_the_reader_runs_is_read_next()
+    {
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        ui.ClipboardContent += got.Enqueue;
+        var calls = 0;
+        ui.UserFileReader = () =>
+        {
+            var n = Interlocked.Increment(ref calls);
+            Thread.Sleep(800); // starting a process as the user takes a moment
+            return new A.ClipboardFilesReader.Result([n == 1 ? @"C:\first.txt" : @"C:\second.txt"], "");
+        };
+        using var stop1 = new ManualResetEventSlim();
+        using var stop2 = new ManualResetEventSlim();
+        var announced = 0;
+        var first = DataObjectOnly(stop1, () => Interlocked.Increment(ref announced));
+        try
+        {
+            Skip.IfNot(SpinWait.SpinUntil(() => Volatile.Read(ref announced) == 1, 3000), "no clipboard in this session");
+            Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref calls) == 1, 3000), "the reader wasn't asked for the first copy");
+            stop1.Set();
+            first.Join(3000);
+            var second = DataObjectOnly(stop2, () => Interlocked.Increment(ref announced));
+            Assert.True(SpinWait.SpinUntil(() => got.Any(c => c.Files is { } f && f.Contains(@"C:\second.txt")), 6000), "the second copy wasn't read");
+            Assert.Equal(2, Volatile.Read(ref calls));
+            Assert.DoesNotContain(got, c => c.Files is { } f && f.Contains(@"C:\first.txt"));
+            stop2.Set();
+            second.Join(3000);
+        }
+        finally
+        {
+            stop1.Set();
+            stop2.Set();
+            ClearClipboard();
+        }
+    }
+
+    [SkippableFact]
+    public void A_reader_that_fails_or_hangs_leaves_a_note_and_never_holds_up_the_helper()
+    {
+        using var ui = new A.Win32HelperUi();
+        var got = new ConcurrentQueue<A.HelperClipboard>();
+        var texts = new ConcurrentQueue<string>();
+        var notes = new ConcurrentQueue<string>();
+        ui.ClipboardContent += got.Enqueue;
+        ui.ClipboardChanged += texts.Enqueue;
+        ui.Noted = notes.Enqueue;
+        using var stop = new ManualResetEventSlim();
+        var announced = false;
+
+        // Fails: one line with the reason, nothing sent.
+        ui.UserFileReader = () => new A.ClipboardFilesReader.Result(null, "GetData 0x80040064");
+        var copier = DataObjectOnly(stop, () => announced = true);
+        try
+        {
+            Skip.IfNot(SpinWait.SpinUntil(() => announced, 3000), "no clipboard in this session");
+            Assert.True(SpinWait.SpinUntil(() => notes.Any(n => n.Contains("read as the user: GetData 0x80040064")), 5000), string.Join(" | ", notes));
+            Assert.Empty(got);
+        }
+        finally
+        {
+            stop.Set();
+            copier.Join(3000);
+        }
+
+        // Hangs (until its time limit): a text copied meanwhile still arrives, and the late answer is dropped.
+        using var release = new ManualResetEventSlim();
+        ui.UserFileReader = () => { release.Wait(10000); return new A.ClipboardFilesReader.Result([@"C:\late.txt"], ""); };
+        using var stop2 = new ManualResetEventSlim();
+        announced = false;
+        copier = DataObjectOnly(stop2, () => announced = true);
+        try
+        {
+            Assert.True(SpinWait.SpinUntil(() => announced, 3000));
+            Thread.Sleep(500); // the helper has asked the reader by now
+            stop2.Set();
+            copier.Join(3000);
+            var t = new Thread(() => System.Windows.Forms.Clipboard.SetText("meanwhile"));
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join();
+            Assert.True(SpinWait.SpinUntil(() => texts.Contains("meanwhile"), 5000), "the helper waited for the reader");
+            release.Set();
+            Thread.Sleep(500);
+            Assert.DoesNotContain(got, c => c.Files is { } f && f.Contains(@"C:\late.txt"));
+        }
+        finally
+        {
+            release.Set();
+            stop2.Set();
+            ClearClipboard();
+        }
+    }
+
+    [Fact]
+    public void Only_a_well_formed_reader_answer_is_used()
+    {
+        var ok = A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes("files\nC:\\a.txt\r\n\\\\.\\pipe\\x\nrelative.txt\n\\\\server\\share\\b.txt\n"));
+        Assert.Equal(new[] { @"C:\a.txt", @"\\server\share\b.txt" }, ok.Files);
+        Assert.Null(A.ClipboardFilesReader.Parse([0xFF, 0xFE, 0x00]).Files);                        // not UTF-8
+        Assert.Null(A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes("C:\\a.txt\n")).Files);     // no header
+        Assert.Null(A.ClipboardFilesReader.Parse(new byte[A.ClipboardFilesReader.MaxOutputBytes + 1]).Files);
+        Assert.Null(A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes("files\n\\\\?\\C:\\x\n")).Files);
+        var none = A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes("none GetData 0x80040064\n"));
+        Assert.Null(none.Files);
+        Assert.Equal("GetData 0x80040064", none.Why);
+        var many = "files\n" + string.Concat(Enumerable.Range(0, A.DesktopProtocol.MaxTransferItems + 5).Select(i => $"C:\\m\\f{i}.txt\n"));
+        Assert.Equal(A.DesktopProtocol.MaxTransferItems, A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes(many)).Files!.Count);
+    }
+
+    /// <summary>The reader verb itself, as the user runs it: a file copied by Set-Clipboard -Path comes out as its path.</summary>
+    [SkippableFact]
+    public void The_reader_verb_writes_the_copied_files()
+    {
+        var file = Path.Combine(Path.GetTempPath(), "rh-reader-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(file, "read by the user");
+        try
+        {
+            using (var script = Process.Start(new ProcessStartInfo("powershell.exe", $"-NoProfile -NonInteractive -Command \"Set-Clipboard -Path '{file}'\"")
+                   { UseShellExecute = false, CreateNoWindow = true })!)
+                script.WaitForExit(15000);
+            var output = new StringWriter();
+            var code = A.ClipboardFilesReader.Run(output);
+            Skip.If(code != 0 && output.ToString().StartsWith("none OleGetClipboard"), "no clipboard in this session: " + output);
+            Assert.True(code == 0 && output.ToString() == $"files\n{file}\n", $"exit {code}: {output}");
+            Assert.Equal(new[] { file }, A.ClipboardFilesReader.Parse(Encoding.UTF8.GetBytes(output.ToString())).Files);
+        }
+        finally
+        {
+            ClearClipboard();
+            File.Delete(file);
+        }
+    }
+
+    private static nint Global(byte[] bytes)
+    {
+        var memory = GlobalAlloc(0x0002, bytes.Length);
+        System.Runtime.InteropServices.Marshal.Copy(bytes, 0, GlobalLock(memory), bytes.Length);
+        GlobalUnlock(memory);
+        return memory;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern nint CreateWindowExW(uint exStyle, string cls, string name, uint style, int x, int y, int w, int h, nint parent, nint menu, nint instance, nint param);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool DestroyWindow(nint hwnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool OpenClipboard(nint hwnd);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool CloseClipboard();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EmptyClipboard();
+    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern nint SetClipboardData(uint format, nint data);
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern nint GlobalAlloc(uint flags, nint bytes);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern nint GlobalLock(nint memory);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] private static extern bool GlobalUnlock(nint memory);
     /// <summary>A DROPFILES block as programs put it on the clipboard: the header, then the paths and a closing \0.</summary>
     private static byte[] Drop(bool wide, params string[] paths)
     {
@@ -293,11 +699,14 @@ public class HelperClipboardFilesTests
         var notes = new ConcurrentQueue<string>();
         ui.ClipboardContent += got.Enqueue;
         ui.Noted = notes.Enqueue;
+        // The user's reader (a fake here) is asked next, and gets nothing either.
+        ui.UserFileReader = () => new A.ClipboardFilesReader.Result(null, "GetData 0x80040064");
         var owner = new DelayedFileList(Drop(true, file), renderAt: int.MaxValue);
         try
         {
             Skip.IfNot(owner.Announce(), "no clipboard in this session");
-            Assert.True(SpinWait.SpinUntil(() => notes.Any(n => n.Contains("could not be read")), 5000), "no note for the unreadable list");
+            Assert.True(SpinWait.SpinUntil(() => notes.Any(n => n.Contains("its file list: no data") && n.Contains("read as the user: GetData 0x80040064")), 5000),
+                "no note for the unreadable list: " + string.Join(" | ", notes));
             Thread.Sleep(1000);
             Assert.Equal(1, owner.Asked);
             Assert.Empty(got);

@@ -699,6 +699,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     private void OnClipboard()
     {
         _readTries = 0;
+        _changes++;
         SetTimer(_messageWindow, ClipboardTimer, 200, IntPtr.Zero); // restarts the wait on every change
     }
 
@@ -737,12 +738,13 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             IReadOnlyList<string>? files = null;
             HelperClipboard? image = null;
             string? text = null, why = null, formats = null;
+            var dataObject = false;
             try
             {
                 // Files first: a program may put the paths as text next to a file list; what was copied is the files.
                 if (IsClipboardFormatAvailable(CF_HDROP)) files = ReadFiles(out why);
                 else if (IsClipboardFormatAvailable(13)) text = ReadText();
-                else if ((image = ReadImage()) is null) formats = Formats();
+                else if ((image = ReadImage()) is null) formats = Formats(out dataObject);
             }
             finally { CloseClipboard(); }
 
@@ -751,7 +753,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                 _lastClipboard = "";
                 ClipboardContent?.Invoke(new HelperClipboard(Files: files));
             }
-            else if (why is not null) Noted?.Invoke($"clipboard: a file list copied at the device could not be read ({why})");
+            else if (why is not null) ReadFilesAsUser(_changes, $"its file list: {why}");
             else if (image is not null)
             {
                 _lastClipboard = "";
@@ -765,6 +767,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             }
             // Nothing RemoteHub takes: only the format numbers go to the log, so a copy that should have arrived can be
             // told apart from one that was never seen.
+            else if (dataObject) ReadFilesAsUser(_changes, $"formats {formats}"); // an OLE copy the helper isn't shown: read as the user
             else if (formats is not null and not "none") Noted?.Invoke($"clipboard: a copy at the device with nothing to send (formats {formats})");
         }
         catch (Exception ex)
@@ -773,6 +776,9 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             Noted?.Invoke($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
         }
     }
+
+    /// <summary>WM_CLIPBOARDUPDATEs so far: a result that arrives after a newer one is dropped.</summary>
+    private int _changes;
 
     /// <summary>CF_UNICODETEXT, at most 1,000,000 characters (the clipboard is open).</summary>
     private static string? ReadText()

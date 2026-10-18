@@ -3,6 +3,13 @@ using RemoteHub.Agent;
 
 // RemoteHub Agent – Windows service "RemoteHubAgent" (runs as LocalSystem).
 // Config: %ProgramData%\RemoteHub\Agent\agent.json; certificate: LocalMachine\My (thumbprint in the config).
+// The desktop helper's clipboard reader, started as the signed-in user: before anything else, it touches no agent files.
+if (args.Length == 1 && args[0] == ClipboardFilesReader.Verb)
+{
+    using var stdout = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false));
+    return ClipboardFilesReader.Run(stdout);
+}
+
 var log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), 30);
 
 // Setup commands, run by the MSI: enroll <file|folder>, cleanup.
