@@ -194,7 +194,7 @@ public sealed class StartupProtectionWindow : FluentWindow
         _body.Children.Add(Text("Locks RemoteHub after a while without mouse or keyboard input on this PC. Sessions keep running; " +
                                 "unlocking asks for the password or Windows Hello.", muted: true, bottom: 6));
         var lockAfter = new System.Windows.Controls.ComboBox { Width = 220, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 8) };
-        foreach (var (minutes, label) in new[] { (0, "Never"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes"), (60, "After 1 hour") })
+        foreach (var (minutes, label) in new[] { (0, "Never"), (1, "After 1 minute"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes"), (60, "After 1 hour") })
             lockAfter.Items.Add(new ComboBoxItem { Content = label, Tag = minutes });
         // Fixed by policy AutoLockMinutes (§6.3): shown, greyed out, not stored.
         var currentMinutes = AppPolicy.AutoLockMinutes ?? _data().Ui.AutoLockMinutes;
