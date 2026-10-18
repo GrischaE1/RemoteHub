@@ -246,6 +246,10 @@ internal sealed class AutoSignInBroker : IAutoSignIn, IDisposable
             finally { ProtectedSecret.CryptographicWipe(message); } // the only clear copy: gone once written
 
             var result = await Read(client, TimeSpan.FromSeconds(50), life.Token);
+            // The sign-in screen doesn't list the account and won't take the ticket (the provider has dropped it): no
+            // answer from Windows will come, so the service asks Windows itself with the same password (lab C-AUTO-20).
+            if (result is not null && AutoSignInWire.IsNotOffered(result, nonce))
+                return AutoSignInNotOffered.Result(request.Domain, request.User, request.Password, AutoSignInNotOffered.CheckLogon);
             if (result is null || AutoSignInWire.ReadResult(result, nonce) is not { } r)
             {
                 Drop(client);

@@ -65,7 +65,8 @@ public sealed class AgentLog
         _cleaned = DateOnly.FromDateTime(now);
         int days;
         try { days = RetentionDays is { } read ? Math.Max(1, read()) : _retentionDays; } catch { days = _retentionDays; }
-        foreach (var file in Directory.GetFiles(_folder, "agent-*.log"))
+        // provider-*.log: the credential provider's trace (LogonUI writes it here, credential-provider-design.md §8.6).
+        foreach (var file in Directory.GetFiles(_folder, "agent-*.log").Concat(Directory.GetFiles(_folder, "provider-*.log")))
             if (File.GetLastWriteTime(file) < now.AddDays(-days))
                 try { File.Delete(file); } catch { /* in use */ }
     }

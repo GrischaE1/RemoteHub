@@ -20,6 +20,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     case MessageType::Claim: { ClaimMessage m; if (ParseClaim(data, size, m)) n = WriteClaim(m, again, sizeof(again)); break; }
     case MessageType::Ticket: { TicketMessage m; if (ParseTicket(data, size, m)) n = WriteTicket(m, again, sizeof(again)); break; }
     case MessageType::Result: { ResultMessage m; if (ParseResult(data, size, m)) n = WriteResult(m, again, sizeof(again)); break; }
+    case MessageType::NotOffered: { NotOfferedMessage m; if (ParseNotOffered(data, size, m)) n = WriteNotOffered(m, again, sizeof(again)); break; }
     }
     // A message that parsed is canonical: written back, it is the same bytes.
     if (n != 0 && (n != size || memcmp(again, data, size) != 0)) abort();

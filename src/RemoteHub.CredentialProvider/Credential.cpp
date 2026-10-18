@@ -3,6 +3,7 @@
 #include "Channel.h"
 #include "Logon.h"
 #include "Provider.h"
+#include "Trace.h"
 
 #include <string>
 
@@ -31,7 +32,7 @@ namespace rhcp
         return S_OK;
     }
 
-    Credential::Credential(std::shared_ptr<Channel> channel) : _channel(std::move(channel)) { AddObject(); }
+    Credential::Credential(std::shared_ptr<Channel> channel, long id) : _channel(std::move(channel)), _id(id) { AddObject(); }
     Credential::~Credential() { ReleaseObject(); }
 
     IFACEMETHODIMP Credential::QueryInterface(REFIID riid, void** ppv)
@@ -56,19 +57,33 @@ namespace rhcp
         return refs;
     }
 
-    IFACEMETHODIMP Credential::Advise(ICredentialProviderCredentialEvents*) { return S_OK; }
-    IFACEMETHODIMP Credential::UnAdvise() { return S_OK; }
+    IFACEMETHODIMP Credential::Advise(ICredentialProviderCredentialEvents*)
+    {
+        Trace("provider %ld: tile Advise", _id);
+        return S_OK;
+    }
+
+    IFACEMETHODIMP Credential::UnAdvise()
+    {
+        Trace("provider %ld: tile UnAdvise", _id);
+        return S_OK;
+    }
 
     IFACEMETHODIMP Credential::SetSelected(BOOL* autoLogon)
     {
         RHCP_GUARD_BEGIN
         if (autoLogon == nullptr) return E_POINTER;
         *autoLogon = _channel && _channel->HasTicket() ? TRUE : FALSE;
+        Trace("provider %ld: tile SetSelected, auto sign-in %s", _id, *autoLogon ? "yes" : "no");
         return S_OK;
         RHCP_GUARD_END
     }
 
-    IFACEMETHODIMP Credential::SetDeselected() { return S_OK; }
+    IFACEMETHODIMP Credential::SetDeselected()
+    {
+        Trace("provider %ld: tile SetDeselected", _id);
+        return S_OK;
+    }
 
     IFACEMETHODIMP Credential::GetFieldState(DWORD field, CREDENTIAL_PROVIDER_FIELD_STATE* state, CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE* interactive)
     {
@@ -132,20 +147,30 @@ namespace rhcp
         ZeroMemory(serialization, sizeof(*serialization));
 
         // Only the ticket already received; nothing here waits for the pipe (§8.2).
-        if (!_channel || !_channel->HasTicket()) return S_OK;
+        if (!_channel || !_channel->HasTicket())
+        {
+            Trace("provider %ld: GetSerialization without a ticket", _id);
+            return S_OK;
+        }
 
         ULONG package = 0;
         HRESULT hr = NegotiatePackage(&package);
-        if (FAILED(hr)) return hr;
+        if (FAILED(hr))
+        {
+            Trace("provider %ld: GetSerialization, no Negotiate package: 0x%08lX", _id, static_cast<unsigned long>(hr));
+            return hr;
+        }
         BYTE* buffer = nullptr;
         ULONG bytes = 0;
         hr = _channel->TakeSerialization(&buffer, &bytes);
         if (FAILED(hr))
         {
+            Trace("provider %ld: GetSerialization, packing failed: 0x%08lX", _id, static_cast<unsigned long>(hr));
             _failed = true;
             _channel->ReportResult(StatusUnsuccessful, 0); // tell the service; the ticket is used up anyway
             return hr;
         }
+        Trace("provider %ld: GetSerialization, ticket handed to LogonUI", _id);
         _failed = false;
         serialization->ulAuthenticationPackage = package;
         serialization->clsidCredentialProvider = ProviderClsid;
@@ -162,7 +187,9 @@ namespace rhcp
         if (statusText) *statusText = nullptr;
         if (statusIcon) *statusIcon = CPSI_NONE;
         // Never retries (lockout): the result goes to the service and the ticket is gone (§8.2).
-        if (_channel) _channel->ReportResult(status, substatus);
+        const bool queued = _channel && _channel->ReportResult(status, substatus);
+        Trace("provider %ld: ReportResult 0x%08lX / 0x%08lX - %s", _id, static_cast<unsigned long>(status),
+            static_cast<unsigned long>(substatus), queued ? "queued for the agent" : "dropped, no ticket was taken");
         if (status != StatusSuccess)
         {
             _failed = true;
@@ -179,7 +206,9 @@ namespace rhcp
         if (sid == nullptr) return E_POINTER;
         *sid = nullptr;
         std::wstring account, value;
-        if (_channel && _channel->Account(account, value) && !value.empty()) return DuplicateString(value.c_str(), sid);
+        const bool given = _channel && _channel->Account(account, value) && !value.empty();
+        Trace("provider %ld: tile GetUserSid -> %s", _id, given ? "the ticket's SID" : "none");
+        if (given) return DuplicateString(value.c_str(), sid);
         return S_FALSE; // no SID: the tile goes under "Other user"
         RHCP_GUARD_END
     }

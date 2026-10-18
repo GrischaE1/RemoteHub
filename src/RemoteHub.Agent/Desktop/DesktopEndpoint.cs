@@ -539,6 +539,11 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             {
                 if (result.Code == AutoSignInFailure.Windows)
                     o.Log.Audit(AuditEvent.AutoSignInFailed, $"Automatic sign-in failed: {identity.Account} from {source} – Windows reported 0x{result.Status:X8} (0x{result.Substatus:X8}): {result.Message}");
+                else if (result.Code == AutoSignInFailure.NotOffered)
+                    // Not LogonUI's answer: the sign-in screen doesn't list the account, and the service checked with Windows itself.
+                    o.Log.Audit(AuditEvent.AutoSignInFailed, $"Automatic sign-in failed: {identity.Account} from {source} – the sign-in screen didn't offer the account" +
+                        (result.CheckedError is { } error ? $"; checked with Windows: error {error}{(result.Status != 0 ? $" (0x{result.Status:X8})" : "")}" : "; Windows couldn't be asked") +
+                        $": {result.Message}");
                 else o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {result.Message} ({result.Code})");
                 if (_screenByService) { _screen = null; _screenByService = false; _resume?.Screen = null; _resume?.ScreenByService = false; }
                 await Status(DesktopStatusState.SignInFailed, result.Message, ct);

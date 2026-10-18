@@ -1730,6 +1730,26 @@ public partial class AgentDesktopFlowTests
         Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
     }
 
+    [Fact]
+    public async Task An_account_the_sign_in_screen_does_not_offer_fails_at_once_with_the_accounts_reason()
+    {
+        // Lab C-AUTO-20 on Windows 11: a locked account isn't on the sign-in screen's list, the provider says so at once.
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn
+        {
+            Answer = r => A.AutoSignInNotOffered.Result(r.Domain, r.User, r.Password, (_, _, _) => 1909), // ERROR_ACCOUNT_LOCKED_OUT
+        };
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn]);
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.Equal("The account is locked.", v.Next(DesktopStatusState.SignInFailed).Message);
+        Assert.Contains(A.AuditEvent.AutoSignInFailed, d.Audits);   // 2105, like Windows' own refusals
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInRefused, d.Audits);
+        Assert.Equal(1, d.Helpers.Started);
+    }
+
     private const string LostAnswer = "The sign-in screen didn't take the sign-in. If it shows a message (for example after a failed attempt), click OK and try again.";
 
     [Fact]
@@ -2141,6 +2161,68 @@ public partial class AgentDesktopFlowTests
         var result = new byte[] { 1, A.AutoSignInWire.Result, 24, 0 }.Concat(nonce).Concat(new byte[] { 0x6D, 0, 0, 0xC0, 0x6A, 0, 0, 0xC0 }).ToArray();
         Assert.Equal((unchecked((int)0xC000006D), unchecked((int)0xC000006A)), A.AutoSignInWire.ReadResult(result, nonce));
         Assert.Null(A.AutoSignInWire.ReadResult(result, new byte[16]));
+
+        // NotOffered (type 5): the nonce only.
+        var notOffered = new byte[] { 1, A.AutoSignInWire.NotOffered, 16, 0 }.Concat(nonce).ToArray();
+        Assert.True(A.AutoSignInWire.IsNotOffered(notOffered, nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered(notOffered, new byte[16]));          // another ticket's
+        Assert.False(A.AutoSignInWire.IsNotOffered(notOffered[..^1], nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered([.. notOffered, 0], nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered(result, nonce));                     // a Result isn't one
+        Assert.Null(A.AutoSignInWire.ReadResult(notOffered, nonce));                     // nor the other way round
+    }
+
+    [Theory]
+    [InlineData(1385, "The account may not sign in on this device's screen (\"Allow log on locally\").", 0xC000015B)]
+    [InlineData(1331, "The account is disabled.", 0xC0000072)]
+    [InlineData(1909, "The account is locked.", 0xC0000234)]
+    [InlineData(1793, "The account has expired.", 0xC0000193)]
+    [InlineData(1907, "The password has expired and must be changed at the device.", 0xC0000224)]
+    [InlineData(1330, "The password has expired and must be changed at the device.", 0xC0000071)]
+    [InlineData(1326, "The password was wrong (the stored password may be out of date).", 0xC000006D)]
+    [InlineData(1328, "The account may not sign in at this time of day.", 0xC000006F)]
+    [InlineData(1329, "The account may not sign in on this device.", 0xC0000070)]
+    public void An_account_the_sign_in_screen_does_not_offer_is_checked_with_Windows_and_gets_its_reason(int error, string text, uint status)
+    {
+        // Lab C-AUTO-20: the provider's NotOffered; the service asks Windows itself (LogonUserW) with the ticket's password.
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("pw"));
+        var asked = new List<string>();
+        var r = A.AutoSignInNotOffered.Result("DEVICE", "rhaslock", password, (d, u, p) =>
+        {
+            p.Reveal(pw => asked.Add($@"{d}\{u}:{System.Text.Encoding.Unicode.GetString(pw)}"));
+            return error;
+        });
+        Assert.False(r.Ok);
+        Assert.False(r.Unconfirmed); // the ticket was never used: no console check, no wait
+        Assert.Equal(A.AutoSignInFailure.NotOffered, r.Code);
+        Assert.Equal(text, r.Message);
+        Assert.Equal(unchecked((int)status), r.Status);
+        Assert.Equal(error, r.CheckedError);
+        Assert.Equal([@"DEVICE\rhaslock:pw"], asked); // the ticket's account and password, once
+    }
+
+    [Fact]
+    public void An_account_Windows_accepts_but_the_sign_in_screen_does_not_offer_is_said_so()
+    {
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("pw"));
+        var ok = A.AutoSignInNotOffered.Result("DEVICE", "new", password, (_, _, _) => 0);
+        Assert.Equal((false, A.AutoSignInFailure.NotOffered, 0, (int?)0), (ok.Ok, ok.Code, ok.Status, ok.CheckedError));
+        Assert.Contains("doesn't offer this account yet, although Windows accepts its sign-in", ok.Message);
+
+        // an error without a known reason, and a check that couldn't run
+        var other = A.AutoSignInNotOffered.Result("DEVICE", "u", password, (_, _, _) => 5);
+        Assert.Equal(("The sign-in screen doesn't offer this account, and Windows refused its sign-in (error 5).", 0, (int?)5), (other.Message, other.Status, other.CheckedError));
+        var failed = A.AutoSignInNotOffered.Result("DEVICE", "u", password, (_, _, _) => throw new InvalidOperationException());
+        Assert.Equal(("The sign-in screen doesn't offer this account – it may be disabled or locked.", (int?)null), (failed.Message, failed.CheckedError));
+    }
+
+    [Fact]
+    public void The_logon_check_reports_an_unknown_account_as_an_error_and_leaves_the_password_usable()
+    {
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("not-the-password"));
+        var error = A.AutoSignInNotOffered.CheckLogon(".", "rh-no-such-user-" + Guid.NewGuid().ToString("N")[..8], password);
+        Assert.NotEqual(0, error); // typically 1326: an unknown account is a failed logon
+        password.Reveal(pw => Assert.Equal("not-the-password", System.Text.Encoding.Unicode.GetString(pw))); // protected again, not consumed
     }
 
     [Fact]

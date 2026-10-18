@@ -39,6 +39,9 @@ public sealed record AutoSignInResult(bool Ok, string Code, string Message, int 
     /// </summary>
     public bool Unconfirmed { get; init; }
 
+    /// <summary>NotOffered only: the Win32 error of the service's own check with Windows (0 = accepted); null when it couldn't check.</summary>
+    public int? CheckedError { get; init; }
+
     public static AutoSignInResult Failed(string code, string message) => new(false, code, message);
 
     /// <summary>A failure after the ticket went out: see <see cref="Unconfirmed"/>.</summary>
@@ -50,9 +53,85 @@ public static class AutoSignInFailure
 {
     public const string NotAllowed = "notAllowed", Unavailable = "unavailable", SessionState = "sessionState", ExistingSession = "existingSession",
         Busy = "busy", RateLimit = "rateLimit", Timeout = "timeout", NoProvider = "noProvider", SessionChanged = "sessionChanged",
-        Windows = "windows", WrongAccount = "wrongAccount";
+        Windows = "windows", WrongAccount = "wrongAccount", NotOffered = "notOffered";
 }
 
+/// <summary>
+/// The provider's NotOffered: the sign-in screen doesn't list the account and didn't take the ticket (Windows 11 leaves
+/// locked-out, disabled and – for a while – newly created accounts out, lab C-AUTO-20; docs/credential-provider-design.md
+/// §6.4, §8.2). Windows' answer never comes then, so the service asks Windows itself: an interactive LogonUserW with the
+/// ticket's password, whose error is worded like the NTSTATUS LogonUI would have reported.
+/// </summary>
+public static class AutoSignInNotOffered
+{
+    public const string Accepted = "The sign-in screen doesn't offer this account yet, although Windows accepts its sign-in – " +
+        "a new account may only appear there later. Try again in a while, or sign in at the device once.";
+
+    // winerror.h -> the ntstatus.h value LogonUI would have reported, so the texts are AutoSignInStatus's.
+    private static readonly Dictionary<int, uint> Statuses = new()
+    {
+        [1326] = AutoSignInStatus.LogonFailure,              // ERROR_LOGON_FAILURE
+        [1327] = AutoSignInStatus.AccountRestriction,        // ERROR_ACCOUNT_RESTRICTION
+        [1328] = AutoSignInStatus.InvalidLogonHours,         // ERROR_INVALID_LOGON_HOURS
+        [1329] = AutoSignInStatus.InvalidWorkstation,        // ERROR_INVALID_WORKSTATION
+        [1330] = AutoSignInStatus.PasswordExpired,           // ERROR_PASSWORD_EXPIRED
+        [1331] = AutoSignInStatus.AccountDisabled,           // ERROR_ACCOUNT_DISABLED
+        [1317] = AutoSignInStatus.NoSuchUser,                // ERROR_NO_SUCH_USER
+        [1311] = AutoSignInStatus.NoLogonServers,            // ERROR_NO_LOGON_SERVERS
+        [1385] = AutoSignInStatus.LogonTypeNotGranted,       // ERROR_LOGON_TYPE_NOT_GRANTED
+        [1398] = AutoSignInStatus.TimeDifferenceAtDc,        // ERROR_TIME_SKEW
+        [1789] = AutoSignInStatus.TrustedRelationshipFailure, // ERROR_TRUSTED_RELATIONSHIP_FAILURE
+        [1793] = AutoSignInStatus.AccountExpired,            // ERROR_ACCOUNT_EXPIRED
+        [1907] = AutoSignInStatus.PasswordMustChange,        // ERROR_PASSWORD_MUST_CHANGE
+        [1909] = AutoSignInStatus.AccountLockedOut,          // ERROR_ACCOUNT_LOCKED_OUT
+        [1922] = AutoSignInStatus.SmartCardLogonRequired,    // ERROR_SMARTCARD_LOGON_REQUIRED
+    };
+
+    /// <param name="checkLogon">Signs the account in interactively and closes the token at once: 0 when Windows accepts
+    /// it, else the Win32 error. Tests pass their own; the service passes <see cref="CheckLogon"/>.</param>
+    public static AutoSignInResult Result(string domain, string user, ProtectedSecret password, Func<string, string, ProtectedSecret, int> checkLogon)
+    {
+        int error;
+        try { error = checkLogon(domain, user, password); }
+        catch (Exception) { error = -1; }
+        if (error == 0) return new AutoSignInResult(false, AutoSignInFailure.NotOffered, Accepted) { CheckedError = 0 };
+        if (error > 0 && Statuses.TryGetValue(error, out var status))
+            return new AutoSignInResult(false, AutoSignInFailure.NotOffered, AutoSignInStatus.Describe((int)status, 0), (int)status) { CheckedError = error };
+        return new AutoSignInResult(false, AutoSignInFailure.NotOffered, error > 0
+            ? $"The sign-in screen doesn't offer this account, and Windows refused its sign-in (error {error})."
+            : "The sign-in screen doesn't offer this account – it may be disabled or locked.") { CheckedError = error > 0 ? error : null };
+    }
+
+    /// <summary>
+    /// LogonUserW(LOGON32_LOGON_INTERACTIVE) as the service: 0 or the Win32 error. The password is in a pinned buffer for
+    /// the call only and zeroed right after; the token, if any, is closed at once. This is one more interactive sign-in
+    /// attempt for the account (with a wrong password it counts towards the lockout like any attempt).
+    /// </summary>
+    public static int CheckLogon(string domain, string user, ProtectedSecret password)
+    {
+        var error = -1;
+        password.Reveal(utf16 =>
+        {
+            var buffer = GC.AllocateArray<byte>(utf16.Length + 2, pinned: true); // UTF-16LE and its terminator
+            try
+            {
+                utf16.CopyTo(buffer);
+                if (LogonUserW(user, domain, Marshal.UnsafeAddrOfPinnedArrayElement(buffer, 0), 2 /* LOGON32_LOGON_INTERACTIVE */,
+                        0 /* LOGON32_PROVIDER_DEFAULT */, out var token))
+                {
+                    Native.CloseHandle(token);
+                    error = 0;
+                }
+                else error = Marshal.GetLastWin32Error();
+            }
+            finally { ProtectedSecret.CryptographicWipe(buffer); }
+        });
+        return error;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool LogonUserW(string user, string domain, IntPtr password, int logonType, int logonProvider, out IntPtr token);
+}
 /// <summary>
 /// A secret in its own pinned buffer, protected with CryptProtectMemory (same process) while it waits. Never a .NET
 /// string; zeroed on dispose. <see cref="Reveal"/> gives the clear text only for the duration of a callback.
@@ -123,7 +202,7 @@ public static class AutoSignInWire
 {
     public const byte Version = 1;
     public const int MaxMessageBytes = 4096, NonceBytes = 16, MaxNameChars = 256, MaxPasswordChars = 256;
-    public const byte Pending = 1, Claim = 2, Ticket = 3, Result = 4;
+    public const byte Pending = 1, Claim = 2, Ticket = 3, Result = 4, NotOffered = 5;
     private const int HeaderBytes = 4;
 
     public static byte[] WritePending(ReadOnlySpan<byte> nonce, uint session) => NonceSession(Pending, nonce, session);
@@ -160,6 +239,10 @@ public static class AutoSignInWire
         if (!TryPayload(m, Result, NonceBytes + 8, out var p) || !p[..NonceBytes].SequenceEqual(nonce)) return null;
         return (BinaryPrimitives.ReadInt32LittleEndian(p[NonceBytes..]), BinaryPrimitives.ReadInt32LittleEndian(p[(NonceBytes + 4)..]));
     }
+
+    /// <summary>A NotOffered for this nonce: the sign-in screen won't take the ticket (the provider has dropped it).</summary>
+    public static bool IsNotOffered(ReadOnlySpan<byte> m, ReadOnlySpan<byte> nonce) =>
+        TryPayload(m, NotOffered, NonceBytes, out var p) && p.SequenceEqual(nonce);
 
     private static byte[] NonceSession(byte type, ReadOnlySpan<byte> nonce, uint session)
     {

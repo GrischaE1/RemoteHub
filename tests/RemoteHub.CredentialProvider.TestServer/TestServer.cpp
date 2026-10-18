@@ -251,8 +251,14 @@ int wmain(int argc, wchar_t** argv)
         Log("sent Ticket");
 
         ResultMessage result;
-        if (!Read(pipe, buffer, sizeof(buffer), 120000, read) || !ParseResult(buffer, read, result) ||
-            memcmp(result.Nonce, pending.Nonce, NonceBytes) != 0)
+        NotOfferedMessage notOffered;
+        if (!Read(pipe, buffer, sizeof(buffer), 120000, read)) { Log("error no valid Result"); break; }
+        if (ParseNotOffered(buffer, read, notOffered) && memcmp(notOffered.Nonce, pending.Nonce, NonceBytes) == 0)
+        {
+            Log("not offered: the sign-in screen doesn't list the account");
+            break; // single use
+        }
+        if (!ParseResult(buffer, read, result) || memcmp(result.Nonce, pending.Nonce, NonceBytes) != 0)
         {
             Log("error no valid Result");
             break;
