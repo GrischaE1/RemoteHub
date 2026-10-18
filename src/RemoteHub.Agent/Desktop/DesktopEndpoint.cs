@@ -404,7 +404,23 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             }
             _parkedHelper?.Dispose();
             _helper?.Dispose();
-            if (_virtualShown) VirtualDisplay.Hide(); // switched off with the last connection that needed it
+            {
+                // Switched off with the last connection that had it on – in the background, since it may be tried again for
+                // a few seconds while the ended helper still holds the display. Always released: a switch-on still under
+                // way for this connection then switches it off again itself. Every outcome goes to the log.
+                var log = o.Log;
+                var session = _helperSession;
+                var lease = _virtualLease;
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        if (VirtualDisplay.Hide(lease, line => log.Write($"Desktop: session {session}: {line}")) is { } off)
+                            log.Write($"Desktop: session {session}: {off}");
+                    }
+                    catch (Exception ex) { log.Write($"Desktop: session {session}: Virtual display not switched off: {ex.Message}"); }
+                });
+            }
             // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not – that
             // was revoked when the end was reported. A takeover still under way (nothing revoked it) is let through.
             if (_resume is { } r)
@@ -850,7 +866,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     }
 
     private volatile bool _gdi;
-    private bool _virtualShown;
+    /// <summary>This connection's hold on the virtual monitor (counted once it is on for it, whichever way).</summary>
+    private readonly VirtualDisplay.Lease _virtualLease = VirtualDisplay.NewLease();
     private bool? _secureShown;
     private int _framesSinceSwitch;
 
@@ -979,10 +996,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var size = DesktopWire.ReadText(m).Split(' ');
                         if (size.Length == 2 && int.TryParse(size[0], out var vw) && int.TryParse(size[1], out var vh))
                         {
-                            var resizeOnly = _virtualShown;
-                            var (shown, recovered) = await Task.Run(() => (VirtualDisplay.Show(vw, vh, resizeOnly, out var r), r), ct);
+                            var lease = _virtualLease;
+                            var (shown, recovered) = await Task.Run(() => (VirtualDisplay.Show(lease, vw, vh, out var r), r), ct);
                             if (recovered is not null) o.Log.Write($"Desktop: session {_helperSession}: {recovered}");
-                            if (shown is null && !_virtualShown) _virtualShown = true;
                             o.Log.Write($"Desktop: session {_helperSession}: virtual monitor {(shown is null ? $"on at {VirtualDisplay.Normalize(vw, vh).W}×{VirtualDisplay.Normalize(vw, vh).H}" : "not switched on: " + shown)}");
                         }
                         break;

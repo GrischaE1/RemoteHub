@@ -177,6 +177,19 @@ connection that asked for it ends (and at service start). After a restart of the
 the switched-off device (pnputil: *Disconnected*, enabling fails with 1167 "not connected"); switching it on then
 rescans the devices and, if that doesn't bring it back, removes the device node and creates it again from the
 hash-checked files as at install, keeps the new instance ID in `virtual-display.txt` and logs what it repaired.
+Switching off covers every device with the hardware ID `Root\MttVDD` that Windows reports, plus the one in the state
+file, and counts only when Windows no longer shows it as OK (reported without a problem): while the ended connection
+still holds it, it is tried again after 1, 2 and 3 s, then the device node is removed (created again by the next
+connection). Every switch-off writes one log line – which devices were switched off, found off and in what state, or
+why not – and a line for each failed try as it happens; an end that leaves it on for others says for how many. Each
+connection is counted once the monitor is on for it, whichever way it was switched on (enabled, rescan, created again,
+size kept), and released once at its end; a connection that ends while its monitor is being switched on switches it
+off again. Counting has its own lock, so a connection's end never waits for another one's pnputil call or driver pipe;
+the device lock is held only for each pnputil call or pipe request, not during the waits, and a connection that
+switches the monitor on meanwhile ends the tries. At service start it is switched off in the background, without
+holding up the service's start, and never removed there. Every pnputil call is stopped after 20 s. If the driver's
+control pipe doesn't answer a resize within 3 s while the monitor is on for another connection, the new connection
+still counts and the log says the monitor kept its size.
 Uninstall removes device (also one Windows no longer reports), driver package, settings and the publisher trust
 (Trusted Publishers – only if the agent added it).
 

@@ -53,7 +53,9 @@ try
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
     try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
     catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
-    VirtualDisplay.Reset(); // the virtual monitor is off until a connection needs it (a crash may have left it on)
+    // The virtual monitor is off until a connection needs it (a crash may have left it on) – in the background: the
+    // service must report running within Windows' 30 s, whatever pnputil does.
+    _ = VirtualDisplay.ResetInBackground(log.Write);
     await app.RunAsync();
     log.Write("RemoteHub Agent stopped");
     return 0;
