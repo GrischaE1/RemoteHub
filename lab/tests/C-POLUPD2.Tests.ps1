@@ -81,7 +81,14 @@ BeforeAll {
         if ($Beta) { $null = Ui 'Beta *pre-releases*' -Title 'Settings' -Value check }
         else { $null = Ui 'GA *stable releases*' -Title 'Settings' -Value check }
         $null = Ui 'Check for updates now' -Title 'Settings'
-        $text = WinText 'RemoteHub updates'
+        # the window opens with "Checking for updates..." and shows the result when the check ends (at most 15 s for
+        # the server, then a little for the window): read it once that line is gone
+        $deadline = (Get-Date).AddSeconds(40)
+        do {
+            $text = WinText 'RemoteHub updates'
+            if ("$text" -notmatch 'Checking for updates') { break }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $deadline)
         $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 10
         $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
         $null = Ui 'Cancel' -Title 'Settings' -Optional -TimeoutSec 10
@@ -383,7 +390,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                     crashFiles = @(Get-ChildItem "$l\crash" -Filter 'crash-*.json' -ErrorAction SilentlyContinue | ForEach-Object Name).Count
                 }
             }
-            $t.offRequests = @(Requests '/telemetry')
+            $t.offRequests = Requests '/telemetry'   # (already an array; @() would nest it)
             Close-Rh
             Policy @{ DisableTelemetry = $null }
             Save 'tel03' $t
@@ -418,9 +425,9 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Restart-Client
             Start-Sleep -Seconds 25
             # every telemetry event that arrived (run 20261016-024318: no app_crash - was anything sent at all?)
-            $c.all = @(Requests '/telemetry' | ForEach-Object json | ForEach-Object event)
+            $c.all = @((Requests '/telemetry') | ForEach-Object json | ForEach-Object event)
             $c.pending = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -ErrorAction SilentlyContinue | ForEach-Object Name) }
-            $c.events = @(Requests '/telemetry' | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' })
+            $c.events = @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' })
             Close-Rh
             # why nothing may have arrived: is the mock running, what did it get, what does RemoteHub's log say
             $c.why = Invoke-LabGuest -Name $VmName -ScriptBlock { [ordered]@{ mock = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -match 'RhMockServer').Count; requests = @(Get-Content 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { ($_ | ConvertFrom-Json).path }); diag = @(Get-Content 'C:\Users\Admin\AppData\Roaming\RemoteHub\logs\remotehub.log' -Tail 25 -ErrorAction SilentlyContinue) } }
@@ -447,8 +454,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Clear-Requests
             Restart-Client
             Start-Sleep -Seconds 25
-            $q.all = @(Requests '/telemetry' | ForEach-Object json | ForEach-Object event)
-            $q.sent = @(Requests '/telemetry' | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' } | ForEach-Object message)
+            $q.all = @((Requests '/telemetry') | ForEach-Object json | ForEach-Object event)
+            $q.sent = @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' } | ForEach-Object message)
             $q.left = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -Filter 'crash-*.json' -ErrorAction SilentlyContinue | ForEach-Object Name).Count }
             Close-Rh
             $q.why = Invoke-LabGuest -Name $VmName -ScriptBlock { [ordered]@{ mock = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -match 'RhMockServer').Count; requests = @(Get-Content 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue | ForEach-Object { ($_ | ConvertFrom-Json).path }); diag = @(Get-Content 'C:\Users\Admin\AppData\Roaming\RemoteHub\logs\remotehub.log' -Tail 25 -ErrorAction SilentlyContinue) } }

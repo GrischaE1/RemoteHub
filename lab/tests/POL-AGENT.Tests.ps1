@@ -2,6 +2,7 @@
 # MaxSessions / PrivacyScreenMessage without a restart, PowerShellEnabled, AllowedGroups, ListenPort and the firewall
 # rule, and automatic sign-in moving from the policy key to agent.json on an update. Values are written the way the
 # ADMX template writes them (Set-LabAgentPolicy). Every VM. See docs/test-lab-cases.md section 10.7.
+# LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -18,11 +19,17 @@ BeforeAll {
         Invoke-LabGuest -Name $VmName -ScriptBlock { (& 'C:\Program Files\RemoteHub Agent\RemoteHubAgent.exe' policy) -join "`n" }
     }
     # a PowerShell session through the agent: the harness' answer, or the error it threw
-    function Ps([string]$Pin, [string]$Account = 'Admin', [string]$Script = '$PID', [int]$Port = 58732) {
+    function AgentPs([string]$Pin, [string]$Account = 'Admin', [string]$Script = '$PID', [int]$Port = 58732) {
         try { Invoke-LabAgentCommand -Name $VmName -Pin $Pin -Account $Account -Script $Script -Port $Port } catch { [pscustomobject]@{ error = "$_" } }
     }
     function Desktop([string]$Pin, [string]$Account = 'Admin', [string]$Name = 'desktop') {
-        try { (Invoke-LabDesktop -Name $VmName -Pin $Pin -Account $Account -Out (Out $Name) -Steps @(@{ do = 'connect' }, @{ do = 'close' })).hello }
+        try {
+            $d = Invoke-LabDesktop -Name $VmName -Pin $Pin -Account $Account -Out (Out $Name) -Steps @(@{ do = 'connect' }, @{ do = 'close' })
+            # a refused connection doesn't throw: no hello, its reason (and status) in connectError
+            if ($d.hello) { $d.hello }
+            elseif ($d.PSObject.Properties['connectError'] -and $d.connectError) { [pscustomobject]@{ error = "$($d.connectError.connectError) ($($d.connectError.status))" } }
+            else { [pscustomobject]@{ error = 'no hello and no connect error' } }
+        }
         catch { [pscustomobject]@{ error = "$_" } }
     }
     function Rule {
@@ -88,15 +95,15 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
                 Invoke-LabAgentCommand -Name $name -Pin $pin -Script 'Start-Sleep -Seconds 25; $PID'
             }
             Start-Sleep -Seconds 8
-            $r.second = Ps $pin
+            $r.second = AgentPs $pin
             $null = Receive-Job $job -Wait -AutoRemoveJob -ErrorAction SilentlyContinue
             $r.limitLog = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'session limit' })
 
             # an invalid value: the default applies and the log says so once, however many connections
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ MaxSessions = 0 }
             $since = Get-LabGuestTime -Name $VmName
-            $r.invalidFirst = Ps $pin
-            $r.invalidSecond = Ps $pin
+            $r.invalidFirst = AgentPs $pin
+            $r.invalidSecond = AgentPs $pin
             $r.invalidLog = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Policy MaxSessions: 0 is outside 1' })
 
             # the heading of the privacy screen with message, on the device's own screen (it is never in the picture)
@@ -158,13 +165,13 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ PowerShellEnabled = 0 }
             $since = Get-LabGuestTime -Name $VmName
             $g.health = Get-LabAgentHealth -Name $VmName -Pin $pin
-            $g.ps = Ps $pin
+            $g.ps = AgentPs $pin
             $g.probe = (Invoke-LabProbe -Name $VmName -Kind ws -Params @{ pin = $pin; user = $vm.AdminAccount; password = $cfg.Password }).results[0]
             $g.log = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Refused PowerShell' })
             $g.failedLogons = @(Get-LabFailedLogon -Name $VmName -Since $since)
             $g.desktop = Desktop $pin -Name 'ps-off-desktop'
             Set-LabAgentPolicy -Name $VmName -Clear
-            $g.psAgain = Ps $pin
+            $g.psAgain = AgentPs $pin
 
             # POL-06: a new local group with a new user is the default for every right
             $groupUser = New-LabGuestUser -Name $VmName -User 'polgroupuser' -Group 'RH Policy Operators'
@@ -172,13 +179,13 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ AllowedGroups = @($groupSid) }
             $g.memberPs = try { Invoke-LabHarness @('run', '--host', (Get-LabVmAddress -Name $VmName), '--port', '58732', '--pin', $pin,
                         '--user', ".\polgroupuser", '--password', $cfg.Password, '--script', '$PID') -VmName $VmName } catch { [pscustomobject]@{ error = "$_" } }
-            $g.adminPs = Ps $pin
+            $g.adminPs = AgentPs $pin
             $g.adminDesktop = Desktop $pin -Name 'allowed-admin'
             $g.report = Policy-Report
             # Rights\Desktop on its own wins over AllowedGroups for that right only
             Set-LabAgentPolicy -Name $VmName -Values @{ AllowedGroups = @($groupSid) } -Rights @{ Desktop = @('S-1-5-32-544') }
             $g.adminDesktopRight = Desktop $pin -Name 'right-admin'
-            $g.adminPsRight = Ps $pin
+            $g.adminPsRight = AgentPs $pin
             Set-LabAgentPolicy -Name $VmName -Clear
             Save 'powershell-groups' @{ g = $g; groupUser = $groupUser }
         }
@@ -288,9 +295,21 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
                     }
                 }
             }
+            # once the previous release is 0.18.12 or later its install no longer writes the policy key: leave the
+            # values and the marker as a version before 0.18.12 does, so the update still finds them
+            $m.planted = $false
+            try { $m.planted = [version](Get-LabMsiVersion $previous) -ge [version]'0.18.12' } catch { }
+            function Leave-OldValues {
+                if (-not $m.planted) { return }
+                Set-LabAgentPolicy -Name $VmName -Values @{ NoUserBehavior = 'AutoSignIn' } -Rights @{ AutoSignIn = @('S-1-5-32-544') }
+                Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    Set-Content -Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy' -Value @('NoUserBehavior=AutoSignIn', 'Rights\AutoSignIn=S-1-5-32-544') -Encoding Ascii
+                }
+            }
 
             Reset-LabVm -Name $VmName
             $install = Install-LabAgent -Name $VmName -Msi $previous -AutoSignIn $true
+            Leave-OldValues
             $m.before = Old-State
             $since = Get-LabGuestTime -Name $VmName
             $update = Install-LabAgent -Name $VmName -Msi $current -KeepIdentity
@@ -305,6 +324,7 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             # variant: IT changed NoUserBehavior before the update - it stays IT's
             Reset-LabVm -Name $VmName
             $install = Install-LabAgent -Name $VmName -Msi $previous -AutoSignIn $true
+            Leave-OldValues
             Set-LabAgentPolicy -Name $VmName -Values @{ NoUserBehavior = 'SignInScreen' }
             $since = Get-LabGuestTime -Name $VmName
             $null = Install-LabAgent -Name $VmName -Msi $current -KeepIdentity

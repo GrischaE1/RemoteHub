@@ -19,7 +19,8 @@ BeforeAll {
         try { Invoke-LabAutoSignIn -Name $VmName -Pin $pin @Options } catch { [pscustomobject]@{ error = "$_"; statuses = @(); rights = $null; features = @() } }
     }
     function Text($r) { (@($r.statuses) + @($r.error)) -join "`n" }
-    # the provider's own policy values back to what an AUTOSIGNIN=1 install writes, nothing else
+    # the policy key back to automatic sign-in allowed for Administrators, nothing else - set as IT would, on top of the
+    # AUTOSIGNIN=1 install's own choice in agent.json (which allows the same)
     function Reset-Policy {
         Set-LabAgentPolicy -Name $VmName -Clear -Values @{ NoUserBehavior = 'AutoSignIn' } -Rights @{ AutoSignIn = @('S-1-5-32-544') }
     }
@@ -44,7 +45,9 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
             Save 'default-off' @{ State = $state.AutoSignIn; Run = $r }
         }
 
-        It 'C-AUTO-07 without AUTOSIGNIN: no policy value, Hello autoSignIn false, "turned off on this device (policy NoUserBehavior)"' -Tag 'C-AUTO-07' {
+        It 'C-AUTO-07 without AUTOSIGNIN: nothing in agent.json, no policy value, Hello autoSignIn false, "turned off on this device (policy NoUserBehavior)"' -Tag 'C-AUTO-07' {
+            $state.AutoSignIn.ConfigBehavior | Should -BeNullOrEmpty
+            @($state.AutoSignIn.ConfigGroups) | Should -BeNullOrEmpty
             $state.AutoSignIn.Behavior | Should -BeNullOrEmpty
             $state.AutoSignIn.Marker | Should -BeFalse
             $r.rights.autoSignIn | Should -BeFalse
@@ -191,7 +194,9 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
 
         It 'C-AUTO-13 IT''s NoUserBehavior=SignInScreen is left as it is by the install and by the uninstall' -Tag 'C-AUTO-13' {
             $installed.AutoSignIn.Behavior | Should -Be 'SignInScreen'
-            ($installed.LogLines -join "`n") | Should -Match 'left as it is'
+            # the install records its own choice in agent.json (since 0.18.12) and says the policy decides
+            $installed.AutoSignIn.ConfigBehavior | Should -Be 'AutoSignIn'
+            ($installed.LogLines -join "`n") | Should -Match 'policy NoUserBehavior is "SignInScreen" on this device.*it decides, so automatic sign-in stays off'
             $uninstall.ExitCode | Should -BeIn 0, 3010
             $after.NoUserBehavior | Should -Be 'SignInScreen'
         }

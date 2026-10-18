@@ -22,7 +22,13 @@ BeforeAll {
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; viewOnly = $ViewOnly }
                 @{ do = 'wait'; anyOf = @('WaitingForUser', 'Failed'); timeout = 60 }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 60 }) +
             $Before + @(@{ do = 'markFile'; path = (Join-Path $o 'ready.txt') }, @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 300 }) + $After + @(@{ do = 'close' }))
-        $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+        $allow = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+        if (-not $allow.clicked) {
+            # not connected: the steps after the park are let run to their end, and the context fails here rather than
+            # at a missing picture or a wrong state later on
+            Set-Content (Join-Path $o 'go.txt') 'go'
+            throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')"
+        }
         Wait-LabHostFile (Join-Path $o 'ready.txt') -TimeoutSec 120
         $job
     }
@@ -32,6 +38,10 @@ BeforeAll {
     $install = $init.Install
     $pin = $init.Pin
     $is1809 = $vm.Version -eq '1809'
+    # the person's first call after the sign-in starts its server, compiles its helper and starts the OCR (slow): done
+    # here, not against the consent dialog's 30 s countdown (as in D-MORE)
+    $null = Invoke-LabPerson -Name $VmName -Do windows
+    $null = Invoke-LabPerson -Name $VmName -Do screen-read
 }
 
 AfterAll {
@@ -55,7 +65,10 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $b = [ordered]@{}
             $job = Connect-Allowed 'control' -Before @(@{ do = 'frame'; out = 'frame.png'; timeout = 30 }) -After @(
                 @{ do = 'wait'; anyOf = @('Ended'); timeout = 120 }, @{ do = 'reconnect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; resume = 'last' }
-                @{ do = 'wait'; anyOf = @('WaitingForUser', 'Connected', 'Failed'); timeout = 60 })
+                @{ do = 'wait'; anyOf = @('WaitingForUser', 'Connected', 'Failed'); timeout = 60 }
+                # asked again: the connection stays until the question is answered (the test clicks Deny), else it would
+                # end at once and take the question with it before it is read
+                @{ do = 'wait'; anyOf = @('Denied', 'Connected', 'Ended', 'Failed'); timeout = 90 })
             $b.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'
             $b.wide = @(Invoke-LabPerson -Name $VmName -Do windows)
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path (Out 'control') 'console.png')
@@ -64,12 +77,22 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             Start-Sleep -Seconds 12
             $b.collapsed = @(Invoke-LabPerson -Name $VmName -Do windows)
             $b.hover = Invoke-LabPerson -Name $VmName -Do hover -Title 'RemoteHub'
-            # the user tries to get rid of it without Disconnect
-            # Alt+F4 on the banner (a console click on its text gives it the focus)
+            # the user tries to get rid of it without Disconnect: a click on its text, then Alt+F4. The banner never takes
+            # the focus (WS_EX_NOACTIVATE), so Alt+F4 goes to the foreground window. Without a window of the user's own
+            # that is the shell: on Server 2025 the taskbar had the focus and normaluser was signed out there (runs
+            # 20261016-212514 and 20261017-054704: helper ended, session 2 at the sign-in screen, every later context
+            # without a session). The marker is made the foreground window first (a console click on it), so the
+            # key lands there.
+            $closeMarker = Start-LabMarker -Name $VmName
+            if (-not $closeMarker.Shown) { throw "the marker window didn't show, so Alt+F4 would reach the shell ($($closeMarker.Why))" }
+            Send-LabMouse -Name $VmName -X 200 -Y 400
+            Start-Sleep -Seconds 1
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Controlled' -Title 'RemoteHub'
             Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x73
             Start-Sleep -Seconds 2
-            $b.close = [pscustomobject]@{ left = @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object Title -eq 'RemoteHub').Count }
+            $b.close = [pscustomobject]@{ left = @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object Title -eq 'RemoteHub').Count
+                altF4 = @(Get-LabMarker -Name $VmName -Marker $closeMarker | Where-Object { $_.e -eq 'down' -and $_.vk -eq 115 }).Count }
+            Stop-LabInSession -Name $VmName -Task $closeMarker.Task
             $helper = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$' | Select-Object -First 1).ProcessId }
             $b.kill = Invoke-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("taskkill.exe /PID $helper /F 2>&1"))
             $b.afterTries = @(Invoke-LabPerson -Name $VmName -Do windows)
@@ -101,9 +124,10 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
         }
 
         It 'D-BAN-04 after 8 s the banner is the small pill; hovering expands it' -Tag 'D-BAN-04' {
-            $wide = ($b.wide | Where-Object Title -eq 'RemoteHub').Width
+            # the full width from the hover, not from $b.wide: that is read after the connect and the OCR, which can take
+            # longer than the 8 s, so it often caught the pill already (412 = 412, most runs since 16 Oct)
             $pill = ($b.collapsed | Where-Object Title -eq 'RemoteHub').Width
-            $pill | Should -BeLessThan $wide
+            $b.hover.before.Width | Should -Be $pill -Because 'collapsed before the mouse came'
             $b.hover.after.Width | Should -BeGreaterThan $pill
         }
 
@@ -127,15 +151,17 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $v = [ordered]@{}
             $marker = Start-LabMarker -Name $VmName
             $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value 'device clipboard before'
-            $res = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($s.Width)x$($s.Height)" }
+            $res = Get-LabResolution -Name $VmName
+            # a fit to a size the console isn't at: else an ignored fit and an obeyed one look the same
+            $size = if ($res -eq '1024x768') { @(1280, 720) } else { @(1024, 768) }
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             $job = Connect-Allowed 'view' -ViewOnly $true -Before @(
                 @{ do = 'keys'; text = 'viewonly' }, @{ do = 'mouse'; action = 'Down'; button = 'Left'; x = 200; y = 200 }, @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 200; y = 200 }
-                @{ do = 'cad' }, @{ do = 'clipboardText'; text = 'from RemoteHub in view-only' }, @{ do = 'settings'; fitWidth = 1024; fitHeight = 768 }, @{ do = 'sleep'; seconds = 5 })
+                @{ do = 'cad' }, @{ do = 'clipboardText'; text = 'from RemoteHub in view-only' }, @{ do = 'settings'; fitWidth = $size[0]; fitHeight = $size[1] }, @{ do = 'sleep'; seconds = 5 })
             $v.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'
             $v.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -in 'down', 'char', 'mdown', 'mup', 'clipboard')
             $v.clip = Invoke-LabPerson -Name $VmName -Do clip-get
-            $v.res = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($s.Width)x$($s.Height)" }
+            $v.res = Get-LabResolution -Name $VmName
             $v.logon = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count }
             Go 'view'
             $v.r = Receive-LabDesktop $job
@@ -185,7 +211,12 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             Set-LabAgentPolicy -Name $VmName -Clear -Rights @{ SecureDesktop = @('RH Others') }
             $marker = Start-LabMarker -Name $VmName
             $o = Out 'held'
-            $job = Connect-Allowed 'held' -Before @(@{ do = 'key'; scan = '0x1E' }, @{ do = 'sleep'; seconds = 2 }) -After @(
+            # the marker must have the keyboard focus for the key-down to be recorded: the consent dialog took the focus
+            # (SetForegroundWindow) and when it closes Windows needn't give it back to the marker, another process - in
+            # the run of 16.10.2026 the key reached Windows but no window. A click on the marker gives it the focus first.
+            $job = Connect-Allowed 'held' -Before @(
+                @{ do = 'sleep'; seconds = 2 }, @{ do = 'mouse'; action = 'Down'; button = 'Left'; x = 200; y = 200 }, @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 200; y = 200 }
+                @{ do = 'sleep'; seconds = 1 }, @{ do = 'key'; scan = '0x1E' }, @{ do = 'sleep'; seconds = 2 }) -After @(
                 @{ do = 'markFile'; path = (Join-Path $o 'held.txt') }, @{ do = 'waitFile'; path = (Join-Path $o 'uac.txt'); timeout = 120 }, @{ do = 'key'; scan = '0x1E'; flags = @('Up') }, @{ do = 'sleep'; seconds = 3 })
             Go 'held'
             Wait-LabHostFile (Join-Path $o 'held.txt')
@@ -208,7 +239,8 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
         }
 
         It 'D-VIEW-03 a key held down when input stops being allowed (secure desktop without the right) is released - no stuck key' -Tag 'D-VIEW-03' {
-            @($events | Where-Object { $_.e -eq 'down' -and $_.vk -eq 65 }).Count | Should -BeGreaterThan 0
+            @($events | Where-Object { $_.e -eq 'mdown' }).Count | Should -BeGreaterThan 0 -Because 'the click on the marker (for the focus) reached it'
+            @($events | Where-Object { $_.e -eq 'down' -and $_.vk -eq 65 }).Count | Should -BeGreaterThan 0 -Because 'the key was held down in the session (precondition)'
             "$stuck".Trim() | Should -Be 'False'
         }
     }

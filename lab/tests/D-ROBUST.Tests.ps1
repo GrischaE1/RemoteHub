@@ -23,8 +23,13 @@ BeforeAll {
     function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
     $connect = @(@{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 90 })
     function Begin([string]$Name, [object[]]$Steps, [string]$Account = 'Admin', [switch]$NoAllow) {
+        if (-not $pin) { throw "no agent PIN for '$Name' - the context's Initialize-LabVm didn't give one" }
         $job = Start-LabDesktop -Name $VmName -Pin $pin -Account $Account -Out (Out $Name) -Steps ($connect + $Steps)
-        if (-not $NoAllow) { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60 }
+        if (-not $NoAllow) {
+            # the dialog can come up only after the person's first look (a slow first call in the session): one more look
+            $a = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+            if (-not ($a -and $a.PSObject.Properties['x'])) { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 20 }
+        }
         $job
     }
     function Helper { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$' | ForEach-Object ProcessId) } }
@@ -68,6 +73,10 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             $c = (Of $i.idle 'Connected')[0].ms
             $warn = @($i.idle.statuses | Where-Object message -match 'No mouse or keyboard input for a while')[0]
             $end = (Of $i.idle 'Ended')[0]
+            # without a connection there is nothing to time (all of these would be $null and the times 0)
+            $c | Should -Not -BeNullOrEmpty -Because "the session must connect first (Allow clicked in time); states: $(@($i.idle.statuses | ForEach-Object state) -join ', ')"
+            $warn | Should -Not -BeNullOrEmpty -Because 'the agent warns before it ends an idle session'
+            $end | Should -Not -BeNullOrEmpty -Because 'the agent ends the idle session'
             ($warn.ms - $c) / 1000 | Should -BeGreaterOrEqual 20
             ($warn.ms - $c) / 1000 | Should -BeLessOrEqual 45
             ($end.ms - $c) / 1000 | Should -BeGreaterOrEqual 55
@@ -186,30 +195,52 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options.png' }, (Mark $o 'options'), @{ do = 'click'; fromFile = (Join-Path $o 'switch-xy.txt') }
                 @{ do = 'sleep'; seconds = 8 }, @{ do = 'drop' }, @{ do = 'reconnect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; resume = 'last' }
                 @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'tiles.png' }
-                (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'keys'; text = "$password`n" }
+                (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }
+                (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asked'), @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Ended'); timeout = 60 }, @{ do = 'close' })
             Reached $o 'options'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'tiles'
-            $xy = Find-LabPictureText -Path (Join-Path $o 'tiles.png') -Text $vm.ConsoleAccount -Last; Set-Content (Join-Path $o 'admin-xy.txt') $(if ($xy) { $xy } else { '0,0' })
-            Reached $o 'asked'
-            $null = Invoke-LabPerson -Name $VmName -Account Console -Do click -Text 'Deny' -TimeoutSec 60
+            # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
+            # to the device's accounts, not as an exact word
+            $xy = (Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'tiles.png') -Account $vm.ConsoleAccount).XY
+            Set-Content (Join-Path $o 'admin-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            Reached $o 'selected'
+            # the chosen tile's name stands large in the middle; when it isn't Admin the password signs normaluser in again
+            # and the case fails on $adminSelected (with the pictures as evidence), not on a session that isn't there
+            $chosen = Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'selected.png') -Account $vm.ConsoleAccount -Selected
+            $selected = @($chosen.Lines)
+            $adminSelected = $chosen.Selected
+            Release $o 'type'
+            Reached $o 'asked' 240
+            # Admin answers in Admin's own session - there only when the sign-in through the picture worked (otherwise a
+            # session task for Admin never runs); unanswered, the dialog's countdown denies it, which the case doesn't mind
+            $adminIn = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                param($a)
+                @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $a }).Count -gt 0
+            }
+            if ($adminIn) {
+                try { $null = Invoke-LabPerson -Name $VmName -Account Console -Do click -Text 'Deny' -TimeoutSec 60 }
+                catch { Write-Warning "${VmName}: Deny in $($vm.ConsoleAccount)'s session: $($_.Exception.Message)" }
+            }
             $u = Receive-LabDesktop $job
-            Save 'res-user' $u
-            # back to normaluser for what follows
-            Reset-LabVm -Name $VmName
-            $script:pin2 = (Install-LabAgent -Name $VmName).pin
-            Set-LabAutoLogon -Name $VmName -Account User
+            Save 'res-user' ([ordered]@{ AdminSelected = $adminSelected; Selected = $selected; AdminTile = $xy; AdminSignedIn = $adminIn; Result = $u })
         }
 
+        # Admin is signed in now (or normaluser again after a failed step): the next context starts from the file's state
+        AfterAll { Set-LabVmDirty -Name $VmName }
+
         It 'D-RES-06 another user signed in meanwhile: resumed, they are asked' -Tag 'D-RES-06' {
+            $adminSelected | Should -BeTrue -Because "$($vm.ConsoleAccount) signs in through the picture: its tile must be chosen on the sign-in screen (d-rob-res-user\tiles.png, selected.png; read there: $($selected -join ', '))"
             @($u.statuses | Where-Object { $_.connection -ge 2 -and $_.state -eq 'WaitingForUser' }).Count | Should -BeGreaterThan 0
         }
     }
 
     Context 'helper and service failures' {
         BeforeAll {
-            $pin = $script:pin2
+            # the context before signed Admin in: back to the file's state (normaluser signed in, the agent) - from the run
+            # checkpoint or installed again - with that state's PIN
+            $pin = (Initialize-LabVm -Name $VmName -Agent -AutoLogon User).Pin
             $f = [ordered]@{}
             $o = Out 'helper'
             $job = Begin 'helper' @((Mark $o 'connected'), (Park $o 'killed'), @{ do = 'sleep'; seconds = 8 }, (Mark $o 'back'), (Park $o 'flood'), @{ do = 'wait'; state = 'Ended'; timeout = 120 })
@@ -226,18 +257,24 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             }
             $f.r = Receive-LabDesktop $job
             # the service restarted while connected
-            $before = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" }
+            $before = Get-LabResolution -Name $VmName
+            # fitted to a size the console isn't at, so "restored" can tell
+            $size = if ($before -eq '1280x720') { @(1024, 768) } else { @(1280, 720) }
             $o = Out 'service'
-            $job = Begin 'service' @(@{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 6 }, (Mark $o 'fitted'), @{ do = 'wait'; anyOf = @('Ended', 'Failed'); timeout = 90 }, @{ do = 'sleep'; seconds = 5 })
+            $job = Begin 'service' @(@{ do = 'settings'; fitWidth = $size[0]; fitHeight = $size[1] }, @{ do = 'sleep'; seconds = 6 }, (Mark $o 'fitted'), @{ do = 'wait'; anyOf = @('Ended', 'Failed'); timeout = 90 }, @{ do = 'sleep'; seconds = 5 })
             Reached $o 'fitted'
+            $f.fitted = Wait-LabResolution -Name $VmName -Not $before -TimeoutSec 15 -NoThrow
             Invoke-LabGuest -Name $VmName -ScriptBlock { Restart-Service RemoteHubAgent -Force }
             $f.service = Receive-LabDesktop $job
             Start-Sleep -Seconds 5
             $f.helpersAfter = Helper
-            $f.resAfter = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" }
+            $f.resAfter = Wait-LabResolution -Name $VmName -Is $before -TimeoutSec 20 -NoThrow
             $f.before = $before
             Save 'failures' $f
         }
+
+        # the helper killed, the service restarted: the next context checks (and if need be rebuilds) the state
+        AfterAll { Set-LabVmDirty -Name $VmName }
 
         It 'D-ROB-01 the helper killed: started again ("screen changed ... reconnecting"), no new question for the same user' -Tag 'D-ROB-01' {
             @($f.r.statuses | Where-Object message -match 'reconnecting').Count | Should -BeGreaterThan 0
@@ -251,13 +288,14 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
         It 'D-ROB-03 a service restart while connected: the session ends cleanly, no helper left, the resolution restored' -Tag 'D-ROB-03' {
             @($f.service.closes).Count | Should -BeGreaterThan 0
             @($f.helpersAfter) | Should -BeNullOrEmpty
+            $f.fitted | Should -Not -Be $f.before -Because 'the fit changed the console''s resolution (precondition: else "restored" says nothing)'
             $f.resAfter | Should -Be $f.before
         }
     }
 
     Context 'fuzzing and ping' {
         BeforeAll {
-            $pin = $script:pin2
+            $pin = (Initialize-LabVm -Name $VmName -Agent -AutoLogon User).Pin
             $z = [ordered]@{}
             $since = Get-LabGuestTime -Name $VmName
             $z.ping = Receive-LabDesktop (Begin 'ping' @(@{ do = 'ping'; bytes = '0102030405060708' }, @{ do = 'close' }))
@@ -288,7 +326,7 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
 
     Context 'soak' {
         BeforeAll {
-            $pin = $script:pin2
+            $pin = (Initialize-LabVm -Name $VmName -Agent -AutoLogon User).Pin
             $minutes = if ($cfg.PSObject.Properties['SoakMinutes']) { [int]$cfg.SoakMinutes } else { 50 }
             $ws0 = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Process -Id (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId).WorkingSet64 }
             $steps = foreach ($k in 1..$minutes) { @{ do = 'mouse'; action = 'Move'; x = 100 + $k % 300; y = 200 }, @{ do = 'sleep'; seconds = 60 } }

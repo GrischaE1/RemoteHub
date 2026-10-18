@@ -120,13 +120,14 @@ BeforeAll {
         }
     }
     # Windows' Save As / Open dialog: no usable UIA patterns, so the path is typed at the console keyboard into the file
-    # name box (focused when the dialog opens) and Enter pressed
+    # name box (focused when the dialog opens) and Enter pressed. -TypeText: the ':' as a raw US scan code is an O umlaut
+    # on the Console VM's German layout (run 20261017-054704: "Path does not exist", C-BAK-04 never got to the import).
     function FileDialog([string]$Path, [string]$Title = 'Save As', [string]$Account = 'Console') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20 -Account $Account
         Start-Sleep -Seconds 2
         $null = Ui 'File name:' -Title $Title -Value realclick -Optional -TimeoutSec 5 -Account $Account
         Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x41
-        Send-LabText -Name $VmName -Text $Path
+        Send-LabText -Name $VmName -Text $Path -TypeText
         Start-Sleep -Milliseconds 500
         Send-LabKey -Name $VmName -Key Enter
         Start-Sleep -Seconds 2
@@ -206,6 +207,32 @@ BeforeAll {
     function Legacy-Folder([string]$Name, [object[]]$Children) { [ordered]@{ '$type' = 'folder'; Id = [guid]::NewGuid().ToString(); Name = $Name; InheritCredentials = $true; Children = @($Children) } }
     # RemoteHub's diagnostic log (%APPDATA%\RemoteHub\logs\remotehub.log)
     function DiagLog { Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Get-Content "$r\logs\remotehub.log" -Raw -ErrorAction SilentlyContinue } }
+    # RemoteHub's state when a start failed: its processes as the session sees them (Responding: the main window answers
+    # messages within 5 s), crash / hang / .NET entries of the Application log in the last 15 minutes, the diagnostic
+    # log's end - and a summary line for the case's message
+    function ClientState {
+        $s = [ordered]@{}
+        try {
+            $s.processes = @(InSession ('@(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = $_.Id; title = $_.MainWindowTitle; ' +
+                    'responding = $_.Responding; cpuSec = [int]$_.TotalProcessorTime.TotalSeconds; started = $_.StartTime.ToString("o") } })') -TimeoutSec 120)
+        }
+        catch { $s.processesError = "$_" }
+        try {
+            $s.events = @(Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-15) } -ErrorAction SilentlyContinue |
+                        Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', '.NET Runtime', 'Windows Error Reporting' -and $_.Message -match 'RemoteHub' } |
+                        Select-Object -First 10 | ForEach-Object { "$($_.TimeCreated.ToString('o')) $($_.ProviderName) $($_.Id): $(($_.Message -split "`n" | Select-Object -First 6) -join ' ')" }
+                })
+        }
+        catch { $s.eventsError = "$_" }
+        $s.diagLog = @("$(DiagLog)" -split "`r?`n" | Where-Object { $_ } | Select-Object -Last 30)
+        $p = @($s.processes | Where-Object { $_ })
+        $s.summary = if ($s.Contains('processesError')) { "processes unknown ($($s.processesError))" }
+        elseif (-not $p.Count) { 'RemoteHub not running' }
+        else { 'RemoteHub running: ' + (@($p | ForEach-Object { "pid $($_.id) '$($_.title)' responding=$($_.responding) cpu=$($_.cpuSec)s" }) -join '; ') }
+        $s.summary += "; $(@($s.events).Count) crash/hang events$(if (@($s.events).Count) { ': ' + @($s.events)[0] })"
+        $s
+    }
     function Import-Backup([string]$File, [string]$Pw, [string]$Account = 'Console') {
         Settings-Page 'Security & storage' -Account $Account
         # closes the settings window first, then Windows' Open dialog
@@ -914,17 +941,26 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'Close' -Title 'Audit log' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }
-            # C-AUD-08: a folder with 60 connections (moved in from a settings.dat), deleted in one go
+            # C-AUD-08: a folder with 60 connections (moved in from a settings.dat), deleted in one go. Only C-AUD-08 needs
+            # them: a start that fails here is written down with RemoteHub's state, and the other cases go on from a
+            # fresh start without them.
             Clear-RhData
             $null = New-LegacyFile @(Legacy-Folder 'BulkFolder' @(1..60 | ForEach-Object { Legacy-Connection "Bulk $_" "bulk$_.lab.test" }))
-            Start-Client
             Step $a 'bulk' {
+                Start-Client
+                $a.bulkStarted = $true
                 $null = Ui 'BulkFolder' -Value 'menu:Delete'
                 $null = Ui 'Delete' -Title '?*' -TimeoutSec 15
                 Start-Sleep -Seconds 5
                 $a.bulkGone = Ui 'BulkFolder' -Value exists -Optional -TimeoutSec 3
             }
-            New-LabClientConnection -Name $VmName -Display 'Aud1' -TargetHost 'aud1.lab.test'
+            if (-not $a.bulkStarted) {
+                $a.bulkState = ClientState
+                $null = Close-Rh
+                Clear-RhData
+                Start-Client
+            }
+            Step $a 'aud1' { New-LabClientConnection -Name $VmName -Display 'Aud1' -TargetHost 'aud1.lab.test' }
             # C-AUD-05: Settings -> Logs
             Step $a 'retention' {
                 Settings-Page 'Logs'
@@ -958,7 +994,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                     Settings-Page 'Logs'
                     $a.policyBox = Ui 'AuditRetentionBox' -Title 'Settings' -Value exists -Optional -TimeoutSec 10
                     $a.policyItem = Ui 'Keep entries for' -Title 'Settings' -Value readnext -Optional -TimeoutSec 5
-                    $a.policyNote = Ui 'Set by your organisation.' -Title 'Settings' -Value exists -Optional -TimeoutSec 5
+                    # since the policy work: "Set by your organisation (Settings -> Policies)." (EditorWindow.xaml.cs:288)
+                    $a.policyNote = Ui 'Set by your organisation*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5
                     Shot 'aud05-policy'
                     $null = Ui 'Cancel' -Title 'Settings' -Optional
                 }
@@ -1012,7 +1049,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
         }
 
         It 'C-AUD-08 a save of more than 50 changes: one "Changed" entry "[n] items" / "[a] added, [c] changed, [d] deleted"' -Tag 'C-AUD-08' {
-            $a['bulk-error'] | Should -BeNullOrEmpty
+            $a['bulk-error'] | Should -BeNullOrEmpty -Because "RemoteHub starts with the 60 connections moved in from settings.dat$(if ($a.bulkState) { ' (after the failed start: ' + $a.bulkState.summary + ')' })"
             $a.bulkGone.found | Should -BeFalse
             $sum = @($a.dump1.audit | Where-Object { $_.event -eq 'data.changed' -and $_.target -match '^\d+ items$' })
             $sum.Count | Should -Be 1
@@ -1106,7 +1143,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'Unlock' -Title 'RemoteHub*locked'
                 $l.mainNew = Wait-Main
             }
-            # C-LOCK-08 then C-LOCK-07: auto-lock after 5 minutes; the Edit dialog open for 5 1/2 minutes without input,
+            # C-LOCK-08 then C-LOCK-07: auto-lock after 1 minute (5 on older builds); the Edit dialog open past that without input,
             # closed (UI Automation, not input), the lock comes; Exit RemoteHub
             Step $l 'autolock' {
                 # UI Automation isn't input: after the steps before RemoteHub may have locked already - unlocked first
@@ -1126,12 +1163,18 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'Startup protection?' -Title 'Settings'
                 # the window builds itself again once it knows whether Windows Hello is there: fields filled before are lost
                 Start-Sleep -Seconds 3
-                $l.choose = Ui 'Lock when you?re away' -Title 'Startup protection' -Value 'choose:After 5 minutes'
+                # the shortest time the build offers: 1 minute (since the option was added), else 5 minutes
+                $l.choose = Ui 'Lock when you?re away' -Title 'Startup protection' -Value 'choose:After 1 minute' -Optional
+                if (-not $l.choose -or $l.choose.value -ne 'After 1 minute') {
+                    $l.choose = Ui 'Lock when you?re away' -Title 'Startup protection' -Value 'choose:After 5 minutes'
+                }
+                $l.lockMinutes = $(if ($l.choose.value -eq 'After 1 minute') { 1 } else { 5 })
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
                 $null = Ui 'LockConn' -Value 'menu:Edit?'
                 $l.dialogOpen = Ui '*' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 15
-                Start-Sleep -Seconds 330
+                # past the lock time + RemoteHub's 15 s check: the lock is due, but the dialog holds it back
+                Start-Sleep -Seconds ($l.lockMinutes * 60 + 30)
                 $l.lockedUnderDialog = Ui '*' -Title 'RemoteHub*locked' -Value exists -Optional -TimeoutSec 3
                 $l.dialogStill = Ui '*' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 3
                 Shot 'lock08-dialog'
@@ -1189,12 +1232,12 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $l.exitTip.found | Should -BeTrue -Because 'the button''s tooltip'
             $l.seenAfterExit | Should -BeFalse
             $l.exited | Should -BeTrue
-            @($l.dump2.audit | Where-Object event -eq 'app.locked' | ForEach-Object detail) | Should -Contain 'After 5 min without input'
+            @($l.dump2.audit | Where-Object event -eq 'app.locked' | ForEach-Object detail) | Should -Contain "After $($l.lockMinutes) min without input"
         }
 
         It 'C-LOCK-08 no auto-lock while a dialog is open; it locks once the dialog is closed' -Tag 'C-LOCK-08' {
             $l['autolock-error'] | Should -BeNullOrEmpty
-            $l.choose.value | Should -Be 'After 5 minutes'
+            $l.choose.value | Should -BeIn 'After 1 minute', 'After 5 minutes'
             $l.dialogOpen.found | Should -BeTrue
             $l.lockedUnderDialog.found | Should -BeFalse
             $l.dialogStill.found | Should -BeTrue

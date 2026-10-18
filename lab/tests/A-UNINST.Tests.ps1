@@ -93,11 +93,16 @@ Describe 'A-UNINST auto sign-in <VmName>' -Tag Agent, 'A-UNINST' {
             ConvertTo-Json -Depth 6 | Set-Content (Join-Path $EvidenceDir 'a-uninst-autosignin.json') -Encoding UTF8
     }
 
-    It 'A-UNINST-15 after an AUTOSIGNIN=1 install: provider DLL and keys gone, the policy values the agent set and its marker removed' -Tag 'A-UNINST-15' {
+    # since 0.18.12 the install keeps its choice in agent.json, not in the policy key (docs/admx-design.md 11.3)
+    It 'A-UNINST-15 after an AUTOSIGNIN=1 install: provider DLL and keys gone, agent.json with the install''s choice removed, the policy key left empty' -Tag 'A-UNINST-15' {
         $withProvider.AutoSignIn.Dll | Should -BeTrue
         $withProvider.AutoSignIn.Provider | Should -BeTrue
-        $withProvider.AutoSignIn.Behavior | Should -Be 'AutoSignIn'
-        $withProvider.AutoSignIn.Marker | Should -BeTrue
+        $withProvider.AutoSignIn.ConfigBehavior | Should -Be 'AutoSignIn'
+        @($withProvider.AutoSignIn.ConfigGroups) | Should -Contain 'S-1-5-32-544'
+        $withProvider.AutoSignIn.Behavior | Should -BeNullOrEmpty -Because 'the install no longer writes the policy key'
+        $withProvider.AutoSignIn.Marker | Should -BeFalse
+        $afterProvider.Config | Should -BeNullOrEmpty -Because 'uninstall removes agent.json and with it the install''s choice'
+        $afterProvider.AutoSignIn.ConfigBehavior | Should -BeNullOrEmpty
         $removed.ExitCode | Should -BeIn 0, 3010
         $afterProvider.AutoSignIn.Dll | Should -BeFalse
         $afterProvider.AutoSignIn.Provider | Should -BeFalse

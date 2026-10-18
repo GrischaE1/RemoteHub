@@ -103,6 +103,11 @@ BeforeAll {
         do { if (& $Cond) { return $true }; Start-Sleep -Seconds $Every } while ((Get-Date) -lt $until)
         $false
     }
+    # the admin PC's local time (RemoteHub names a recording after it): a moment on the recording's own clock
+    function GuestNow {
+        $s = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff') }
+        [datetime]::ParseExact("$s", 'yyyy-MM-dd HH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+    }
     function TopWindows { @((Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'zz-no-such-window' -Text 'zz' -Value exists -TimeoutSec 1).windows) }
     # the RDP tab is connected: its header says "Click into the session to type" / "Keyboard -> remote session"
     function Wait-RdpTab([int]$TimeoutSec = 90) {
@@ -146,6 +151,27 @@ BeforeAll {
         & $Do
         $null = Ui 'Save' -Title 'Edit connection'
         Start-Sleep -Seconds 2
+    }
+    # The share recshare under Device (Tools > Add network share...), added when it isn't there yet: C-REC-08 needs it
+    # too, and a rerun filtered to C-REC-08 skipped the context that adds it (the run of 17.10.2026 05:47: "'recshare'
+    # not found", the tree had Device only)
+    function Add-RecShare {
+        if ((Ui 'recshare' -Value exists -Optional -TimeoutSec 5).found) { return }
+        # "Add network share..." is in the Tools group of the connection's menu (MainWindow.xaml CmAddShare)
+        Menu 'Tools>Add network share*'
+        $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:recshare' -TimeoutSec 30
+        $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhrec'
+        $null = Ui 'Add' -Title 'Add network share to Device'
+        Start-Sleep -Seconds 3
+    }
+    # Double-clicks recshare in the tree. Not found there (a new item isn't always scrolled into view, its parent may be
+    # collapsed): searched for in the search box, opened from the result, the search cleared again.
+    function Open-RecShare {
+        if ((Ui 'recshare' -Value exists -Optional -TimeoutSec 10).found) { $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20; return }
+        $null = Ui 'SearchBox' -Value 'set:recshare'
+        Start-Sleep -Seconds 2
+        try { $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20 }
+        finally { $null = Ui 'SearchBox' -Value 'set:' -Optional -TimeoutSec 5 }
     }
     function CloseAll { foreach ($i in 1..6) { $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3; if (-not $c.found) { break }; Start-Sleep -Seconds 2 } }
     # the console account's recordings, oldest first (empty files are the placeholders of C-REC-11)
@@ -295,13 +321,8 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
         BeforeAll {
             $r7 = [ordered]@{}
             Step $r7 share {
-                # "Add network share..." is in the Tools group of the connection's menu (MainWindow.xaml CmAddShare)
-                Menu 'Tools>Add network share*'
-                $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:recshare' -TimeoutSec 30
-                $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhrec'
-                $null = Ui 'Add' -Title 'Add network share to Device'
-                Start-Sleep -Seconds 3
-                $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20
+                Add-RecShare
+                Open-RecShare
                 $r7.tab = Ui 'Upload selected files' -Value exists -Optional -TimeoutSec 60
                 Start-Sleep -Seconds 3
                 StartRecording $r7 'share'
@@ -329,23 +350,33 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
             $r8 = [ordered]@{}
             Step $r8 hidden {
                 CloseAll
+                Add-RecShare
                 Menu 'Connect'
                 $r8.connected = Wait-RdpTab 90
                 StartRecording $r8 'hidden'
-                $t0 = Get-Date
                 Start-Sleep -Seconds 4
-                # another tab of the connection in front: the recorded one isn't visible
-                $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20
-                $r8.hiddenFrom = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
-                Start-Sleep -Seconds 8
+                # another tab of the connection in front: the recorded one isn't visible. The hidden period is taken on
+                # the video's own clock, from when the share tab's toolbar is found: a clock started after "Record" and
+                # the double-click step returning are not on it (run 20261016-212514: frames up to 38 s still showed the
+                # remote desktop, the placeholder began at 40 s, but the test had taken 22.6 s as the start)
+                Open-RecShare
+                $r8.shareTab = (Ui 'Upload selected files' -Value exists -Optional -TimeoutSec 60).found
+                $hiddenAt = GuestNow; $r8.hiddenAt = $hiddenAt.ToString('HH:mm:ss.fff')
+                Start-Sleep -Seconds 10
+                # ends at the latest when Connect is clicked: the guest's time before it
+                $shownAt = GuestNow; $r8.shownAt = $shownAt.ToString('HH:mm:ss.fff')
                 # the RDP tab in front again (Connect selects the open one)
                 Menu 'Connect'
-                $r8.hiddenTo = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
                 Start-Sleep -Seconds 4
                 StopRecording
                 $null = Box $savedBox -Button 'Close'
                 $r8.video = NewestVideo
-                $from = [math]::Ceiling($r8.hiddenFrom + 1); $to = [math]::Floor($r8.hiddenTo - 1)
+                # seconds into the video: it starts at the time in its file name (the guest's local time as RemoteHub
+                # took it, whole seconds - the first frame is up to 1 s later), on the same clock as GuestNow
+                $started = [datetime]::ParseExact([regex]::Match($r8.video.Name, '\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}').Value, 'yyyy-MM-dd HH-mm-ss', [Globalization.CultureInfo]::InvariantCulture)
+                $r8.hiddenFrom = [math]::Round(($hiddenAt - $started).TotalSeconds, 1)
+                $r8.hiddenTo = [math]::Round(($shownAt - $started).TotalSeconds, 1)
+                $from = [math]::Ceiling($r8.hiddenFrom + 1); $to = [math]::Floor($r8.hiddenTo - 2)
                 $at = @(if ($to -ge $from) { $from..$to | Where-Object { ($_ - $from) % 2 -eq 0 } } else { $r8.hiddenFrom + 1 })
                 $r8.frames = @(FrameTexts $r8.video.Path $at 'hidden')
                 $r8.visible = @(FrameTexts $r8.video.Path @(1) 'visible')
@@ -357,7 +388,15 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
         It 'C-REC-08 the recorded tab hidden: the video shows "Tab not visible - recording continues when it is shown again"' -Tag 'C-REC-08' {
             $r8['hidden-error'] | Should -BeNullOrEmpty
             $r8.connected | Should -BeTrue
-            (@($r8.frames | ForEach-Object text) -join "`n") | Should -Match 'Tab not visible . recording continues when it is shown again'
+            $r8.shareTab | Should -BeTrue -Because 'the share tab came to the front, hiding the recorded one'
+            @($r8.frames).Count | Should -BeGreaterThan 0
+            # every frame of the hidden period: the placeholder, never the remote screen. The dash between the two
+            # parts is matched loosely - OCR may read the en dash as another dash, and Get-LabOcr reads RhPerson's
+            # UTF-8 answer as ANSI in Windows PowerShell, so one dash arrives as up to three characters
+            foreach ($f in @($r8.frames)) {
+                "$($f.error)" | Should -BeNullOrEmpty -Because "the frame at $($f.at) s was read"
+                $f.text | Should -Match 'Tab not visible \S{1,3} recording continues when it is shown again' -Because "the frame at $($f.at) s lies in the hidden period ($($r8.hiddenFrom) - $($r8.hiddenTo) s)"
+            }
             (@($r8.visible | ForEach-Object text) -join "`n") | Should -Not -Match 'Tab not visible' -Because 'while the tab is in front it is recorded itself'
         }
     }
@@ -476,10 +515,18 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 New-LabClientConnection -Name $VmName -Display $unsafeName -TargetHost '192.0.2.1'
                 # not through its context menu: the name is wider than the list, and the address line below it is as
                 # wide (a stack panel), so the middle of either text is outside the list - a right-click there opens no
-                # menu. Its tree item selected (UIA SelectionItem of the address text's parent) and Enter in the tree:
-                # Tree_KeyDown opens the selected connection, as Connect does
-                $r11.select = (Ui '192.0.2.1' -Value check).value
-                $null = Ui 'Tree' -Value 'keys:{ENTER}'
+                # menu. Not by Enter in the tree either: UIA SetFocus on the TreeView fails ("Operation is not valid due
+                # to the current state of the object" - the tree doesn't take the keyboard focus itself), and its items
+                # are all named "RemoteHub.Models.Connection". Through the search box instead: the name searched for
+                # (ValuePattern), Enter in the box opens the first hit (SearchBox_PreviewKeyDown -> ActivateHit, as
+                # Connect does), then the search cleared. The real click first brings RemoteHub to the front, so the
+                # box can take the focus
+                $null = Ui 'SearchBox' -Value realclick
+                $null = Ui 'SearchBox' -Value 'set:Rec11'
+                Start-Sleep -Milliseconds 500
+                $null = Ui 'SearchBox' -Value 'keys:{ENTER}'
+                Start-Sleep -Seconds 1
+                $null = Ui 'SearchBox' -Value 'set:'
                 Start-Sleep -Seconds 5
                 StartRecording $r11 'first'
                 Start-Sleep -Seconds 3

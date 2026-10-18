@@ -12,6 +12,9 @@
 #  - dropped: the helper keeps the cover for 2 minutes (AutoSignInSessions.HoldAfterDrop), a resume takes it over,
 #    otherwise signed out; the cover ending sooner signs out at once (no banner since 0.18.10 - SignedInRemotely);
 #  - the service killed: autosignin.json is dealt with at the next start (dropped -> signed out, else the end action).
+# KNOWN PRODUCT FINDING (D-RES-10 / C-END-15): when the agent sees a drop as a cancelled read (keep-alive timeout, or the
+# request aborted before the read fails), it counts as "closed by RemoteHub" and the session is locked at once - then
+# C-END-06, -07 and -08 fail at their DropLine (DesktopEndpoint.cs main loop, fromClient cancelled, not faulted).
 # Every sign-in starts from the sign-in screen with a restarted agent (the rate limit is 3 per account in 15 minutes).
 # LabRole: device
 param(
@@ -86,9 +89,10 @@ public static class RhLabWts {
     # the console account's sessions (the one automatic sign-in created)
     # (",": the array as it is - PowerShell would hand back $null for none and the object itself for one)
     function Mine { , @(Sessions | Where-Object { $_.User -match "\\$([regex]::Escape($account))$" }) }
+    # (Mine, not @(Mine): @() would wrap the array Mine hands back, and an empty list would count as 1)
     function Wait-Gone([int]$TimeoutSec = 90) {
         $until = (Get-Date).AddSeconds($TimeoutSec)
-        do { $left = @(Mine); if ($left.Count -eq 0) { return , @() }; Start-Sleep -Seconds 3 } while ((Get-Date) -lt $until)
+        do { $left = Mine; if ($left.Count -eq 0) { return , @() }; Start-Sleep -Seconds 3 } while ((Get-Date) -lt $until)
         , $left
     }
     # event 1107 "Automatic sign-in session <n> of <account> locked / signed out (<why>)" since a guest time
@@ -116,7 +120,8 @@ public static class RhLabWts {
         }
         $null = Wait-LabAgent -Name $VmName -Pin $pin
     }
-    # every sign-in: the policy the install wrote (+ extra values), a fresh agent (rate limit, cached checks), nobody at the console
+    # every sign-in: automatic sign-in allowed for Administrators by policy (as IT would set it - the install keeps its own
+    # choice in agent.json) (+ extra values), a fresh agent (rate limit, cached checks), nobody at the console
     function Prepare([hashtable]$Policy = @{}) {
         Get-Job | Where-Object State -eq 'Running' | Stop-Job
         Get-Job | Remove-Job -Force
@@ -150,7 +155,7 @@ public static class RhLabWts {
         $since = Get-LabGuestTime -Name $VmName
         Release $o 'close'
         $x.R = Receive-LabDesktop $job
-        $x.Ended = Wait-Ended $since
+        $x.Ended = @(Wait-Ended $since)
         Start-Sleep -Seconds 5
         $x.After = Mine
         $x.SignedInEvent = @(Get-LabAgentEvent -Name $VmName -Since $since.AddMinutes(-5) -Id 1106 | Select-Object -Last 1)
@@ -186,6 +191,8 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $c.ConsoleText = Shot 'covered-console'
             # the device's own keyboard: blocked; RemoteHub's keys: arrive (the marker in the signed-in session records both)
             $marker = Start-LabMarker -Name $VmName -Account Console
+            $c.MarkerShown = $marker.Shown
+            $c.MarkerWhy = $marker.Why
             Start-Sleep -Seconds 2
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             Send-LabText -Name $VmName -Text 'local'
@@ -201,7 +208,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $since = Get-LabGuestTime -Name $VmName
             Release $o 'close'
             $c.R = Receive-LabDesktop $job
-            $c.Ended = Wait-Ended $since
+            $c.Ended = @(Wait-Ended $since)
             Start-Sleep -Seconds 5
             $c.After = Mine
             $c.SignedInEvent = @(Get-LabAgentEvent -Name $VmName -Since $since.AddMinutes(-5) -Id 1106 | Select-Object -Last 1)
@@ -214,6 +221,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             ($c.SignedInEvent.Message -join "`n") | Should -Match 'privacy screen on'
             $c.ConsoleText | Should -Match 'signed in remotely'
             @($c.R.privacy | Where-Object { $_.privacy.screen -eq 'Message' -and $_.privacy.localInputBlocked }).Count | Should -BeGreaterThan 0
+            $c.MarkerShown | Should -BeTrue -Because "lab: the marker window must be up to count keys (c-end-covered.json MarkerWhy: $($c.MarkerWhy))"
             @($c.LocalKeys).Count | Should -Be 0 -Because 'the device''s keyboard is blocked in a session automatic sign-in created'
             @($c.RemoteKeys).Count | Should -BeGreaterThan 0 -Because 'RemoteHub''s keys reach the session'
             @($c.R.images)[0].meanLuma | Should -BeGreaterThan 20 -Because 'RemoteHub''s picture is the desktop, not the cover'
@@ -336,13 +344,20 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
                 # 3 minutes and more: until the session is signed out (the agent may notice the cut late), at most 6 minutes
                 Start-Sleep -Seconds 60
                 $n.CutText = Shot 'noresume-cut'
-                $n.Ended = Wait-Ended $cutAt 300
+                # always an array: one entry would come back as a single object, whose .Count is $null in 5.1
+                $n.Ended = @(Wait-Ended $cutAt 300)
             }
             finally { Connect-LabNetwork -Name $VmName -Switches $cut }
             $n.Gone = Wait-Gone
-            $n.DropLine = @(Get-LabAgentLog -Name $VmName -Since $cutAt | Where-Object { $_ -match 'Automatic sign-in: the connection to session \d+ dropped' })[0]
-            if ($n.Ended.Count -gt 0 -and $n.DropLine -match '^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})') {
-                $n.HeldSeconds = [math]::Round(([datetime]$n.Ended[0].Time - [datetime]$Matches[1]).TotalSeconds)
+            $agentLog = @(Get-LabAgentLog -Name $VmName -Since $cutAt | ForEach-Object { "$_" })
+            $n.DropLine = @($agentLog | Where-Object { $_ -match 'Automatic sign-in: the connection to session \d+ dropped' })[0]
+            $n.SignOutLine = @($agentLog | Where-Object { $_ -match 'signed out \(connection lost and not continued in time\)' })[0]
+            # both times from the agent's log, in the device's own clock: the event's time arrives converted to this host's
+            # time zone (run 20261017-160133: 9 h apart on Server 2025)
+            $stamp = '^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)'
+            if ($n.DropLine -match $stamp) {
+                $dropped = [datetime]$Matches[1]
+                if ($n.SignOutLine -match $stamp) { $n.HeldSeconds = [math]::Round(([datetime]$Matches[1] - $dropped).TotalSeconds) }
             }
             $n.CutToEndSeconds = if ($n.Ended.Count -gt 0) { [math]::Round(([datetime]$n.Ended[0].Time - $cutAt).TotalSeconds) } else { $null }
             Release $o 'back'
@@ -352,8 +367,9 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
 
         It 'C-END-06 the adapter cut for 3 minutes: covered while held, signed out 2 minutes after the drop, event 1107' -Tag 'C-END-06' {
             Text $n.R | Should -Match 'SignedIn: Signed in as'
-            $n.CutText | Should -Match 'signed in remotely'
+            # first: without the drop the session got its end action (locked), and the console shows the lock screen
             $n.DropLine | Should -Not -BeNullOrEmpty -Because 'the agent noticed the dropped connection'
+            $n.CutText | Should -Match 'signed in remotely'
             ($n.Ended.Message -join "`n") | Should -Match 'signed out \(connection lost and not continued in time\)'
             $n.HeldSeconds | Should -BeGreaterOrEqual 115
             $n.HeldSeconds | Should -BeLessOrEqual 150
@@ -373,7 +389,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $k.ConnectedState = AutoSignInState
             $since = Get-LabGuestTime -Name $VmName
             Kill-Agent
-            $k.ConnectedEnded = Wait-Ended $since
+            $k.ConnectedEnded = @(Wait-Ended $since)
             $k.ConnectedR = Receive-LabDesktop $job
             Start-Sleep -Seconds 5
             $k.ConnectedAfter = Mine
@@ -387,7 +403,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $k.DroppedState = AutoSignInState
             $since = Get-LabGuestTime -Name $VmName
             Kill-Agent
-            $k.DroppedEnded = Wait-Ended $since
+            $k.DroppedEnded = @(Wait-Ended $since)
             $k.DroppedR = Receive-LabDesktop $job
             $k.DroppedGone = Wait-Gone
             Save 'restart' $k
@@ -425,7 +441,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
                 @(Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object { $_.CommandLine -match '\sdesktop\s*$' -and $_.SessionId -eq $sid } |
                     ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId })
             }
-            $b.Ended = Wait-Ended $killAt 90
+            $b.Ended = @(Wait-Ended $killAt 90)
             $b.KillToEndSeconds = if ($b.Ended.Count -gt 0) { [math]::Round(([datetime]$b.Ended[0].Time - $killAt).TotalSeconds) } else { $null }
             $b.Gone = Wait-Gone
             Save 'cover-ends' $b

@@ -2,6 +2,7 @@
 # greyed out by policy (docs/admx-design.md sections 4 and 16). RemoteHub and the agent are installed on the same client VM;
 # RemoteHub runs in the console account's session, driven by UI Automation. Console values are written the way the
 # template writes them (HKLM, or the console account's HKCU). Client VMs only. See docs/test-lab-cases.md section 10.7.
+# LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -9,7 +10,7 @@ param(
 
 BeforeDiscovery {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isClient = (Get-LabVm $VmName).Os -ne 'Server'
+    $isClient = Test-LabConsoleVm -Name $VmName
     # gpedit's window title and the template's fallback language are checked on English Windows only
     $isEnglish = (Get-LabVm $VmName).Id -notlike '*de-DE*'
 }
@@ -44,7 +45,7 @@ BeforeAll {
     function Policies-Text { Settings-Page 'Policies'; $t = Settings-Text; $null = Ui 'Cancel' -Title 'Settings'; $t }
     $script:task = $null
 
-    if ($vm.Os -ne 'Server') {
+    if ((Test-LabConsoleVm -Name $VmName)) {
         Reset-LabVm -Name $VmName
         $install = Install-LabAgent -Name $VmName
         $pin = $install.pin
@@ -55,7 +56,7 @@ BeforeAll {
 }
 
 AfterAll {
-    if ($vm.Os -ne 'Server') {
+    if ((Test-LabConsoleVm -Name $VmName)) {
         Shot 'end'
         Stop-LabClient -Name $VmName -Task $script:task
         Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'pol-client-agent-logs')
@@ -72,16 +73,33 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
             Copy-LabFile -Name $VmName -Path (Join-Path $policy 'RemoteHub.admx') -Destination 'C:\Windows\PolicyDefinitions'
             Copy-LabFile -Name $VmName -Path (Join-Path $policy 'en-US\RemoteHub.adml') -Destination 'C:\Windows\PolicyDefinitions\en-US'
             $editor = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & "$env:SystemRoot\System32\mmc.exe" "$env:SystemRoot\System32\gpedit.msc" }
-            $t.window = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Local Group Policy Editor' -Text '*' -Value exists -TimeoutSec 90
-            Start-Sleep -Seconds 5
-            # a template the editor can't read shows a dialog titled "Administrative Templates" with the file and line
-            $t.error = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Administrative Templates' -Text '*' -Value list -TimeoutSec 5
-            # Computer Configuration -> Administrative Templates -> RemoteHub (the first "Administrative Templates" is the computer's)
-            $null = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Local Group Policy Editor' -Text 'Administrative Templates' -Value doubleclick -TimeoutSec 30
-            Start-Sleep -Seconds 3
-            $null = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Local Group Policy Editor' -Text 'RemoteHub' -Value doubleclick -TimeoutSec 30
-            Start-Sleep -Seconds 3
-            $t.tree = (Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Local Group Policy Editor' -Text '*' -Value list -TimeoutSec 30).items -join "`n"
+            # mmc.exe asks for the highest available rights, so the editor runs elevated for the console account (an
+            # administrator). UI Automation from the person server (a limited token) sees only its window frames then - no
+            # tree items, no menu (UIPI). So the editor is read by RhPerson run elevated in the same session.
+            & (Get-Module RemoteHub.TestLab) { param($n) Copy-LabPerson -Name $n } $VmName
+            function GpEdit([string]$Text, [string]$Value, [string]$Title = 'Local Group Policy Editor', [int]$TimeoutSec = 30) {
+                $out = "C:\ProgramData\RemoteHubLab\session\pol-gpedit-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
+                $q = { param($s) "'" + ($s -replace "'", "''") + "'" }
+                $cmd = "& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do uia -Title $(& $q $Title) -Text $(& $q $Text) -Value $(& $q $Value) -TimeoutSec $TimeoutSec -Out '$out'"
+                $raw = Invoke-LabInSession -Name $VmName -Account Console -Elevated -TimeoutSec ($TimeoutSec + 60) -ScriptBlock ([scriptblock]::Create($cmd))
+                # RhPerson writes UTF-8 without a BOM
+                $json = Invoke-LabGuest -Name $VmName -ArgumentList $out -ScriptBlock { param($f) if (Test-Path $f) { [IO.File]::ReadAllText($f, [Text.Encoding]::UTF8); Remove-Item $f } }
+                if (-not $json) { throw "RhPerson -Do uia '$Text' in the elevated session gave no answer: $raw" }
+                $json | ConvertFrom-Json
+            }
+            $t.window = GpEdit '*' exists -TimeoutSec 90
+            # Computer Configuration -> Administrative Templates -> RemoteHub, opened in the results list: the scope tree
+            # shows no items to UI Automation and the editor opens with only the two configurations listed (run
+            # 20261017-054704: 'Computer Configuration' / 'User Configuration' ListItems, an empty 'Console Embedded Scope')
+            $t.computer = GpEdit 'Computer Configuration' doubleclick
+            $null = GpEdit 'Administrative Templates' doubleclick
+            # the editor reads the templates when Administrative Templates is opened: one it can't read shows a dialog
+            # titled "Administrative Templates" with the file and line
+            $t.error = GpEdit '*' list -Title 'Administrative Templates' -TimeoutSec 5
+            $null = GpEdit 'RemoteHub' doubleclick
+            # both branches listed under RemoteHub
+            $t.agentBranch = GpEdit 'RemoteHub Agent' exists
+            $t.tree = (GpEdit '*' list).items -join "`n"
             Shot 'gpedit'
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process mmc -ErrorAction SilentlyContinue | Stop-Process -Force }
             Stop-LabInSession -Name $VmName -Task $editor
@@ -91,9 +109,10 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
         It 'POL-01 gpedit.msc reads the template without an error and shows both branches under RemoteHub' -Tag 'POL-01' {
             $t.window.found | Should -BeTrue
             $t.error.found | Should -Not -BeTrue -Because "a template the editor can't read shows an 'Administrative Templates' error dialog"
-            # whole items: "RemoteHub Agent features" (under the console) must not count as the agent's branch
-            $t.tree | Should -Match '(?m)^RemoteHub Console\s*$'
-            $t.tree | Should -Match '(?m)^RemoteHub Agent\s*$'
+            # whole items ("<type>|<name>|<id>" lines of the list): "RemoteHub Agent features" (under the console) must not
+            # count as the agent's branch
+            $t.tree | Should -Match '(?m)^ListItem\|RemoteHub Console\|'
+            $t.tree | Should -Match '(?m)^ListItem\|RemoteHub Agent\|'
         }
     }
 
@@ -116,7 +135,11 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
         }
 
         It 'POL-02 each product reads only its own key; Settings -> Policies shows the agent''s values in their own section' -Tag 'POL-02' {
-            $b.desktop.error | Should -Match 'turned off by a policy on the device'
+            # the harness reports a refused connection in connectError (RemoteHub's text: the agent answers 404 and its
+            # health has no "desktop"); error only when the harness itself failed
+            $b.desktop.error | Should -BeNullOrEmpty
+            $b.desktop.connectError.status | Should -Be 404
+            $b.desktop.connectError.connectError | Should -Match 'The remote desktop is turned off by a policy on .+ \(DesktopEnabled in HKLM\\SOFTWARE\\Policies\\RemoteHub\\Agent\)'
             $b.agentReport | Should -Not -Match 'DisableRecording'
             $b.agentReport | Should -Match 'DesktopEnabled\s+Off\s+\[policy\]'
             $b.ps.error | Should -BeNullOrEmpty -Because 'the agent still allows PowerShell'

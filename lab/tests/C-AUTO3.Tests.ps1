@@ -53,7 +53,8 @@ BeforeAll {
     }
     # from the checkpoint (the console account signed in), the agent installed with AUTOSIGNIN=1; answers the pin
     function Fresh { Reset-LabVm -Name $VmName; (Install-LabAgent -Name $VmName -AutoSignIn $true).pin }
-    # the policy an AUTOSIGNIN=1 install writes, a fresh agent (rate limit, cached checks), nobody at the console
+    # automatic sign-in allowed for Administrators by policy (as IT would set it; the same as the AUTOSIGNIN=1 install's
+    # choice in agent.json), a fresh agent (rate limit, cached checks), nobody at the console
     function Prepare([string]$Pin) {
         Set-LabAgentPolicy -Name $VmName -Clear -Values @{ NoUserBehavior = 'AutoSignIn' } -Rights @{ AutoSignIn = @('S-1-5-32-544') }
         $null = Restart-LabAgent -Name $VmName -Pin $Pin
@@ -438,22 +439,29 @@ Set-Content '$labDir\launch-console.txt' ([RhLabLaunch]::Start('powershell.exe -
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock { net.exe accounts /lockoutthreshold:0 }
             $w.Failed = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2105)
             Save 'windows' $w
+            # the logs of these four now, before a later context resets the VM: the provider's trace (provider-*.log)
+            # shows which calls LogonUI made for each refusal (Windows 11 never reported a locked or disabled account)
+            Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-auto3-refusals-logs')
         }
 
         # Windows hands LogonUI an NTSTATUS and a substatus; a disabled account may come as 0xC000006E (account
-        # restriction) with the substatus 0xC0000072 - the message must still name the reason.
+        # restriction) with the substatus 0xC0000072 - the message must still name the reason. Windows 11 leaves locked
+        # and disabled accounts off its sign-in screen and never answers: the provider reports "not offered" after its
+        # grace and the agent asks Windows itself (LogonUserW): 2105 "didn't offer the account; checked with Windows: error N (0x...)".
         It 'C-AUTO-20 locked / disabled / expired password / "Deny log on locally": SignInFailed with Windows'' reason, 2105 with the status' -Tag 'C-AUTO-20' {
             $expected = [ordered]@{
                 rhaslock     = @{ Text = 'The account is locked\.'; Status = 'C0000234' }
                 rhasdisabled = @{ Text = 'The account is disabled\.'; Status = 'C0000072' }
-                rhasdeny     = @{ Text = 'may not sign in on this device.s screen'; Status = 'C000015B' }
+                rhasdeny     = @{ Text = 'The account may not sign in on this device.s screen'; Status = 'C000015B' }
                 rhasexpired  = @{ Text = 'The password has expired and must be changed at the device\.'; Status = 'C0000224|C0000071' }
             }
             foreach ($u in $expected.Keys) {
                 Text $w[$u].R | Should -Match 'SignInReady:' -Because "$u reached the sign-in"
                 Text $w[$u].R | Should -Match "SignInFailed: $($expected[$u].Text)" -Because $u
                 Text $w[$u].R | Should -Not -Match 'SignedIn:' -Because $u
-                (@($w.Failed | Where-Object { $_.Message -match "\\$u from " }).Message -join "`n") | Should -Match "Windows reported .*0x($($expected[$u].Status))" -Because "2105 for $u"
+                (@($w.Failed | Where-Object { $_.Message -match "\\$u from " }).Message -join "`n") | Should -Match "(Windows reported .*|didn't offer the account; checked with Windows: error \d+ \()0x($($expected[$u].Status))" -Because "2105 for $u"
+                # no 50 s wait for an answer that can't come (the provider's grace is 10 s)
+                $w[$u].R.seconds | Should -BeLessThan 45 -Because "$u failed without the result timeout"
             }
         }
     }

@@ -2,7 +2,8 @@
 #   A-INST-27   a folder a user made before the install is taken over (owner Administrators, inherited ACEs only)
 #   A-INST-28   AUTOSIGNIN=1 on a package without the credential provider (needs such a package - see Find-NoProviderMsi)
 #   A-HAND-07   the credential provider added / removed on an installed agent (ADDLOCAL / REMOVE=CredentialProvider)
-#   A-UNINST-16 policy values IT changed after the agent wrote them survive uninstall and AUTOSIGNIN=0
+#   A-UNINST-16 the install's choice (agent.json) goes with uninstall and AUTOSIGNIN=0, policy values IT set stay; values
+#               a version before 0.18.12 wrote into the policy key move to agent.json at service start unless IT changed them
 #   S-THR-06    what counts toward the sign-in block (403 counts, 500 doesn't)
 #   S-THR-07    the shared sign-in slots (skipped: needs 2 source addresses and Windows sign-ins slower than 30 s)
 #   P-SES-10    PowerShell can't start (IFEO Debugger on powershell.exe): 500, log line, no event 1000, slot released
@@ -47,17 +48,22 @@ BeforeAll {
         foreach ($c in $candidates) { if ($c -and -not (Test-MsiFeature $c 'CredentialProvider')) { return $c } }
         $null
     }
-    # the provider's files and keys, the policy values, the service and its identity - what A-HAND-07 compares
+    # the provider's files and keys, the install's automatic sign-in choice (agent.json, since 0.18.12), the policy
+    # values, the service and its identity - what A-HAND-07 compares
     function Get-Snapshot {
         Invoke-LabGuest -Name $VmName -ArgumentList $clsid -ScriptBlock {
             param($clsid)
             $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue
             $rights = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue
             $cfg = 'C:\ProgramData\RemoteHub\Agent\agent.json'
+            $json = $null
+            if (Test-Path $cfg) { $json = Get-Content $cfg -Raw | ConvertFrom-Json }
             [pscustomobject]@{
                 Dll          = Test-Path 'C:\Program Files\RemoteHub Agent\RemoteHubCredentialProvider.dll'
                 Provider     = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$clsid"
                 Clsid        = Test-Path "HKLM:\SOFTWARE\Classes\CLSID\$clsid"
+                ConfigBehavior = $(if ($json -and $json.PSObject.Properties['noUserBehavior']) { [string]$json.noUserBehavior })
+                ConfigGroups = (@($(if ($json -and $json.PSObject.Properties['autoSignInGroups']) { $json.autoSignInGroups }) | Where-Object { $_ }) -join ';')
                 Behavior     = $(if ($policy -and $policy.PSObject.Properties['NoUserBehavior']) { [string]$policy.NoUserBehavior })
                 Right        = (@($(if ($rights -and $rights.PSObject.Properties['AutoSignIn']) { $rights.AutoSignIn })) -join ';')
                 Marker       = Test-Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy'
@@ -76,15 +82,22 @@ BeforeAll {
             $p.ExitCode
         }
     }
-    # the policy values as the device has them (also after the agent is gone)
-    function Get-PolicyNow {
+    # automatic sign-in as the device has it (also after the agent is gone): the install's choice in agent.json (since
+    # 0.18.12), the policy values and the marker file of a version before 0.18.12
+    function Get-AutoSignInNow {
         Invoke-LabGuest -Name $VmName -ScriptBlock {
             $policy = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue
             $rights = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue
+            $cfg = 'C:\ProgramData\RemoteHub\Agent\agent.json'
+            $json = $null
+            if (Test-Path $cfg) { $json = Get-Content $cfg -Raw | ConvertFrom-Json }
             [pscustomobject]@{
-                Behavior = $(if ($policy -and $policy.PSObject.Properties['NoUserBehavior']) { [string]$policy.NoUserBehavior })
-                Right    = (@($(if ($rights -and $rights.PSObject.Properties['AutoSignIn']) { $rights.AutoSignIn })) -join ';')
-                Marker   = Test-Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy'
+                Config         = Test-Path $cfg
+                ConfigBehavior = $(if ($json -and $json.PSObject.Properties['noUserBehavior']) { [string]$json.noUserBehavior })
+                ConfigGroups   = (@($(if ($json -and $json.PSObject.Properties['autoSignInGroups']) { $json.autoSignInGroups }) | Where-Object { $_ }) -join ';')
+                Behavior       = $(if ($policy -and $policy.PSObject.Properties['NoUserBehavior']) { [string]$policy.NoUserBehavior })
+                Right          = (@($(if ($rights -and $rights.PSObject.Properties['AutoSignIn']) { $rights.AutoSignIn })) -join ';')
+                Marker         = Test-Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy'
             }
         }
     }
@@ -228,9 +241,9 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
         }
 
         # Known product gap (docs/test-lab-cases.md A-INST-28): auto-sign-in=[AUTOSIGNIN] is passed to the enroll step
-        # outside the CredentialProvider condition, so NoUserBehavior and Rights\AutoSignIn are written anyway. Tested
-        # for the correct behaviour - fails until fixed.
-        It 'A-INST-28 AUTOSIGNIN=1 on a package without the provider: installs, no DLL / CLSID keys, no policy values, Hello autoSignIn false' -Tag 'A-INST-28' {
+        # outside the CredentialProvider condition, so the install's choice is recorded anyway (agent.json noUserBehavior /
+        # autoSignInGroups since 0.18.12, the policy key before). Tested for the correct behaviour - fails until fixed.
+        It 'A-INST-28 AUTOSIGNIN=1 on a package without the provider: installs, no DLL / CLSID keys, automatic sign-in not allowed (agent.json, policy key), Hello autoSignIn false' -Tag 'A-INST-28' {
             if (-not $noProvider) {
                 Set-ItResult -Skipped -Because 'needs an agent MSI of the build under test without the credential provider (build-installer.ps1 without -CredentialProvider) in LabRoot\msi or LabRoot\msi\no-provider - Start-LabRun.ps1 publishes only the one under test'
                 return
@@ -242,8 +255,10 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             $state.AutoSignIn.InprocServer | Should -BeNullOrEmpty
             $run.rights.autoSignIn | Should -BeFalse
             @($run.features) | Should -Not -Contain 'autoSignIn'
-            # the gap: today these are written
-            $state.AutoSignIn.Behavior | Should -BeNullOrEmpty -Because 'without the provider the install must not allow automatic sign-in by policy'
+            # the gap: today the install's choice is written
+            $state.AutoSignIn.ConfigBehavior | Should -BeNullOrEmpty -Because 'without the provider the install must not allow automatic sign-in (agent.json noUserBehavior)'
+            @($state.AutoSignIn.ConfigGroups) | Should -BeNullOrEmpty
+            $state.AutoSignIn.Behavior | Should -BeNullOrEmpty -Because 'the install never writes the policy key'
             @($state.AutoSignIn.Right | Where-Object { $_ }) | Should -BeNullOrEmpty
             $state.AutoSignIn.Marker | Should -BeFalse
             @($log | Where-Object { $_ -match 'Automatic sign-in allowed on this device' }) | Should -BeNullOrEmpty
@@ -256,7 +271,7 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             $hasProvider = Test-MsiFeature $msi 'CredentialProvider'
             if ($hasProvider) {
                 Reset-LabVm -Name $VmName
-                # installed with automatic sign-in: the policy values are there, so "not touched" means something
+                # installed with automatic sign-in: agent.json allows it, so "unchanged" means something
                 $install = Install-LabAgent -Name $VmName -AutoSignIn $true
                 Copy-LabFile -Name $VmName -Path $msi -Destination 'C:\LabHand7'
                 $code = (Get-LabAgentState -Name $VmName).Product.Code
@@ -287,11 +302,15 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             }
         }
 
-        It 'A-HAND-07 REMOVE= / ADDLOCAL=CredentialProvider: 0/3010, DLL and both keys removed / added; same service PID, agent.json unchanged, no new enrollment, policy values untouched' -Tag 'A-HAND-07' {
+        It 'A-HAND-07 REMOVE= / ADDLOCAL=CredentialProvider: 0/3010, DLL and both keys removed / added; same service PID, agent.json (with the install''s automatic sign-in choice) unchanged, no new enrollment, policy key untouched' -Tag 'A-HAND-07' {
             if (-not $hasProvider) { Set-ItResult -Skipped -Because 'the agent MSI under test has no CredentialProvider feature (build-installer.ps1 -CredentialProvider)'; return }
             $h.before.Dll | Should -BeTrue
             $h.before.Provider | Should -BeTrue
-            $h.before.Behavior | Should -Be 'AutoSignIn'
+            # since 0.18.12 the install keeps its choice in agent.json, not in the policy key (docs/admx-design.md 11.3)
+            $h.before.ConfigBehavior | Should -Be 'AutoSignIn'
+            $h.before.ConfigGroups | Should -Match 'S-1-5-32-544'
+            $h.before.Behavior | Should -BeNullOrEmpty -Because 'the install no longer writes the policy key'
+            $h.before.Marker | Should -BeFalse
             # removed
             $h.remove | Should -BeIn 0, 3010
             $h.afterRemove.Dll | Should -BeFalse
@@ -307,56 +326,92 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
                 $s.ServicePid | Should -Be $h.before.ServicePid
                 $s.ConfigHash | Should -Be $h.before.ConfigHash
                 $s.EnrollLines | Should -Be $h.before.EnrollLines
-                # only RemoteHub's "auto-sign-in on/off" sets them
-                $s.Behavior | Should -Be $h.before.Behavior
-                $s.Right | Should -Be $h.before.Right
+                # only the enroll step and RemoteHub's "auto-sign-in on/off" set them - not a feature change
+                $s.ConfigBehavior | Should -Be $h.before.ConfigBehavior
+                $s.ConfigGroups | Should -Be $h.before.ConfigGroups
+                # as strings: "not set" comes back as $null or an empty value after the remoting round trip
+                [string]$s.Behavior | Should -Be ([string]$h.before.Behavior)
+                [string]$s.Right | Should -Be ([string]$h.before.Right)
                 $s.Marker | Should -Be $h.before.Marker
             }
             $h.health.deviceId | Should -Be $install.deviceId
         }
     }
 
-    Context 'values IT changed after the agent wrote them' {
+    # Since 0.18.12 the install keeps its choice in agent.json and never writes the policy key (docs/admx-design.md 11.3):
+    # uninstall and AUTOSIGNIN=0 remove the install's choice, policy values IT set stay. What a version before 0.18.12 wrote
+    # into the policy key (recorded in autosignin.policy) moves to agent.json once, at service start, unless IT changed it.
+    Context 'the install''s choice, policy values IT set, and values an older version wrote' {
         BeforeAll {
             $hasProvider = Test-MsiFeature (Get-LabAgentMsi) 'CredentialProvider'
             if ($hasProvider) {
                 $u = [ordered]@{}
-                # uninstall: IT changed Rights\AutoSignIn
+                # uninstall: IT set Rights\AutoSignIn while the install allowed automatic sign-in
                 Reset-LabVm -Name $VmName
                 $null = Install-LabAgent -Name $VmName -AutoSignIn $true
-                $u.written = Get-PolicyNow
+                $u.written = Get-AutoSignInNow
                 $null = Invoke-LabGuest -Name $VmName -ScriptBlock { if (-not (Get-LocalGroup 'RH Operators' -ErrorAction SilentlyContinue)) { New-LocalGroup 'RH Operators' } }
                 Set-LabAgentPolicy -Name $VmName -Rights @{ AutoSignIn = @('S-1-5-32-544', 'RH Operators') }
-                $u.edited = Get-PolicyNow
+                $u.edited = Get-AutoSignInNow
                 $u.uninstall = Uninstall-LabAgent -Name $VmName
-                $u.afterUninstall = Get-PolicyNow
-                # AUTOSIGNIN=0 (an update through the agent): IT changed NoUserBehavior
+                $u.afterUninstall = Get-AutoSignInNow
+                # AUTOSIGNIN=0 (an update through the agent): IT set NoUserBehavior
                 Reset-LabVm -Name $VmName
                 $install = Install-LabAgent -Name $VmName -AutoSignIn $true
                 Set-LabAgentPolicy -Name $VmName -Values @{ NoUserBehavior = 'SignInScreen' }
-                $u.edited0 = Get-PolicyNow
+                $u.edited0 = Get-AutoSignInNow
                 $rebuilt = New-LabRebuiltMsi -Source (Get-LabAgentMsi) -Path (Join-Path (Out 'rebuilt') 'RemoteHub-Agent-rebuilt-x64.msi')
                 $u.update = Update-LabAgent -Name $VmName -Pin $install.pin -Msi $rebuilt.FullName -AutoSignIn $false
-                $u.afterOff = Get-PolicyNow
+                $u.afterOff = Get-AutoSignInNow
+                # migration: the policy key and marker as a version before 0.18.12 leaves them - NoUserBehavior as it
+                # wrote it, Rights\AutoSignIn changed by IT since (one more group) - then a service start
+                $pinNow = $install.pin
+                if ($u.update.PSObject.Properties['expectedPin'] -and $u.update.expectedPin) { $pinNow = $u.update.expectedPin }
+                Set-LabAgentPolicy -Name $VmName -Clear -Values @{ NoUserBehavior = 'AutoSignIn' } -Rights @{ AutoSignIn = @('S-1-5-32-544', 'RH Operators') }
+                Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    if (-not (Get-LocalGroup 'RH Operators' -ErrorAction SilentlyContinue)) { $null = New-LocalGroup 'RH Operators' }
+                    Set-Content -Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy' -Value @('NoUserBehavior=AutoSignIn', 'Rights\AutoSignIn=S-1-5-32-544') -Encoding Ascii
+                }
+                $u.planted = Get-AutoSignInNow
+                $since = Get-LabGuestTime -Name $VmName
+                $null = Restart-LabAgent -Name $VmName -Pin $pinNow
+                $u.migrated = Get-AutoSignInNow
+                $u.migrateLog = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Automatic sign-in: ' })
                 Save 'it-changed' $u
             }
         }
 
-        It 'A-UNINST-16 a value IT changed survives uninstall and AUTOSIGNIN=0; only the unchanged one is removed, the marker deleted' -Tag 'A-UNINST-16' {
+        It 'A-UNINST-16 uninstall and AUTOSIGNIN=0 remove the install''s choice from agent.json and leave policy values IT set; an older version''s values move to agent.json unless IT changed them' -Tag 'A-UNINST-16' {
             if (-not $hasProvider) { Set-ItResult -Skipped -Because 'the agent MSI under test has no CredentialProvider feature (AUTOSIGNIN needs build-installer.ps1 -CredentialProvider)'; return }
-            $u.written.Behavior | Should -Be 'AutoSignIn'
-            $u.written.Right | Should -Be 'S-1-5-32-544'
-            $u.written.Marker | Should -BeTrue
-            # uninstall
+            # the install's choice is in agent.json, the policy key stays empty
+            $u.written.ConfigBehavior | Should -Be 'AutoSignIn'
+            $u.written.ConfigGroups | Should -Be 'S-1-5-32-544'
+            $u.written.Behavior | Should -BeNullOrEmpty -Because 'the install no longer writes the policy key'
+            $u.written.Right | Should -BeNullOrEmpty
+            $u.written.Marker | Should -BeFalse
+            # uninstall: agent.json goes, IT's value stays
             $u.uninstall.ExitCode | Should -BeIn 0, 3010
-            $u.afterUninstall.Right | Should -Be $u.edited.Right -Because 'IT changed Rights\AutoSignIn - it stays'
-            $u.afterUninstall.Behavior | Should -BeNullOrEmpty -Because 'NoUserBehavior was unchanged - removed'
+            $u.afterUninstall.Config | Should -BeFalse -Because 'uninstall removes agent.json and with it the install''s choice'
+            $u.afterUninstall.Right | Should -Be $u.edited.Right -Because 'IT set Rights\AutoSignIn - it stays'
+            $u.afterUninstall.Behavior | Should -BeNullOrEmpty
             $u.afterUninstall.Marker | Should -BeFalse
-            # AUTOSIGNIN=0
+            # AUTOSIGNIN=0: the install's choice cleared, IT's value stays
             $u.update.verdict | Should -Be 'updated' -Because $u.update.message
-            $u.afterOff.Behavior | Should -Be 'SignInScreen' -Because 'IT changed NoUserBehavior - it stays'
-            $u.afterOff.Right | Should -BeNullOrEmpty -Because 'Rights\AutoSignIn was unchanged - removed'
+            $u.edited0.ConfigBehavior | Should -Be 'AutoSignIn'
+            $u.afterOff.Config | Should -BeTrue
+            $u.afterOff.ConfigBehavior | Should -BeNullOrEmpty -Because 'AUTOSIGNIN=0 clears noUserBehavior in agent.json'
+            $u.afterOff.ConfigGroups | Should -BeNullOrEmpty -Because 'AUTOSIGNIN=0 clears autoSignInGroups in agent.json'
+            $u.afterOff.Behavior | Should -Be 'SignInScreen' -Because 'IT set NoUserBehavior - it stays'
             $u.afterOff.Marker | Should -BeFalse
+            # migration at service start: the unchanged value moves, the one IT changed stays, the marker goes
+            $u.planted.Marker | Should -BeTrue
+            $u.migrated.Marker | Should -BeFalse
+            $u.migrated.Behavior | Should -BeNullOrEmpty -Because 'NoUserBehavior was as the older version wrote it - moved'
+            $u.migrated.ConfigBehavior | Should -Be 'AutoSignIn'
+            $u.migrated.Right | Should -Be 'S-1-5-32-544;RH Operators' -Because 'IT changed Rights\AutoSignIn - it stays in the policy key'
+            $u.migrated.ConfigGroups | Should -BeNullOrEmpty -Because 'a value IT changed is not moved'
+            ($u.migrateLog -join "`n") | Should -Match 'moved NoUserBehavior from the policy key to agent\.json'
+            ($u.migrateLog -join "`n") | Should -Match 'Rights\\AutoSignIn changed since the install . left in the policy key'
         }
     }
 
@@ -396,20 +451,22 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             $null = Restart-LabAgent -Name $VmName -Pin $pin
             $t.deny5 = Ws 'rhdeny' $password @{ count = 5 }
             $t.denyNext = Ws 'rhok' $password
-            # an error the agent doesn't map (500): doesn't count
+            # an expired account: Windows refuses it (1793), so 401 since 0.18.16 (SignInRefusal) - and it counts like a
+            # wrong password. A 500 (Windows couldn't check, e.g. no domain controller) can't be made on a lab VM, so that
+            # it doesn't count (AgentHost: only refusals reach gate.Failed) isn't checked here.
             $null = Restart-LabAgent -Name $VmName -Pin $pin
             $t.exp6 = Ws 'rhexp' $password @{ count = 6 }
             $t.expNext = Ws 'rhok' $password
             Save 'throttle-counts' $t
         }
 
-        It 'S-THR-06 5 refused sign-ins with the right password (normaluser 403, deny-network-logon 403) block the address, the 6th gets 429; unmapped errors (500) don''t count' -Tag 'S-THR-06' {
+        It 'S-THR-06 5 refused sign-ins with the right password (normaluser 403, deny-network-logon 403, expired 401) block the address, the 6th gets 429' -Tag 'S-THR-06' {
             Status $t.user5 | Should -Be @(403, 403, 403, 403, 403)
             Status $t.userNext | Should -Be @(429)
             Status $t.deny5 | Should -Be @(403, 403, 403, 403, 403)
             Status $t.denyNext | Should -Be @(429)
-            Status $t.exp6 | Should -Be @(500, 500, 500, 500, 500, 500)
-            Status $t.expNext | Should -Be @(101)
+            Status $t.exp6 | Should -Be @(401, 401, 401, 401, 401, 429)
+            Status $t.expNext | Should -Be @(429)
         }
 
         It 'S-THR-07 at most 8 Windows sign-ins at once across all addresses; no slot within 30 s -> 503' -Tag 'S-THR-07' {

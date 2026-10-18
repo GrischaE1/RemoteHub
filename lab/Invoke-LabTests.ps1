@@ -15,7 +15,10 @@
       # LabNeeds: jumphost              it uses the jump host (one at a time in the lab). Found by itself too.
       # TimeLimitMin: 150               more time than -FileTimeoutMin.
     A VM is reused between files (RHLAB_REUSE=1, see Initialize-LabVm); a file that fails drops the state of the VMs it
-    used, so the next file there starts from the checkpoint.
+    used, so the next file there starts from the checkpoint. The first time a VM is set up for a state in the run,
+    Initialize-LabVm takes a run checkpoint ("RHLAB <run> <state>"); later files that need that state revert to it
+    instead of installing again (off: -NoSnapshots). Run checkpoints are removed at the end of the run and, left by a
+    cancelled run, at the start of the next.
 .EXAMPLE
     .\Invoke-LabTests.ps1                                              # all kinds, all scenarios
     .\Invoke-LabTests.ps1 -Vm W11-26H2-en-US,Console-26H2-en-US -Tag Smoke
@@ -27,8 +30,11 @@ param(
     [string]$RunId = (Get-Date -Format 'yyyyMMdd-HHmmss'),
     # per scenario file and VM: a file that runs longer is ended and its cases are reported as failed
     [int]$FileTimeoutMin = 60,
-    # every file from the checkpoint, as before (no reuse between files)
-    [switch]$NoReuse
+    # every file from the checkpoint, as before (no reuse between files, no run checkpoints)
+    [switch]$NoReuse,
+    # no run checkpoints (Initialize-LabVm installs again whenever a VM isn't in the state a file needs); also
+    # RHLAB_SNAPSHOTS=0
+    [switch]$NoSnapshots
 )
 $ErrorActionPreference = 'Stop'
 # powershell -File passes "-Vm a,b" as one string
@@ -38,12 +44,20 @@ $Tag = @($Tag | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 Import-Module (Join-Path $PSScriptRoot 'RemoteHub.TestLab') -Force
 $cfg = Get-LabConfig
 
+# Run checkpoints a cancelled run left behind (Stop-LabRun ends the processes, so the finally block below didn't run),
+# before anything looks at the VMs' checkpoints. Their merges are waited for (bounded): a revert during one fails.
+try {
+    Remove-LabRunCheckpoints -MergeTimeoutSec 900 | Where-Object Removed |
+        ForEach-Object { Write-Host "$($_.Vm): $($_.Removed) run checkpoint(s) of an earlier run removed" -ForegroundColor Yellow }
+}
+catch { Write-Warning "Removing run checkpoints of an earlier run failed: $($_.Exception.Message)" }
+
 # the kinds asked for (a VM's Id or its kind both select the kind), and every VM of those kinds (both lanes)
 # Only VMs that are ready for the lab: a checkpoint to revert to (a VM still being set up has none yet - it is left out
 # and named, so a half-made second lane doesn't take files and fail them)
 $labVms = @(Get-LabVm | Where-Object {
         $v = $_
-        if (-not @(Get-VMSnapshot -VMName $v.Name -ErrorAction SilentlyContinue).Count) {
+        if (-not (Get-LabBaseCheckpoint -Name $v.Name)) {
             Write-Host "$($v.Name): no checkpoint yet - not used in this run" -ForegroundColor Yellow; return $false
         }
         # the VM is asked for the lab's accounts (a typo in one fails every file there) - started for it when it is off
@@ -92,7 +106,7 @@ function Get-MsiInfo($file) {
     Vms           = @($kinds | ForEach-Object {
             $k = $_
             $first = @($vms | Where-Object BaseId -eq $k | Sort-Object Lane)[0]
-            $cp = Get-VMSnapshot -VMName $first.Name | Sort-Object CreationTime -Descending | Select-Object -First 1
+            $cp = Get-LabBaseCheckpoint -Name $first.Name
             [pscustomobject]@{
                 Id             = $k
                 Name           = $first.Name
@@ -140,6 +154,11 @@ foreach ($file in $testFiles) {
 Write-Host "$($queue.Count) file runs on $($vms.Count) VMs"
 
 if (-not $NoReuse) { $env:RHLAB_REUSE = '1' } else { $env:RHLAB_REUSE = '0'; foreach ($v in $vms) { Clear-LabVmState -Name $v.Name } }
+# the file processes inherit these: Initialize-LabVm takes run checkpoints only inside a run, named with its id
+$snapshots = (-not $NoReuse) -and (-not $NoSnapshots) -and $env:RHLAB_SNAPSHOTS -ne '0'
+$env:RHLAB_SNAPSHOTS = $(if ($snapshots) { '1' } else { '0' })
+$env:RHLAB_RUN_ID = $RunId
+Write-Host "Reuse between files: $(if ($NoReuse) { 'off' } else { 'on' }) - run checkpoints: $(if ($snapshots) { 'on' } else { 'off' })"
 
 # ------------------------------------------------------------------ the scheduler
 # A VM is busy with its own file, or held for another VM's file of its lane (Get-LabDevice). Files that use the jump
@@ -157,8 +176,12 @@ function Start-Item($item, $v) {
     $base = [IO.Path]::GetFileNameWithoutExtension([IO.Path]::GetFileNameWithoutExtension($item.File))
     $xml = Join-Path $kindDir "pester-$base.xml"
     $log = Join-Path $kindDir "console-$base.log"
+    # evidence per VM: two lanes run files of the same kind at once, and their evidence names may meet. Lane 1's Id is
+    # the kind, so its evidence stays next to the Pester results; lane 2 gets <run>\<kind>-2.
+    $evidenceDir = Join-Path $runDir $v.Id
+    $null = New-Item -ItemType Directory -Path $evidenceDir -Force
     $runner = Join-Path $PSScriptRoot 'Invoke-LabTestFile.ps1'
-    $cmd = "& '$runner' -TestFile '$($item.File)' -VmName '$($v.Name)' -EvidenceDir '$kindDir' -OutputPath '$xml' -Tag '$($Tag -join ',')' *> '$log'"
+    $cmd = "& '$runner' -TestFile '$($item.File)' -VmName '$($v.Name)' -EvidenceDir '$evidenceDir' -OutputPath '$xml' -Tag '$($Tag -join ',')' *> '$log'"
     $p = Start-Process powershell.exe -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $cmd -WindowStyle Hidden -PassThru
     $held = @()
     if ($item.Needs.Lane) {
@@ -226,6 +249,13 @@ try {
 finally {
     foreach ($r in @($running.Values)) { Complete-Item $r }
     foreach ($v in $labVms | Where-Object { $_.Role }) { try { Stop-LabVm -Name $v.Name } catch { } }
+    # after the last file (also when drained or ended early): the run checkpoints go. The VMs are off by now, so nothing
+    # runs from them while they merge; the next run waits for merges still going on.
+    try {
+        Remove-LabRunCheckpoints -MergeTimeoutSec 120 | Where-Object Removed |
+            ForEach-Object { Write-Host "$($_.Vm): $($_.Removed) run checkpoint(s) removed" }
+    }
+    catch { Write-Warning "Removing the run checkpoints failed: $($_.Exception.Message) - the next run removes them" }
 }
 
 $summary = foreach ($k in $kinds) {

@@ -76,8 +76,9 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
         }
 
         It 'J-02 WinRM HTTPS through the forwarder (127.0.0.1, name not checked): the session opens' -Tag 'J-02' {
-            $winrmTest.result.state | Should -Be 'Available' -Because $winrmTest.result.message
-            $winrmTest.result.message | Should -Match ([regex]::Escape($computer))
+            # "test" answers { state, message, transport } itself, not wrapped in "result" like the other ops
+            $winrmTest.state | Should -Be 'Available' -Because $winrmTest.message
+            $winrmTest.message | Should -Match ([regex]::Escape($computer))
         }
 
         It 'J-04 PowerShell without the agent (WinRM) works through the jump host' -Tag 'J-04' {
@@ -305,12 +306,15 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             }
             $until = (Get-Date).AddSeconds(120)
             while (-not (Test-Path $ready) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
-            # the jump host loses its side towards this PC for 30 s
+            # the jump host loses its side towards this PC for 30 s (its adapter on the jump switch stays connected)
             $cut = Disconnect-LabNetwork -Name 'JumpHost' -ExceptSwitch (Get-LabConfig).JumpHost.Switch
-            Start-Sleep -Seconds 30
-            Connect-LabNetwork -Name 'JumpHost' -Switches $cut
-            $null = Wait-LabAgent -Name 'JumpHost' -Pin $jump.Pin -TimeoutSec 120
-            Set-Content $back 'back'
+            try { Start-Sleep -Seconds 30 } finally { Connect-LabNetwork -Name 'JumpHost' -Switches $cut }
+            try {
+                $null = Wait-LabAgent -Name 'JumpHost' -Pin $jump.Pin -TimeoutSec 120
+                # and the device behind it again: a failure here names the broken path instead of a later tool call
+                $null = Wait-LabAgent -Name $VmName -Pin $pinNow -TimeoutSec 120
+            }
+            finally { Set-Content $back 'back' -Encoding ASCII }
             $desk = Receive-Job $job -Wait -AutoRemoveJob
             $after = Invoke-LabTool -Name $VmName -Op ps -Pin $pinNow -Params @{ script = '$env:COMPUTERNAME' }
             Save 'drop' @{ Desktop = $desk; After = $after }
@@ -332,29 +336,50 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $rng = [Security.Cryptography.RandomNumberGenerator]::Create(); $buf = New-Object byte[] (4MB)
             $fs = [IO.File]::Create($big); try { for ($k = 0; $k -lt 512; $k++) { $rng.GetBytes($buf); $fs.Write($buf, 0, $buf.Length) } } finally { $fs.Dispose() }
             $hash = (Get-FileHash $big -Algorithm SHA256).Hash
-            # the desktop runs meanwhile: frames per second while the copy goes through the same jump host
+            # the desktop runs meanwhile, for the whole copy: frames while the copy goes through the same jump host. The
+            # agent sends a picture only when the screen changes (the mouse pointer isn't part of it), so a window keeps
+            # changing; the desktop stays open until the copy has ended (the done file)
+            $change = Start-LabChangingWindow -Name $VmName
+            $copyDone = Join-Path $env:TEMP "rhlab-jump-copied-$([guid]::NewGuid().ToString('N').Substring(0, 6)).txt"
             $mod = (Get-Module RemoteHub.TestLab).Path
-            $deskJob = Start-Job -ArgumentList $mod, $jump, $VmName, $pinNow, (Join-Path $EvidenceDir 'j-throughput') -ScriptBlock {
-                param($mod, $jump, $vmName, $pin, $out)
+            $deskJob = Start-Job -ArgumentList $mod, $jump, $VmName, $pinNow, (Join-Path $EvidenceDir 'j-throughput'), $copyDone -ScriptBlock {
+                param($mod, $jump, $vmName, $pin, $out, $copyDone)
                 Import-Module $mod
                 Use-LabJump -Jump $jump
                 Invoke-LabDesktop -Name $vmName -Pin $pin -Account Console -Out $out -Steps @(
                     @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; fps = 30 }, @{ do = 'wait'; state = 'Connected'; timeout = 60 }
-                    @{ do = 'moves'; count = 3000; x0 = 100; y0 = 100; dx = 1; dy = 0; delayMs = 30 }, @{ do = 'close' })
+                    @{ do = 'waitFile'; path = $copyDone; timeout = 1800 }, @{ do = 'close' })
             }
-            $sw = [Diagnostics.Stopwatch]::StartNew()
-            $up = Invoke-LabTool -Name $VmName -Op fs-upload -Pin $pinNow -Params @{ files = $big; remote = 'C:\LabJumpBig' } -TimeoutSec 1800
-            $seconds = $sw.Elapsed.TotalSeconds
-            $desk = Receive-Job $deskJob -Wait -AutoRemoveJob
-            $deviceHash = Invoke-LabGuest -Name $VmName -ArgumentList (Split-Path $big -Leaf) -ScriptBlock { param($n) (Get-FileHash "C:\LabJumpBig\$n" -Algorithm SHA256).Hash }
+            try {
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $up = Invoke-LabTool -Name $VmName -Op fs-upload -Pin $pinNow -Params @{ files = $big; remote = 'C:\LabJumpBig' } -TimeoutSec 1800
+                $seconds = $sw.Elapsed.TotalSeconds
+            }
+            finally {
+                Set-Content $copyDone 'done' -Encoding ASCII
+                $desk = Receive-Job $deskJob -Wait -AutoRemoveJob
+                $changed = Stop-LabChangingWindow -Change $change
+                Remove-Item $copyDone -ErrorAction SilentlyContinue
+            }
+            # when the copy ended, in the desktop's own clock (the end of its waitFile step)
+            $wait = @($desk.steps | Where-Object { $_.do -eq 'waitFile' })[0]
+            $copyEndMs = if ($wait) { [double]$wait.atMs + [double]$wait.seconds * 1000 } else { 0 }
+            # no file when the upload failed: $null here, so J-08 reports the upload's answer instead of Get-FileHash's error
+            $deviceHash = Invoke-LabGuest -Name $VmName -ArgumentList (Split-Path $big -Leaf) -ScriptBlock {
+                param($n) $p = "C:\LabJumpBig\$n"; if (Test-Path -LiteralPath $p) { (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash }
+            }
             Remove-Item $big -ErrorAction SilentlyContinue
-            Save 'throughput' @{ Upload = $up; Seconds = $seconds; Desktop = @{ frames = $desk.frames; stats = $desk.stats } }
+            Save 'throughput' @{ Upload = $up; Seconds = $seconds; CopyEndMs = $copyEndMs; Changed = $changed; Desktop = @{ frames = $desk.frames; stats = $desk.stats; steps = $desk.steps } }
         }
 
         It 'J-08 2 GB to the device through the jump host arrive unchanged while its remote desktop keeps sending pictures' -Tag 'J-08' {
-            $up.result.failed | Should -Be 0
+            $up.result.failed | Should -Be 0 -Because ($up | ConvertTo-Json -Depth 4 -Compress)
             $deviceHash | Should -Be $hash
-            $desk.frames.count | Should -BeGreaterThan 100 -Because 'the picture must keep coming during the copy'
+            $changed.perSecond | Should -BeGreaterThan 10 -Because "the window must keep changing (it changed $($changed.perSecond) times a second)"
+            $copyEndMs | Should -BeGreaterThan 0 -Because 'the desktop must stay open until the copy has ended'
+            $desk.frames.count | Should -BeGreaterThan 100 -Because "the picture must keep coming during the copy ($([int]$seconds) s; fps: $(@($desk.stats | ForEach-Object { $_.stats.framesPerSecond }) -join ', '))"
+            # still coming at the end of the copy, not only before the tunnel got busy
+            [double]$desk.frames.lastAtMs | Should -BeGreaterThan ($copyEndMs - 30000) -Because 'pictures must still come in the copy''s last 30 s'
         }
     }
 
@@ -378,7 +403,8 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             foreach ($k in $sh.Keys) { $sh[$k].ok | Should -BeTrue -Because $k }
             $sh.smb.description | Should -Match 'RemoteHub client' -Because 'SMB behind a jump host always uses RemoteHub''s own client'
             $ftp.ok | Should -BeFalse
-            ($ftp | ConvertTo-Json -Depth 5) | Should -Match 'FTP can''t go through a jump host'
+            # (Unescape: Windows PowerShell's ConvertTo-Json writes ' as ')
+            [regex]::Unescape(($ftp | ConvertTo-Json -Depth 5)) | Should -Match 'FTP can''t go through a jump host'
         }
     }
 }

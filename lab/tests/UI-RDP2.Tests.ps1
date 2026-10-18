@@ -71,8 +71,24 @@ BeforeAll {
         } while ((Get-Date) -lt $until)
         $false
     }
-    # tabs of the selected connection (the tab bar shows each one's kind)
-    function RdpTabCount { @(@((Ui '*' -Value list -Optional -TimeoutSec 10).items) | Where-Object { $_ -match '^Text\|Remote desktop\|' }).Count }
+    # RDP tabs of the selected connection. The second tab row (each tab's kind) shows only when the connection has more
+    # than one tab (MainWindow.xaml), so a single RDP tab has no row - then the main window's title says the kind (run
+    # 20261016-212514 counted 0 for one tab and 2 for two).
+    function RdpTabCount {
+        $n = @(@((Ui '*' -Value list -Optional -TimeoutSec 10).items) | Where-Object { $_ -match '^Text\|Remote desktop\|' }).Count
+        if ($n -eq 0 -and @(TopWindows | Where-Object { $_ -match ' \S Remote desktop \S RemoteHub$' }).Count) { $n = 1 }
+        $n
+    }
+    # waits until the selected connection has $Count RDP tabs; answers the last count
+    function Wait-RdpTabCount([int]$Count, [int]$TimeoutSec = 60) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $n = RdpTabCount
+            if ($n -eq $Count) { return $n }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $until)
+        $n
+    }
     # a click into the RDP session of the selected tab with the console mouse (the control gets the keyboard)
     function ClickIntoSession {
         $fit = Ui 'Reconnect' -Value fit
@@ -89,6 +105,16 @@ BeforeAll {
                         if ($_ -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?<s>Active|Disc)' -and $Matches.u -eq $u -and $Matches.s -eq 'Active' -and "$($Matches.n)" -like 'rdp-tcp*') { [int]$Matches.id }
                     })
             })
+    }
+    # waits until PSAdmin has at least $Count active RDP sessions on the device (a sign-in takes a while); answers them
+    function Wait-DeviceRdp([int]$Count, [int]$TimeoutSec = 90) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $ids = @(DeviceRdp)
+            if ($ids.Count -ge $Count) { return $ids }
+            Start-Sleep -Seconds 3
+        } while ((Get-Date) -lt $until)
+        $ids
     }
     function Clear-DeviceSessions {
         $null = Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
@@ -146,19 +172,14 @@ BeforeAll {
             $null = Ui 'When Windows asks for the password' -Title 'Edit connection' -Value "choose:$Choice"
         }
     }
-    # Windows' credential dialog of the RDP client ("Windows Security"; the newer one is a "Credential Dialog Xaml Host")
-    function CredDialog([int]$TimeoutSec = 60) {
-        $until = (Get-Date).AddSeconds($TimeoutSec)
-        do {
-            foreach ($t in 'Windows Security', 'Credential Dialog Xaml Host') {
-                if ((Ui '*' -Title $t -Value exists -Optional -TimeoutSec 2).found) { return $true }
-            }
-        } while ((Get-Date) -lt $until)
-        $false
-    }
+    # Windows' credential dialog of the RDP client, shown within -TimeoutSec (Wait-LabCredentialDialog: UI Automation
+    # lists it inside RemoteHub's window with nothing in it, so a -Title 'Windows Security' element search never matched)
+    function CredDialog([int]$TimeoutSec = 60) { Wait-LabCredentialDialog -Name $VmName -Account Console -TimeoutSec $TimeoutSec }
     # RemoteHub's password notice (ClipboardToast): a window of its own without a title
     function Toast([int]$TimeoutSec = 3) { Ui 'Stored password for*' -Title '*' -Value exists -Optional -TimeoutSec $TimeoutSec }
-    function Clip { Invoke-LabPerson -Name $VmName -Account Console -Do clip-get }
+    # the clipboard's hash and length only: clip-get's "start" (the text's beginning) would be the stored password here,
+    # and this goes into the evidence
+    function Clip { Invoke-LabPerson -Name $VmName -Account Console -Do clip-get | Select-Object -Property * -ExcludeProperty start }
 
     if ($isClient) {
         Reset-LabVm -Name $device.Name
@@ -169,6 +190,7 @@ BeforeAll {
             Set-ItemProperty $ts -Name fSingleSessionPerUser -Value 0
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
+        Restart-LabRdpService -Name $device.Name
         $deviceIp = Get-LabVmAddress -Name $device.Name
         # RemoteHub installed (kept from an earlier file when it left the VM so; AfterAll empties RemoteHub's data)
         $null = Initialize-LabVm -Name $VmName -Client
@@ -206,6 +228,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = New-Item $k -Force
                 Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
             }
+            Restart-LabRdpService -Name $device.Name
             Step $p nothing {
                 PasswordPrompt 'Do nothing'
                 $p.nothingAuditBefore = PasswordCopiedCount
@@ -262,6 +285,8 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 CloseAll
             }
             Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
+            # the next contexts connect without a prompt
+            Restart-LabRdpService -Name $device.Name
             Save 'prompt' $p
         }
 
@@ -312,15 +337,17 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $s.device2 = Wait-RdpTab 90
                 Menu 'Connect' -Node 'Ghost'
                 Start-Sleep -Seconds 3
-                $s.sessions = DeviceRdp
+                $s.sessions = Wait-DeviceRdp 2
             }
             Step $s next {
-                # back on Device's tab, a click into its session, then Ctrl+Alt+< (left Alt; VK_OEM_102 = the "<" key)
+                # back on Device's tab, a click into its session, then Ctrl+Alt+< (left Alt; VK_OEM_102 = the "<" key).
+                # As scan codes (Ctrl 1D, left Alt 38, "<" 56): Hyper-V's PressKey rejects VK_OEM_102 (226) with 32773
+                # "Invalid parameter" (run 20261016-212514) - its key table is the US 101-key one without that key.
                 Menu 'Connect'
                 $null = Wait-RdpTab 30
                 $s.before = SelectedTab
                 ClickIntoSession
-                Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x12, 0xE2
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
                 Start-Sleep -Seconds 3
                 $s.afterNext = SelectedTab
                 Shot 'switch-next'
@@ -328,7 +355,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             Step $s previous {
                 # in Device2's session: Ctrl+Alt+Shift+< goes back to Device (next would be Ghost)
                 ClickIntoSession
-                Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x12, 0x10, 0xE2
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56
                 Start-Sleep -Seconds 3
                 $s.afterPrevious = SelectedTab
                 Shot 'switch-previous'
@@ -338,13 +365,13 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Ui 'Full screen'
                 Start-Sleep -Seconds 3
                 $s.fsBefore = TopWindows
-                Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x12, 0xE2
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
                 Start-Sleep -Seconds 4
                 $s.fsAfter = TopWindows
                 $s.fsSelected = SelectedTab
                 Shot 'switch-fullscreen'
-                # Ctrl+Alt+Break leaves full screen (Break = VK_CANCEL with Ctrl held)
-                Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x12, 0x03
+                # Ctrl+Alt+Break leaves full screen (Pause with Ctrl held sends the extended scan code E0 46 = Break)
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0xE046
                 Start-Sleep -Seconds 3
             }
             Save 'switch' $s
@@ -374,16 +401,13 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Clear-DeviceSessions
                 Menu 'Connect'
                 $a.first = Wait-RdpTab 90
-                Start-Sleep -Seconds 3
-                $a.tabs1 = RdpTabCount
-                $a.sessions1 = DeviceRdp
+                $a.tabs1 = Wait-RdpTabCount 1 30
+                $a.sessions1 = Wait-DeviceRdp 1
                 # with an RDP tab open the tree offers "Open additional session"
                 Menu 'Open additional session'
-                Start-Sleep -Seconds 5
+                $a.tabs2 = Wait-RdpTabCount 2 60
                 $a.second = Wait-RdpTab 90
-                Start-Sleep -Seconds 5
-                $a.tabs2 = RdpTabCount
-                $a.sessions2 = DeviceRdp
+                $a.sessions2 = Wait-DeviceRdp 2
                 Shot 'additional-tree'
             }
             Step $a tab {
@@ -391,15 +415,13 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Clear-DeviceSessions
                 Menu 'Connect'
                 $null = Wait-RdpTab 90
-                Start-Sleep -Seconds 3
-                $a.tabTabs1 = RdpTabCount
+                $a.tabTabs1 = Wait-RdpTabCount 1 30
+                $null = Wait-DeviceRdp 1
                 # the tab bar's "+" (Open another tab for this connection): "Additional remote desktop session"
                 $null = Ui 'Open another tab for this connection' -Value 'pick:Additional remote desktop session'
-                Start-Sleep -Seconds 5
+                $a.tabTabs2 = Wait-RdpTabCount 2 60
                 $a.tabSecond = Wait-RdpTab 90
-                Start-Sleep -Seconds 5
-                $a.tabTabs2 = RdpTabCount
-                $a.tabSessions2 = DeviceRdp
+                $a.tabSessions2 = Wait-DeviceRdp 2
                 Shot 'additional-tab'
                 CloseAll
             }
@@ -411,9 +433,11 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             $a['tab-error'] | Should -BeNullOrEmpty
             $a.first | Should -BeTrue
             @($a.sessions1).Count | Should -Be 1
-            $a.tabs2 | Should -Be ($a.tabs1 + 1)
+            $a.tabs1 | Should -Be 1
+            $a.tabs2 | Should -Be 2
             @($a.sessions2).Count | Should -Be 2
-            $a.tabTabs2 | Should -Be ($a.tabTabs1 + 1)
+            $a.tabTabs1 | Should -Be 1
+            $a.tabTabs2 | Should -Be 2
             @($a.tabSessions2).Count | Should -Be 2
         }
     }

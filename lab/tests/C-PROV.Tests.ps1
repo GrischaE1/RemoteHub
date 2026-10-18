@@ -37,14 +37,18 @@ BeforeAll {
             param($clsid)
             $dll = 'C:\Program Files\RemoteHub Agent\RemoteHubCredentialProvider.dll'
             $sig = if (Test-Path $dll) { Get-AuthenticodeSignature $dll } else { $null }
+            $json = try { Get-Content 'C:\ProgramData\RemoteHub\Agent\agent.json' -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $null }
             [pscustomobject]@{
                 Dll          = Test-Path $dll
                 Signature    = if ($sig) { "$($sig.Status)" } else { $null }
                 Provider     = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\$clsid" -ErrorAction SilentlyContinue).'(default)'
                 InprocServer = (Get-ItemProperty "HKLM:\SOFTWARE\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).'(default)'
                 Threading    = (Get-ItemProperty "HKLM:\SOFTWARE\Classes\CLSID\$clsid\InprocServer32" -ErrorAction SilentlyContinue).ThreadingModel
+                # the install's choice (agent.json since 0.18.12) and the policy values (IT's only since then)
+                ConfigBehavior = $(if ($json -and $json.PSObject.Properties['noUserBehavior']) { $json.noUserBehavior })
+                ConfigGroups = @($(if ($json -and $json.PSObject.Properties['autoSignInGroups']) { $json.autoSignInGroups }) | Where-Object { $_ })
                 Behavior     = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue).NoUserBehavior
-                Right        = @((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue).AutoSignIn)
+                Right        = @((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue).AutoSignIn | Where-Object { $_ })
             }
         }
     }
@@ -146,6 +150,8 @@ BeforeAll {
 }
 
 AfterAll {
+    # the provider's trace (provider-*.log): which calls LogonUI made, and whether the account was in its user list
+    try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-prov-agent-logs') } catch { }
     # the provider swapped, rebuilt agents installed: the next file starts from the checkpoint
     Set-LabVmDirty -Name $VmName
     Get-LabFile -Name $VmName -Path "$guestDir\*.log" -Destination (Join-Path $EvidenceDir 'c-prov-logs')
@@ -186,7 +192,9 @@ Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {
         $afterRemove.Dll | Should -Be $false
         $afterRemove.Provider | Should -BeNullOrEmpty
         $afterRemove.InprocServer | Should -BeNullOrEmpty
-        $afterRemove.Behavior | Should -BeNullOrEmpty                     # AUTOSIGNIN=0 also removes the policy the install set
+        $afterRemove.ConfigBehavior | Should -BeNullOrEmpty               # AUTOSIGNIN=0 also clears the install's choice in agent.json
+        @($afterRemove.ConfigGroups) | Should -BeNullOrEmpty
+        $afterRemove.Behavior | Should -BeNullOrEmpty                     # and the policy key stays empty
     }
 
     It 'C-PROV-06 RemoteHub installs the provider on a running agent, which keeps running' -Tag 'C-PROV-06' {
@@ -196,8 +204,10 @@ Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {
         $afterActionInstall.Signature | Should -Be 'Valid'
         $afterActionInstall.Provider | Should -Be 'RemoteHub Agent'
         $afterActionInstall.InprocServer | Should -Be 'C:\Program Files\RemoteHub Agent\RemoteHubCredentialProvider.dll'
-        $afterActionInstall.Behavior | Should -Be 'AutoSignIn'          # allowed by policy for the agent's groups
-        $afterActionInstall.Right | Should -Be @('S-1-5-32-544')
+        $afterActionInstall.ConfigBehavior | Should -Be 'AutoSignIn'    # allowed in agent.json for the agent's groups (since 0.18.12)
+        $afterActionInstall.ConfigGroups | Should -Be @('S-1-5-32-544')
+        $afterActionInstall.Behavior | Should -BeNullOrEmpty            # the policy key is IT's - not written
+        @($afterActionInstall.Right) | Should -BeNullOrEmpty
         $actionInstall.message | Should -Match 'Automatic sign-in allowed on this device'
     }
 
@@ -206,7 +216,9 @@ Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {
         $actionRemove.installed | Should -Be $false
         $afterActionRemove.Dll | Should -Be $false
         $afterActionRemove.Provider | Should -BeNullOrEmpty
-        $afterActionRemove.Behavior | Should -BeNullOrEmpty               # what the agent had set is gone again
+        $afterActionRemove.ConfigBehavior | Should -BeNullOrEmpty         # the install's choice in agent.json is gone again
+        @($afterActionRemove.ConfigGroups) | Should -BeNullOrEmpty
+        $afterActionRemove.Behavior | Should -BeNullOrEmpty
         @($afterActionRemove.Right | Where-Object { $_ }) | Should -BeNullOrEmpty
         $pidAfter | Should -Be $pidBefore   # the service was never restarted
         $healthAfter | Should -Not -BeNullOrEmpty

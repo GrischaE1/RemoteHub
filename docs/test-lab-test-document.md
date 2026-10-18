@@ -245,7 +245,7 @@ These are the places where the product code behaves differently from what the sh
 | C-CRASH-01 | RemoteHub has no built-in switch to force a crash; the lab needs its own trigger (e.g. a test build hook). An "unexpected error" that RemoteHub survives ("RemoteHub – unexpected error" message box) is recorded the same way, at most three per session. |
 | R-RDP-03 | RemoteHub shows Windows' own text (`GetErrorDescription`) in the tab. It has no extra explanation of the NTLM delegation policy in the app; that explanation is only in the README. |
 | R-RDP-08 | the password in the `.rdp` is DPAPI-protected for the exporting Windows user (like mstsc), so `normaluser` can't read it and Windows asks for it. The risks dialog is shown only when a `.rdp` file is opened (argument / file association) and creates a new entry, not for import through *New* or drag and drop. |
-| UI-AG-02 | *Test RemoteHub Agent* is only in the menu while the connection uses the agent and the last result isn't "available"; after a successful test the menu shows the tools instead. |
+| UI-AG-02 | *Test RemoteHub Agent* is only in the context menu's *Tools* group while the connection uses the agent and the last result isn't "available"; after a successful test the group shows the tools instead. |
 | UI-AD-07 | view-only is chosen on the connect page before connecting; there is no toggle while connected. |
 | C-REC-01 | the agent desktop tab is called "Desktop (agent)" in the file name. |
 
@@ -257,43 +257,66 @@ These are the places where the product code behaves differently from what the sh
 |---|---|
 | A-UPDFAIL-04 | An update with an unreadable (truncated) MSI: `PackageVersion` comes back null, so RemoteHub reports "Updated – RemoteHub Agent <old version>" instead of a failure. The test is expected to fail until this is fixed. |
 | A-UPDFAIL-02 | Seen in lab runs 20261012-214723 (W11) and 20261012-231526 (both VMs). An upgrade from 0.17.2 to 0.18.0 whose enrollment step fails ends with MSI 1603, and the device is left with **no agent**: the product is not registered, the install folder and service are gone, but `agent.json`, the certificate and the firewall rule are still there. The MSI rollback should have restored 0.17.2. The test now saves the whole verbose MSI log so the rollback can be traced. |
-| A-SAME-02 | Seen in lab runs 20261012-214723 and 20261012-231526 on both VMs. Installing the same version again with "Create a new device certificate": `agent.json` points to the new certificate, but for over 3 minutes the agent keeps answering with the old certificate and never with the new one. RemoteHub reports "didn't answer again". The service seems to keep running without picking up the new identity. |
+| A-SAME-02 | Seen in lab runs 20261012-214723 and 20261012-231526 on both VMs. Installing the same version again with "Create a new device certificate": `agent.json` points to the new certificate, but for over 3 minutes the agent keeps answering with the old certificate and never with the new one. RemoteHub reports "didn't answer again". The service seems to keep running without picking up the new identity. Still there in 0.18.15 (lab run 20261016-212514): now `agent.json` also keeps the old device ID and certificate, and the agent log has no "Enrolled" or "starting" line after the install – the same-version install seems to skip the enrollment altogether. |
 | W-* (note) | On Windows clients the default execution policy is Restricted, so the generated setup script can't run as a .ps1 file until the admin allows scripts for that window (`Set-ExecutionPolicy -Scope Process Bypass`). The lab does that now. Consider adding that line to the instructions RemoteHub shows. |
-| S-AUTH-08 | Windows error 1907 (password must be changed) has no mapping in the agent's sign-in code and comes back as HTTP 500 instead of a clear refusal. |
+| S-AUTH-08 | Windows error 1907 (password must be changed) has no mapping in the agent's sign-in code and comes back as HTTP 500 instead of a clear refusal. **Fixed** on branch fixes-20261017 (`6dd3686`): 1907 and the other refusals get 401 or 403 with the reason; S-AUTH-08 and -10 pass in lab run 20261017-160133 (0.18.16, W11 and Server 2025). |
 | T-FS-09 | A cancelled upload can leave a `.remotehub-part` file on the device. |
 | W-* / P-SES | `ParseGroups` only recognises the English group name "Administrators", so on a de-DE device ("Administratoren") the admin check fails. |
 | D-VID-09 | When the Media Foundation H.264 encoder is missing (N edition without the Media Feature Pack), the client only gets the generic "kept failing" text and no event 3100 is written. The real cause appears only in the agent log. |
 | D-RES-07 | A connection that is taken over gets no final Status, and its 1101 audit event is skipped, so the audit trail doesn't show the hand-over. |
-| S-AUTH-08 / S-AUTH-10 | Seen in lab run 20261014-214238 (W11). An expired account (Windows error 1793) and an account that must change its password (1907) both get HTTP 500, not 401. Same unmapped-error path as above. |
+| S-AUTH-08 / S-AUTH-10 | Seen in lab run 20261014-214238 (W11). An expired account (Windows error 1793) and an account that must change its password (1907) both get HTTP 500, not 401. Same unmapped-error path as above. **Fixed** on branch fixes-20261017 (`6dd3686`), passing in lab run 20261017-160133 (0.18.16, both platforms). |
 | A-INST-25 | Another program listening on 58732 without exclusive use: the agent binds the same port as well, without a warning. Connections then go to one of the two at random. |
 | A-ROLLBACK-01 | With 58732 held exclusively by another program, the service reports "started", then fails to bind. The MSI and RemoteHub report a successful install, but the agent isn't running. |
-| P-SES-06 | Seen in lab run 20261014-214238. A network drop ends the PowerShell session in time (54 s), but event 1001 gives the reason "PowerShell ended", not "connection lost: …". The keep-alive timeout ends the shell first, and `Tunnel.RunAsync` then reports the shell side (`AgentHost.cs:328`). |
+| P-SES-06 | Seen in lab run 20261014-214238. A network drop ends the PowerShell session in time (54 s), but event 1001 gives the reason "PowerShell ended", not "connection lost: …". The keep-alive timeout ends the shell first, and `Tunnel.RunAsync` then reports the shell side (`AgentHost.cs:328`). **Fixed** on branch fixes-20261017 (`f7e9981`), passing in lab run 20261017-160133 (0.18.16). |
 | UI-* (accessibility) | Icon-only buttons in the PowerShell tab (`PsConsoleView.HeaderButton`, e.g. "Stop the running command") have only a tooltip and no `AutomationProperties.Name`, unlike `RemoteToolChrome.Tool`. The terminal's input line and output have no name either. |
 | C-REC-06 | Code review (0.18.11). On a Windows N edition without the Media Feature Pack `mfplat.dll` is missing: `MFStartup` throws `DllNotFoundException`, which `Mp4Writer.Create` doesn't catch (only `InvalidOperationException`), so the recording stops with "Unable to load DLL 'mfplat.dll' …" instead of the H.264 / Media Feature Pack message (`SessionRecorder.cs:349, 366, 387, 562`). |
 | C-DB-13 / C-LOCK-09 | Code review (0.18.11). Two messages point to menu entries that don't exist: "You can restore an exported backup via Menu → Import." (`App.xaml.cs:94`) and "Export a backup first (Menu → Export backup)" (`StartupProtectionWindow.cs:118`). Import and export are under Settings → Security & storage, as the other database message already says (`App.xaml.cs:167`). |
-| A-INST-28 | Code review (0.18.11). `AUTOSIGNIN=1` on an agent package built without the credential provider still writes `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn` ("Automatic sign-in allowed on this device …"): `auto-sign-in=[AUTOSIGNIN]` sits outside the `CredentialProviderDll` condition in `Package.wxs:65`. |
+| A-INST-28 | Code review (0.18.11). `AUTOSIGNIN=1` on an agent package built without the credential provider still records the install's choice to allow automatic sign-in (`agent.json` `noUserBehavior` / `autoSignInGroups` since 0.18.12, `NoUserBehavior` and `Rights\AutoSignIn` in the policy key before; "Automatic sign-in allowed on this device …"): `auto-sign-in=[AUTOSIGNIN]` sits outside the `CredentialProviderDll` condition in `Package.wxs:65`. |
 | C-TEL-03 | Code review (0.18.11). Telemetry must be fully off under the `DisableTelemetry` policy, but only the Settings switch deletes `install-id` (C-TEL-02); with the policy it stays on disk (`Telemetry.cs:146-148`, `EditorWindow.xaml.cs:401`). Decided 2026-10-15: product bug. |
-| C-END-05 / C-END-15 / D-RES-10 | Seen in lab run 20261015-072527 (W11), root cause from the code. When the agent notices a lost connection first (keep-alive 30 s, or TCP giving up on unacknowledged frames), the pending `ReceiveAsync` throws an `OperationCanceledException`, so the client loop ends *cancelled*, not *faulted*. `DesktopEndpoint.cs:220-230` only checks `IsFaulted`: `_lost` stays false, the reason stays "closed by RemoteHub", the resume token is revoked instead of kept, and a session automatic sign-in created gets its end action at once ("Automatic sign-in session 7 … locked (closed by RemoteHub)") instead of the cover for 2 minutes. Affects every agent desktop connection whose drop the agent notices first – short cuts only work because RemoteHub resumes before the agent notices. Fix: treat `fromClient.IsCanceled` (not on purpose) as lost. P-SES-06 is the same pattern in `AgentHost.cs:327-329`. |
+| C-END-05 / C-END-15 / D-RES-10 (also C-END-06, -07, -08, -12) | Seen in lab run 20261015-072527 (W11), root cause from the code. Confirmed in lab run 20261016-212514 (both W11 VMs, 0.18.15): C-END-06's adapter cut ended the connection after 27 s as "closed by RemoteHub" and locked the session; the harness' `drop` (socket aborted) did the same in 3 of 5 drops (C-END-07, -08, -12; C-END-05 and -11 got "connection lost" and the 2 minutes), so it is a race between the failed read and the request being aborted. A .NET 10 check shows the keep-alive timeout ends `ReceiveAsync` with `OperationCanceledException("Aborted")`, so the `Task.Run` around the client loop ends cancelled. When the agent notices a lost connection first (keep-alive 30 s, or TCP giving up on unacknowledged frames), the pending `ReceiveAsync` throws an `OperationCanceledException`, so the client loop ends *cancelled*, not *faulted*. `DesktopEndpoint.cs:220-230` only checks `IsFaulted`: `_lost` stays false, the reason stays "closed by RemoteHub", the resume token is revoked instead of kept, and a session automatic sign-in created gets its end action at once ("Automatic sign-in session 7 … locked (closed by RemoteHub)") instead of the cover for 2 minutes. Affects every agent desktop connection whose drop the agent notices first – short cuts only work because RemoteHub resumes before the agent notices. Fix: treat `fromClient.IsCanceled` (not on purpose) as lost. P-SES-06 is the same pattern in `AgentHost.cs:327-329`. **Fixed** on branch fixes-20261017 (`f7e9981`, with `bd9fd8b` for an aborted request and `7f0d9cf` so that a drop during a helper frame keeps the cover – C-END-12): C-END passes 8 of 8 on W11 and Server 2025 in lab runs 20261018-152145 (0.18.20) and 20261018-162105 (0.18.21; C-END-01 on W11 needed the marker fix below). |
+| P-SES-06 | Seen in lab run 20261016-212514 (W11, 0.18.15): after a network drop the PowerShell session ended as "Session ended: … (PowerShell ended)" instead of "connection lost" (event 1001). Same pattern as D-RES-10: `Tunnel.RunAsync` (`AgentHost.cs:333-335`) only checks `first.IsFaulted`; a drop seen through the keep-alive ends the WebSocket task cancelled, not faulted, so the reason falls back to "closed by RemoteHub" / "PowerShell ended". Fix: treat a cancelled transfer task (when the agent didn't cancel it itself) as "connection lost", as in the desktop endpoint. **Fixed** on branch fixes-20261017 (`f7e9981`), passing in lab run 20261017-160133 (0.18.16). |
 | UI-TL-03 | Seen in lab run 20261015-020456. The registry tab's *New* menu shows "String value (REGSZ)…", "(REGEXPAND_SZ)", "(REGMULTI_SZ)": WPF takes the first `_` of a `MenuItem` header as the access-key marker (`RegistryView.NewKinds` needs `__`). Also: a path typed into the address box isn't found when the key was created after the parent was loaded ("Key not found" until Refresh) – `Navigate` doesn't reload the cached children. |
-| D-HIDE-03 | Code review (0.18.11). Apps hidden by the policy `HiddenApps` are counted as hidden by the user: the first Privacy message has hiddenApps=1, the banner says "1 app hidden" and event 1105 claims "the user … hides 1 app(s)" (`DesktopHelper.cs:177-179`, `DesktopEndpoint.cs:762-763`). |
+| D-HIDE-03 | Code review (0.18.11). Apps hidden by the policy `HiddenApps` are counted as hidden by the user: the first Privacy message has hiddenApps=1, the banner says "1 app hidden" and event 1105 claims "the user … hides 1 app(s)" (`DesktopHelper.cs:177-179`, `DesktopEndpoint.cs:762-763`). **Fixed** on branch fixes-20261017 (`7903d72`; the Privacy message has a separate `policyHiddenApps`), passing in lab run 20261017-160133 (0.18.16). |
+| D-HIDE-01 (privacy) | **Privacy issue.** Seen in lab run 20261016-212514 and the spike runs spike-ctl-W11-D-PRIV and spike-reg-W11-D-PRIV (W11 26H2, 0.18.15) – D-HIDE-01 has never passed on Windows 11: with `HiddenApps` set to the full path of the program that owns the window (`Get-Process notepad`: the Store Notepad's `Notepad.exe` under `C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_…`), Notepad and its secret text were fully in the picture (the frame identical to the control frame without the policy), and the Privacy message had `hiddenApps` 1 but no covered regions. Cause from the code: for a packaged process the helper names the app only by `aumid:` + its AppUserModelID and drops the program's path (`AppWindows.cs:198-205`), and `AppMask` compares only that name (`AppWindows.cs:329`), so a path never matches a packaged desktop app – the new Notepad, Paint, Windows Terminal and any vendor app shipped as MSIX. `C:\Windows\System32\notepad.exe`, what an admin would expect to work, is only a stub that starts the Store app and owns no window, so it can't match either. The ADMX help, README and `agent-spec.md` say "the full path of a program", nothing warns that the entry has no effect, and the failure is silent and open: the banner even says "1 app hidden". Fix: also hide a window when its program's path (`exe`, which `Identify` already has) is in the list – `AppWindow` needs the path next to `App` – and say in the ADMX help that a Store app's path changes with each update (its folder carries the version), so `aumid:` is the lasting entry; a unit test in `AppMask` tests for a packaged window listed by path. **Fixed** on branch fixes-20261017 (`9af6c7f`): a packaged app is hidden by its program's path too; D-HIDE-01 passes in lab run 20261017-160133 (0.18.16, W11). |
 | C-END-14 | Code review (0.18.11). The cover the service puts up after an automatic sign-in is audited as 1104 "<admin> … turned the privacy screen on …" although the admin didn't (`DesktopEndpoint.cs:768-771`). |
-| UI-CP-13 | Code review (0.18.11). With `DesktopClipboard=2` (text and images) a file copy is refused with "Copying images and files isn't allowed on this device – only text.", which is wrong for that level; the agent's own text is "Copying files isn't allowed on this device." (`AgentDesktopSession.cs:402-403`). |
-| C-AUTO-15 | Confirmed in lab run 20261015-192844 (W11, 0.18.14): SignInFailed "The connection to the credential provider broke: Pipe is broken.". Code review (0.18.11): If someone signs in at the console while an automatic sign-in waits, the broker uses the LogonUI client it already holds (`WaitForClient`) and only re-checks after the provider's Claim (`AutoSignInBroker.cs:221`); that LogonUI is gone, so the result is NoProvider "The connection to the credential provider broke …" instead of SessionChanged "Someone is signed in on the console now". No ticket goes out, but reason and code are wrong. Fix: run the session check before calling the broker. |
-| C-AUTO-20 | Seen in lab run 20261015-192844 (W11, 0.18.14): for a locked and for a disabled account no result reaches the agent at all – SignInFailed after the timeout "The sign-in screen didn't take the sign-in. …" instead of the reason (an expired password and "Deny log on locally" do get their own texts). Code review (0.18.11): Windows reports a disabled account to LogonUI as 0xC000006E with substatus 0xC0000072; `AutoSignInStatus.Describe` (`AutoSignIn.cs:211`) matches 0xC000006E first and says "can't sign in this way (it may need a smart card …)". Only the 0xC0000064 substatus is handled; an expired account (0xC0000193) is likely affected the same way. |
+| UI-CP-13 | Code review (0.18.11). With `DesktopClipboard=2` (text and images) a file copy is refused with "Copying images and files isn't allowed on this device – only text.", which is wrong for that level; the agent's own text is "Copying files isn't allowed on this device." (`AgentDesktopSession.cs:402-403`). Confirmed in lab run 20261016-212514 (Console admin PC, lane 2, Server 2025 device, 0.18.15): f1.bin copied with level 2 got "Copying images and files isn't allowed on this device – only text.". The image half of the case failed in that run only because of the test – its picture comparison was named `Diff`, which Windows PowerShell 5.1 resolves to the alias for `Compare-Object` (fixed: `Get-PicDiff`); the device did fetch the picture ("clipboard: pasted by powershell (4444) – … 1 item(s), 619 bytes"). |
+| UI-TL-09 | Seen in lab run 20261016-212514 (Console admin PC, lane 2, 0.18.15): the setup script copied with *Copy script* was still on the clipboard 156 s later (5956 characters), although the dialog says it is "cleared after 120 s". The dialog had been closed about 108 s after the copy. `SecureClipboard.CopySecret` keeps the copying window's handle as the clipboard owner – here the dialog's (`RemotingSetupDialog.cs:135-136`, `SecureClipboard.cs:25`) – and the timer's `ClearIfOurs` opens the clipboard with that handle (`SecureClipboard.cs:50`). Once the dialog is closed the handle is gone, `OpenClipboard` fails with error 1400 (invalid window handle – checked on Windows Server 2025), nothing is emptied and `_ourSequence` is reset (`:55`), so the clear at app exit (`MainWindow.xaml.cs:2508`) doesn't remove it either. Copying the script, closing the dialog and pasting it on the target – the usual order – leaves it on the clipboard for good. A password copied from the main window isn't affected (that window stays open). Fix: when `OpenClipboard(_owner)` fails because the window is gone (`IsWindow`), open the clipboard with no owner (`IntPtr.Zero` – `EmptyClipboard` still clears it) or with the main window; a unit test for a copy whose owner window is destroyed before the timeout. **Fixed** on branch fixes-20261017 (`f04d5ed`), passing in lab run 20261017-160133 (0.18.16). |
+| C-AUTO-15 | Confirmed in lab runs 20261015-192844 (W11, 0.18.14) and 20261016-212514 (W11, 0.18.15): SignInFailed "The connection to the credential provider broke: Pipe is broken.". Code review (0.18.11): If someone signs in at the console while an automatic sign-in waits, the broker uses the LogonUI client it already holds (`WaitForClient`) and only re-checks after the provider's Claim (`AutoSignInBroker.cs:221`); that LogonUI is gone, so the result is NoProvider "The connection to the credential provider broke …" instead of SessionChanged "Someone is signed in on the console now". No ticket goes out, but reason and code are wrong. Fix: run the session check before calling the broker. **Fixed** on branch fixes-20261017 (`baa0025`), passing on W11 and Server 2025 in lab run 20261018-112637 (0.18.17). |
+| C-AUTO-20 | Seen in lab runs 20261015-192844 (W11, 0.18.14) and 20261016-212514 (W11, 0.18.15): for a locked and for a disabled account no result reaches the agent at all – SignInFailed after the timeout "The sign-in screen didn't take the sign-in. …" instead of the reason (an expired password and "Deny log on locally" do get their own texts). Code review (0.18.11): Windows reports a disabled account to LogonUI as 0xC000006E with substatus 0xC0000072; `AutoSignInStatus.Describe` (`AutoSignIn.cs:211`) matches 0xC000006E first and says "can't sign in this way (it may need a smart card …)". Only the 0xC0000064 substatus is handled; an expired account (0xC0000193) is likely affected the same way. **Fixed** on branch fixes-20261017: the substatus is read first (`baa0025`); for accounts Windows 11 leaves off the sign-in screen the provider reports "not offered" after 10 s and the agent asks Windows itself (`732254b`, credential-provider-design.md §8.6). Lab run 20261018-162105 (0.18.21): all four refusals give Windows' reason on W11 and on Server 2025 – rhaslock 1909, rhasdisabled 1331, rhasexpired 1907, rhasdeny 1385 ("checked with Windows: error N" in 2105). |
+| C-END-10 (result lost) | **Security issue.** Seen once, in lab run 20261016-212514 (Server 2025, lane 2, 0.18.15); the policy level (`PrivacyScreen=0`) plays no part – nothing on the sign-in path reads it before the result. The agent reported SignInFailed "The sign-in screen didn't take the sign-in. …" (logged as "Automatic sign-in refused … (timeout)") only 3.9 s after the start, and 0.5 s later its helper saw Admin's desktop: Windows had signed the account in (session 3 Active with explorer.exe). Every other "(timeout)" in the lab's agent logs comes after the full 30 s; this one is the pipe ending early (`Read` returns null on 0 bytes, `AutoSignInBroker.cs:237-243`). Cause from the code: after a successful logon LogonUI calls `ReportResult` and then releases the provider, whose destructor calls `Channel::Stop` (`Provider.cpp:48-50`). The channel thread waits on `{ stop, readDone, ResultEvent }` (`Channel.cpp:367-369`); when it wakes with both stop and the result signalled, `WaitForMultipleObjects` returns the lowest index – stop – so `Serve` returns without writing the result and the pipe closes. A busier VM makes the race likelier. The consequence is worse than a wrong message: the agent doesn't record the session as one automatic sign-in created, so it gets no cover (at levels 1 and 2 the console would show the admin's desktop), no end action (closing the connection left it signed in and unlocked – no 1107) and the ordinary banner ("Controlled by … Disconnect"). Fix: send a pending result before honouring stop (check `ResultPending` when stop wins, or put the result event first), and on the agent side treat "pipe ended after the ticket went out" while the console session now has the ticket's account signed in as success, or at least apply the end action to it. C-END2 now says in C-END-10's message whether the account was signed in anyway. Seen a second time in the same run, in isolation: C-PROV-03 on Server 2025 lane 2 (Lab provider build + RemoteHubCpTestServer.exe) logged "sent Ticket" at 18:23:31.890 and then "error no valid Result" 120 s later – the provider took the ticket and never sent its result. A third time in rerun 20261017-054704: C-PROV-03 on Server 2025 lane 1 - "sent Ticket" at 00:01:59.805 (guest time), "error no valid Result" 120 s later. So far: 2 of 3 C-PROV-03 runs on Server 2025 and 0 of 2 on W11 lost the result - not rare on Server. **Fixed** on branch fixes-20261017 (`baa0025`): the channel sends a pending result before it honours stop. C-PROV passes 8 of 8 on both platforms in lab runs 20261018-152145 (0.18.20) and 20261018-162105 (0.18.21). |
+| C-END-01 (marker) | To confirm – seen once, in lab run 20261016-212514 (Server 2025, lane 1, 0.18.15): the sign-in and the cover were fine, but none of RemoteHub's keys reached the marker window, and the frame RemoteHub took 3 s after the keys shows the plain desktop – the marker (a full-screen, topmost magenta window) wasn't there at all, while on W11 it was. The wait before the keys was 99 s instead of 57 s, which fits `Start-LabMarker` giving up after 60 s without the window showing; it then carried on silently, so C-END-01's "local keys blocked" check passed for nothing. The same helper did work on Server in C-END2's uncovered session (5 local keys), so the open question is whether a marker started in a session under the service's cover (input blocked) comes up on Server 2025. `Start-LabMarker` now returns `Shown` and `Why` (the task's state and last result, whether its PowerShell is running), and C-END-01, C-END-09 and C-END-12 fail with that text when the marker never came up, instead of counting keys that couldn't arrive. **Lab, fixed on 18 Oct.** Seen again in lab run 20261018-162105 (W11, 0.18.21): the marker was shown and RemoteHub's picture had it, but none of the 6 keys arrived – the window was up without the keyboard (a process started by a task may be refused the foreground). The marker now takes the foreground itself and records `active` / `inactive` (with the window that took it) and `nofocus`; `Start-LabMarker` waits for `active` and otherwise says which window kept the keyboard. C-END-01 passes on both platforms in lab run 20261018-171338 (6 of 6 keys). |
 | C-END-13 | Seen in lab run 20261015-225719 (W11, 0.18.14). After a failed automatic sign-in (wrong password) the agent reports SignInFailed correctly, but RemoteHub's tile on the sign-in screen stays selected and still says `Signing in DESKTOP-GGPVP10\Admin…`. The `Automatic sign-in failed` text the credential provider has for this (Credential.cpp:91) never shows, and there is no password box, so the person at the device has to pick the password under *Sign-in options* to sign in by hand. The tile's text is probably never refreshed (no `SetFieldString` through the credential events after the failure). The test now goes through *Sign-in options*. |
 | C-END-13 (text) | Seen in the same run: the tile shows `Signing in DESKTOP-GGPVP10\Adminâ€¦` instead of `…`. The literal `L"…"` in Credential.cpp:94 is in a UTF-8 file without a BOM, and the project builds without `/utf-8`, so MSVC reads it as cp1252. Fix: `L"\u2026"` or `/utf-8` for the credential provider project. |
-| UI-JUMP (tree) | Seen in lab run 20261016-024318 (W11, 0.18.14): a connection or folder created with New, or made with Duplicate, below the visible rows of the connection tree is selected but not scrolled into view - the old row keeps its highlight and the new item is out of sight. NewConnection_Click / NewFolder_Click (MainWindow.xaml.cs:1873, 1884) and CmDuplicate_Click (:1763) only set IsSelected on the virtualized tree (MainWindow.xaml:445-458); RevealInTree (:608-638) already scrolls an item into view and could be called there. The lab's UI driver now scrolls an off-screen element into view itself, so the tests don't depend on it. |
+| UI-JUMP (tree) | Seen in lab run 20261016-024318 (W11, 0.18.14): a connection or folder created with New, or made with Duplicate, below the visible rows of the connection tree is selected but not scrolled into view - the old row keeps its highlight and the new item is out of sight. NewConnection_Click / NewFolder_Click (MainWindow.xaml.cs:1873, 1884) and CmDuplicate_Click (:1763) only set IsSelected on the virtualized tree (MainWindow.xaml:445-458); RevealInTree (:608-638) already scrolls an item into view and could be called there. The lab's UI driver now scrolls an off-screen element into view itself, so the tests don't depend on it. Seen again in lab run 20261016-212514 (Console 26H2 admin PC, 0.18.15): UI-JUMP's tree step stopped at "'Orphan' … not found" right after New connection had created it below the visible rows – the virtualized tree had built no row for it, so neither UI Automation nor the driver's scrolling could reach it. It caused none of that run's failed cases: those came from rows scrolled partly above the tree's top, which UI Automation still counts as on the screen, so right-clicks and drops landed on the search box; UI-JUMP now scrolls such rows into view first. |
 | R-RDP (code 263) | Minor, seen in lab runs 20261015-072527 and 20261016-024318: when Windows' question about an untrusted RDP server certificate is dismissed (Esc or No), the tab only says "Disconnected (code 263)." - RdpSession.OnDisconnected (RdpSession.cs:309-331) falls back to the bare code when GetErrorDescription returns nothing. A plain text such as "The server's certificate was not accepted." would tell the admin what happened. (The lab's RDP tests set "Connect without warning" for the lab's self-signed device certificates.) |
+| R-RDP-07 (full screen keeps the tab's size) | Seen in lab run 20261017-054704 (Console 26H2 admin PC, Server 2025 device, 0.18.15): after *Full screen* the RDP control's own full-screen window covered the 1024 × 768 screen, but the session stayed at the tab's 460 × 492 pixels, centred on black (`ui-rdp-fullscreen.png`, 2 s after the click). Dynamic resolution is switched off while the control is in full screen: `ApplyDynamicResolution` returns at once when `IsFullScreen` (`RdpSession.cs:301`) and `Fits` counts full screen as fitting (`:285`), so nothing asks the server for the screen's size, and leaving full screen doesn't start a fit either. Fix: on `OnEnterFullScreenMode` send the full-screen size (`UpdateSessionDisplaySettings` with the monitor's size) and fit again on `OnLeaveFullScreenMode`. R-RDP-07 doesn't check the size. To confirm, same run: right after leaving full screen with Ctrl+Alt+Break, *Detach into its own window / dock back* (UI Automation's Invoke) opened no window within 30 s, although it worked in earlier runs where full screen hadn't come up; nothing was recorded then, UI-RDP now keeps RemoteHub's state and tries a real click as well (`ui-rdp-detach-invoke.json`, `detClick` / `detRealClick` in `ui-rdp-tab.json`). |
 | C-REC-01/05 (duration) | Seen in lab run 20261016-135543 (W11, 0.18.14): recordings are written as fragmented MP4 (SessionRecorder.cs:349 Mp4Writer fragmented, :375 MFTranscodeContainerType_FMPEG4) without an mehd box and with about one fragment per 3 frames. The movie header and the frames agree with RemoteHub's "Recording saved" length (e.g. 15.8 s / 158 frames, 30.1 s), but Windows' media pipeline (MediaSource, as players use it, and MediaClip) reports whole multiples of 10 s less (10 s, 10 s). Players will likely show a wrong length and seek bar. Writing an mehd (fragment duration) or finalizing as a plain MP4 at stop would fix it. C-REC-05 now checks the frames' length (fragSeconds) as well. |
 | S-SMB-08 (folder ACL) | Minor, seen in lab run 20261016-135543 (Server device): a share whose folder ACL (not the share permission) allows only Administrators is connected without complaint, and the refusal comes at the first listing as the bare "Access to the path '\\ip\share' is denied." without the remote UAC hint. WindowsSmbShare's constructor explains it only when the share root can't be seen (WindowsSmbShare.cs:35-45); here Directory.Exists is true, and List() (:68) goes through Io() (:111-118) with the bare message. The share-permission variant gets the hint as designed. |
-| UI-CP-08 | Seen in lab run 20261016-135543 (W11 admin PC, Server device, 0.18.14): with the device's session locked, clipboard text still went both ways through the agent tab - the admin's text arrived on the device (its SHA-256 equal) and the device's text on the admin's PC. The agent passes clipboard messages gated only on the connection being live and the clipboard level (RemoteHub.Agent\Desktop\DesktopEndpoint.cs:677, :953; DesktopHelper.cs:165, :240); locking switches to the secure desktop and back within a second without restarting the helper. The case expects nothing to or from the device's clipboard while it is locked. |
+| UI-CP-08 | Seen in lab run 20261016-135543 (W11 admin PC, Server device, 0.18.14): with the device's session locked, clipboard text still went both ways through the agent tab - the admin's text arrived on the device (its SHA-256 equal) and the device's text on the admin's PC. The agent passes clipboard messages gated only on the connection being live and the clipboard level (RemoteHub.Agent\Desktop\DesktopEndpoint.cs:677, :953; DesktopHelper.cs:165, :240); locking switches to the secure desktop and back within a second without restarting the helper. The case expects nothing to or from the device's clipboard while it is locked. Again in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15), both ways: the admin's "while locked …" text was on the device's clipboard and the device's "device locked …" text on the admin's PC. The agent log shows why the gate never closes: `Lock-LabSession` at 16:27:14 "switched to the secure desktop", 16:27:15 "switched to the user's desktop" – on Server 2025 / Windows 11 the lock screen runs on the Default desktop (D-LOCK-05), so the helper treats the locked session as the user's desktop until Ctrl+Alt+Del. A lock check has to look at the session's lock state (`WTSSESSION_LOCK` / `WTSQuerySessionInformation` `SessionFlags`), not only the input desktop. |
 | C-AUTO-16 | Code review (0.18.11). `CheckInstallation` ignores the provider key's `Disabled` value: Hello offers automatic sign-in and the operator waits about 23 s for "The device's sign-in screen didn't load the RemoteHub credential provider." |
 | S-SMB-08 | Code review (0.18.11). The remote-UAC hint for local administrators is only added when listing the share fails; access denied by the share's own permissions fails earlier in `WindowsSmbShare.Acquire` (`WNetAddConnection2`, error 5) and shows "\\host\share: Access is denied." without the hint. |
 | UI-AG-12 | Code review (0.18.11). The notice "Automatic sign-in needs a stored password for this connection …" can't be reached: without a stored password RemoteHub asks for one first (`BuildTarget`, `PasswordDialog` refuses an empty one), and a typed password works as well – the text should not say "stored". A password over 256 characters can't sign in to the agent either. |
+| D-VD-05 (virtual display after a restart) | Seen in lab runs 20261015-192844, 20261015-213401, 20261016-024318 (W11), 20261016-135543 (W11 and Server 2025) and 20261016-212514 (W11 lane 2), 0.18.14 and 0.18.15. Once the device has restarted after the agent was installed (in the lab: the auto logon's restart), the virtual display can't be switched on any more: "virtual monitor not switched on: The virtual display couldn't be switched on (pnputil exit code 1167: Failed to enable device: ROOT\DISPLAY\0000 The device is not connected.)", and `pnputil /enum-devices` shows the device as *Disconnected* (Get-PnpDevice: Error). Every switch-on that worked (C-AUTO3, D-MORE, run 20261016-212514) came after an install without a restart in between, every one after a restart failed. The same run (W11 lane 1) shows it in D-VIDEO: D-MON-01 switched the virtual monitor on (no restart yet); the virtual display context then powers the VM off and on to limit the Hyper-V display to 1024×768, and from there the device stayed *Error* and every Fit went to the Hyper-V adapter ("1600×900 asked → 1024×768 (closest listed mode); display modes: 1024×768, 800×600, 640×480"). Affected cases: D-VD-05 (D-MORE2), D-VD-01, D-VD-03 and D-VD-04 (D-VIDEO) – they fail until this is fixed. `Show` only falls back to the driver's pipe when the device is already started (`VirtualDisplay.cs:170-171`) and otherwise gives up (`SetEnabled`, :205-209), so on a real headless server the virtual display works only until its first reboot. Fix to try: when enabling fails, bring the device back the way `Install` does – remove the device node and create it again (`CreateRootDevice` + `UpdateDriver`, :94-95) – or rescan (`pnputil /scan-devices`) and enable again; or keep the device enabled and switch the monitor off through the driver's settings instead of disabling it. **Fixed** on branch fixes-20261017: rescan, then re-create the device (`89c4d1f`); switched off with the last connection also after a re-create (`ece37ee`). D-VD-05 passes in lab runs 20261018-152145 and 20261018-162105; D-VD-01 to 04 pass on Server 2025 in 20261018-162105 and on W11 in 20261018-171338 – see "D-VD-01 (slow switch-off)" for the time it takes on W11. |
+| D-VD-01 (slow switch-off) | Seen in lab run 20261018-171338 (W11 lane 2, 0.18.21): after the device had been created again, the switch-off at the last connection's end took 65 s – the first two `pnputil /disable-device` calls didn't answer within their 20 s and were stopped ("still on after try 1 (pnputil exit code 1460: pnputil didn't answer within 20 s and was stopped)"), the third switched it off. On Server 2025 it took 7 s (run 20261018-171338) and the first try worked. In run 20261018-162105 the test read the device 5 s after the end and the agent was restarted 9 s after it, so the switch-off was cut off and D-VD-01 to 03 failed on W11; D-VIDEO now waits up to 120 s for the agent's line. Likely cause, to check: the virtual monitor is still the primary monitor of the sign-in screen when it is disabled. Fix to try: make the other display primary again (or detach the virtual monitor) before disabling the device. |
+| D-VID-05 (quality on a slow link) | Confirmed in lab run 20261017-054704 (W11 lane 2, 0.18.15): with the noise window the 2 Mbit/s link was full (~1892 kbit/s of video arrived, 46 frames, 1-2 fps), yet the quality stayed at 80 in every sample. First seen in code review; earlier, in run 20261016-212514 the test didn't load the link (pointer moves only – 391 KB of video in 40 s), so the quality stayed at 80 for lack of traffic; D-VIDEO now sends a window of random pixels. The quality steps down only when `blocked > loops` within 2 s (`DesktopHelper.cs:966`). On a saturated link each wait for an ack (`blocked++`, :805) is followed by exactly one capture (`loops++`, :809) that sends the next frame and fills the window again, so `blocked == loops` and the quality never steps down; `blocked > loops` only happens when stale semaphore counts make a wait return early – fast acks, the opposite case. If an ack takes over a second, the wait gives up and the two sends after it make `loops` larger still. Fix to try: step down when the loop spent more than about half of the 2 s waiting for acks (time blocked rather than counts), or when `blocked * 2 >= loops`. |
 | UI-AG-07 | Code review (0.18.11). The install dialog still says "Anyone at the device can see the session while you work" next to "Allow automatic sign-in"; with the cover after an automatic sign-in that is no longer true in most cases. |
 | D-* (accessibility) | The agent's consent, PIN and banner windows (`RemoteHubAgentWindow`) expose no UI Automation elements, so screen readers can't read them. The lab reads them by OCR. |
 | S-* (audit) | IPv4 callers are logged as IPv4-mapped IPv6 (`::ffff:192.168.250.25`) in the events and the log. |
 | D-ROB-05 | Malformed Mouse/Key messages go to the helper unchecked. The helper crashes, gets restarted, and the crashes count towards "kept failing". |
+| A-REPAIR-01 | Minor, seen in lab runs 20261016-200451, -205935 and -212514 (W11, 0.18.14/0.18.15): `msiexec /fa <product code> /qn` ends with 1603 – the service is stopped, started again 3 s later by the rollback, and nothing changes. The verbose log wasn't kept then; the cause from the code: `AgentInstaller` installs from a temp folder it deletes afterwards (`RemoveFolderScript`, `AgentInstaller.cs:138, 216`), and the cached package has no files (`MediaTemplate EmbedCab="yes"`, `Package.wxs:23`), so a full repair finds no source (normally error 1706). Windows still offers *Repair* in Programs and Features (no `ARPNOREPAIR`); it can only work when the admin points it at the MSI. Fix: set `ARPNOREPAIR=1` next to `ARPNOMODIFY` (RemoteHub's install again, A-SAME-01, is the supported repair), or keep a copy of the MSI on the device. The test now repairs from the MSI and saves the log. Confirmed in runs 20261017-054704 and 20261017-093048: `/fa` with a copy of the MSI - even under the registered package name `RemoteHub-Agent-x64.msi` - still ends with error 1706 ("SOURCEMGMT: Failed to resolve source"): Windows Installer only looks in the registered source list, which holds RemoteHub's deleted upload folder. So a repair can't work even when an admin has the MSI at hand; the fix stays `ARPNOREPAIR` (no Repair offered) or registering a source that stays on the device. |
+| C-SHARE-02 | Seen in lab run 20261016-212514 (Console VM with the Server as the second PC, 0.18.15; run 20261016-024318 on 0.18.14 also got no conflict question in the first run): the first edit after *Open shared settings* (an existing shared file) is never written to it. The device's RemoteHub renamed ConnB and saved, and the shared file stayed unchanged (same SHA-256 8 s later, and A's save then met no conflict); the second run's save, after a reload, was written within seconds. Cause from the code: `SettingsStore.OpenShared` (`SettingsStore.cs:529-538`) loads the file but doesn't call `SetBaseline`, so the change tracker still belongs to this PC's database. The first `Save` then sees `_baselineOf != Location` and resets the tracker to the data as it is now – the edit included (`SettingsStore.cs:219-224`) – so the diff is empty and `Save` returns without writing (`:228`). The edit is lost unless something else changes later, also on exit; the other PCs never see it. Fix: `SetBaseline(data)` in `OpenShared` (as `Load` and `Reload` do), plus a unit test. The lab case keeps the precondition and fails until then. |
+| D-CLIP-06 / -08 / -10 / -12 / -16 (also D-CLIP-21, UI-CP-05) | Seen in lab run 20261016-212514 (W11, 0.18.15), in the spike runs spike-ctl-W11-D-CLIP and spike-reg-W11-D-CLIP, and in D-CLIP-21 (run 20261016-024318) and UI-CP-05 (run 20261016-135543): files copied at the device in normaluser's session (`Set-Clipboard -Path`, Windows Forms `SetFileDropList`) never reach RemoteHub. No TransferOffer, no TransferEnd with a refusal (not even "Too much to copy …" for a 101 MB file), no helper restart and no line in the agent log. Text and images copied the same way in the same sessions do arrive (D-CLIP-02, the image offer of D-CLIP-04). The code path (`Win32HelperUi.OnClipboard` → `ReadOther`, CF_HDROP → `DesktopHelperSession.SendClipboard` → `ClipboardTransfer.Files` as the user → TransferOffer) shows no gap, and the same reading of CF_HDROP works in an ordinary process on the lab host. The cause isn't settled yet. D-CLIP now keeps the output of each `Set-Clipboard` and the device's clipboard formats after it, so the next run shows whether the files were on the clipboard at all. UI-CP-05 again in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15): after `SetFileDropList` in normaluser's session nothing came – no notice in the tab, no line in the agent log – and the admin's clipboard still held UI-CP-04's own file list (`FileDrop`), so the paste on the admin's PC brought back f1.bin … inner2.bin instead of a.txt … d.txt. **Fixed** on branch fixes-20261017 (`eb5da1a`, `8a266c0`, and `1bedd10`: the LocalSystem helper was shown only Explorer's "DataObject" for a file copy, so the list is now read as the signed-in user). D-CLIP passes 18 of 18 on W11 and Server 2025 in lab run 20261018-162105 (0.18.21), D-CLIP-16 included. |
+| D-CLIP-05 / -07 / -17 (also D-CLIP-19, UI-CP-04, UI-CP-15) | **A lab paste problem (no message pump during the shell's paste; fixed in the lab on 17 Oct).** Confirmed in lab run 20261017-093048 (W11, 0.18.15): with `Invoke-LabPaste` D-CLIP-05 (3 files and a folder, owned by normaluser, hashes equal, a receipt), D-CLIP-07 and D-CLIP-19 pass. UI-CP-04 still failed in the same run (the tab showed "Copied 5 files to the device – paste it there.", not "Copying 5 files …") – to be checked separately. Seen in the same runs: files offered to the device (paste-on-demand) are never fetched by the shell's *Paste* verb in normaluser's session. No TransferRequest, no "clipboard: pasted by …" (nor "… reads every clipboard change") line in the agent log, and nothing in the target folder. A copy sent at once (`offer: false`) lands as CF_HDROP and is fine (D-CLIP-14, level 3). A likely cause is the clipboard across integrity levels: the user's programs may not get the LocalSystem helper's data object, so they fall back to the plain clipboard, where the contents aren't (`VirtualFiles.cs:43-48`). The owner reported the clipboard working in a manual test (privacy-mode-design.md §5.8), so it may be limited to how the lab pastes. D-CLIP now records the formats normaluser's programs see for the offer. D-CLIP-17 passes only because nothing was pasted. UI-CP-04 again in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15), with the formats recorded: normaluser's programs did see the offer (`FileGroupDescriptorW`, `FileContents`, `Preferred DropEffect`), yet the shell's *Paste* into a folder brought nothing within 120 s, the agent log has no "clipboard: pasted by …" line for it (the image of UI-CP-03 in the same connection was fetched: "pasted by powershell (2116)"), and the tab showed neither "Copying 5 files to the device" nor "Copied 5 files". So the data object does reach the user's session; the shell's *Paste* either doesn't ask it for `FileContents` or the request never reaches the helper. UI-CP-15 in the same run (Console admin PC, lane 2, Server 2025 device, 0.18.15) shows it in an administrator's session too: big99.bin (99 MB) copied on the admin's PC while connected to Admin's console session, the shell's *Paste* (`Shell.Application` … `InvokeVerb('paste')`) into a folder of that session – no "Copying 1 file to the device" within 90 s and no "clipboard: pasted by …" line in the agent log, while the picture of UI-CP-13 had been fetched in the same session a few minutes before ("pasted by powershell (4444)"). Points to the lab's paste rather than the agent: in lab run 20261017-054704 (Console 26H2 admin PC, Server 2025 device, 0.18.15) UI-RDP's file copies through Windows' own RDP clipboard – no RemoteHub code in the path – failed the same way in both directions (UI-CP-10: three files, none arrived; A-CLIP-01: the MSI and the `.rhagent`, none arrived, so msiexec ended with 1619), while text and pictures went through. The lab pastes with `Shell.Application` … `InvokeVerb('paste')` and then waits with `Start-Sleep`; the shell copies delayed files (`FileGroupDescriptorW` / `FileContents`) on a thread of its own that calls back into the clipboard's data object, which lives on the pasting PowerShell's STA thread – and that thread pumps no messages while it sleeps. A ready `CF_HDROP` (D-CLIP-14) needs no such call, which fits. Since 17 Oct every lab paste of files (UI-RDP, D-CLIP, D-MORE2, UI-DESKTOP, UI-MORE) goes through the module's `Invoke-LabPaste` / `Get-LabPasteCode`, which pumps messages until the files are complete and records the clipboard's formats before the paste and the thread's apartment; if the files arrive in the next run, this row can go. Confirmed: with `Invoke-LabPaste` D-CLIP passes 18 of 18 on both platforms in lab run 20261018-162105 – this row can go once UI-CP-04 and UI-CP-15 have passed too. |
+| D-CLIP-04 (double offer) | Minor, seen in spike-reg-W11-D-CLIP: one image copied at the device with Windows Forms `SetImage` was offered twice (ids 1 and 2, 22 ms apart). A program that uses the OLE clipboard changes it twice (`OleSetClipboard`, then `OleFlushClipboard`), and `Win32HelperUi.OnClipboard` (`HelperWindows.cs:686`) sends on every change. With paste-on-demand the second offer quietly replaces the first. Without it (an older RemoteHub, or D-CLIP-16), the first copy starts and can end with "A newer copy replaced it." although only one copy was made, and a file copy is read twice. |
+| D-BAN-08 (input blocked) | Seen in lab runs 20261016-135543 (W11 and Server), -184035 and -212514 (W11, 0.18.14/0.18.15): with the admin's privacy screen and the device's input blocked, the banner does stay open (1000 px wide instead of the 412 px pill), but the person at the device never reads why their mouse and keyboard don't work. On the lab's 1024 × 768 screen the banner is capped at the screen width less 24 px (`BannerSize`, `HelperWindows.cs:811`), and with "Hide screen", "Hide apps…" and "Disconnect" the heading `Your screen is being viewed and controlled by DESKTOP-GGPVPIO\PSAdmin · mouse and keyboard blocked` (`HelperWindows.cs:350, 354`) is cut with "…" right after the middle dot; the subtitle `Click "Disconnect" to end` (`:355`) is dropped first when space runs out (`PaintBanner`, `:1164-1173`). The console OCR reads `… by DESKTOP-GGPVPIO\PSAdmin · m…`. The part that matters is the one that goes, at a resolution common on older devices and VMs, and with longer account names. Fix: put the state first (e.g. "Mouse and keyboard blocked · controlled by …"), or switch to the short heading plus the state when the full one doesn't fit, and leave out "Hide apps…" while the screen is covered. |
+| D-DISC-01 / D-FUS-01 (asked while UAC is up) | To confirm – seen once, in lab run 20261016-212514 (W11 lane 2, 0.18.15). A UAC prompt was left open in normaluser's session (D-UAC-01's typed credentials didn't elevate), so that session stayed on the secure desktop. The next two connections to it both got `WaitingForUser` within a second, but neither a `Denied` after the dialog's 30 s nor the service's "No answer in time." (`DesktopEndpoint.cs:871-875`): about 56 s after the start the agent dropped the connection without a Status or a close frame ("An existing connection was forcibly closed by the remote host"). On the normal desktop the same unanswered question ended with `Denied` after 32 s (d-secure-sas-desktop). RemoteHub would show only "connection lost", not that the user was asked and didn't answer. The agent's log of that part was lost to the context's revert; D-SECURE now keeps it (`d-secure-agent-logs-before-signin`). It also closes a leftover prompt after D-UAC-01, so seeing this again needs a connection made on purpose while a UAC prompt is open. |
+| S-SHR-02 (slow answer to "Trust this server?") | Seen in lab run 20261016-212514 (Console lane 2, 0.18.15); it passed in 20261016-135543 (W11), where the lab clicked sooner. SFTP asks about the host key from SSH.NET's `HostKeyReceived`, during the key exchange inside `SftpClient.Connect()` (`SftpShare.cs:33-41`), and `Connect()` waits for that exchange only as long as `ConnectionInfo.Timeout` – 20 s (`SftpShare.cs:29`). A user who compares the fingerprint, as the dialog asks, takes longer: `Connect()` then gives up with SSH.NET's timeout error while the dialog is still open, and the tab is not connected. *Trust and connect* clicked after that still stores the key (`accepted(fp)`, `SftpShare.cs:39`; `MainWindow.Shares.cs:190`), so the next open connects without asking – exactly what the run shows: `connected1` false, the key accepted, `connected2` true. With a changed key the late *Cancel* doesn't give "The server's key wasn't accepted – nothing was sent.": the timeout isn't the `SshConnectionException` that `catch … when (refused)` (`SftpShare.cs:46`) maps, so the tab shows the generic error (`refused` false in the same run). Fix: don't ask inside the handshake – refuse an unknown key there, keep its fingerprint, ask after `Connect()` has failed (no time limit) and connect again with the accepted key. The FTPS and WebDAV certificate questions should be checked for the same limit. S-SHARE2 now answers both questions 30 s after they appear, so the case fails every time until this is fixed. |
+| UI-AG-04 (RemoteHub ended) | To confirm – seen once, in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15). With an agent desktop tab of the connection still live (the PIN connection of UI-AD-06, left open by the test), the connection's password was changed to a wrong one and *Tools → PowerShell* opened: the agent refused the sign-in at 16:48:50 ("Refused .\PSAdmin … The user name or password is incorrect.", event 2000), and at 16:48:59 it logged the desktop connection as "connection lost" with its helper ended – RemoteHub's process was gone. The tab never showed the refusal text, the next UI step found only "Program Manager", and UI-AG-04, -07 and -08 failed on the missing window. In run 20261016-135543 (W11 admin PC) the same steps without a live desktop tab gave the expected "… rejected the sign-in: wrong user name or password …". The cause isn't known: the run kept neither RemoteHub's diagnostic log nor the Application log. UI-DESKTOP now writes both down (`<step>-clientGone` in ui-desktop-*.json) and starts RemoteHub again when its process is gone; it also closes its tabs properly now, so this needs a run that opens PowerShell with a wrong password while a desktop tab of the same connection is live. |
+| UI-AD-02 / D-INPUT (focus after consent) | Minor, to confirm. The agent's consent dialog takes the foreground (`SetForegroundWindow`, `HelperWindows.cs:881`); when it closes, Windows needn't give the foreground back to the window that had it. In the D-INPUT runs of 16.10.2026 the admin's keys of three of four sessions reached Windows but no window, and in lab run 20261016-212514 the text typed through the tab right after Allow (UI-AD-02) didn't reach the device's Notepad. For the admin it looks as if the keyboard doesn't work until they click into the picture. Fix to consider: remember the foreground window before showing the dialog and give it back (`SetForegroundWindow` from the helper, which holds the foreground then) when the dialog closes. UI-DESKTOP now records whether the tab's own click brought the window to the front (`typedFocus`, `cp01Focus`: "tab", or "device" when the person at the device had to click). Seen again in lab run 20261017-093048 (Console admin PC, Server 2025 device): Notepad had the focus by the tab's own click, yet neither the typed text (UI-AD-02) nor Ctrl+V (UI-CP-01) reached it – so more than the foreground after the dialog may be involved. |
+| J-08 (pictures during a tunnel copy) | **Lab, not the product.** Lab run 20261017-093048 (W11 lane 2, 0.18.15) was the first in which the case ran: 2 GB through the jump host arrived unchanged in 472 s, but only 19 pictures came. The case can't measure the picture yet: the desktop job only moves the mouse (the pointer isn't part of the captured picture, so the agent sends a frame only when the screen changes – the stats show 0-3 fps from the start), and its 3000 moves end after about 90 s of a copy that takes several minutes. Fixed in the lab on 17 Oct: a window keeps changing for the whole copy (the module's `Start-LabChangingWindow`, which D-VIDEO now uses too), the desktop stays open until the copy has ended (`waitFile`), and the case also checks that pictures still come in the copy's last 30 s. |
+| D-BAN-05 (resume after Disconnect) | **Security issue.** Seen in lab run 20261017-054704 (W11 lane 1, 0.18.15): the user at the device clicked *Disconnect* on the banner, the connection got Ended "The user at the device ended the session.", and a new connection started 27 ms later with the old resume token was continued at once ("Continuing on the device…", Connected) – nobody was asked, although the user had just ended the session. Cause from the code: on a *Disconnect* the endpoint sends the Ended status and leaves the loop (`DesktopEndpoint.cs:245-249`), but the token is revoked only at the very end of `finally` (`:389`), after the close handshake, which waits up to 2 s for RemoteHub's close (`:361-367`). Within that window `DesktopResume.TakeAsync` still finds the entry with no expiry, takes it as "the old connection hasn't noticed yet", cancels the old one and hands the new connection the session with the old `AllowedBy` (`:1099-1106`). RemoteHub itself doesn't resume after Ended, but any client that holds the token (the same account) can skip the user's refusal. The same applies to every end on purpose (RemoteHub's close, idle, refused). Fix: revoke the token (or mark the entry void) before the Ended status is sent – wherever `_endReason` is set without `_lost` – and have `TakeAsync` refuse an entry whose owner is ending on purpose; a unit test that takes the token right after a user end. **Fixed** on branch fixes-20261017 (`261ad28`), passing on W11 and Server 2025 in lab run 20261018-112637 (0.18.17). |
+| W-NONADMIN-01 (setup script on Windows clients) | **Security issue.** Seen in lab runs 20261016-212514 (W11 lane 1) and 20261017-054704 (W11 lane 2, 0.18.15); passes on Server 2025. With "Allow local administrators over the network" **not** chosen, RemoteHub's WinRM setup script still leaves `LocalAccountTokenFilterPolicy` = 1 on Windows 11: the test set it to 0 (it wasn't set before), ran the script with local admins off, and read 1 afterwards. Cause: the script always runs `Enable-PSRemoting -Force -SkipNetworkProfileCheck` (`RemotingSetup.cs:190`), and on client editions of Windows that cmdlet sets `LocalAccountTokenFilterPolicy` to 1 itself. So the UAC remote restrictions for local accounts are turned off without the admin asking for it, and the script's own warning ("Local administrators are restricted over the network here", `:244-245`) never shows. Fix: read the value before `Enable-PSRemoting` and, when local administrators weren't chosen, put it back (delete it if it didn't exist) right after - then the warning works as intended. W-SETUP's "set up before" context doesn't see it because it runs `Enable-PSRemoting` itself before setting the value to 0. **Fixed** on branch fixes-20261017 (`1a4a530`), passing on W11 in lab run 20261017-160133 (0.18.16). |
+| POL-05 (PowerShell turned off: reason lost) | Seen in lab run 20261017-054704 (W11 lane 2, 0.18.15), cause confirmed with a unit test. The agent refused correctly ("Refused PowerShell from … turned off on this device (policy PowerShellEnabled)", HTTP 404 before any sign-in), but RemoteHub shows the WebSocket's own text "The server returned status code '404' when status code '101' was expected." instead of "PowerShell, files, registry, services and processes are turned off on … by a policy on the device (PowerShellEnabled)". PowerShell wraps a failed open in `PSRemotingDataStructureException` ("An error has occurred which PowerShell cannot handle …"); the transport's `PSRemotingTransportException` with RemoteHub's text is its inner exception, and the `WebSocketException` below that. `PsRemoting.AgentExplain` (`PsRemoting.cs:183-188`) only takes a transport message that contains "RemoteHub Agent" and otherwise falls back to `GetBaseException().Message`; the 404 text from `AgentErrors.Explain` (`AgentTransport.cs:282-283`) is the only one that doesn't name the agent, so it is skipped. The session limit (503) and "not allowed" (403) texts do name it and reach the user. Every tool through the agent is affected (PowerShell tab, files, registry, services, processes, install and update through the agent), also a policy key the agent can't read (S-POL-01: everything is off, 404). Fix: have the agent's transport throw its own exception type (e.g. `AgentRefusedException : PSRemotingTransportException`) and let `AgentExplain` take the first one of that type in the chain, or simply the first `PSRemotingTransportException` from `AgentClientTransport.Connect`; or name the agent in the 404 text. The unit test `PowerShell_turned_off_by_policy_reaches_RemoteHub_as_the_agents_reason` (`AgentTests.cs`) is skipped until then; POL-05 fails until then. POL-04 and POL-06 failed in the same run only because the lab harness reported PowerShell's outer message instead of RemoteHub's text (also J-06 in run 20261016-212514) – the harness now shows what RemoteHub shows (`OpenAgentSession` in `Program.cs`, `LabTools.Open`). |
 
 ### Existing tests that are not in the sheet
 
@@ -964,12 +987,13 @@ P3 · How: S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 **Preconditions:** VM reverted. MSI and `.rhagent` in one folder; Admin signed in.
 
 **Steps:**
-1. Start `msiexec /i RemoteHub-Agent-x64.msi VIRTUALDISPLAY=0` in Admin's session.
-2. Drive the install dialog with UI Automation to the end.
+1. Start `msiexec /i RemoteHub-Agent-x64.msi /qb` in Admin's session (elevated); the same session notes the title of msiexec's visible window until msiexec ends (a first install takes only a few seconds – a look from outside afterwards can miss the window).
+2. Nothing to click: Windows Installer's progress window runs to the end on its own.
 3. Read `Get-LabAgentState`.
 
 **Expected:**
-- Installed, service running.
+- A window titled "RemoteHub Agent" was shown; msiexec exit 0 (or 3010).
+- Installed, enrolled with the `.rhagent` next to the MSI, service running.
 - `virtualDisplay` = `off`, no `Root\MttVDD` device.
 
 Note: the MSI has no custom dialog and no virtual-display checkbox (only the `VIRTUALDISPLAY` property); the UI is the standard Windows Installer progress UI. The checkbox exists only in RemoteHub's install dialog.
@@ -980,7 +1004,7 @@ P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `U
 **Preconditions:** two VMs: RemoteHub on the admin VM, device VM reverted. RDP connection with clipboard redirection.
 
 **Steps:**
-1. In RemoteHub, right-click the connection → Install RemoteHub Agent, method Clipboard (UI Automation).
+1. In RemoteHub, right-click the connection → RemoteHub Agent → Install RemoteHub Agent, method Clipboard (UI Automation).
 2. Open the RDP session to the device; paste both files into one folder.
 3. Run `RemoteHub-Agent-x64.msi` as administrator in that session.
 4. Watch the connection in RemoteHub.
@@ -1273,14 +1297,16 @@ P3 · How: PS · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 **Preconditions:** agent installed (A-INST-01); state and pin read.
 
 **Steps:**
-1. Find the product code (Uninstall key, DisplayName "RemoteHub Agent").
-2. Run `msiexec /fa <product code> /qn /l*v <log>` as PSAdmin.
+1. Copy the agent MSI to the device (RemoteHub deletes the folder it installed from, and the cached package in `C:\Windows\Installer` holds no files, so a repair needs the MSI as its source).
+2. Run `msiexec /fa <path to the MSI> /qn /l*v <log>` as PSAdmin; the log is saved to the evidence (`a-more-repair`).
 3. Read the state and health with the pin.
 
 **Expected:**
 - msiexec exit 0 (or 3010).
 - `deviceId`, thumbprint, port, rule unchanged; 1 certificate; service `Running`; health answers with the old pin.
-- The agent log has "Update without enrollment file: keeping the existing device identity" (enroll runs on repair and finds no `.rhagent` next to the cached MSI).
+- No new "Enrolled as device" line: the enrollment step doesn't run on a repair (`NOT Installed`).
+
+Note: `msiexec /fa <product code>` without the MSI ended with 1603 in every run so far (20261016-200451, -205935, -212514): the service was stopped and started again 3 s later – the rollback – and the product stayed as it was. See the findings table.
 
 #### A-ROLLBACK-01 · First install fails after enrolling
 P1 · How: PS · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
@@ -1442,9 +1468,11 @@ P3 · How: S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 **Preconditions:** agent installed; Admin signed in at the console.
 
 **Steps:**
-1. Open Settings → Apps → Installed apps in Admin's session (UI Automation).
-2. Find "RemoteHub Agent", choose Uninstall, confirm (and accept UAC on the secure desktop through the console).
+1. Open Settings → Apps → Installed apps in Admin's session (UI Automation); UAC for admins is set to elevate without asking (the checkpoint restores it).
+2. Type "RemoteHub Agent" into the page's search box (picked from the page's elements – its name differs between Windows builds), press *More options* in RemoteHub Agent's own row, choose Uninstall, confirm in the flyout, and answer Windows Installer's "Yes" where this build asks.
 3. Read the device state.
+
+Note: until 20261016 the test searched for a box named "Search apps", which wasn't found on 26H2, and then pressed the first *More options* on the page – that of whichever app came first – so RemoteHub Agent was never uninstalled.
 
 **Expected:**
 - Same results as A-UNINST-02 … A-UNINST-11.
@@ -1902,8 +1930,8 @@ P1 · How: PS H · Needs: – · Status: ✅ Automated – `S-THR.Tests.ps1`
 4. Read the agent log.
 
 **Expected:**
-- Health `features` = `["powershell"]` only.
-- PowerShell: 403 (no group has the right).
+- Health `features` empty: an unreadable key allows nothing, and since `PowerShellEnabled` health leaves out `powershell` when it's off.
+- PowerShell: 404 before any sign-in – it counts as turned off, like the desktop (since `PowerShellEnabled`; 403 would mean "signed in, but no right").
 - Desktop: 404 (desktop turned off).
 - Agent log: "The policy (SOFTWARE\Policies\RemoteHub\Agent) can't be read – access refused: …". The line is written on connections, not on health.
 
@@ -2943,7 +2971,7 @@ P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
 - Dialog body "If you agree, read this code out to them. Nobody can connect without it." and 6 digit boxes.
 - After the PIN: Status `Connected` "Connected."; event 1100 with "consent Pin".
 
-Note: the lab spec says the PIN is read by AutomationId; the code has no UIA element for it (painted text), so only OCR works.
+Note: the lab spec says the PIN is read by AutomationId; the code has no UIA element for it (painted text), so only OCR works. OCR sometimes returns one of the large digits as a look-alike letter (0 as "O" or "o", 1 as "I", "l" or "|"); `RhPerson.ps1 -Do pin` counts such one-letter words of digit height as digits.
 
 #### D-PIN-02 · PIN wrong ×3
 P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-CONSENT.Tests.ps1`
@@ -3163,7 +3191,9 @@ P2 · How: S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 **Steps:**
 1. `Invoke-LabInSession` (normaluser): post WM_CLOSE to the banner window.
 2. `Invoke-LabInSession`: `taskkill /F /IM RemoteHubAgent.exe`.
-3. Press Alt+F4 on the console.
+3. Start the marker window in normaluser's session and click it on the console, so it is the foreground window; click
+   the banner's text and press Alt+F4 on the console. The banner never takes the focus (WS_EX_NOACTIVATE), so the key
+   goes to the foreground window – without the marker that is the shell, and on Server 2025 normaluser was signed out.
 4. Check the banner window and the Status stream.
 
 **Expected:**
@@ -3218,16 +3248,17 @@ P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1
 #### D-VIEW-03 · Key release still passes
 P3 · How: H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 
-**Preconditions:** `Rights\SecureDesktop` = a group PSAdmin is not in; connected with control to normaluser's session after Allow; marker app focused.
+**Preconditions:** `Rights\SecureDesktop` = a group PSAdmin is not in; marker app running in normaluser's session; connected with control to that session after Allow.
 
 **Steps:**
-1. Harness client sends Key down Shift (scan 0x2A).
+1. Harness client clicks on the marker (it gets the keyboard focus back – the consent dialog had it), then sends Key down A (scan 0x1E).
 2. A task in normaluser's session runs `Start-Process cmd -Verb RunAs` (UAC on the secure desktop).
-3. Harness client sends Key up Shift while the prompt is open.
-4. Cancel the prompt with Esc on the console; check the Shift state in the session.
+3. Harness client sends Key up A while the prompt is open.
+4. Close the prompt; check the A key's state in the session.
 
 **Expected:**
-- Shift is not stuck after the prompt (`GetAsyncKeyState` in the session shows it up).
+- The marker recorded the click and the key-down (precondition: the key really was held in the session).
+- A is not stuck after the prompt (`GetAsyncKeyState` in the session shows it up).
 
 Note: view-only can't be switched on during a session (it is fixed at Start, and the service drops all keys in view-only). The code only lets the release of a held key through when input becomes not allowed on the current desktop (secure desktop without the right, or a held user desktop); the case is written for that.
 
@@ -3408,13 +3439,13 @@ P1 · How: H S · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 **Steps:**
 1. Task in normaluser's session: `Start-Process cmd -Verb RunAs`.
 2. Wait for a Layout with `secureDesktop: true`; save frames; read Stats.
-3. Through the desktop session type PSAdmin's user name and password into the prompt, Enter.
-4. PS Direct: check for an elevated `cmd.exe` in normaluser's session.
+3. Through the desktop session type the password of the administrator the prompt offers, Enter. For a standard user Windows lists the device's administrators with the first one (Admin, the console account) chosen and its password field focused – a typed user name would go into the password field.
+4. PS Direct: check for an elevated `cmd.exe` in normaluser's session; close a prompt that is still open (`consent.exe`), so the next cases don't start on the secure desktop.
 
 **Expected:**
-- Frames show the UAC credential prompt; Stats `capture` "GDI".
+- Frames show the UAC credential prompt with Admin chosen; Stats `capture` "GDI".
 - Agent log: "Desktop: session `<id>` switched to the secure desktop (sign-in, lock or UAC screen)".
-- Elevated cmd.exe runs (as PSAdmin) in that session.
+- Elevated cmd.exe runs (as Admin) in that session.
 
 #### D-UAC-02 · UAC prompt not leaked to view-only users
 P – · How: – · Needs: – · Status: see D-RIGHT-02
@@ -3639,7 +3670,7 @@ P3 · How: H E · Needs: – · Status: ✅ Automated – `D-SECURE.Tests.ps1`
 #### D-IN-01 · Keyboard by scan code
 P1 · How: H S · Needs: de-DE (second run) · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 
-**Preconditions:** connected with control after Allow; marker app (text box, logs characters) focused in normaluser's session; en-US VM, then de-DE VM.
+**Preconditions:** connected with control after Allow; marker app (text box, logs characters) in normaluser's session, clicked through the connection first so it has the keyboard focus (the consent dialog takes the foreground and Windows needn't give it back when it closes – also for D-IN-02, D-IN-05 and D-IN-06); en-US VM, then de-DE VM. What counts is the session's keyboard layout, not the Windows language: an en-US VM can have a German keyboard first.
 
 **Steps:**
 1. Send Key down/up for scan codes of `z` (0x2C), `y` (0x15), the `;`/`ö` key (0x27), the `'`/`ä` key (0x28).
@@ -3649,6 +3680,7 @@ P1 · How: H S · Needs: de-DE (second run) · Status: ✅ Automated – `D-INPU
 **Expected:**
 - en-US: "zy;'" and no "@" from AltGr+q.
 - de-DE: "yzöä@" (the device's layout applies).
+- Automated: the text `The quick brown fox 0123456789 !@#$%^&*()_+-=[]{};:,./<>?` sent by US scan codes arrives unchanged on a US layout and as `… !"§$%&/()=?` followed by the dead-key and umlaut characters on a German one; another layout is skipped.
 
 #### D-IN-02 · Extended keys
 P2 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
@@ -3670,7 +3702,7 @@ P1 · How: H S · Needs: – · Status: ✅ Automated – `D-INPUT.Tests.ps1`
 **Steps:**
 1. Send Move to 5 known points (pixels of the shown monitor).
 2. Send Down/Up for Left, Right, Middle, X1, X2 at a point.
-3. Send Wheel ±120 and HorizontalWheel ±120.
+3. Send Wheel ±120 and HorizontalWheel ±120, a second apart (Windows merges wheel turns still queued for the window into one with the sum: 120 and −240 sent together arrive as one −120).
 
 **Expected:**
 - Each point arrives within ±2 px.
@@ -3763,11 +3795,13 @@ P3 · How: H S · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Steps:**
 1. Count Video frames for 10 s with nothing moving.
-2. Start a marker window that changes colour every 200 ms; count for 10 s.
+2. Start a window in the console session that changes colour on every tick of a 15 ms timer and records how often it changed; connect at 30 fps and read Stats for 12 s.
 
 **Expected:**
 - Still screen: after the first frame at most 3 more (refinement frames), then none.
-- Moving marker: frames keep arriving.
+- Changing window (more than 10 changes a second): frames keep arriving, Stats above 5 fps.
+
+Note: moving the pointer alone changes no frame – the pointer goes as its own Cursor message – so mouse moves are no stimulus for frame counts.
 
 #### D-VID-04 · Key frame request
 P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
@@ -3785,10 +3819,10 @@ P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 #### D-VID-05 · Slow network
 P2 · How: H N · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
-**Preconditions:** connected; moving marker window; VM network limited to 1 Mbit/s (`Set-VMNetworkAdapter -MaximumBandwidth`).
+**Preconditions:** connected at 30 fps, quality 80; a 480×360 window in the console session showing new random pixels on every 15 ms tick (far more than the link carries); VM network limited to 2 Mbit/s (`Set-VMNetworkAdapter -MaximumBandwidth`).
 
 **Steps:**
-1. Read Stats for 20 s.
+1. Read Stats for 30 s.
 2. Second run: harness client stops sending Acks for 5 s; count Video meanwhile.
 3. Send a Mouse move through the session; check it lands.
 
@@ -3796,6 +3830,8 @@ P2 · How: H N · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 - Stats `quality` goes down in steps of 10 (not below 20).
 - Without Acks: at most 2 frames, then at most 2 more per second (the agent assumes lost acks after 1 s).
 - Input still works.
+
+Note: see the finding for D-VID-05 above – from the code, the quality may never step down on a saturated link.
 
 #### D-VID-06 · Capture method
 P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
@@ -3813,13 +3849,13 @@ P3 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 #### D-VID-07 · No GPU encoder on a VM
 P2 · How: H · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
-**Preconditions:** normal lab VM without GPU-P.
+**Preconditions:** normal lab VM without GPU-P; the changing window of D-VID-03 in the console session.
 
 **Steps:**
-1. Start with 60 fps; read Stats for 10 s.
+1. Start with 60 fps; read Stats for 12 s.
 
 **Expected:**
-- Frames arrive; Stats `capture` without ", GPU encoder"; no Failed/Ended status.
+- Frames arrive (more than 20 in the 12 s); Stats `capture` without ", GPU encoder"; no Failed/Ended status.
 
 #### D-VID-08 · GPU encoder
 P2 · How: H · Needs: GPU-P · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
@@ -3873,7 +3909,7 @@ P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Steps:**
 1. Connect; send Settings (monitor 0, Fit 1600×900).
-2. Read Stats `fit` and Layout; PS Direct reads the current resolution.
+2. Read Stats `fit` and Layout; read the console's resolution from Hyper-V's video head (`Msvm_VideoHead`). Not from a PowerShell Direct session: its screen is its own (1024×768), not the console's.
 3. Close the connection; read the resolution again.
 
 **Expected:**
@@ -3901,7 +3937,7 @@ P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Steps:**
 1. PS Direct: `Stop-Process -Force` the helper.
-2. Read the resolution at once and after 5 s.
+2. Read the resolution (Hyper-V's video head, as in D-FIT-01) until it is fitted again (up to 30 s).
 3. Close the connection; read the resolution.
 
 **Expected:**
@@ -4005,7 +4041,7 @@ P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
 
 **Steps:**
 1. Settings Fit 1280×800.
-2. Poll the virtual monitor's resolution for 5 s.
+2. Wait 6 s; read the primary monitor from the agent's last Layout (the virtual monitor is the primary one; the Hyper-V video head doesn't show it).
 
 **Expected:**
 - Resolution 1280×800 within 5 s; agent log "virtual monitor on at 1280×800"; `C:\VirtualDisplayDriver\vdd_settings.xml` has the new size.
@@ -4058,7 +4094,10 @@ P2 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 1. Send TransferStart (kind image, item "image.png") + TransferData; check formats in the session (`GetClipboardFormats`).
 2. Same with "image.bmp".
 3. In the session copy an image from Paint (and once a PNG from a browser).
-4. Receive TransferStart + TransferData; check the item name.
+4. Wait for the TransferOffer (with `transferOnPaste` the image is only offered); send TransferRequest with its id.
+5. Receive TransferStart + TransferData; check the item name.
+
+The automated test copies a bitmap with Windows Forms' `SetImage` (no "PNG" format), so it expects "image.bmp".
 
 **Expected:**
 - PNG: clipboard has "PNG" and CF_DIB; TransferEnd receipt `ok: true`, `toDevice: true`.
@@ -4121,7 +4160,7 @@ P1 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 **Preconditions:** as D-CLIP-01.
 
 **Steps:**
-1. Send TransferStart files with total 101 MB; then one with 1001 items.
+1. Send TransferStart files with total 101 MB; then one with 1001 items. Both are sent as raw messages: RemoteHub – and the harness' `files` step – refuse such a copy before sending anything, so only a raw start reaches the agent's own check.
 2. In the session copy a 101 MB file (and a folder with 1001 files).
 3. Check the clipboard folder.
 
@@ -4238,6 +4277,8 @@ P3 · How: H S · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
 1. Copy the 90 MB file; wait for the first TransferData; slow down Acks/reading.
 2. Copy a small file while the first one transfers.
 3. Collect TransferEnd messages.
+
+The automated test makes both copies in one session task, 300 ms apart (`Set-Clipboard -Path`), with `features: []` at Start. Before that it sends one small file to the device, which is the transfer D-CLIP-18 needs.
 
 **Expected:**
 - First transfer: TransferEnd `ok: false` "A newer copy replaced it."
@@ -4381,12 +4422,15 @@ P1 · How: H S C · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
 **Preconditions:** connected to normaluser's console session after Allow.
 
 **Steps:**
-1. Abort the TCP connection.
-2. Switch the console to Admin (tsdiscon + console sign-in), within 50 s.
-3. Start (console session, consent Ask) with the token.
+1. Through the picture: Ctrl+Alt+Del, Switch user (normaluser's session is disconnected, the sign-in screen shows).
+2. Abort the TCP connection; Start (console session, consent Ask) with the token – the connection continues on the sign-in screen.
+3. Through the picture: choose Admin's tile, check that Admin's name now stands large in the middle, type the password.
+4. Admin answers Deny in Admin's session (or the dialog's countdown denies it).
 
 **Expected:**
-- `WaitingForUser` "Waiting for `<VM>\Admin` to allow access…".
+- `WaitingForUser` "Waiting for `<VM>\Admin` to allow access…" on the resumed connection.
+
+Note: OCR reads the small tile names on the wallpaper only in parts ("min" for Admin), so the test matches each line of the tile list to the closest of the device's accounts. When Admin's tile wasn't chosen the case fails on that (evidence `d-rob-res-user\tiles.png`, `selected.png`). Admin stays signed in afterwards: the next context starts from the file's state again (`Initialize-LabVm`) with that state's PIN.
 
 #### D-RES-07 · Old connection still alive
 P3 · How: H · Needs: – · Status: ✅ Automated – `D-ROBUST.Tests.ps1`
@@ -4708,10 +4752,10 @@ P2 · How: PS U · Needs: – · Status: ◐ Written, not yet run in the lab –
 **Preconditions:** `Admin` has a database (C-DB-01); `backup\` empty.
 
 **Steps:**
-1. FlaUI: start RemoteHub, wait 30 s, close it. PS Direct: list `%LOCALAPPDATA%\RemoteHub\backup`.
-2. Start and close RemoteHub again the same day; list `backup\`.
-3. Repeat 9 times: PS Direct moves the guest clock forward 1 day (time sync off), start RemoteHub, wait 30 s, close.
-4. List `backup\` after each round.
+1. FlaUI: start RemoteHub, wait until the backup is written (a new file whose size has settled, at most 90 s), close it. PS Direct: list `%LOCALAPPDATA%\RemoteHub\backup`.
+2. Start RemoteHub again the same day, wait 30 s (nothing to wait for), close it; list `backup\`.
+3. Repeat 9 times: PS Direct moves the guest clock forward 1 day, start RemoteHub, wait until the new backup is written (at most 90 s), close. Time sync is off on both sides while the clock is moved: Hyper-V's time synchronisation service, and in the guest `w32time` and `vmictimesync` set to Disabled (only stopped, `w32time` is started again by its triggers and puts the clock back – lab run 20261016-212514). Their start types are restored afterwards.
+4. List `backup\` and note the guest's clock (at the start, after the backup, at the end) after each round.
 
 **Expected:**
 - After step 1: one file `remotehub-<yyyyMMdd-HHmmss>.db` (UTC time).
@@ -4763,8 +4807,8 @@ P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C
 **Preconditions:** C-LOCK-01 done. An RDP or PowerShell tab is open and connected.
 
 **Steps:**
-1. FlaUI: *Startup protection…* → enter the current password → *Lock when you're away* → *After 5 minutes*.
-2. Don't send any input to the VM for 5 min 30 s.
+1. FlaUI: *Startup protection…* → enter the current password → *Lock when you're away* → *After 1 minute* (*After 5 minutes* on builds without that option).
+2. Don't send any input to the VM for the chosen time + 30 s (RemoteHub checks every 15 s).
 3. Look for RemoteHub windows.
 4. Device side: check the session is still connected (PS Direct `query session` on the device).
 5. Type the password in the unlock window.
@@ -4772,7 +4816,7 @@ P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C
 **Expected:**
 - The main window is hidden; "RemoteHub is locked" with "Locked after a while without input – your sessions keep running." and *Exit RemoteHub* is shown.
 - The remote session is still active.
-- After unlock the main window is back with the tab still connected; audit "RemoteHub locked" ("After 5 min without input").
+- After unlock the main window is back with the tab still connected; audit "RemoteHub locked" ("After 1 min without input", or 5 min).
 
 #### C-LOCK-03 · Windows Hello PIN
 P3 · How: U S · Needs: vTPM · Status: ◐ Written, not yet run in the lab – `C-DATA.Tests.ps1`
@@ -4829,12 +4873,13 @@ P2 · How: U · Needs: SMB, 2VM · Status: ◐ Written, not yet run in the lab �
 
 **Steps:**
 1. VM A (FlaUI): open a connection's editor and change its name, don't save yet.
-2. VM B (FlaUI): rename another connection and save.
+2. VM B (FlaUI): rename another connection and save; wait until the shared file's SHA-256 changes (at most 30 s).
 3. VM A: save the edit.
-4. Read the dialog; click *Keep mine* on one run and *Reload* on a second run.
+4. Read the dialog – its text through UI Automation, its title from the window (`GetWindowText`: RemoteHub's message boxes are named by their text in UI Automation and the title bar text isn't listed); click *Keep mine* on one run and *Reload* on a second run.
 5. Compare the file content on both VMs after each choice.
 
 **Expected:**
+- VM B's save changes the shared file, on both runs. (In the lab the device's RemoteHub opens the existing file with *Open shared settings*, so the first run's save is its first edit after that – see the findings table.)
 - VM A shows "Settings changed on another device": "The settings file was changed on another PC (or by another admin) after RemoteHub loaded it. …" with *Reload* and *Keep mine*.
 - *Reload*: VM B's change is shown, VM A's edit is gone. *Keep mine*: the file holds VM A's version.
 - The file is never overwritten before the choice.
@@ -4943,10 +4988,10 @@ P2 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C
 **Steps:**
 1. FlaUI as `normaluser`: Import backup, pick the file.
 2. Enter a wrong password.
-3. Read the dialog; compare the tree before and after.
+3. Read the dialog – its text through UI Automation, its title from the window (`GetWindowText`; see C-SHARE-02) – then click OK; compare the tree before and after.
 
 **Expected:**
-- "Import failed": "Wrong password or the backup file is damaged."
+- "Import failed" (the window title): "Wrong password or the backup file is damaged." (the text).
 - Nothing imported; no "Backup imported" audit entry.
 
 #### C-BAK-03 · Old `.rdpmbackup`
@@ -5132,7 +5177,7 @@ P2 · How: U C M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1`
 **Steps:**
 1. FlaUI: *Details…* → *Download and install*.
 2. Confirm the question about open sessions.
-3. Console (C): approve the UAC prompt on the secure desktop by keyboard (`Send-LabKey`).
+3. Console (C): approve the UAC prompt on the secure desktop by keyboard (`Send-LabKeyCombo` Alt+Y; if the prompt is still there, Alt+Z – the console keyboard sends US key positions and the image's layout is German).
 4. Wait up to 3 min for `RemoteHub.exe` to run again.
 5. Read the file version of `C:\Program Files\RemoteHub\RemoteHub.exe`.
 
@@ -5331,7 +5376,7 @@ P2 · How: U · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `U
 **Preconditions:** Working connection `Device` with drives and clipboard redirection on.
 
 **Steps:**
-1. FlaUI as `Admin`: right-click `Device` → *Save as .rdp file…*, include the password, save `C:\lab\device.rdp`.
+1. FlaUI as `Admin`: right-click `Device` → *More* → *Save as .rdp file…*, include the password, save `C:\lab\device.rdp`.
 2. As `normaluser`: double-click `C:\lab\device.rdp` (RemoteHub is the handler via "Open with").
 3. Read the "Open .rdp file" dialog; click *Connect*.
 4. Enter the password when Windows asks.
@@ -5362,11 +5407,11 @@ P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** Device with WinRM working for the connection (remoting check passed); no agent on the device.
 
 **Steps:**
-1. FlaUI: right-click the connection → *Install RemoteHub Agent…*; choose "Install silently over PowerShell remoting (WinRM) …", keep "Use the agent for this connection afterwards", click *Install*.
-2. Wait for the progress window to show *Done*.
-3. Right-click → *PowerShell*; run `hostname`.
-4. Open *File transfer* and upload a file; open *Registry*, *Services*, *Processes*.
-5. Right-click → *Remote desktop* (agent desktop tab), connect to the console session.
+1. FlaUI: right-click the connection → *Tools* → *Test PowerShell remoting* first and wait for "PowerShell remoting works (…)" – the install dialog offers the silent install only once WinRM is known to work, and *Tools* lists the tools only after a passed test.
+2. Right-click the connection → *RemoteHub Agent* → *Install RemoteHub Agent…*; choose "Install silently over PowerShell remoting (WinRM) …", keep "Use the agent for this connection afterwards", click *Install*; wait for the progress window to show *Done*.
+3. Right-click → *Tools* → *PowerShell* (if *Tools* shows *Test RemoteHub Agent* instead, run that first); run `hostname`.
+4. From *Tools*, open *File transfer* and upload a file; open *Registry*, *Services*, *Processes*.
+5. Right-click → *Connect* (with the agent in use, the agent desktop tab); on its connect page keep the console session and click *Connect*.
 
 **Expected:**
 - Progress ends with "Installed – service Running." and *Done*; the connection shows the agent shield.
@@ -5415,7 +5460,7 @@ P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** Connection to the device with WinRM working (remoting check passed); no agent on the device.
 
 **Steps:**
-1. FlaUI: right-click the connection → *Install RemoteHub Agent…*.
+1. FlaUI: right-click the connection → *Tools* → *Test PowerShell remoting* first; wait for "PowerShell remoting works (…)" (the silent install is offered only once WinRM is known to work). Then right-click → *RemoteHub Agent* → *Install RemoteHub Agent…*.
 2. Choose "Install silently over PowerShell remoting (WinRM) – copies both files to a temp folder, installs, deletes them"; click *Install*.
 3. Wait for the progress window; read each row.
 4. Hover the agent shield next to the connection name.
@@ -5432,13 +5477,13 @@ P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** Agent installed; connection set to "Connect through" = "RemoteHub Agent"; remoting status reset (not yet tested).
 
 **Steps:**
-1. FlaUI: right-click the connection → *Test RemoteHub Agent*.
+1. FlaUI: right-click the connection → *Tools* → *Test RemoteHub Agent*.
 2. Read the dialog.
 
 **Expected:**
 - Dialog "RemoteHub Agent": "The RemoteHub Agent works (<version info>). Right-click the connection or its tab → PowerShell, File transfer, Registry, Services or Processes."
 
-Note: *Test RemoteHub Agent* is only in the menu while the connection uses the agent and the last result isn't "available"; after a successful test the menu shows the tools instead.
+Note: *Test RemoteHub Agent* is only in the *Tools* group while the connection uses the agent and the last result isn't "available"; after a successful test the group shows the tools instead.
 
 #### UI-AG-03 · Wrong pin
 P1 · How: U PS E · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
@@ -5447,7 +5492,7 @@ P1 · How: U PS E · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1
 
 **Steps:**
 1. Note the device's Security log 4624/4625 count and the agent log size.
-2. FlaUI: open a PowerShell tab through the agent.
+2. FlaUI: open a PowerShell tab through the agent (right-click → *Tools* → *PowerShell*; when *Tools* offers *Test RemoteHub Agent* instead, run that – its answer names the certificate the same way).
 3. Read the error; look for a way to continue anyway.
 4. PS Direct on the device: read the Security log and the agent log again.
 
@@ -5477,7 +5522,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** Agent installed; connection uses the agent.
 
 **Steps:**
-1. PS Direct on the device: `Stop-Service RemoteHubAgent`.
+1. FlaUI: right-click → *Tools*: PowerShell is offered (else *Test RemoteHub Agent* first). PS Direct on the device: `Stop-Service RemoteHubAgent`.
 2. FlaUI: open a PowerShell tab; time how long until a message shows.
 3. PS Direct: `Start-Service RemoteHubAgent`.
 4. FlaUI: *Reconnect* the tab (or open it again).
@@ -5492,7 +5537,7 @@ P1 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab –
 **Preconditions:** Previous agent version installed (`Get-LabAgentMsi -Previous`); RemoteHub ships the new agent MSI.
 
 **Steps:**
-1. FlaUI: right-click → *Update RemoteHub Agent…*.
+1. FlaUI: right-click → *RemoteHub Agent* → *Update RemoteHub Agent…*.
 2. Choose "Update through the running agent"; leave "Create a new device certificate" unticked; click *Update*.
 3. Wait for *Done*.
 4. Hover the shield; PS Direct on the device: read the agent's file version and certificate thumbprint.
@@ -5509,7 +5554,7 @@ P1 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – 
 **Preconditions:** Agent installed; `normaluser` signed in on the device console.
 
 **Steps:**
-1. FlaUI: right-click → *Remote desktop* (agent).
+1. FlaUI: right-click → *Connect* (with the agent installed, the agent desktop; *Remote desktop via RDP* is the other way).
 2. Read the session list.
 3. Pick the console session, choose a consent mode the test can answer, click *Connect*.
 4. Take a Hyper-V console screenshot of the device and a screenshot of the tab picture.
@@ -5815,12 +5860,14 @@ P1 · How: U S C · Needs: 2VM · Status: ◐ Written, not yet run in the lab �
 1. Lock the device session.
 2. FlaUI: click "Send Ctrl+Alt+Del"; screenshot the tab.
 3. Type `normaluser`'s password through the tab, Enter.
-4. Check the tab: the picture waits for consent; task in the user's session allows it.
+4. Check the tab and the device: no new consent dialog, no "Waiting for … to allow access", the tab live.
 5. Repeat while connected as `normaluser` itself (own account).
 
 **Expected:**
 - The password field shows in the tab; typing unlocks the session.
-- As `PSAdmin` the picture holds until the user allows; as `normaluser` it continues without asking.
+- `normaluser` allowed this connection before the lock, so after the unlock it continues without asking – the user who allowed it isn't asked again (agent-desktop-draft.md §4.2 step 4, `HoldUserDesktop` in `DesktopEndpoint.cs`). Someone else unlocking or signing in is asked first (D-LOCK-02, UI-SAS-03). As `normaluser` (own account) it continues as well.
+
+Note: until lab run 20261016-212514 the test expected `normaluser` to be asked again; the agent did as designed (no dialog, the tab stayed live), so the expectation was corrected.
 
 #### UI-SAS-03 · Agent tab, sign-in screen
 P1 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
@@ -5845,12 +5892,12 @@ P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – 
 **Steps:**
 1. Task in the user's session: `Start-Process cmd -Verb RunAs`.
 2. Screenshot the tab.
-3. Type `PSAdmin` and the lab password into the UAC prompt through the tab, Enter.
-4. PS Direct: look for an elevated `cmd.exe` in that session.
+3. Type the lab password into the UAC prompt through the tab, Enter. `normaluser` isn't an administrator: the prompt offers the device's administrators with the first one (the console account, `Admin`) chosen and its password field focused – there is no user name field to type `PSAdmin` into (lab run 20261016-212514 typed `PSAdmin`, Tab, password into that field and nothing was elevated).
+4. PS Direct: look for an elevated `cmd.exe` in that session; close a prompt still open (`consent.exe`), so the session doesn't stay on the secure desktop for the next cases.
 
 **Expected:**
 - The UAC prompt is visible in the tab.
-- After the credentials an elevated `cmd.exe` runs.
+- After the password an elevated `cmd.exe` runs as the console account.
 
 #### UI-SAS-05 · Physical Ctrl+Alt+Del stays local
 P2 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
@@ -5894,13 +5941,15 @@ P1 · How: U S · Needs: 2VM · Status: ◐ Written, not yet run in the lab – 
 
 **Tools and network**
 
+The context menu's *Tools* group lists *PowerShell*, *File transfer*, *Registry*, *Services* and *Processes* only once the connection's test has passed the way it connects now (WinRM or the agent). Until then it has one entry instead: *Test PowerShell remoting* or *Test RemoteHub Agent* ("… again" after a failure, "Testing …" and switched off while it runs). So each case below runs that test from the menu first when the tools aren't offered, and waits for "… works (…)" before it opens a tool.
+
 #### UI-TL-01 · PowerShell tab
 P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** Connection works over the agent; a second connection works over WinRM HTTPS ("Use HTTPS" on).
 
 **Steps:**
-1. FlaUI: right-click → *PowerShell*; type `Get-Service Spooler`, Enter; read the output.
+1. FlaUI: right-click → *Tools* → *Test PowerShell remoting* (*Test RemoteHub Agent* for the agent connection); wait for "… works (…)", click *OK*. Then right-click → *Tools* → *PowerShell*; type `Get-Service Spooler`, Enter; read the output.
 2. Type `Get-Ser` and press Tab; read the completion list.
 3. Type `exit`, Enter.
 4. Repeat for the WinRM HTTPS connection.
@@ -5916,7 +5965,7 @@ P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** `C:\lab\up` with a folder of files on the admin's PC.
 
 **Steps:**
-1. FlaUI: right-click → *File transfer*; type `C:\Temp` in the remote address bar, Enter.
+1. FlaUI: right-click → *Tools* → *File transfer*; type `C:\Temp` in the remote address bar, Enter.
 2. Drag the folder from the local side to the remote side.
 3. Wait for the File transfers pane to show done.
 4. PS Direct on the device: compute SHA-256 of the files; check for `*.remotehub-part`.
@@ -5932,7 +5981,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** PS Direct created `HKLM\SOFTWARE\RemoteHubLab` on the device.
 
 **Steps:**
-1. FlaUI: right-click → *Registry*; type `HKLM\SOFTWARE\RemoteHubLab` in the address bar, Enter.
+1. FlaUI: right-click → *Tools* → *Registry*; type `HKLM\SOFTWARE\RemoteHubLab` in the address bar, Enter.
 2. Right-click → *New* → string value `LabValue` = `one`.
 3. Edit it to `two`; PS Direct: `reg query HKLM\SOFTWARE\RemoteHubLab /v LabValue`.
 4. Delete it (confirm); `reg query` again.
@@ -5947,7 +5996,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** Spooler running on the device.
 
 **Steps:**
-1. FlaUI: right-click → *Services*; filter `Spooler`.
+1. FlaUI: right-click → *Tools* → *Services*; filter `Spooler`.
 2. Click *Stop*, confirm.
 3. PS Direct: `(Get-Service Spooler).Status`.
 4. Click *Start*; check again.
@@ -5961,7 +6010,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** `notepad.exe` running on the device.
 
 **Steps:**
-1. FlaUI: right-click → *Processes*; filter `notepad`.
+1. FlaUI: right-click → *Tools* → *Processes*; filter `notepad`.
 2. Select it, *End process* (Del), confirm.
 3. PS Direct: `Get-Process notepad`.
 4. Filter `lsass`, select it, press Del.
@@ -5976,7 +6025,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 **Preconditions:** WinRM off on the device; connection with "Use HTTPS" off.
 
 **Steps:**
-1. FlaUI: right-click → *Test PowerShell remoting*; in the result click *Set up on the target…*.
+1. FlaUI: right-click → *Tools* → *Test PowerShell remoting*; in the result click *Set up on the target…*. (The later UI-AGENT cases run this setup themselves when this case didn't run before them, e.g. in a rerun of single cases.)
 2. Choose "HTTPS with a new certificate for this computer …"; click *Save as .ps1…* to `C:\lab\setup.ps1`.
 3. Copy the script to the device and run it elevated via PS Direct (`Invoke-LabSetupScript`).
 4. Click *Test again*; compare the thumbprint and confirm the trust.
@@ -6313,7 +6362,7 @@ P1 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `
 P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
 
 **Expected:**
-- install succeeds without DLL and CLSID keys; Hello `autoSignIn` false. Today `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn` are still written ("Automatic sign-in allowed on this device for Administrators.") – product gap: `auto-sign-in=[AUTOSIGNIN]` outside the `CredentialProviderDll` condition
+- install succeeds without DLL and CLSID keys; Hello `autoSignIn` false; automatic sign-in not allowed – neither in `agent.json` (`noUserBehavior`, `autoSignInGroups`) nor in the policy key. Today the install's choice is still recorded (`agent.json` since 0.18.12, the policy key before; "Automatic sign-in allowed on this device for Administrators.") – product gap: `auto-sign-in=[AUTOSIGNIN]` outside the `CredentialProviderDll` condition
 
 ### 5.2 Other install paths
 
@@ -6321,7 +6370,7 @@ P3 · How: PS H · Needs: – · Status: ◐ Written, not yet run in the lab –
 P2 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
 
 **Expected:**
-- `msiexec /i <msi> ADDLOCAL=CredentialProvider` / `/i {ProductCode} REMOVE=CredentialProvider` → 0/3010, DLL and both keys added / removed; same service PID, agent.json unchanged, no new enroll line; the policy values are not touched (only RemoteHub's `auto-sign-in on/off` sets them)
+- `msiexec /i <msi> ADDLOCAL=CredentialProvider` / `/i {ProductCode} REMOVE=CredentialProvider` → 0/3010, DLL and both keys added / removed; same service PID, agent.json unchanged (its `noUserBehavior` = AutoSignIn and `autoSignInGroups` from the `AUTOSIGNIN=1` install stay – only the enroll step and RemoteHub's `auto-sign-in on/off` set them), no new enroll line; the policy key is not touched (empty: the install doesn't write it since 0.18.12)
 
 ### 5.4 Uninstall
 
@@ -6329,14 +6378,16 @@ P2 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `
 P1 · How: PS · Needs: – · Status: ✅ Automated – `A-UNINST.Tests.ps1`
 
 **Expected:**
-- after an `AUTOSIGNIN=1` install: provider DLL and both keys gone, the `NoUserBehavior` / `Rights\AutoSignIn` values the agent set and `autosignin.policy` removed
+- after an `AUTOSIGNIN=1` install (`agent.json` `noUserBehavior` = AutoSignIn, `autoSignInGroups` with Administrators; policy key empty, no `autosignin.policy` – docs/admx-design.md §11.3): provider DLL and both keys gone, `agent.json` and with it the install's choice removed, the policy key still empty
 - Steps: see the test (`lab/tests/A-UNINST.Tests.ps1`).
 
-#### A-UNINST-16 · Values IT changed after the agent wrote them
+#### A-UNINST-16 · The install's choice, IT's policy values and an older version's values
 P3 · How: PS · Needs: – · Status: ◐ Written, not yet run in the lab – `A-MORE2.Tests.ps1`
 
 **Expected:**
-- after an `AUTOSIGNIN=1` install IT edits `Rights\AutoSignIn` → uninstall (or `AUTOSIGNIN=0`) leaves that value, removes only the unchanged ones, deletes the marker
+- after an `AUTOSIGNIN=1` install (its choice in `agent.json`, policy key empty) IT sets `Rights\AutoSignIn` → uninstall removes `agent.json`, IT's value stays
+- IT sets `NoUserBehavior=SignInScreen` → `AUTOSIGNIN=0` (update through the agent) clears `noUserBehavior` / `autoSignInGroups` in `agent.json`, IT's value stays
+- migration (planted, so it doesn't depend on the previous release): the policy key and `autosignin.policy` as a version before 0.18.12 leaves them – `NoUserBehavior` unchanged, `Rights\AutoSignIn` changed by IT – then a service restart → `NoUserBehavior` moved to `agent.json`, `Rights\AutoSignIn` stays in the policy key, the marker deleted, the log says "moved NoUserBehavior" and "Rights\AutoSignIn changed since the install – left in the policy key"
 
 ### 5.5 Configuration and service behaviour
 
@@ -6425,6 +6476,7 @@ P2 · How: U · Needs: Server · Status: ◐ Written, not yet run in the lab –
 
 **Expected:**
 - first key or certificate → "Trust this server?" (*Trust and connect*); a changed key → "Server key changed"; the accepted value is kept; *Forget* in the editor → asked again next time
+- the question has no time limit: answered 30 s after it appears (a user comparing the fingerprint), *Trust and connect* still connects and *Cancel* on a changed key gives "The server's key wasn't accepted – nothing was sent."
 
 #### S-SHR-03 · Idle close
 P3 · How: H U · Needs: Server · Status: ◐ Written, not yet run in the lab – `S-SHARE2.Tests.ps1`
@@ -6510,6 +6562,8 @@ P3 · How: S C · Needs: – · Status: ◐ Written, not yet run in the lab – 
 **Expected:**
 - something hidden → the banner stays open with " · mouse and keyboard blocked" and 'Click "Disconnect" to end'
 
+Note: fails on the lab's 1024 × 768 screen – the banner stays open, but its heading is cut before " · mouse and keyboard blocked" and the subtitle is dropped. A product bug, see the findings table (D-BAN-08, input blocked).
+
 #### D-BAN-09 · Clicks pass through
 P3 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
 
@@ -6546,11 +6600,15 @@ P2 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – 
 **Expected:**
 - mouse down / wheel over a hidden app and key-down while it has the focus are dropped
 
+Note: the person at the device first clicks the marker with the console mouse, and the test waits for that click to arrive, so the marker has the keyboard focus (the consent dialog takes the foreground, as in D-INPUT); the admin's own click would be dropped in the hidden run. In run 20261016-212514 the control run saw nothing at all: the previous context had left its session parked with the app picker open in the middle of the screen, where the clicks and keys went. Each context now waits until no agent window is left before it starts.
+
 #### D-IN-09 · Input stops when the user hides
 P2 · How: H S · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
 
 **Expected:**
 - the user hides the screen → held keys released, no input passes
+
+Note: "Hide screen" is clicked on the banner by its whole label, found in the console picture (the banner is kept out of screen captures). Clicking the word "Hide" took "Hide apps…" in runs 20261016-184035 and -212514, so the screen was never hidden, the admin's Ctrl+Alt+Del got through and the read of the banner then failed on the secure desktop ("Capture … The handle is invalid"). The test waits for event 1105 before the admin's input goes out.
 
 ### 9.8 Picture, encoder, resolution, monitors
 
@@ -6559,6 +6617,8 @@ P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab –
 
 **Expected:**
 - while connected `RemoteDesktop_SuppressWhenMinimized` = 2, restored afterwards (`rdp-minimized-<sid>.txt`), log line
+
+Note: the helper sets the value for the session's user (`HKEY_USERS\<sid>`, any session, not only RDP ones) as soon as it starts – already while the consent dialog is up – and puts it back when it ends (`KeepRdpDrawing.cs`, `DesktopHelper.cs:103`). A refused connection therefore has it back at 0 before the test reads it; the test first checks that the connection was allowed. Lab run 20261016-212514 (W11 lane 2): the person's first click came after the 30 s countdown (its server was still starting), the connection was refused and D-VID-11 read 0.
 
 #### D-VID-12 · GPU picture stands still
 P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
@@ -6581,8 +6641,18 @@ P3 · How: H · Needs: – · Status: ◐ Written, not yet run in the lab – `D
 #### D-VD-05 · Off after a service restart
 P3 · How: H PS · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE2.Tests.ps1`
 
+**Preconditions:** installed with the virtual display; agent.json `"virtualDisplay": "always"`, service restarted.
+
+**Steps:**
+1. Connect; send Settings with Fit 1280×720 (switches the virtual monitor on).
+2. PS Direct: device state; kill the service process, start it again.
+3. PS Direct: device state 10 s after the agent answers again.
+
 **Expected:**
-- the virtual display is removed when the service restarts
+- While connected the virtual display device is on (status OK); agent log "virtual monitor on at 1280×720".
+- After the service started again it is switched off (disabled), although the connection was still open when the service was killed.
+
+Note: the device is disabled by design (ConfigManagerErrorCode 22) except while a connection needs it. In every lab run so far (W11 and Server 2025) it couldn't be switched on – see the finding for D-VD-05 above.
 
 ### 9.9 Clipboard
 
@@ -6707,7 +6777,8 @@ P1 · How: PS H S · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps
 
 **Expected:**
 - `HiddenApps` (full path and `aumid:`) → those windows never in the frames, whatever the user chooses
-- Steps: see the test (`lab/tests/D-PRIVACY.Tests.ps1`).
+- Steps: Notepad opens a file with a secret text in normaluser's session; the test waits (60 s) for its window, restores it if minimised and brings it to the front (an Alt tap and `SetForegroundWindow` in the session, a console click into it if that wasn't enough), keeps a console screenshot (`d-priv-apps-console.png`), then takes a control frame without the policy (`visible.png`), sets `HiddenApps` to the program of the process that owns the window and takes a frame with it (`hidden.png`). The window's title, rectangle, foreground state and program are in `d-priv-apps.json`.
+- Precondition: the secret text is in the control frame – otherwise the case fails with "precondition: the app's window wasn't in the visible picture" and the hiding wasn't tested. The text counts as read when the OCR has a word at most 3 characters off it (Server 2025 read "BHLABSECRETAPPTEXT" in run 20261016-212514); the same rule decides that it leaked into `hidden.png`.
 
 #### D-HIDE-02 · The user hides
 P1 · How: H S E · Needs: – · Status: ✅ Automated – `D-PRIVACY.Tests.ps1`
@@ -6788,21 +6859,21 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 
 **Expected:**
-- DLL and both keys gone; the `NoUserBehavior` / `Rights\AutoSignIn` values the install set removed
+- DLL and both keys gone; the install's choice (`agent.json` `noUserBehavior` / `autoSignInGroups`) cleared, the policy key stays empty
 - Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
 
 #### C-PROV-06 · RemoteHub's *Install credential provider*
 P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 
 **Expected:**
-- `AgentInstaller.ChangeCredentialProvider` over the agent → installed, DLL signed, both keys; policy `NoUserBehavior=AutoSignIn` and `Rights\AutoSignIn=S-1-5-32-544` set; message "Automatic sign-in allowed on this device"
+- `AgentInstaller.ChangeCredentialProvider` over the agent → installed, DLL signed, both keys; `agent.json` `noUserBehavior` = AutoSignIn and `autoSignInGroups` = S-1-5-32-544, the policy key not written (since 0.18.12); message "Automatic sign-in allowed on this device"
 - Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
 
 #### C-PROV-07 · RemoteHub's *Remove credential provider*
 P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 
 **Expected:**
-- removed, DLL and keys gone, policy values removed again; the agent's service process is the same as before both actions and health answers with the same certificate
+- removed, DLL and keys gone, the install's choice in `agent.json` cleared again, the policy key still empty; the agent's service process is the same as before both actions and health answers with the same certificate
 - Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
 
 #### C-PROV-08 · Another build on the device
@@ -6823,7 +6894,7 @@ P3 · How: H PS · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
 P1 · How: H · Needs: – · Status: ✅ Automated – `C-AUTO.Tests.ps1`
 
 **Expected:**
-- installed with `AUTOSIGNIN=1` (policy values and marker written by the agent), then `NoUserBehavior=SignInScreen` set as IT would → `Rights.AutoSignIn` false; a request → SignInFailed "turned off"
+- installed with `AUTOSIGNIN=1` (`agent.json` `noUserBehavior` = AutoSignIn, `autoSignInGroups` = Administrators; policy key and marker not written – since 0.18.12), then `NoUserBehavior=SignInScreen` set as IT would → `Rights.AutoSignIn` false; a request → SignInFailed "turned off". The value deleted again ("Not configured") → the install's choice applies again (the rest of C-AUTO signs in on it)
 - Steps: see the test (`lab/tests/C-AUTO.Tests.ps1`).
 
 #### C-AUTO-02 · View-only
@@ -6900,21 +6971,21 @@ P1 · How: H N C · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
 P1 · How: H N PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
 
 **Expected:**
-- adapter cut for 3 min → signed out after 2 min; event 1107
+- adapter cut for 3 min → signed out after 2 min; event 1107. Fails today when the agent notices the cut first (D-RES-10): in lab run 20261016-212514 the keep-alive ended the connection after 27 s as "closed by RemoteHub" and the session was locked at once
 - Steps: see the test (`lab/tests/C-END.Tests.ps1`).
 
 #### C-END-07 · Agent restart
 P1 · How: H PS E · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
 
 **Expected:**
-- service killed while connected → at the next start the session gets its end action (signed out when it was dropped)
+- service killed while connected → at the next start the session gets its end action (signed out when it was dropped). The "dropped" half fails today when the agent takes the harness' drop for a close (D-RES-10)
 - Steps: see the test (`lab/tests/C-END.Tests.ps1`).
 
 #### C-END-08 · Cover ends after a drop
 P2 · How: H N C · Needs: – · Status: ✅ Automated – `C-END.Tests.ps1`
 
 **Expected:**
-- a session automatic sign-in created has no banner (since 0.18.10), only the cover; the cover's helper ending during the 2 minutes → signed out at once, event 1107 "… (the screen cover ended after the connection dropped)"
+- a session automatic sign-in created has no banner (since 0.18.10), only the cover; the cover's helper ending during the 2 minutes → signed out at once, event 1107 "… (the screen cover ended after the connection dropped)". Fails today when the agent takes the harness' drop for a close (D-RES-10)
 - Steps: see the test (`lab/tests/C-END.Tests.ps1`).
 
 #### C-END-09 · Input blocked at level 1 too
@@ -6929,17 +7000,18 @@ P2 · How: H C E · Needs: – · Status: ◐ Written, not yet run in the lab �
 **Expected:**
 - `PrivacyScreen`=0 (`AutoSignInRequirePrivacyScreen` 0) → signed in, 1106 ", no privacy screen on this device", the console shows the desktop, no banner
 
-#### C-END-11 · Locked at the device during the hold
+#### C-END-11 · Ctrl+Alt+Del at the device during the hold
 P3 · How: H N C E · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
 
 **Expected:**
-- after a drop Ctrl+Alt+Del → Lock at the console → not signed out at once; signed out when the 2 min run out
+- after a drop Ctrl+Alt+Del at the console → the screen offers only Task Manager and Cancel (no Lock – the cover blocks input, privacy-mode-design §5.9); not signed out at once; signed out when the 2 min run out
+- Changed after lab run 20261016-212514: the case used to click Lock on that screen, which isn't there while the cover blocks input.
 
 #### C-END-12 · Resume brings the cover back
 P2 · How: H N C · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
 
 **Expected:**
-- an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back
+- an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back. Fails today when the agent takes the harness' drop for a close (D-RES-10)
 
 #### C-END-13 · Failed sign-in removes the cover
 P3 · How: H C · Needs: – · Status: ◐ Written, not yet run in the lab – `C-END2.Tests.ps1`
@@ -6963,7 +7035,7 @@ P1 · How: H N PS E · Needs: – · Status: ◐ Written, not yet run in the lab
 P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 
 **Expected:**
-- installed without `AUTOSIGNIN` → no `NoUserBehavior`, Hello `autoSignIn` false, no `autoSignIn` feature; a request → "turned off on this device (policy NoUserBehavior)"
+- installed without `AUTOSIGNIN` → no `noUserBehavior` / `autoSignInGroups` in `agent.json`, no `NoUserBehavior` policy value, Hello `autoSignIn` false, no `autoSignIn` feature; a request → "turned off on this device (policy NoUserBehavior)"
 - Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
 
 #### C-AUTO-08 · Rights
@@ -7005,7 +7077,7 @@ P1 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 P1 · How: PS · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 
 **Expected:**
-- `NoUserBehavior=SignInScreen` set before an `AUTOSIGNIN=1` install → left as it is (log says so), still there after the uninstall
+- `NoUserBehavior=SignInScreen` set before an `AUTOSIGNIN=1` install → left as it is; the install records its own choice in `agent.json` and the log says the policy decides ("… it decides, so automatic sign-in stays off"); still there after the uninstall
 - Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
 
 #### C-AUTO-14 · Sign-in not confirmed
@@ -7485,10 +7557,10 @@ P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab –
 - *When Windows asks for the password* = Do nothing → clipboard untouched, no toast, no "Password copied" audit
 
 #### R-RDP-12 · Switch hotkey inside RDP
-PU C · How: " in the session instead · Needs: ○ · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
+P3 · How: U C · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
 
 **Expected:**
-- Ctrl+Alt+< → next tab, Ctrl+Alt+Shift+< → previous (full screen left first); on de-DE AltGr+< types "\
+- Ctrl+Alt+< → next tab, Ctrl+Alt+Shift+< → previous (full screen left first); on de-DE AltGr+< types the pipe character in the session instead
 
 #### R-RDP-13 · Additional RDP session
 P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `UI-RDP2.Tests.ps1`
@@ -7522,7 +7594,7 @@ P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – 
 P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
 
 **Expected:**
-- end action *Sign out*: the notice after SignedIn ends "When you disconnect, the session is signed out."; Disconnect, closing the tab (x, middle click, Ctrl+W) or the group asks "Sign out on the device?" (*Disconnect* / Cancel keeps it); with Lock, or the device's `AutoSignInEndAction` = Lock, "… is locked." and nothing asked
+- end action *Sign out*: the notice after SignedIn ends "When you disconnect, the session is signed out."; Disconnect, closing the tab (x, middle click, Ctrl+W) or the group asks "Sign out on the device?" (*Disconnect* / Cancel keeps it) – the tab's own x shows only with more than one tab of the connection, with one tab the group's x closes it; with Lock, or the device's `AutoSignInEndAction` = Lock, "… is locked." and nothing asked
 
 #### UI-AG-11 · 2-minute reconnect after automatic sign-in
 P2 · How: U N · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
@@ -7625,7 +7697,7 @@ P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `U
 P2 · How: U N · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-MORE.Tests.ps1`
 
 **Expected:**
-- cut longer than 30 s (normal session) → "Connection lost – reconnecting…", "Attempt n – trying for up to 30 s.", then "The connection dropped and couldn't be restored within 30 s: <error>"; *Stop reconnecting* ends it at once
+- cut longer than 30 s (normal session) → "Connection lost – reconnecting…", "Attempt n – trying for up to 30 s.", then "The connection dropped and couldn't be restored within 30 s: <error>"; *Stop reconnecting* ends it at once ("Disconnected.", not the 30 s message; the lab allows 10 s after the click for its own UI round trips)
 
 ### 10.6 Recordings
 
@@ -7639,7 +7711,7 @@ P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab –
 P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`
 
 **Expected:**
-- the video shows "Tab not visible – recording continues when it is shown again"
+- every frame of the hidden period shows "Tab not visible – recording continues when it is shown again" – not the remote screen
 
 #### C-REC-09 · Normal exit while recording
 P2 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab – `C-REC2.Tests.ps1`

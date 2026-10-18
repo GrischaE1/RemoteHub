@@ -85,7 +85,7 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
             $console = Get-ConsoleSession
             $during = @(Get-Helpers)
             $shot = Get-LabScreenshot -Name $VmName -Path (Join-Path (Out 'session') 'console.png')
-            $resolution = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" }
+            $resolution = Get-LabResolution -Name $VmName
             Set-Content $done 'done'
             $r = Receive-LabDesktop $job
             # the helper ends with the session

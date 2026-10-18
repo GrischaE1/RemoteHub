@@ -103,7 +103,8 @@ Provided by the owner, not built by the lab:
 3. Windows Update automatic restarts off (results must not depend on updates running during a test).
 4. Power plan: never sleep, never turn off the display (the screen must stay capturable).
 5. A **Standard** checkpoint taken while running (saved state keeps `Admin`'s session). The lab always reverts to the
-   **newest** checkpoint, whatever its name – refreshing the image = taking a new checkpoint.
+   **newest** checkpoint, whatever its name – refreshing the image = taking a new checkpoint. Names starting with
+   `RHLAB ` are the lab's own run checkpoints (§10) and are never reverted to as the base – don't use that prefix.
 
 Unactivated is fine (KMS client key). The "Activate Windows" watermark is part of every screenshot; template matching
 for the consent dialog only looks at the dialog's area.
@@ -201,8 +202,8 @@ Location `lab/RemoteHub.TestLab/` (Windows PowerShell 5.1 and 7, `Set-StrictMode
 | Area | Functions |
 |---|---|
 | Config | `Get-LabConfig` (lab.json + lab.local.json), `Get-LabVm`, `Get-LabCredential` |
-| VM | `Reset-LabVm` (revert to checkpoint, start, wait), `Stop-LabVm` (turn lab VMs off), `Wait-LabVm` (heartbeat + PS Direct answers), `Restart-LabVm` (guest restart, waits for the new boot), `Get-LabVmAddress` |
-| Guest | `Invoke-LabGuest` (PS Direct, admin account by default), `Copy-LabFile` / `Get-LabFile` (PS Direct session, creating folders) |
+| VM | `Reset-LabVm` (revert to the VM's own checkpoint, start, wait), `Initialize-LabVm` (reuse or set up a state, run checkpoints – §10), `Remove-LabRunCheckpoints`, `Stop-LabVm` (turn lab VMs off), `Wait-LabVm` (heartbeat + PS Direct answers), `Restart-LabVm` (guest restart, waits for the new boot), `Get-LabVmAddress` |
+| Guest | `Invoke-LabGuest` (PS Direct, admin account by default), `Copy-LabFile` / `Get-LabFile` (PS Direct session, creating folders) – one session per VM and account is kept for the test file and reset before each call (variables, functions, preferences, environment, location, strict mode back to a new session's), so a call takes tens of ms instead of 0.5–2 s; dropped when the module reverts, restarts, stops or checkpoints the VM, and never re-sent once a block may have run. `RHLAB_SESSION_CACHE=0` or `Invoke-LabGuest -NewSession`: a session per call |
 | Console | `Get-LabScreenshot` (PNG at the guest's resolution, reports a blank screen), `Send-LabText`, `Send-LabKey`, `Send-LabKeyCombo`, `Send-LabMouse`, `Send-LabCtrlAltDel` |
 | Person / UI | `Invoke-LabPerson` (RhPerson.ps1: windows, read, click, pin, clipboard, screen OCR, uia), `Get-LabOcr`, `Start-LabMarker` / `Get-LabMarker` (what reached the device), `Install-LabClient` / `Start-LabClient` / `Invoke-LabUi` (RemoteHub in the VM) |
 | Jump host | `Start-LabJumpHost`, `Stop-LabJumpHost`, `Move-LabVmBehindJump`, `Restore-LabVmNetwork`, `Use-LabJump`, `Invoke-LabJump` |
@@ -283,6 +284,17 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
   (`-Tag A-UPD-04` runs one case). After the run `Start-LabRun.ps1` writes the PR report `report.md`
   (`New-LabReport.ps1`).
 - Requests run one after another, and so do the VMs within a run. Only the VM under test is on (plus the jump host while a jump case runs): a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
+- Reuse between files: a file that needs "agent and/or RemoteHub installed, an account signed in" calls
+  `Initialize-LabVm`, which keeps the VM when it is already in that state (`LabRoot\state\<Id>.json` plus a token in
+  the guest, checked before reuse) and otherwise reverts and installs. The first time a VM is set up for a state in a
+  run, it also takes a **run checkpoint** of the running VM, `RHLAB <run id> <state key>` (the key covers the options,
+  the MSIs and the VM's own checkpoint); its state record goes to `LabRoot\state\run-checkpoints\<Id>\`. A later file
+  that needs the same state – after a failed file, `Set-LabVmDirty` or an install test – reverts to it instead of
+  installing again (minutes saved per file), then the guest clock is synced and the reuse check runs; a checkpoint that
+  fails it is deleted and the state built the full way. `Reset-LabVm` and the install/upgrade tests never start from a
+  run checkpoint. The runner removes them at the end of the run and at the start of the next (a cancelled run leaves
+  them; `Remove-LabRunCheckpoints` by hand). Off: `Invoke-LabTests.ps1 -NoSnapshots` or `RHLAB_SNAPSHOTS=0`;
+  `-NoReuse` turns off both.
 - Measured: SMOKE on W11-26H2-en-US ≈ 110 s. Target: one VM × all scenarios < 30 min.
 
 ## 11. Open questions

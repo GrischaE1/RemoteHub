@@ -23,6 +23,22 @@ BeforeAll {
     function Secure($r) { @($r.layouts | ForEach-Object { $_.layout.secureDesktop }) }
     function Get-Sas([datetime]$Since) { @(Get-LabAgentLog -Name $VmName -Since $Since | Where-Object { $_ -match 'Ctrl\+Alt\+Del for' }) }
     function Lock-State { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 } }
+    # The person allows the connection (the agent's dialog counts down 30 s). Not clicked: the harness' parked steps are
+    # released so it ends, and the context fails here with what the person read - not later at a missing picture.
+    function Allow([string]$o, [string[]]$Release = @(), [string]$Account = 'User') {
+        $a = Invoke-LabPerson -Name $VmName -Account $Account -Do click -Text 'Allow' -TimeoutSec 60
+        if (-not ($a -and $a.PSObject.Properties['clicked'] -and $a.clicked)) {
+            foreach ($n in $Release) { Release $o $n }
+            $read = if ($a -and $a.PSObject.Properties['lines']) { @($a.lines) -join ' | ' } else { '' }
+            throw "$(Split-Path $o -Leaf): Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $read"
+        }
+        $a
+    }
+    # A name as OCR may read it: any 5 letters of it in a row ("normaluse(" and "maluser" for normaluser).
+    function NameLike([string]$n) {
+        $k = [Math]::Min(5, $n.Length)
+        (@(0..($n.Length - $k) | ForEach-Object { [regex]::Escape($n.Substring($_, $k)) }) -join '|')
+    }
 
     $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
     $install = $init.Install
@@ -61,7 +77,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 # Lock from the options screen
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options3.png' }, (Mark $o 'options3'), @{ do = 'click'; fromFile = (Join-Path $o 'lock-xy.txt') }
                 @{ do = 'sleep'; seconds = 6 }, @{ do = 'frame'; out = 'locked.png' }, (Mark $o 'locked'), (Park $o 'go'), @{ do = 'close' })
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+            $null = Allow $o @('go')
             Reached $o 'options2'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options2.png') -Text 'Task' ; if (-not $xy) { $xy = '0,0' }
             Set-Content (Join-Path $o 'taskmgr-xy.txt') $xy
@@ -164,8 +180,11 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $o = Out 'lock'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }
-                @{ do = 'sleep'; seconds = 3 }, @{ do = 'frame'; out = 'locked.png' }, (Mark $o 'connected'), (Park $o 'unlocked')
-                @{ do = 'wait'; state = 'WaitingForUser'; timeout = 60 }, @{ do = 'frame'; out = 'held.png' }, (Mark $o 'asking')
+                # Windows 11's "Press Ctrl+Alt+Delete" screen and the held picture send no new frame (D-LOCK-01, D-LOCK-05):
+                # short frame timeouts, so the wait doesn't eat the consent dialog's 30 s (run 20261016-212514: the 30 s
+                # default for held.png ran out with the countdown and normaluser's answer came too late - Denied)
+                @{ do = 'sleep'; seconds = 3 }, @{ do = 'frame'; out = 'locked.png'; timeout = 5 }, (Mark $o 'connected'), (Park $o 'unlocked')
+                @{ do = 'wait'; state = 'WaitingForUser'; timeout = 60 }, @{ do = 'frame'; out = 'held.png'; timeout = 5 }, (Mark $o 'asking')
                 @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }, @{ do = 'sleep'; seconds = 2 }, @{ do = 'frame'; out = 'allowed.png' }
                 # Win+L by the user while connected: the connection stays
                 (Mark $o 'allowed'), (Park $o 'relocked'), @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'relocked.png' }, @{ do = 'close' })
@@ -173,13 +192,17 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             Unlock-LabSession -Name $VmName
             Release $o 'unlocked'
             Reached $o 'asking'
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+            try { $null = Allow $o @('relocked') }
+            catch { Stop-LabInSession -Name $VmName -Task $marker.Task; throw }
             Reached $o 'allowed'
             Lock-LabSession -Name $VmName
             Release $o 'relocked'
             $l.allow = Receive-LabDesktop $job
             Unlock-LabSession -Name $VmName
-            $l.heldMagenta = Get-LabColorShare -Path (Join-Path $o 'held.png')
+            # no held.png: no new picture came while the user was asked - nothing of their desktop either
+            $held = Join-Path $o 'held.png'
+            $l.heldPicture = Test-Path $held
+            $l.heldMagenta = if ($l.heldPicture) { Get-LabColorShare -Path $held } else { 0 }
             $l.allowedMagenta = Get-LabColorShare -Path (Join-Path $o 'allowed.png')
             # the same, and the user refuses
             Lock-LabSession -Name $VmName
@@ -238,7 +261,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'password.png' }, @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 90 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }, @{ do = 'close' })
             Reached $o 'asking'
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+            $null = Allow $o
             $r = Receive-LabDesktop $job
             $unlocked = -not (Lock-State)
             $pwOcr = Get-LabOcr -Path (Join-Path $o 'password.png')
@@ -246,7 +269,9 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
         }
 
         It 'D-SAS-06 on the lock screen: Ctrl+Alt+Del shows the password field, the typed password unlocks, then normaluser is asked' -Tag 'D-SAS-06' {
-            $pwOcr.text | Should -Match ([regex]::Escape($vm.UserAccount))
+            # the name is small on the wallpaper: OCR read "maluser ... normaluse(" in run 20261016-212514
+            $pwOcr.text | Should -Match 'Password|PIN'
+            $pwOcr.text | Should -Match (NameLike $vm.UserAccount)
             $unlocked | Should -BeTrue
             (Of $r 'WaitingForUser').Count | Should -BeGreaterThan 0
             @($r.statuses | Where-Object state -eq 'Connected')[-1] | Should -Not -BeNullOrEmpty
@@ -259,9 +284,11 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }
                 (Mark $o 'connected'), (Park $o 'uac-up'), @{ do = 'sleep'; seconds = 3 }, @{ do = 'frame'; out = 'uac.png' }
-                # normaluser isn't an admin: the prompt asks for an admin's credentials
-                @{ do = 'keys'; text = "$($vm.AdminAccount)`t$password`n"; delayMs = 30 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'close' })
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+                # normaluser isn't an admin: the prompt offers the device's administrators with the first one (Admin, the
+                # console account) chosen and its password field focused - so only the password is typed (run
+                # 20261016-212514 typed "PSAdmin<Tab>" into that field and nothing was elevated)
+                @{ do = 'keys'; text = "$password`n"; delayMs = 30 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'close' })
+            $null = Allow $o @('uac-up')
             Reached $o 'connected'
             $task = Start-LabInSession -Name $VmName -ScriptBlock { Start-Process cmd.exe -ArgumentList '/k title RHLAB-ELEVATED' -Verb RunAs }
             $until = (Get-Date).AddSeconds(60)
@@ -271,14 +298,18 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $elevated = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object CommandLine -match 'RHLAB-ELEVATED' | ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User })
             }
+            # a prompt left open keeps the user's session on the secure desktop: the person's screen capture there fails
+            # ("The handle is invalid") and the next contexts can't answer the agent - closed here whatever happened
+            $uacLeft = Invoke-LabGuest -Name $VmName -ScriptBlock { $p = @(Get-Process consent -ErrorAction SilentlyContinue); $p | Stop-Process -Force -ErrorAction SilentlyContinue; $p.Count }
             Stop-LabInSession -Name $VmName -Task $task
             $uacOcr = Get-LabOcr -Path (Join-Path $o 'uac.png')
-            Save 'uac' @{ R = $r; Elevated = $elevated; Ocr = $uacOcr }
+            Save 'uac' @{ R = $r; Elevated = $elevated; Ocr = $uacOcr; PromptLeftOpen = $uacLeft }
         }
 
-        It 'D-UAC-01 UAC in normaluser''s session is in the picture and usable: an admin''s credentials typed through the session elevate' -Tag 'D-UAC-01' {
+        It 'D-UAC-01 UAC in normaluser''s session is in the picture and usable: an admin''s password typed through the session elevates' -Tag 'D-UAC-01' {
             $uacOcr.text | Should -Match 'User Account Control|Do you want to allow'
-            @($elevated) | Should -Contain $vm.AdminAccount
+            $uacOcr.text | Should -Match (NameLike $vm.ConsoleAccount) -Because 'the prompt offers the console account first and the test types only its password'
+            @($elevated) | Should -Contain $vm.ConsoleAccount
         }
     }
 
@@ -290,7 +321,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }
                 (Mark $o 'connected'), @{ do = 'wait'; state = 'Paused'; timeout = 60 }, (Mark $o 'paused'), (Park $o 'back')
                 @{ do = 'wait'; state = 'Connected'; timeout = 90 }, @{ do = 'sleep'; seconds = 3 }, @{ do = 'close' })
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+            $null = Allow $o @('back')
             Reached $o 'connected'
             $null = Invoke-LabInSession -Name $VmName -ScriptBlock { tsdiscon.exe }
             Reached $o 'paused' 90
@@ -318,27 +349,42 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
     Context 'fast user switching' {
         BeforeAll {
             $o = Out 'fus'
+            # Admin is asked in a session that has just started: the person's first call there is slow (20-45 s), so the
+            # dialog counts down longer than the default 30 s
+            Set-LabAgentPolicy -Name $VmName -Values @{ ConsentTimeoutSeconds = 90 }
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }
                 # Switch user through the picture, then Admin's tile and password
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options.png' }, (Mark $o 'options'), @{ do = 'click'; fromFile = (Join-Path $o 'switch-xy.txt') }
                 @{ do = 'sleep'; seconds = 8 }, @{ do = 'frame'; out = 'tiles.png' }, (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }
-                @{ do = 'sleep'; seconds = 4 }, @{ do = 'keys'; text = "$password`n" }
-                @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }, @{ do = 'close' })
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+                @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }, (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
+                @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }, @{ do = 'close' })
+            $null = Allow $o @('type')
             Reached $o 'options'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'tiles'
-            $xy = Find-LabPictureText -Path (Join-Path $o 'tiles.png') -Text $vm.ConsoleAccount -Last; Set-Content (Join-Path $o 'admin-xy.txt') $(if ($xy) { $xy } else { '0,0' })
-            Reached $o 'asking'
-            $asked = Invoke-LabPerson -Name $VmName -Account Console -Do read -TimeoutSec 60
-            $null = Invoke-LabPerson -Name $VmName -Account Console -Do click -Text 'Allow' -TimeoutSec 60
+            # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
+            # to the device's accounts, not as an exact word (an exact "Admin" clicked 0,0 in D-ROBUST)
+            $tile = Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'tiles.png') -Account $vm.ConsoleAccount
+            Set-Content (Join-Path $o 'admin-xy.txt') $(if ($tile.XY) { $tile.XY } else { '0,0' })
+            Reached $o 'selected'
+            # the chosen tile's name stands large in the middle; when it isn't Admin the password signs normaluser in
+            # again and nobody new is asked - the context stops here with the pictures as evidence
+            $chosen = Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'selected.png') -Account $vm.ConsoleAccount -Selected
+            Release $o 'type'
+            if (-not $chosen.Selected) {
+                Set-LabAgentPolicy -Name $VmName -Clear
+                throw "fus: $($vm.ConsoleAccount)'s tile wasn't chosen on the sign-in screen (d-secure-fus\tiles.png, selected.png); tile list read: $(@($tile.Lines) -join ', '); chosen: $(@($chosen.Lines) -join ', ')"
+            }
+            Reached $o 'asking' 240
+            try { $asked = Allow $o -Account Console }
+            finally { Set-LabAgentPolicy -Name $VmName -Clear }
             $fus = Receive-LabDesktop $job
-            Save 'fus' @{ R = $fus; Asked = $asked }
+            Save 'fus' @{ R = $fus; Asked = $asked; Tile = $tile; Chosen = $chosen }
         }
 
         It 'D-FUS-01 Switch user to Admin while connected: the picture follows the console, Admin is asked' -Tag 'D-FUS-01' {
-            $asked.found | Should -BeTrue
+            $asked.clicked | Should -BeTrue
             @($fus.statuses | Where-Object state -eq 'Connected').Count | Should -BeGreaterOrEqual 2
         }
 
@@ -351,6 +397,8 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
         BeforeAll {
             $s = [ordered]@{}
             # nobody signed in: the console account (Admin) was last; the admin signs in through the picture
+            # the agent's log of the contexts above, before the revert below takes it (run 20261016-212514 kept only this context's)
+            Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-secure-agent-logs-before-signin')
             Clear-LabAutoLogon -Name $VmName
             Reset-LabVm -Name $VmName
             $own = Install-LabAgent -Name $VmName
@@ -368,20 +416,38 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $o = Out 'signout'
             $job = Start-LabDesktop -Name $VmName -Pin $own.pin -Account Console -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
-                (Mark $o 'connected'), @{ do = 'sleep'; seconds = 25 }, @{ do = 'frame'; out = 'after.png' }, @{ do = 'close' })
+                (Mark $o 'connected'), (Park $o 'signedout' 240), @{ do = 'sleep'; seconds = 5 }, @{ do = 'frame'; out = 'after.png' }, @{ do = 'close' })
             Reached $o 'connected'
-            $null = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { shutdown.exe /l }
+            # started, not waited for: the sign-out ends the session task before it can report (run 20261016-212514:
+            # "no result from the session task after 120 s"); the sign-out itself is waited for on the device
+            $out = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { shutdown.exe /l }
+            $until = (Get-Date).AddSeconds(180)
+            $s.signedOut = $false
+            while ((Get-Date) -lt $until) {
+                $s.signedOut = -not (Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                        param($a) @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $a }).Count -gt 0 })
+                if ($s.signedOut) { break }
+                Start-Sleep -Seconds 2
+            }
+            Release $o 'signedout'
+            Stop-LabInSession -Name $VmName -Task $out
             $s.signout = Receive-LabDesktop $job
-            # someone else signs in at the console while PSAdmin is connected to the sign-in screen: they are asked
+            # someone else signs in at the console while PSAdmin is connected to the sign-in screen: they are asked - in a
+            # session that has just started, where the person's first call is slow (20-45 s): a longer countdown
+            Set-LabAgentPolicy -Name $VmName -Values @{ ConsentTimeoutSeconds = 90 }
             $o = Out 'other'
             $job = Start-LabDesktop -Name $VmName -Pin $own.pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
-                (Mark $o 'connected'), @{ do = 'wait'; state = 'WaitingForUser'; timeout = 180 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }
+                (Mark $o 'connected'), @{ do = 'wait'; state = 'WaitingForUser'; timeout = 180 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }
                 @{ do = 'sleep'; seconds = 2 }, @{ do = 'close' })
             Reached $o 'connected'
-            Unlock-LabSession -Name $VmName -Account Console
-            Reached $o 'asking'
-            $null = Invoke-LabPerson -Name $VmName -Account Console -Do click -Text 'Allow' -TimeoutSec 60
+            try {
+                Unlock-LabSession -Name $VmName -Account Console
+                Reached $o 'asking'
+                # not Allow: a miss here fails D-SIGNIN-03 only, not the cases above
+                $s.allowOther = Invoke-LabPerson -Name $VmName -Account Console -Do click -Text 'Allow' -TimeoutSec 60
+            }
+            finally { Set-LabAgentPolicy -Name $VmName -Clear }
             $s.other = Receive-LabDesktop $job
             Save 'signin' $s
         }
@@ -403,12 +469,14 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
         }
 
         It 'D-SIGNIN-04 signing out while connected: the picture follows to the sign-in screen' -Tag 'D-SIGNIN-04' {
+            $s.signedOut | Should -BeTrue -Because "shutdown /l in $($vm.ConsoleAccount)'s session signs them out (d-secure-signout\after.png)"
             (Of $s.signout 'Ended').Count | Should -Be 0
             @(Secure $s.signout)[-1] | Should -BeTrue
         }
 
         It 'D-SIGNIN-03 someone signs in at the console while connected: the helper follows, they are asked, Allow continues' -Tag 'D-SIGNIN-03' {
             (Of $s.other 'WaitingForUser').Count | Should -BeGreaterThan 0
+            $s.allowOther.clicked | Should -BeTrue -Because "Allow in $($vm.ConsoleAccount)'s session; OCR read: $(@($s.allowOther.lines) -join ' | ')"
             @($s.other.statuses | Where-Object state -eq 'Connected').Count | Should -BeGreaterOrEqual 2
         }
     }

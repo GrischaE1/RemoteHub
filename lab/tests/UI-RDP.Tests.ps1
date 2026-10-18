@@ -126,13 +126,91 @@ BeforeAll {
             }
         }
     }
-    # the connection's Edit dialog: -Do picks tabs and values, then Save (as UI-RDP2 / C-REC2)
-    function EditConnection([scriptblock]$Do, [string]$Node = 'Device') {
-        Menu 'Edit*' -Node $Node
-        $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
-        & $Do
-        $null = Ui 'Save' -Title 'Edit connection'
+    # What the client shows, written to ui-rdp-<name>.json / .png: a screenshot, whether the editor is open, the top-level
+    # windows and RemoteHub's elements (its owned dialogs are listed inside the main window), RemoteHub's process (id and
+    # start time - a restart shows), its crash files, errors in the Application log and the end of its diagnostic log.
+    # The setup once failed with the editor gone after its page click and nothing recorded to say why.
+    function ClientState([string]$Name) {
+        Shot $Name
+        $s = [ordered]@{ at = (Get-Date).ToString('HH:mm:ss') }
+        try { $s.editorOpen = [bool](Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } catch { $s.editorOpen = "$_" }
+        try { $s.topWindows = TopWindows } catch { $s.topWindows = "$_" }
+        try { $s.mainItems = @((Ui '*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 120) } catch { $s.mainItems = "$_" }
+        try {
+            $s.client = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                param($u)
+                [ordered]@{
+                    process = @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Id) started $($_.StartTime.ToString('HH:mm:ss')) responding $($_.Responding): $($_.MainWindowTitle)" })
+                    crash   = @(Get-ChildItem "C:\Users\$u\AppData\Local\RemoteHub\crash" -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name) $($_.LastWriteTime.ToString('HH:mm:ss'))" })
+                    events  = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-15) } -ErrorAction SilentlyContinue |
+                            Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', '.NET Runtime', 'Windows Error Reporting' -and $_.Message -match 'RemoteHub' } |
+                            Select-Object -First 10 | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.ProviderName) $($_.Id): $(($_.Message -split "`n" | Select-Object -First 15) -join ' ')" })
+                    diagLog = @(Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 40 -ErrorAction SilentlyContinue)
+                }
+            }
+        }
+        catch { $s.client = "$_" }
+        Save $Name $s
+    }
+    # the connection's Edit dialog: -Do picks tabs and values, then Save (as UI-RDP2 / C-REC2). With -Trace the client's
+    # state is recorded once the editor is open (ClientState "edit-<trace>-open"); a failing step always records it
+    # ("edit-<trace>-fail") before the error goes on.
+    function EditConnection([scriptblock]$Do, [string]$Node = 'Device', [string]$Trace = '') {
+        $tag = if ($Trace) { "edit-$Trace" } else { 'edit' }
+        try {
+            Menu 'Edit*' -Node $Node
+            $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
+            if ($Trace) { ClientState "$tag-open" }
+            & $Do
+            $null = Ui 'Save' -Title 'Edit connection'
+        }
+        catch {
+            $err = $_
+            ClientState "$tag-fail"
+            throw $err
+        }
         Start-Sleep -Seconds 2
+    }
+    # Windows' credential dialog of the RDP client, shown within -TimeoutSec (Wait-LabCredentialDialog: UI Automation
+    # lists it inside RemoteHub's window with nothing in it, so an element search in it never matches)
+    function CredDialog([int]$TimeoutSec = 60, [string]$Account = 'Console') { Wait-LabCredentialDialog -Name $VmName -Account $Account -TimeoutSec $TimeoutSec }
+    # RemoteHub running in the console account's session. A context before may have ended with it stopped or with the
+    # console still signing in (lab run 20261017-054704: the switch back from normaluser timed out, and every later
+    # context found no RemoteHub window).
+    function Ensure-Client {
+        $up = try { @(TopWindows | Where-Object { $_ -like 'RemoteHub*' -or $_ -like '* RemoteHub' }).Count -gt 0 } catch { $false }
+        if ($up) { return }
+        Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 300
+        try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
+        $script:task = Start-LabClient -Name $VmName
+    }
+    # A connected RDP tab of Device, whatever the contexts before left: the NTLM policy (saved credentials need it), the
+    # RDP tab selected if there is one, else a new one - "Remote desktop via RDP" once the agent is the connection's
+    # way, "Connect" before.
+    function Ensure-RdpTab([int]$TimeoutSec = 90) {
+        Allow-NtlmDelegation
+        $null = Ui 'Remote desktop' -Value realclick -Optional -TimeoutSec 5
+        if (Wait-RdpTab 10) { return $true }
+        $r = Ui 'Device' -Value 'menu:Remote desktop via RDP' -Optional
+        if (-not $r.found -or ($r.PSObject.Properties['error'] -and $r.error)) { Key 1B; Menu 'Connect' }
+        Wait-RdpTab $TimeoutSec
+    }
+    # The agent on the device, paired with Device. Installed through the RDP clipboard by the A-CLIP context; when that
+    # didn't happen (a tag-filtered run, or that install failed) by hand as Install-AgentByHand does. Needs the device on
+    # its own network (before the jump host context moves it).
+    function Ensure-Agent {
+        if ("$((Get-LabAgentState -Name $device.Name).Service.State)" -eq 'Running') { return 'already installed' }
+        $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
+        Install-AgentByHand -Node 'Device' -TargetVm $device.Name
+    }
+    # An agent desktop tab of Device, allowed by the person at the device
+    function Ensure-AgentDesktop {
+        $null = Ensure-Agent
+        if ((Ui 'Desktop (agent)' -Value exists -Optional -TimeoutSec 3).found) { return $true }
+        Menu 'Connect'
+        $null = Ui 'Connect' -Optional -TimeoutSec 15
+        $null = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60
+        (Ui 'Send Ctrl+Alt+Del' -Value exists -Optional -TimeoutSec 60).found
     }
     # the connection's audit log window (Audit log...), its rows as text
     function AuditText([string]$Node = 'Device') {
@@ -141,11 +219,14 @@ BeforeAll {
         $null = Ui 'Close' -Title 'Audit log*' -Optional -TimeoutSec 5
         (@($l.items) -join "`n")
     }
-    # RemoteHub's staging folders for agent installs (%TEMP%\RemoteHub-Agent\<12 hex>) of the console account
+    # RemoteHub's staging folders for agent installs (%TEMP%\RemoteHub-Agent\<12 hex>) of the console account, always as
+    # an array: an empty answer unrolled to $null, and @($null).Count is 1 (lab run 20261017-054704: A-CLIP-02 read "1
+    # folder left" when there was none)
     function Staged {
-        @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+        $f = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
                 param($u) @(Get-ChildItem "C:\Users\$u\AppData\Local\Temp\RemoteHub-Agent" -Directory -ErrorAction SilentlyContinue | Where-Object Name -match '^[0-9a-f]{12}$' | ForEach-Object Name)
-            })
+            } | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        , [string[]]$f
     }
     # Install RemoteHub Agent... with "Copy the installer and the enrollment file to the clipboard" (Update... once
     # installed): the dialog's own install path that needs no WinRM
@@ -210,24 +291,9 @@ foreach ($x in $f) { [void]$c.Add($x.FullName) }
 [System.Windows.Forms.Clipboard]::SetFileDropList($c)
 'JSON:' + (ConvertTo-Json -Compress -InputObject @($f | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash } }))
 '@
-    # Explorer's "Paste" into an empty folder (the shell handles the RDP clipboard's file streams), until __COUNT__
-    # files are there and their size stays the same
-    $code.paste = @'
-$d = '__DIR__'
-if (Test-Path $d) { Remove-Item $d -Recurse -Force }
-$null = New-Item -ItemType Directory -Path $d -Force
-$sh = New-Object -ComObject Shell.Application
-$sh.NameSpace($d).Self.InvokeVerb('Paste')
-$until = (Get-Date).AddSeconds(240); $last = -1; $stable = $false
-do {
-    Start-Sleep -Seconds 2
-    $files = @(Get-ChildItem $d -File -ErrorAction SilentlyContinue)
-    $size = [long]($files | Measure-Object Length -Sum).Sum
-    $stable = $files.Count -ge __COUNT__ -and $size -eq $last
-    $last = $size
-} while (-not $stable -and (Get-Date) -lt $until)
-'JSON:' + (ConvertTo-Json -Compress -InputObject @($files | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash } }))
-'@
+    # (Explorer's "Paste" of the RDP clipboard's files: Invoke-LabPaste, which pumps messages while the shell copies -
+    # in lab run 20261017-054704 not one file arrived either way with a plain Start-Sleep (UI-CP-10, A-CLIP-01) while
+    # text and pictures did)
     $code.clipFiles = @'
 Add-Type -AssemblyName System.Windows.Forms
 'JSON:' + (ConvertTo-Json -Compress -InputObject @([System.Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { [string]$_ }))
@@ -262,14 +328,45 @@ $i = New-TestImage __SEED__
 [System.Windows.Forms.Clipboard]::SetImage($i)
 'JSON:' + (ConvertTo-Json -Compress -InputObject @{ hash = (Get-PixelHash $i) })
 '@
+    # waits until the clipboard holds the picture with the wanted pixels (or 30 s). When another one is there, also how it
+    # differs from the picture sent (made again from __SEED__): the clipboard's formats, the pixels changed, the largest
+    # difference in one colour, and whether it is the picture upside down or moved sideways (lab run 20261017-054704:
+    # 96 x 64 arrived both ways with other pixels, nothing recorded to tell why)
     $code.imageGet = $imgLib + @'
-$want = '__WANT__'; $got = ''
+$want = '__WANT__'; $got = ''; $img = $null
 $until = (Get-Date).AddSeconds(30)
 do {
-    try { $got = Get-PixelHash ([System.Windows.Forms.Clipboard]::GetImage()) } catch { }
+    try { $img = [System.Windows.Forms.Clipboard]::GetImage(); $got = Get-PixelHash $img } catch { }
     if ($got -ne $want) { Start-Sleep -Milliseconds 700 }
 } while ($got -ne $want -and (Get-Date) -lt $until)
-'JSON:' + (ConvertTo-Json -Compress -InputObject @{ hash = $got })
+$info = [ordered]@{ formats = @(try { [System.Windows.Forms.Clipboard]::GetDataObject().GetFormats() } catch { "error: $_" }) }
+if ($got -ne $want -and $img) {
+    $a = New-TestImage __SEED__
+    $b = New-Object System.Drawing.Bitmap $img
+    $info.size = "$($b.Width)x$($b.Height) $($img.PixelFormat)"
+    if ($a.Width -eq $b.Width -and $a.Height -eq $b.Height) {
+        $w = $a.Width; $h = $a.Height
+        $pa = New-Object int[] ($w * $h); $pb = New-Object int[] ($w * $h)
+        for ($y = 0; $y -lt $h; $y++) { for ($x = 0; $x -lt $w; $x++) { $pa[$y * $w + $x] = $a.GetPixel($x, $y).ToArgb() -band 0xFFFFFF; $pb[$y * $w + $x] = $b.GetPixel($x, $y).ToArgb() -band 0xFFFFFF } }
+        $changed = 0; $max = 0; $flipped = 0
+        for ($i = 0; $i -lt $pa.Length; $i++) {
+            $p = $pa[$i]; $q = $pb[$i]
+            if ($p -ne $q) {
+                $changed++
+                foreach ($s in 0, 8, 16) { $dd = [Math]::Abs((($p -shr $s) -band 0xFF) - (($q -shr $s) -band 0xFF)); if ($dd -gt $max) { $max = $dd } }
+            }
+            if ($pa[($h - 1 - [int][Math]::Floor($i / $w)) * $w + ($i % $w)] -eq $q) { $flipped++ }
+        }
+        $shifts = @(foreach ($s in -4..4) {
+                if ($s -eq 0) { continue }
+                $same = 0; $n = 0
+                for ($y = 0; $y -lt $h; $y++) { for ($x = [Math]::Max(0, -$s); $x -lt [Math]::Min($w, $w - $s); $x++) { $n++; if ($pa[$y * $w + $x + $s] -eq $pb[$y * $w + $x]) { $same++ } } }
+                "$s=$same/$n"
+            })
+        $info.changed = "$changed of $($pa.Length)"; $info.maxDelta = $max; $info.upsideDownEqual = "$flipped of $($pa.Length)"; $info.shiftedEqual = $shifts
+    }
+}
+'JSON:' + (ConvertTo-Json -Compress -Depth 4 -InputObject @{ hash = $got; info = $info })
 '@
     # \\tsclient\C in the RDP session (it shows up a little after the sign-in when drives are redirected)
     $code.tsclient = @'
@@ -318,7 +415,11 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
             $env:COMPUTERNAME
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name
-        # RemoteHub installed (kept from an earlier file when it left the VM so; no NTLM delegation policy - R-RDP-01)
+        # RemoteHub installed, and no NTLM delegation policy (R-RDP-03's precondition). Always from the checkpoint (the
+        # run's or the VM's own), never a VM an earlier file used: UI-RDP2, UI-JUMP, C-REC and C-REC2 set that policy
+        # and take it out of the registry afterwards, but Windows' CredSSP needn't read it again before a restart - in
+        # lab run 20261017-054704 (right after UI-RDP2 on the same VM) the saved credentials went through without it.
+        Set-LabVmDirty -Name $VmName
         $null = Initialize-LabVm -Name $VmName -Client
         $script:task = Start-LabClient -Name $VmName
         # credentials for this item, "Local account on the target computer (.\user)" ticked: .\PSAdmin
@@ -326,8 +427,11 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
         # no question about the device's self-signed RDP certificate: with "Warn" (the default, AuthenticationLevel 2)
         # the RDP control stops at "The identity of the remote computer cannot be verified" and nothing here answers it
         # (Esc on it ends the tab with "Disconnected (code 263)"). Also goes into the exported .rdp (R-RDP-08).
-        EditConnection {
-            $null = Ui 'Security & session' -Title 'Edit connection'
+        # (Each step recorded: in the 2026-10-17 run the editor was gone after the page click, cause unknown.)
+        EditConnection -Trace 'setup' {
+            $page = Ui 'Security & session' -Title 'Edit connection'
+            ClientState 'edit-setup-page'
+            Save 'edit-setup-pageclick' $page
             $null = Ui 'Server authentication' -Title 'Edit connection' -Value 'choose:Connect without warning'
         }
     }
@@ -354,11 +458,17 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         BeforeAll {
             $n = [ordered]@{}
             Step $n connect {
+                # the precondition on this PC: the policy's values, if any (none expected)
+                $n.policy = @(Invoke-LabGuest -Name $VmName -ScriptBlock {
+                        $k = Get-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation' -ErrorAction SilentlyContinue
+                        if ($k) { @($k.Property | ForEach-Object { "$_=$($k.GetValue($_))" }) }
+                    } | Where-Object { $_ } | ForEach-Object { [string]$_ })
                 Clear-DeviceSessions
                 Menu 'Connect'
                 Start-Sleep -Seconds 25
                 # the tab's overlay (Windows' own text, RdpSession.OnDisconnected) and Windows' credential dialog, if any
                 $n.overlay = @((Ui '*' -Value list).items)
+                $n.promptShown = CredDialog 5
                 $n.prompt = @((Ui '*' -Title 'Windows Security' -Value list -Optional -TimeoutSec 5).items)
                 $n.screen = Screen
                 Shot 'ntlm'
@@ -370,6 +480,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
 
         It 'R-RDP-03 non-domain device, no "Allow delegating saved credentials with NTLM-only" policy: Windows'' message about saved credentials' -Tag 'R-RDP-03' {
+            @($n.policy) | Should -BeNullOrEmpty -Because 'the precondition: no NTLM delegation policy on this PC'
             "$(@($n.overlay) -join "`n")`n$(@($n.prompt) -join "`n")`n$($n.screen)" | Should -Match 'saved credentials'
         }
     }
@@ -442,9 +553,17 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $c.fsConnected = Wait-RdpTab 20
             }
             Step $c detach {
-                $null = Ui 'Detach into its own window / dock back'
+                # (lab run 20261017-054704: right after full screen the button's Invoke opened no window, and nothing
+                # said why - the click's answer and RemoteHub's state are kept, then a real click is tried)
+                $c.detClick = Ui 'Detach into its own window / dock back'
                 Start-Sleep -Seconds 3
                 $c.detWindows = TopWindows
+                if (@($c.detWindows | Where-Object { $_ -eq 'Device' }).Count -eq 0) {
+                    ClientState 'detach-invoke'
+                    $c.detRealClick = Ui 'Detach into its own window / dock back' -Value realclick
+                    Start-Sleep -Seconds 3
+                    $c.detWindows = TopWindows
+                }
                 $c.detHint = (Ui 'This session runs in its own window.' -Value exists -Optional -TimeoutSec 5).found
                 $c.detTools = @((Ui '*' -Title 'Device' -Value list -Optional -TimeoutSec 10).items)
                 Shot 'detached'
@@ -505,17 +624,20 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         BeforeAll {
             $p = [ordered]@{}
             $p.passwordSha = Sha $password
+            # as after the context before (a tag-filtered run starts here)
+            Allow-NtlmDelegation
             $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
             Clear-DeviceSessions
-            # "Always prompt for password upon connection" on the device
+            # "Always prompt for password upon connection" on the device (read when Remote Desktop Services start)
             Invoke-LabGuest -Name $device.Name -ScriptBlock {
                 $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
                 $null = New-Item $k -Force
                 Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
             }
+            Restart-LabRdpService -Name $device.Name
             Step $p prompt {
                 Menu 'Connect'
-                $p.dialog = (Ui '*' -Title 'Windows Security' -Value exists -Optional -TimeoutSec 60).found
+                $p.dialog = CredDialog 60
                 Start-Sleep -Seconds 2
                 # read first: the helper clears it after 30 s
                 $p.clip1 = InSession $VmName Console $code.clipInfo
@@ -530,7 +652,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Key 1B
                 Start-Sleep -Seconds 3
                 $null = Ui 'Reconnect'
-                $p.dialog2 = (Ui '*' -Title 'Windows Security' -Value exists -Optional -TimeoutSec 60).found
+                $p.dialog2 = CredDialog 60
                 Start-Sleep -Seconds 3
                 Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x56
                 Start-Sleep -Milliseconds 500
@@ -539,8 +661,21 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $p.clip3 = InSession $VmName Console $code.clipInfo
                 Shot 'prompt-pasted'
             }
-            Step $p audit { $p.audit = AuditText }
+            Step $p audit {
+                # a dialog still open is modal: RemoteHub's context menu stays empty behind it
+                if (CredDialog 2) { $p.dialogLeft = $true; Key 1B; Start-Sleep -Seconds 2 }
+                $p.audit = AuditText
+            }
+            # the policy off again and Remote Desktop Services restarted, so the next contexts connect without a prompt;
+            # the restart ends the session, so the tab is closed first and opened again afterwards (the next context
+            # expects a connected tab)
+            $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
             Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
+            Restart-LabRdpService -Name $device.Name
+            Step $p reconnect {
+                Menu 'Connect'
+                $p.reconnected = Wait-RdpTab 60
+            }
             Save 'prompt' $p
         }
 
@@ -561,7 +696,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
     Context 'clipboard and drive redirection' {
         BeforeAll {
             $x = [ordered]@{}
-            if (-not (Wait-RdpTab 5)) { $null = Ui 'Reconnect' -Optional; $null = Wait-RdpTab 60 }
+            $x.tab = Ensure-RdpTab
             $x.want = B64 $text
             $x.back = B64 ($text + ' back')
             foreach ($v in $VmName, $device.Name) {
@@ -580,15 +715,19 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             }
             Step $x files {
                 $x.filesOut = @(InSession $VmName Console $code.filesCopy @{ DIR = $cpOut })
-                $x.filesIn = @(InSession $device.Name Admin $code.paste @{ DIR = $cpIn; COUNT = 3 } -TimeoutSec 300)
+                $x.pasteIn = Invoke-LabPaste -Name $device.Name -Account Admin -Folder $cpIn -Count 3 -TimeoutSec 240 -Fresh
+                $x.filesIn = @($x.pasteIn.files)
                 $x.filesBack = @(InSession $device.Name Admin $code.filesCopy @{ DIR = $cpOut })
-                $x.filesBackIn = @(InSession $VmName Console $code.paste @{ DIR = $cpIn; COUNT = 3 } -TimeoutSec 300)
+                $x.pasteBack = Invoke-LabPaste -Name $VmName -Account Console -Folder $cpIn -Count 3 -TimeoutSec 240 -Fresh
+                $x.filesBackIn = @($x.pasteBack.files)
             }
             Step $x image {
                 $x.imgOut = (InSession $VmName Console $code.imageSet @{ SEED = 1 }).hash
-                $x.imgIn = (InSession $device.Name Admin $code.imageGet @{ WANT = $x.imgOut }).hash
+                $r = InSession $device.Name Admin $code.imageGet @{ WANT = $x.imgOut; SEED = 1 }
+                $x.imgIn = $r.hash; $x.imgInInfo = $r.info
                 $x.imgBack = (InSession $device.Name Admin $code.imageSet @{ SEED = 77 }).hash
-                $x.imgBackIn = (InSession $VmName Console $code.imageGet @{ WANT = $x.imgBack }).hash
+                $r = InSession $VmName Console $code.imageGet @{ WANT = $x.imgBack; SEED = 77 }
+                $x.imgBackIn = $r.hash; $x.imgBackInfo = $r.info
             }
             Step $x drives {
                 $x.drivesOff = (InSession $device.Name Admin $code.tsclient @{ WAIT = 5 }).present
@@ -611,15 +750,15 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
 
         It 'UI-CP-10 three files both ways through the RDP tab: hashes equal' -Tag 'UI-CP-10' {
-            @($x.filesIn | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) | Should -Be @($x.filesOut | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" })
-            @($x.filesBackIn | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) | Should -Be @($x.filesBack | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" })
+            @($x.filesIn | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) | Should -Be @($x.filesOut | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) -Because "the device's clipboard offered: $(@($x.pasteIn.formats) -join ', ') ($($x.pasteIn.apartment))"
+            @($x.filesBackIn | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) | Should -Be @($x.filesBack | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Hash)" }) -Because "this PC's clipboard offered: $(@($x.pasteBack.formats) -join ', ') ($($x.pasteBack.apartment))"
             @($x.filesIn).Count | Should -Be 3
         }
 
         It 'UI-CP-11 a picture both ways through the RDP tab: pixels equal' -Tag 'UI-CP-11' {
             $x.imgOut | Should -Not -BeNullOrEmpty
-            $x.imgIn | Should -Be $x.imgOut
-            $x.imgBackIn | Should -Be $x.imgBack
+            $x.imgIn | Should -Be $x.imgOut -Because "the device's picture should be the one sent ($(($x.imgInInfo | ConvertTo-Json -Compress -Depth 4)))"
+            $x.imgBackIn | Should -Be $x.imgBack -Because "this PC's picture should be the one sent ($(($x.imgBackInfo | ConvertTo-Json -Compress -Depth 4)))"
         }
 
         It 'R-RDP-05 clipboard both ways; \\tsclient\C only with "Local drives" on' -Tag 'R-RDP-05' {
@@ -631,17 +770,27 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
     }
 
-    Context '.rdp export and a second start with the file' {
+    # also tagged R-RDP-08: the context 'the exported .rdp opened as normaluser' opens the file this one writes
+    Context '.rdp export and a second start with the file' -Tag 'R-RDP-08' {
         BeforeAll {
             $e = [ordered]@{}
             Invoke-LabGuest -Name $VmName -ScriptBlock { $null = New-Item 'C:\lab' -ItemType Directory -Force; Remove-Item 'C:\lab\device.rdp' -ErrorAction SilentlyContinue }
+            # as after the contexts before (a tag-filtered run starts here): the NTLM policy for the saved credentials, and
+            # "Local drives" on, which R-RDP-08 expects in the file (the clipboard context switches it on)
+            Allow-NtlmDelegation
+            Step $e drives {
+                EditConnection {
+                    $null = Ui 'Local resources & keyboard' -Title 'Edit connection'
+                    $null = Ui 'Local drives' -Title 'Edit connection' -Value 'choose:On'
+                }
+            }
             Step $e export {
                 Menu 'More>Save as .rdp file*'
                 Start-Sleep -Seconds 4
                 Shot 'save-as'
                 # Windows' Save As dialog has no usable UIA patterns here: its file name box has the focus with the
-                # proposed name selected - typed over at the console keyboard
-                Send-LabText -Name $VmName -Text 'C:\lab\device.rdp'
+                # proposed name selected - typed over at the console keyboard (-TypeText: see Send-LabText, the ':')
+                Send-LabText -Name $VmName -Text 'C:\lab\device.rdp' -TypeText
                 Send-LabKey -Name $VmName -Key Enter
                 $e.question = Message -Title 'Include saved passwords*' -Button 'Include passwords' -TimeoutSec 30
                 Start-Sleep -Seconds 3
@@ -680,7 +829,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
     Context 'the agent installed through the clipboard into the RDP session' {
         BeforeAll {
             $a = [ordered]@{}
-            if (-not (Wait-RdpTab 5)) { Menu 'Connect'; $null = Wait-RdpTab 60 }
+            $a.tab = Ensure-RdpTab
             Install-LabSigningCertificate -Name $device.Name
             Step $a copy {
                 Menu 'RemoteHub Agent>Install RemoteHub Agent*'
@@ -694,7 +843,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             }
             Step $a paste {
                 # in PSAdmin's RDP session: both files pasted into one folder, the MSI run as administrator there
-                $a.pasted = @(InSession $device.Name Admin $code.paste @{ DIR = 'C:\ProgramData\RemoteHubLab\session\agent-clip'; COUNT = 2 } -TimeoutSec 400)
+                $a.paste = Invoke-LabPaste -Name $device.Name -Account Admin -Folder 'C:\ProgramData\RemoteHubLab\session\agent-clip' -Count 2 -TimeoutSec 240 -Fresh
+                $a.pasted = @($a.paste.files)
                 $a.msi = InSession $device.Name Admin $code.msiInSession @{ DIR = 'C:\ProgramData\RemoteHubLab\session\agent-clip' } -Elevated -TimeoutSec 600
                 $a.state = Get-LabAgentState -Name $device.Name
                 # RemoteHub asks every 10 s (WaitForManualInstall) and writes the audit entry when the agent answers
@@ -731,7 +881,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         It 'A-CLIP-01 Install RemoteHub Agent, clipboard: "Copied ... to the clipboard", pasted into the RDP session and run there: installed on the first answer' -Tag 'A-CLIP-01' {
             $a.report | Should -Match 'Copied RemoteHub-Agent-x64\.msi and Device\.rhagent to the clipboard\.'
             @($a.clipboard | ForEach-Object { Split-Path $_ -Leaf }) | Should -Contain 'RemoteHub-Agent-x64.msi'
-            @($a.pasted).Count | Should -Be 2
+            @($a.pasted).Count | Should -Be 2 -Because "the device's clipboard offered: $(@($a.paste.formats) -join ', ') ($($a.paste.apartment))"
             "$($a.msi.exit)" | Should -BeIn '0', '3010'
             $a.state.Service.State | Should -Be 'Running'
             $a.audit | Should -Match 'Installed\W+answered as RemoteHub Agent'
@@ -749,6 +899,9 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
     Context 'asked before the device key goes through a desktop tab' {
         BeforeAll {
             $k = [ordered]@{}
+            # the agent from the context before - installed by hand when that didn't happen (lab run 20261017-054704: the
+            # clipboard install's paste failed, so Connect opened RDP again and nobody was asked)
+            Step $k agent { $k.agent = Ensure-Agent }
             Step $k desktop {
                 # with the agent installed, Connect opens the agent desktop; the person at the device allows it
                 Menu 'Connect'
@@ -786,6 +939,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         BeforeAll {
             $u = [ordered]@{}
             $u.text = $text + ' across'
+            # the agent desktop tab of the context before (a tag-filtered run, or one that failed there, has none)
+            Step $u desktop { $u.desktop = Ensure-AgentDesktop }
             Step $u across {
                 # the RDP session next to the agent desktop of the same connection: PSAdmin's RDP session is "device A",
                 # the console session (Admin) behind the agent desktop is "device B"
@@ -816,8 +971,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             $logFile = "C:\Users\$($vm.ConsoleAccount)\AppData\Roaming\RemoteHub\logs\remotehub.log"
             function DiagLines { @(Invoke-LabGuest -Name $VmName -ArgumentList $logFile -ScriptBlock { param($f) if (Test-Path $f) { @(Get-Content $f) } }) }
             Step $w cut {
-                $null = Ui 'Remote desktop' -Value realclick -Optional -TimeoutSec 10
-                $w.before = Wait-RdpTab 30
+                $w.before = Ensure-RdpTab
                 $w.stateBefore = DeviceState
                 $skip = @(DiagLines).Count
                 $map = Disconnect-LabNetwork -Name $device.Name
@@ -868,7 +1022,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $o.question = (@((Invoke-LabUi -Name $VmName -Account User -Text '*' -Title 'Connect to*' -Value list -TimeoutSec 60).items) -join "`n")
                 $null = Invoke-LabUi -Name $VmName -Account User -Text 'Connect' -Title 'Connect to*'
                 # the password in the file is DPAPI-protected for Admin: Windows asks normaluser for it
-                $o.prompt = (Invoke-LabUi -Name $VmName -Account User -Text '*' -Title 'Windows Security' -Value exists -Optional -TimeoutSec 60).found
+                $o.prompt = CredDialog 60 User
                 Start-Sleep -Seconds 3
                 Shot 'user-prompt'
                 Send-LabText -Name $VmName -Text $password
@@ -879,10 +1033,14 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Shot 'user-connected'
                 Stop-LabClient -Name $VmName -Task $userTask
             }
-            # Admin back at the console for the rest of the file
-            Set-LabAutoLogon -Name $VmName -Account Console
-            $script:task = Start-LabClient -Name $VmName
+            # Admin back at the console for the rest of the file. A slow sign-in isn't this context's failure: written
+            # down, then waited for once more (lab run 20261017-054704: "no desktop for PSAdmin after 300 s", the
+            # desktop was there a few minutes later, and every later context found no RemoteHub)
+            try { Set-LabAutoLogon -Name $VmName -Account Console }
+            catch { $o.backToConsole = "$_" }
             Save 'rdp-file' $o
+            $script:task = $null
+            Ensure-Client
         }
 
         It 'R-RDP-08 Save as .rdp with the password; opened by normaluser: "Open .rdp file" lists drives and clipboard, Connect, Windows asks for the password, connected' -Tag 'R-RDP-08' {
@@ -899,9 +1057,16 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
     }
 
-    Context 'a jump host in the tree' {
+    # also tagged J-12: the context 'an older RemoteHub opens the database' reads the jump host this one sets up
+    Context 'a jump host in the tree' -Tag 'J-12' {
         BeforeAll {
             $j = [ordered]@{}
+            # what the contexts before leave (a tag-filtered run starts here): RemoteHub running, the NTLM policy for the
+            # saved credentials (RDP to Behind), and Device's agent - "Move under > Device" (J-11) offers only a
+            # connection with an agent; installed before the device moves behind the jump host
+            Step $j client { Ensure-Client }
+            Allow-NtlmDelegation
+            Step $j agent { $j.agent = Ensure-Agent }
             # the route hints ("via JumpHost") beside the addresses in the tree
             function Hints {
                 $i = @((Ui '*' -Value list).items)

@@ -16,4 +16,8 @@ if (Test-Path $cancel) {
     Remove-Item $cancel -ErrorAction SilentlyContinue
     Write-Warning "The watcher didn't pick up the cancel within 30 s - nothing was running, or it runs an older Invoke-LabQueue.ps1 (restart it: D:\RemoteHubLab\lab\Install-LabTask.ps1, elevated)."
 }
-else { Write-Host 'Cancelled the running request.' }
+else {
+    Write-Host 'Cancelled the running request.'
+    # the run's own clean-up was ended with it; removing checkpoints needs labop's Hyper-V rights, not this shell's
+    Write-Host 'Its run checkpoints (RHLAB ...) stay until the next run starts, which removes them - or now: .\lab\Invoke-AsLabop.ps1 { Remove-LabRunCheckpoints }'
+}

@@ -40,6 +40,17 @@ BeforeAll {
     function Clear-Requests { Invoke-LabGuest -Name $VmName -ScriptBlock { Remove-Item 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue } }
     function Settings-Page([string]$Page) { $null = Ui 'Settings'; $null = Ui $Page -Title 'Settings' }
     function Settings-Text { (Ui '*' -Title 'Settings' -Value list).items -join "`n" }
+    # The text of the 'RemoteHub updates' window once it matches $Pattern (a download error is shown there, not in a
+    # message box), or its last text after $TimeoutSec.
+    function Wait-UpdateText([string]$Pattern, [int]$TimeoutSec = 90) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $text = @((Ui '*' -Title 'RemoteHub updates' -Value list -Optional -TimeoutSec 10).items) -join "`n"
+            if ($text -match $Pattern) { break }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $until)
+        $text
+    }
     $script:task = $null
 }
 
@@ -130,6 +141,9 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
                 $rows
             }
             $p.autoSignInRowsBefore = AutoSignInRows
+            # SettingsFolder off again: while it points at the empty folder every start shows the warning before the main
+            # window, and Restart-Client (which waits for that window) would time out on it
+            Policy @{ SettingsFolder = $null } -Key 'RdpManager'
             Policy @{ DisableAgentAutoSignIn = 1 }
             Restart-Client
             $p.autoSignInRows = AutoSignInRows
@@ -206,20 +220,19 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
-            Start-Sleep -Seconds 15
-            $u.badSum = (Ui '*' -Title '*' -Value list -Optional).items -join "`n"
-            $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 5
+            # the error is shown in the update window itself ('*' as the title would read the taskbar)
+            $u.badSum = Wait-UpdateText 'checksum'
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $u.badSumFiles = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates' -Filter *.msi -ErrorAction SilentlyContinue).Count }
             $u.badSumVersion = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe').VersionInfo.ProductVersion }
             # a download host that isn't allowed
             Set-LabMockLatest -Name $VmName -Version $currentVersion -File (Split-Path $current -Leaf) -Url 'https://evil.example.com/RemoteHub.msi'
+            # (the checksum step above downloaded from /download/: only this step's requests count)
+            Clear-Requests
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
-            Start-Sleep -Seconds 8
-            $u.badHost = (Ui '*' -Title '*' -Value list -Optional).items -join "`n"
-            $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 5
+            $u.badHost = Wait-UpdateText 'trusted'
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $u.badHostRequests = @(Get-LabMockRequests -Name $VmName | Where-Object path -like '/download/*').Count
             # skip / mandatory
@@ -241,8 +254,18 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
             $until = (Get-Date).AddSeconds(120)
             while (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+            $u.uacShown = (Get-Date) -lt $until
             Start-Sleep -Seconds 2
-            Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59
+            try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-polupd-uac.png') } catch { }
+            # Yes is Alt+Y. The console keyboard sends US key positions and the image's layout is German
+            # (docs/test-lab-spec.md 5.1), where that position is Z: Alt+Y first, then Alt+Z if the prompt is still there.
+            $u.uacKeys = @()
+            foreach ($code in 0x59, 0x5A) {
+                if (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) })) { break }
+                Send-LabKeyCombo -Name $VmName -Codes 0x12, $code
+                $u.uacKeys += ('Alt+{0}' -f [char]$code)
+                Start-Sleep -Seconds 3
+            }
             $until = (Get-Date).AddMinutes(5)
             do { Start-Sleep -Seconds 5; $v = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion } } while ($v -notlike "$currentVersion*" -and (Get-Date) -lt $until)
             $u.installed = $v
@@ -257,18 +280,18 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-UPD-02 a checksum mismatch: the download deleted, not installed' -Tag 'C-UPD-02' {
-            $u.badSum | Should -Match 'checksum|SHA|damaged|didn''t match'
+            $u.badSum | Should -Match 'doesn''t match the published SHA-256 checksum'
             $u.badSumFiles | Should -Be 0
             $u.badSumVersion | Should -Not -BeLike "$currentVersion*"
         }
 
         It 'C-UPD-03 a download URL outside GitHub / remotehub.dev is refused' -Tag 'C-UPD-03' {
-            $u.badHost | Should -Match 'not allowed|refus|trusted|isn''t'
+            $u.badHost | Should -Match 'download address isn''t trusted'
             $u.badHostRequests | Should -Be 0
         }
 
         It 'C-UPD-04 Download and install: UAC approved, the package installs, RemoteHub restarts with the new version' -Tag 'C-UPD-04' {
-            $u.installed | Should -BeLike "$currentVersion*"
+            $u.installed | Should -BeLike "$currentVersion*" -Because "UAC prompt seen: $($u.uacShown), keys sent: $($u.uacKeys -join ', ')"
             @($u.restarted | Where-Object { $_ -like "$currentVersion*" }).Count | Should -BeGreaterThan 0
         }
 
@@ -295,13 +318,13 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Start-Sleep -Seconds 75
             Restart-Client
             Start-Sleep -Seconds 15
-            $t.events = @(Requests '/telemetry' | ForEach-Object json)
+            $t.events = @((Requests '/telemetry') | ForEach-Object json)
             # killed as Task Manager would: UnexpectedExit at the next start (the earlier kill's report cleared first)
             Clear-Requests
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub | Stop-Process -Force }
             $script:task = Start-LabClient -Name $VmName
             Start-Sleep -Seconds 15
-            $t.afterKill = @(Requests '/telemetry' | ForEach-Object json)
+            $t.afterKill = @((Requests '/telemetry') | ForEach-Object json)
             # off: the install ID goes
             $t.idBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }
             Settings-Page 'Updates & privacy'

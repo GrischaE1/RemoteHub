@@ -169,7 +169,8 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
         }
 
         It 'D-PIN-02 three wrong codes: attempts left 2, 1, then Denied "entered wrong too often", event 2100' -Tag 'D-PIN-02' {
-            $left = @(Of $p.wrong 'EnterPin' | ForEach-Object pinAttemptsLeft)
+            # Of returns its list as one object (the comma): member enumeration, not ForEach-Object on that one array
+            $left = @((Of $p.wrong 'EnterPin').pinAttemptsLeft)
             $left | Should -Contain 2
             $left | Should -Contain 1
             (Of $p.wrong 'Denied')[0].message | Should -Match 'entered wrong too often'
@@ -177,6 +178,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
         }
 
         It 'D-PIN-03 "123 456" (with a space) is accepted' -Tag 'D-PIN-03' {
+            $p['spaced-read'].pin | Should -Match '^\d{6}$' -Because 'the code is read at the device before it is sent with a space'
             (Of $p.spaced 'Connected').Count | Should -BeGreaterThan 0
         }
 

@@ -71,9 +71,12 @@ Describe 'S-AUTH <VmName>' -Tag Agent, Security, 'S-TLS', 'S-AUTH' {
             else { $http.answered | Should -BeFalse }
         }
 
-        It 'S-TLS-04 health tells only product, version, protocol, device and features; no Server header' -Tag 'S-TLS-04' {
+        It 'S-TLS-04 health tells only product, version, protocol, device, features and managed names; no Server header' -Tag 'S-TLS-04' {
             $health.status | Should -Be 200
-            @($health.fields | Sort-Object) | Should -Be @('deviceId', 'features', 'product', 'protocol', 'version')
+            # managed (admx-design.md: health instead of Hello): only the names of policy-set actions, never values
+            @($health.fields | Sort-Object) | Should -Be @('deviceId', 'features', 'managed', 'product', 'protocol', 'version')
+            $managed = ($health.body | ConvertFrom-Json).managed
+            @($managed | Where-Object { $_ -and $_ -notin 'autoSignIn', 'virtualDisplay', 'port' }) | Should -BeNullOrEmpty -Because "managed may only name autoSignIn, virtualDisplay or port (got: $(@($managed) -join ', '))"
             $health.server | Should -BeNullOrEmpty
             @($health.headers) | Should -Not -Contain 'Server'
         }
