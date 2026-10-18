@@ -2654,8 +2654,10 @@ public partial class MainWindow : FluentWindow
             s.Disconnect();
             s.Dispose();
         }
-        // Give remote PowerShell sessions a moment to close cleanly (otherwise they linger on the server until they time out).
-        try { Task.WaitAll(PsSession.Closing.Keys.ToArray(), TimeSpan.FromSeconds(3)); } catch { /* best effort */ }
+        // Give remote PowerShell sessions a moment to close cleanly (otherwise they linger on the server until they time out),
+        // and agent desktops time to have their close read (otherwise the agent may take it for a drop). All in parallel;
+        // each agent close gives up after AgentDesktopClient.CloseLimit on its own.
+        try { Task.WaitAll([.. PsSession.Closing.Keys, .. AgentDesktopClient.Closing.Keys], TimeSpan.FromSeconds(3)); } catch { /* best effort */ }
     }
 
     // =====================================================================

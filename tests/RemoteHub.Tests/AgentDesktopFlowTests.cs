@@ -163,8 +163,8 @@ public partial class AgentDesktopFlowTests
         public void Dispose() { }
     }
 
-    /// <summary>A 320 × 240 monitor whose picture changes on every capture for the first frames.</summary>
-    private sealed class Screen(bool secure = false, int failAfter = int.MaxValue) : A.IScreenSource
+    /// <summary>A 320 × 240 monitor whose picture changes on every capture for the first frames (<c>changing</c>).</summary>
+    private sealed class Screen(bool secure = false, int failAfter = int.MaxValue, int changing = 20) : A.IScreenSource
     {
         private int _n;
         public readonly ConcurrentQueue<(int, int)> Fits = new();
@@ -180,7 +180,7 @@ public partial class AgentDesktopFlowTests
         public A.CaptureResult Capture(A.DesktopMonitor monitor, int timeoutMs, A.FrameBuffer target)
         {
             if (_n >= failAfter) throw new InvalidOperationException("desktop gone (sign-in)");
-            if (_n++ > 20) { Thread.Sleep(10); return A.CaptureResult.Unchanged; }
+            if (_n++ > changing) { Thread.Sleep(10); return A.CaptureResult.Unchanged; }
             target.Ensure(monitor.Width, monitor.Height);
             for (var i = 0; i < target.Pixels.Length; i += 4) { target.Pixels[i] = (byte)(i + _n); target.Pixels[i + 1] = (byte)_n; target.Pixels[i + 3] = 255; }
             return A.CaptureResult.Changed;
@@ -336,6 +336,10 @@ public partial class AgentDesktopFlowTests
 
         public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
             Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
+
+        /// <summary>Closes like RemoteHub ending the session on purpose, and waits until the agent has read the close: disposing
+        /// right away can reset the connection first, which the agent rightly takes for a drop.</summary>
+        public async Task CloseOnPurpose() => Assert.True(await Client.CloseAsync(TimeSpan.FromSeconds(10)), "the agent didn't answer the close");
 
         public void Dispose() => Client.Dispose();
     }
@@ -1776,7 +1780,7 @@ public partial class AgentDesktopFlowTests
         if (A.DesktopEndpoint.PrivacyScreenSupported)
             WaitFor(() => !d.Helpers.Uis[helperInNewSession].Screens.IsEmpty, "the privacy screen in the new session");
 
-        v.Dispose(); // RemoteHub closes the tab: the session gets its end action
+        await v.CloseOnPurpose(); // RemoteHub closes the tab: the session gets its end action
         WaitFor(() => d.Sessions.Disconnects.Contains(3), "lock");
         WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
         Assert.Empty(d.Sessions.LogOffs);
@@ -1849,7 +1853,7 @@ public partial class AgentDesktopFlowTests
         v.Client.Send(DesktopWire.SignInRequest("pw"));
         Assert.True(ticketOut.Wait(15000), "the sign-in should reach the broker");
 
-        v.Dispose(); // RemoteHub closes the tab before Windows has answered
+        await v.CloseOnPurpose(); // RemoteHub closes the tab before Windows has answered
         WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopEnded), "the connection's end");
         connectionGone.Set();
 
@@ -1931,7 +1935,7 @@ public partial class AgentDesktopFlowTests
         await using var _d = d;
         v.Next(DesktopStatusState.SignedIn);
         WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
-        v.Dispose(); // RemoteHub closes the tab
+        await v.CloseOnPurpose(); // RemoteHub closes the tab
         WaitFor(() => (signsOut ? d.Sessions.LogOffs : d.Sessions.Disconnects).Contains(3), signsOut ? "sign-out" : "lock");
         Assert.Empty(signsOut ? d.Sessions.Disconnects : d.Sessions.LogOffs);
         WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");

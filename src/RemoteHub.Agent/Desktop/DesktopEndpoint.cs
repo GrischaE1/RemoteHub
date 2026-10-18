@@ -984,7 +984,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         if (helper is null) return new HelperExit(false, "no desktop helper");
         try
         {
-            while (await DesktopWire.ReadFramedAsync(helper.Output, ct) is { } m)
+            while (await HelperOutput.ReadAsync(helper, ct) is { } m)
             {
                 switch ((byte)DesktopWire.TypeOf(m))
                 {

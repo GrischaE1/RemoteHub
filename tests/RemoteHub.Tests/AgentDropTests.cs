@@ -23,6 +23,11 @@ internal sealed class ScriptedSocket : WebSocket
     /// <summary>Everything the agent sent, in order.</summary>
     public readonly BlockingCollection<byte[]> Sent = new();
 
+    private readonly ConcurrentDictionary<byte, int> _kinds = new();
+
+    /// <summary>How many messages of this kind (first byte) the agent sent so far, taken by a test or not.</summary>
+    public int SentOf(byte kind) => _kinds.TryGetValue(kind, out var n) ? n : 0;
+
     public void Receive(byte[] message) => _in.Writer.TryWrite(message);
     public void Receive(string line) => Receive(Encoding.UTF8.GetBytes(line));
     public void Close() => _in.Writer.TryWrite(CloseFrame);
@@ -50,6 +55,7 @@ internal sealed class ScriptedSocket : WebSocket
     {
         ct.ThrowIfCancellationRequested();
         if (_state is not (WebSocketState.Open or WebSocketState.CloseReceived)) throw new WebSocketException(WebSocketError.InvalidState);
+        if (buffer.Count > 0) _kinds.AddOrUpdate(buffer[0], 1, (_, n) => n + 1);
         Sent.Add(buffer.ToArray());
         return Task.CompletedTask;
     }

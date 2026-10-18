@@ -194,7 +194,7 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
     {
         try
         {
-            while (await DesktopWire.ReadFramedAsync(helper.Output, CancellationToken.None) is { } m)
+            while (await HelperOutput.ReadAsync(helper, CancellationToken.None) is { } m)
                 if (m.Length > 0 && m[0] == (byte)HelperMessage.End)
                     return DesktopWire.ReadJson(m, HelperJson.Default.HelperEnd).ByUser;
         }
