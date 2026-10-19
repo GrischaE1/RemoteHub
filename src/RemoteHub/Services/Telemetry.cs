@@ -52,6 +52,16 @@ public static class Telemetry
     }
 
     /// <summary>
+    /// Telemetry is off – by the setting or the DisableTelemetry policy: pending crash reports and the install ID are
+    /// deleted, so nothing that could link this install to earlier data stays on the PC (PRIVACY.md).
+    /// </summary>
+    internal static void DiscardLocalRecords(IEnumerable<CrashReport> crashes, string? installIdPath = null)
+    {
+        CrashReporter.Discard(crashes);
+        ForgetInstallId(installIdPath);
+    }
+
+    /// <summary>
     /// Exactly what is sent – nothing else. <paramref name="extra"/>: the counts of "app_start", the run time of
     /// "app_session" or the crash fields (errorType, message, stack).
     /// </summary>
@@ -133,8 +143,8 @@ public static class Telemetry
     /// <summary>
     /// At start-up, in the background if telemetry is on: "app_start" (with <paramref name="counts"/>), "app_session" for
     /// the previous session's run time, then an "app_crash" for each crash of an earlier session that
-    /// <see cref="CrashReporter"/> recorded. Never throws, never waits. With telemetry off, recorded crashes and the
-    /// previous run time are discarded and this session's run time isn't recorded.
+    /// <see cref="CrashReporter"/> recorded. Never throws, never waits. With telemetry off, recorded crashes, the
+    /// previous run time and the install ID are discarded and this session's run time isn't recorded.
     /// </summary>
     public static void AppStart(UiState ui, UsageCounts counts)
     {
@@ -145,7 +155,7 @@ public static class Telemetry
             {
                 var crashes = CrashReporter.TakePending();
                 var previous = RunTime.TakePrevious();
-                if (!Enabled(ui)) { CrashReporter.Discard(crashes); return; }
+                if (!Enabled(ui)) { DiscardLocalRecords(crashes); return; }
                 RunTime.Start();
                 var channel = UpdateService.EffectiveChannel(ui);
                 var id = GetOrCreateInstallId();
