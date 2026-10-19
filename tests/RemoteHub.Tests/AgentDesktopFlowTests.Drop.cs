@@ -261,17 +261,13 @@ public partial class AgentDesktopFlowTests
         public volatile bool Disposed;
         public PipeHelper() => _reader = new CountingStream(new AnonymousPipeClientStream(PipeDirection.In, _out.ClientSafePipeHandle));
         public long Read => _reader.Count;
-        public volatile string? DisposedBy; // who ended it, for the failure message
-        public void Write(ReadOnlySpan<byte> bytes)
-        {
-            if (Disposed) throw new InvalidOperationException("The helper was disposed by:" + Environment.NewLine + DisposedBy);
-            _out.Write(bytes);
-            _out.Flush();
-        }
+        // No Flush after it: a pipe write goes straight to the reader, and an End frame lets the cover dispose the helper
+        // before a Flush would run, which then fails on the closed pipe.
+        public void Write(ReadOnlySpan<byte> bytes) => _out.Write(bytes);
         public Stream Input => Stream.Null;
         public Stream Output => _reader;
         public int ProcessId => 0;
-        public void Dispose() { DisposedBy ??= Environment.StackTrace; Disposed = true; _out.Dispose(); }
+        public void Dispose() { Disposed = true; _out.Dispose(); }
     }
 
     private sealed class CountingStream(Stream inner) : Stream
