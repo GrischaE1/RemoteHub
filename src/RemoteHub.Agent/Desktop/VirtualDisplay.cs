@@ -587,9 +587,11 @@ internal static class VirtualDisplay
         start.RedirectStandardOutput = true;
         start.RedirectStandardError = true;
         using var p = Process.Start(start) ?? throw new InvalidOperationException($"{Path.GetFileName(start.FileName)} didn't start.");
-        // Both at once: a full stderr pipe would otherwise stall the program.
-        var stdout = p.StandardOutput.ReadToEndAsync();
-        var stderr = p.StandardError.ReadToEndAsync();
+        // Both at once: a full stderr pipe would otherwise stall the program. Each on a thread of its own, because the
+        // pipes are read with blocking calls: on the thread pool, a busy pool could keep the reads from finishing within
+        // the wait below, and the output was lost although the program had written it.
+        var stdout = new OutputReader(p.StandardOutput);
+        var stderr = new OutputReader(p.StandardError);
         if (!p.WaitForExit(timeout))
         {
             try { p.Kill(entireProcessTree: true); }
@@ -599,9 +601,32 @@ internal static class VirtualDisplay
             return TimedOut;
         }
         // The pipes close with the program; a child it left running mustn't hold this up either.
-        Task.WaitAll([stdout, stderr], 2000);
-        output = (stdout.IsCompletedSuccessfully ? stdout.Result : "") + "\n" + (stderr.IsCompletedSuccessfully ? stderr.Result : "");
+        var deadline = Stopwatch.StartNew();
+        output = stdout.Text(PipeWait) + "\n" + stderr.Text(PipeWait - deadline.Elapsed);
         return p.ExitCode;
+    }
+
+    /// <summary>How long <see cref="Run"/> waits for the output once the program has ended.</summary>
+    private static readonly TimeSpan PipeWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>Reads a redirected stream to its end on a background thread of its own.</summary>
+    private sealed class OutputReader
+    {
+        private readonly Thread _thread;
+        private string _text = "";
+
+        public OutputReader(StreamReader reader)
+        {
+            _thread = new Thread(() =>
+            {
+                try { _text = reader.ReadToEnd(); }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException) { /* the process was disposed while a child held the pipe */ }
+            }) { IsBackground = true, Name = "VirtualDisplay pipe" };
+            _thread.Start();
+        }
+
+        /// <summary>What was read, or "" if the stream didn't end within <paramref name="wait"/>.</summary>
+        public string Text(TimeSpan wait) => _thread.Join(wait < TimeSpan.Zero ? TimeSpan.Zero : wait) ? _text : "";
     }
 
     /// <summary>pnputil's last two lines on one line – where it says why it failed.</summary>
