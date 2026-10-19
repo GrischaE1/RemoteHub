@@ -2510,9 +2510,11 @@ public partial class MainWindow : FluentWindow
         if (pw.ShowDialog() != true) return;
         try
         {
-            Backup.Export(_vm.Data, dlg.FileName, pw.Password);
+            _ = Notes?.Save(sync: true);
+            var notes = Data.LocalDb.IsOpen ? Data.NoteStore.ExportAll() : null;
+            Backup.Export(_vm.Data, dlg.FileName, pw.Password, notes);
             Data.AuditLog.Write(Data.AuditEvents.BackupExported, null, Path.GetFileName(dlg.FileName),
-                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials");
+                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials, {notes?.Pages.Count ?? 0} pages");
             _ = Dialogs.Info(this, "Export backup", $"Backup saved to\n{dlg.FileName}\n\nKeep the password safe – it cannot be recovered.");
         }
         catch (Exception ex) { _ = Dialogs.Info(this, "Export failed", ex.Message); }
@@ -2527,7 +2529,8 @@ public partial class MainWindow : FluentWindow
         if (pw.ShowDialog() != true) return;
 
         AppData imported;
-        try { imported = Backup.Import(dlg.FileName, pw.Password); }
+        Data.NotesExport? importedNotes;
+        try { imported = Backup.Import(dlg.FileName, pw.Password, out importedNotes); }
         catch (Exception ex) { await Dialogs.Info(this, "Import failed", ex.Message); return; }
 
         var choice = await Dialogs.Ask(this, "Import backup",
@@ -2535,7 +2538,19 @@ public partial class MainWindow : FluentWindow
             "Add as folder", "Replace everything");
         if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary)
             Data.AuditLog.Write(Data.AuditEvents.BackupImported, null, Path.GetFileName(dlg.FileName),
-                choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? "Added as a folder" : "Replaced all settings");
+                (choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? "Added as a folder" : "Replaced all settings") + (importedNotes is { IsEmpty: false } n0 ? $", and {n0.Pages.Count} pages" : ""));
+        if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary && importedNotes is { IsEmpty: false } notes && Data.LocalDb.IsOpen)
+        {
+            // Added: the backup's notebooks come in next to yours, named after the file. Replaced: yours go to Recently deleted.
+            _ = Notes?.Save(sync: true);
+            try
+            {
+                Data.NoteStore.Import(notes, replace: choice == Wpf.Ui.Controls.MessageBoxResult.Secondary,
+                    addedSuffix: choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? Path.GetFileNameWithoutExtension(dlg.FileName) : null);
+                Notes?.Reload();
+            }
+            catch (Exception ex) { await Dialogs.Info(this, "Import failed", "The notes in the backup could not be imported: " + ex.Message); }
+        }
         if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {
             foreach (var sc in imported.SavedCredentials)

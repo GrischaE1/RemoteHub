@@ -255,4 +255,28 @@ public class NotesTests : IDisposable
         NoteStore.EnsureDefault();
         Assert.Single(NoteStore.Notebooks());
     }
+
+    [Fact]
+    public void Backup_file_round_trip_includes_notes_and_an_older_backup_without_notes_imports()
+    {
+        var (_, section) = Default();
+        var page = NoteStore.CreatePage(section, "In the backup", "```sql\nSELECT 1\n```\n", "SELECT 1");
+        NoteStore.AddImage(page, "image/png", 1, 1, [5, 6]);
+        var path = Path.Combine(Path.GetTempPath(), "rh-backup-" + Guid.NewGuid().ToString("N") + ".rhbackup");
+        try
+        {
+            RemoteHub.Services.Backup.Export(new RemoteHub.Models.AppData(), path, "backup-password", NoteStore.ExportAll());
+            Assert.DoesNotContain("SELECT 1", File.ReadAllText(path));
+            RemoteHub.Services.Backup.Import(path, "backup-password", out var notes);
+            Assert.NotNull(notes);
+            Assert.Equal("```sql\nSELECT 1\n```\n", Assert.Single(notes!.Pages).Body);
+            Assert.Equal([5, 6], Assert.Single(notes.Images).Data);
+            Assert.Throws<UnauthorizedAccessException>(() => RemoteHub.Services.Backup.Import(path, "wrong", out _));
+
+            RemoteHub.Services.Backup.Export(new RemoteHub.Models.AppData(), path, "backup-password");
+            RemoteHub.Services.Backup.Import(path, "backup-password", out var none);
+            Assert.Null(none);
+        }
+        finally { File.Delete(path); }
+    }
 }

@@ -1,6 +1,7 @@
 # RemoteHub – Notes and the view rail
 
-Status: Draft v4 (2026-10-19), checked against the code on `main` (127cbf3). Nothing is built yet. v2 took in the
+Status: v5 (2026-10-19) – phases 1–4 are built on the branch `notes-view` except the `AllowNotes` policy; §13 lists what
+differs from the plan. v2 took in the
 answers to the open questions of v1 (§12): several notebooks, Settings and the version in the rail, a faster rail, no
 secret format, no OneNote import. v3 replaces v2's Markdown editor with a **WYSIWYG editor with tables, images and
 script blocks** (§4.5); pages are still stored as Markdown. v4: notes are documentation only (no running or sending
@@ -434,6 +435,10 @@ The editor's `FlowDocument` is converted to Markdown on every save and back when
 - **Copy** puts three formats on the clipboard: plain text, HTML (so a paste into Teams, Outlook or Word keeps the
   formatting), and Markdown as text for a text editor or an AI chat via *Copy as Markdown*. Notes are the user's own
   content, so this is the normal clipboard, not `SecureClipboard`.
+- **Plain Markdown both ways:** *Copy as Markdown* (Ctrl+Alt+C, right-click menu) puts the selection – or the whole
+  page when nothing is selected – on the clipboard as Markdown text. *Paste Markdown* (Ctrl+Alt+V) reads Markdown text
+  from the clipboard and inserts it formatted (headings, lists, tables, script blocks …). Ctrl+Alt uses the left Alt
+  key only: AltGr types characters on many keyboards.
 
 #### 4.5.8 Size limit
 
@@ -714,3 +719,34 @@ The questions of Draft v1, answered on 2026-10-19:
 | 10 | Downgrades to older versions | **Not supported** – RemoteHub isn't GA yet (§5.3). |
 
 Nothing is open.
+
+## 13. As built (phases 1–4)
+
+Built on the branch `notes-view` (2026-10-19). Code: `Views/ViewRail.cs`, `MainWindow.Views.cs`, `Views/NotesView.cs`,
+`Views/NoteEditor.cs`, `Views/ScriptBlock.cs`, `Views/ScriptHighlighting.cs`, `Views/NoteImageView.cs`,
+`Views/NotesDialogs.cs`, `Data/NoteStore.cs`, `Services/NoteMarkdown.cs`, `Services/NoteHtml.cs`,
+`Services/NoteImages.cs`, `Services/NoteFiles.cs`, `Services/ScriptLanguages.cs`. Tests: `NotesTests`,
+`NoteMarkdownTests`, `NoteFilesTests`.
+
+| Plan | Built | Why |
+|---|---|---|
+| `AllowNotes` policy (§8) | **Not on this branch** | The console's `Allow*` feature switches are being built on `admx-phase3`; `AllowNotes` goes in with them or after that branch is merged, so the two don't conflict. |
+| `NotesViewModel` (§5.2) | The logic lives in `NotesView` | Like the other views built in code (`RegistryView`, `FileBrowserView`). |
+| FTS triggers on `notes` (§5.1) | `NoteStore` writes the index in the same transaction; `notes` has an `rid` column for the index | With `trusted_schema = OFF`, triggers can't write to an FTS5 table; `rid` can't be renumbered by `VACUUM`. |
+| Narrow window: panes collapse into drop-downs (§4.1) | Not built | The panes have minimum widths; the window's minimum width still fits them. |
+| Table columns resized by dragging (§4.5.3) | Not built | Columns share the width. The width was display-only anyway. |
+| Reordering by dragging (§4.2, §4.3) | *Move up / Move down* in the context menus; dragging a page onto a section and a section onto a notebook moves it | Dragging inside the lists can come later. |
+| *Paste as script block* offered (§4.5.5) | Code-looking text pasted into an empty paragraph becomes a script block; Ctrl+Z undoes it. Tab-separated rows (Excel) become a table | Fewer clicks; the undo is the way back. |
+| Page undo covers script blocks as one step (§6.2) | A script block has its own undo while the caret is in it; the page's undo doesn't include typing inside a block | AvalonEdit and the RichTextBox keep separate histories. |
+| Images: over 16,384 px refused (§9) | Scaled down to 16,384 px; refused when the header claims more than 65,535 px a side or 300 megapixels, or the file is over 64 MB | Large screenshots of several monitors stay usable; decompression bombs are still refused before decoding. |
+| Touch: press-and-hold shows the expanded rail (§3.3) | Not built | Tapping an icon switches the view. |
+| Notebook export folder name `<notebook> <yyyy-MM-dd HH-mm>` | As planned; a page export writes `Title.md` (+ `Title.assets\`) into the chosen folder, never overwriting (`Title (2).md`) | – |
+
+Audit events: `note.added`, `note.changed` (once per page and run), `note.deleted`, `note.restored`, `notes.exported`,
+`notes.imported` – ids and counts only, in the audit viewer's group *Notes*.
+
+Checked in the running app (test data folder, UI Automation): the rail, switching views, notebooks and sections, a page
+with SQL and PowerShell script blocks, a check list, a table, a quote and an image, and search with highlighted
+snippets. Not checked by hand yet: hovering the rail, typing in the editor (shortcuts, Markdown typed at line starts),
+paste from Word/Excel/browsers, drag and drop, image resizing, export/import dialogs, the light theme, and switching
+views with RDP and agent desktop sessions open.
