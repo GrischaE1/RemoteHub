@@ -35,6 +35,7 @@ public partial class MainWindow
     /// <summary>New → Network share: a share on its own, in the selected folder.</summary>
     private void NewShare_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (Refused(Feature.NetworkShares)) return;
         var share = new NetworkShare();
         var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew());
@@ -47,6 +48,7 @@ public partial class MainWindow
 
     private void AddShare(Connection c)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (Refused(Feature.NetworkShares)) return;
         var share = new NetworkShare { Server = c };
         if (new ShareEditorWindow(share, c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
@@ -58,6 +60,7 @@ public partial class MainWindow
 
     private void EditShare(NetworkShare share)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (new ShareEditorWindow(share, share.Server, _vm.Data, isNew: false) { Owner = this }.ShowDialog() != true) return;
         var server = ServerOf(share);
         foreach (var s in _vm.Sessions.OfType<ShareSession>().Where(s => s.Share == share)) s.Title = server.Name;
@@ -66,6 +69,7 @@ public partial class MainWindow
 
     private async Task DeleteShare(NetworkShare share)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var open = _vm.Sessions.OfType<ShareSession>().Where(s => s.Share == share).ToList();
         if (!await Dialogs.Confirm(this, "Delete network share",
                 $"Remove the share \"{share.Name}\" ({share.Address}){(share.Server is { } c ? $" from {c.Name}" : "")}?" +
@@ -102,12 +106,17 @@ public partial class MainWindow
             cm.Items.Add(new Separator());
         }
         cm.Items.Add(MenuEntry("Copy address", SymbolRegular.Link24, () => { try { Clipboard.SetText(share.Address); } catch { /* clipboard busy */ } }));
-        var edit = MenuEntry("Edit…", SymbolRegular.Edit24, () => EditShare(share));
-        edit.InputGestureText = "F2";
-        cm.Items.Add(edit);
-        if (share.IsStandalone)
+        // A read-only tree (policy AllowConnectionEditing = 0, §5.4): only opening and copying the address are left.
+        var editable = Features.IsAllowed(Feature.ConnectionEditing);
+        if (editable)
         {
-            cm.Items.Add(MenuEntry("Duplicate", SymbolRegular.Copy24, () => _vm.Duplicate(share).IsSelected = true));
+            var edit = MenuEntry("Edit…", SymbolRegular.Edit24, () => EditShare(share));
+            edit.InputGestureText = "F2";
+            cm.Items.Add(edit);
+        }
+        if (editable && share.IsStandalone)
+        {
+            cm.Items.Add(MenuEntry("Duplicate", SymbolRegular.Copy24, () => { if (!Refused(Feature.ConnectionEditing)) _vm.Duplicate(share).IsSelected = true; }));
             if (Features.IsAllowed(Feature.JumpHosts) || share.Parent is Connection) // blocked: only "out of" a jump host
             {
                 var moveUnder = new MenuItem { Header = "Move under", Icon = new SymbolIcon(SymbolRegular.Router24) };
@@ -115,10 +124,13 @@ public partial class MainWindow
                 cm.Items.Add(moveUnder);
             }
         }
-        var remove = MenuEntry("Remove", SymbolRegular.Delete24, () => _ = DeleteShare(share));
-        remove.InputGestureText = "Del";
-        cm.Items.Add(remove);
-        if (share.IsStandalone)
+        if (editable)
+        {
+            var remove = MenuEntry("Remove", SymbolRegular.Delete24, () => _ = DeleteShare(share));
+            remove.InputGestureText = "Del";
+            cm.Items.Add(remove);
+        }
+        if (editable && share.IsStandalone)
         {
             // Like the tree's own menu: new items go next to the share (it is selected above)
             cm.Items.Add(new Separator());

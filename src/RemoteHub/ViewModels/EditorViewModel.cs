@@ -279,7 +279,8 @@ public sealed partial class EditorViewModel : ObservableObject
             [(PasswordPromptAction.Clipboard, "Copy to clipboard (cleared after 30 s)"),
              (PasswordPromptAction.Off, "Do nothing")],
             (o, v) => o.PasswordPrompt = (PasswordPromptAction?)v,
-            "For servers that refuse saved credentials (\"Your credentials did not work\"): the stored password is copied so you can paste it with Ctrl+V."));
+            "For servers that refuse saved credentials (\"Your credentials did not work\"): the stored password is copied so you can paste it with Ctrl+V.",
+            Features.IsAllowed(Feature.PasswordCopy) ? null : Features.TurnedOff)); // policy AllowPasswordCopy = 0 (§5.6)
 
         // Settings of a feature this PC's policy blocks stay visible, greyed out (settings are never hidden, only actions are).
         var remotingOff = Features.IsAllowed(Feature.PowerShellRemoting) ? null : Features.TurnedOff;

@@ -10,9 +10,9 @@ public enum Feature
     Agent, AgentDesktop, AgentPowerShell, AgentFileTransfer, AgentRegistry, AgentServices, AgentProcesses, AgentInstall,
     CredentialProviderInstall, AgentAutoSignIn,
     PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingSetup,
-    QuickConnect,
+    QuickConnect, ConnectionEditing,
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
-    Recording,
+    Recording, SavedPasswords, PasswordCopy,
     RdpFileImport, RdpFileExport, BackupExport, BackupImport, SharedSettings,
     Notes,
 }
@@ -55,6 +55,7 @@ public static class Features
         [Feature.RemotingProcesses] = new(PolicyCatalog.AllowRemotingProcesses, "Processes over WinRM", Feature.PowerShellRemoting),
         [Feature.RemotingSetup] = new(PolicyCatalog.AllowRemotingSetup, "Setting up PowerShell remoting on a target", Feature.PowerShellRemoting),
         [Feature.QuickConnect] = new(PolicyCatalog.AllowQuickConnect, "Quick connect"),
+        [Feature.ConnectionEditing] = new(PolicyCatalog.AllowConnectionEditing, "Changing folders, connections and shares"),
         // A jump host is an agent: no agent, no jump hosts.
         [Feature.JumpHosts] = new(PolicyCatalog.AllowJumpHosts, "Jump hosts", Feature.Agent, Plural: true),
         [Feature.NetworkShares] = new(PolicyCatalog.AllowNetworkShares, "Network shares", Plural: true),
@@ -63,6 +64,8 @@ public static class Features
         [Feature.Ftp] = new(PolicyCatalog.AllowFtp, "FTP shares", Feature.NetworkShares, Plural: true),
         [Feature.WebDav] = new(PolicyCatalog.AllowWebDav, "WebDAV shares", Feature.NetworkShares, Plural: true),
         [Feature.Recording] = new(PolicyCatalog.DisableRecording, "Recording", Inverted: true),
+        [Feature.SavedPasswords] = new(PolicyCatalog.AllowSavedPasswords, "Saving passwords"),
+        [Feature.PasswordCopy] = new(PolicyCatalog.AllowPasswordCopy, "Copying a stored password"),
         [Feature.RdpFileImport] = new(PolicyCatalog.AllowRdpFileImport, "Importing .rdp files"),
         [Feature.RdpFileExport] = new(PolicyCatalog.AllowRdpFileExport, "Saving .rdp files"),
         [Feature.BackupExport] = new(PolicyCatalog.AllowBackupExport, "Exporting a backup"),
@@ -78,6 +81,9 @@ public static class Features
         Feature.JumpHosts => "Jump host",
         Feature.NetworkShares or Feature.Smb or Feature.Sftp or Feature.Ftp or Feature.WebDav => "Network share",
         Feature.QuickConnect => "Quick connect",
+        Feature.ConnectionEditing => "Connections",
+        Feature.SavedPasswords or Feature.PasswordCopy => "Passwords",
+        Feature.RdpFileImport or Feature.RdpFileExport or Feature.BackupExport or Feature.BackupImport => "Import and export",
         Feature.SharedSettings => "Settings location",
         _ => Switches[feature].Entry.Group, // "RemoteHub Agent", "PowerShell remoting", "Import and export", "Recordings"
     };

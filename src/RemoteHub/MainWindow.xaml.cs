@@ -67,6 +67,12 @@ public partial class MainWindow : FluentWindow
         Loaded += (_, _) => ApplyTheme(AppPolicy.Theme ?? vm.Data.Ui.Theme);
         Loaded += (_, _) => StartupChecks();
         Loaded += (_, _) => { UpdateRecordButton(); UpdateSendFilesButton(); };
+        Loaded += (_, _) =>
+        {
+            // A read-only tree (policy AllowConnectionEditing = 0, docs/admx-design.md §5.4): its buttons aren't offered.
+            if (Features.IsAllowed(Feature.ConnectionEditing)) return;
+            NewButton.Visibility = RailNewButton.Visibility = DeleteUnusedButton.Visibility = EditConnectionButton.Visibility = Visibility.Collapsed;
+        };
         Loaded += (_, _) => StartAutoLock();
         Closing += Window_Closing;
     }
@@ -121,7 +127,8 @@ public partial class MainWindow : FluentWindow
         // Match against all sessions first, then honour the per-connection setting – so a dialog of a session with
         // the feature switched off can never pick up the password of another session.
         DiagLog.Write($"Credential dialog matched a session: {pick is not null}");
-        if (pick is null || pick.PasswordPrompt == PasswordPromptAction.Off) return;
+        // Policy AllowPasswordCopy = 0 (docs/admx-design.md §5.6): a stored password never goes to the clipboard.
+        if (pick is null || pick.PasswordPrompt == PasswordPromptAction.Off || !Features.IsAllowed(Feature.PasswordCopy)) return;
         var password = pick.UsedCredentials.Password!;
         var name = pick.Connection.Name;
 
@@ -743,11 +750,14 @@ public partial class MainWindow : FluentWindow
         CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
         CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
         CmAddShare.ToolTip = AddShareTip(n as Connection);
+        // A read-only tree (policy AllowConnectionEditing = 0, §5.4): nothing that creates, changes, moves or deletes an item.
+        var editable = Features.IsAllowed(Feature.ConnectionEditing);
         // With jump hosts blocked only "out of" a jump host is left to offer.
-        CmMoveUnder.Visibility = V(n is Connection or Folder && (Features.IsAllowed(Feature.JumpHosts) || n.Parent is Connection));
+        CmMoveUnder.Visibility = V(editable && n is Connection or Folder && (Features.IsAllowed(Feature.JumpHosts) || n.Parent is Connection));
         if (n is Connection or Folder) FillMoveUnder(CmMoveUnder, n);
         CmConnectAll.Visibility = V(n is Folder && (rdpOn || agentDesktopOn));
-        CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(n is not null);
+        CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(editable && n is not null);
+        CmNew.Visibility = CmNewSep.Visibility = V(editable);
         CmHistory.Visibility = V(n is Connection);
         CmSaveRdp.Visibility = V(n is not null && Features.IsAllowed(Feature.RdpFileExport));
         CmSaveRdp.Header = n is Folder ? "Export folder as .rdp files…" : "Save as .rdp file…";
@@ -772,7 +782,7 @@ public partial class MainWindow : FluentWindow
         CmPsTest.ToolTip = st == PsRemotingState.Unavailable ? $"Last result: {c!.PsRemoting!.Message}" : null;
         CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !viaAgent && Features.IsAllowed(Feature.RemotingSetup));
         CmAgent.Visibility = V(c is not null && Features.IsAllowed(Feature.AgentInstall));
-        CmAddShare.Visibility = V(c is not null && Features.IsAllowed(Feature.NetworkShares));
+        CmAddShare.Visibility = V(c is not null && editable && Features.IsAllowed(Feature.NetworkShares));
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
         CmCredentialProvider.Visibility = V(c is not null && CredentialProviderOffered(c));
         if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
@@ -799,7 +809,11 @@ public partial class MainWindow : FluentWindow
         var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
         var toolsShown = CmTools.Visibility == Visibility.Visible || CmManage.Visibility == Visibility.Visible;
         CmPsSep.Visibility = V(connectShown && toolsShown);
-        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown || CmNotes.Visibility == Visibility.Visible));
+        // …and only with something after it: Edit and the rest (a read-only tree hides them), or More.
+        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown || CmNotes.Visibility == Visibility.Visible)
+                              && (CmEdit.Visibility == Visibility.Visible || CmMore.Visibility == Visibility.Visible));
+        // Nothing left to offer (a read-only tree, right-click on empty space): no empty menu.
+        if (!TreeMenu.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible)) TreeMenu.IsOpen = false;
     }
 
     private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);
@@ -881,10 +895,12 @@ public partial class MainWindow : FluentWindow
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
         if (Features.IsAllowed(Feature.NetworkShares))
         {
-            if (tools.Items.Count > 0) tools.Items.Add(new Separator());
             // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
-            foreach (var share in c.Shares.Where(s => Features.IsAllowed(s.Protocol))) tools.Items.Add(ShareEntry(share));
-            tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
+            var shares = c.Shares.Where(s => Features.IsAllowed(s.Protocol)).ToList();
+            var canAdd = Features.IsAllowed(Feature.ConnectionEditing); // a read-only tree takes no new share
+            if (tools.Items.Count > 0 && (shares.Count > 0 || canAdd)) tools.Items.Add(new Separator());
+            foreach (var share in shares) tools.Items.Add(ShareEntry(share));
+            if (canAdd) tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
         }
         if (tools.Items.Count > 0) cm.Items.Add(tools);
 
@@ -953,8 +969,11 @@ public partial class MainWindow : FluentWindow
         var cm = new ContextMenu();
         AddConnectionTools(cm, g.Connection, null);
         if (cm.Items.Count > 0) cm.Items.Add(new Separator()); // nothing above when policy blocks every way in
-        cm.Items.Add(MenuEntry("Edit connection…", SymbolRegular.Edit24, () => EditNode(g.Connection)));
-        cm.Items.Add(new Separator());
+        if (Features.IsAllowed(Feature.ConnectionEditing))
+        {
+            cm.Items.Add(MenuEntry("Edit connection…", SymbolRegular.Edit24, () => EditNode(g.Connection)));
+            cm.Items.Add(new Separator());
+        }
         cm.Items.Add(MenuEntry(g.Sessions.Count > 1 ? $"Close all {g.Sessions.Count} tabs" : "Close", SymbolRegular.Dismiss24, () => CloseGroup(g)));
         ShowMenu(cm, item, PlacementMode.MousePoint);
         e.Handled = true;
@@ -985,7 +1004,7 @@ public partial class MainWindow : FluentWindow
         if (RecordingAllowed)
             Add(s.IsRecording ? "Stop recording" : "Record to a video file…", s.IsRecording ? SymbolRegular.RecordStop24 : SymbolRegular.Record24, () => ToggleRecording(s));
         Add(s.IsDetached ? "Dock back" : "Detach into its own window", SymbolRegular.WindowNew24, () => ToggleDetach(s));
-        Add("Edit connection…", SymbolRegular.Edit24, () => EditNode(c));
+        if (Features.IsAllowed(Feature.ConnectionEditing)) Add("Edit connection…", SymbolRegular.Edit24, () => EditNode(c));
         cm.Items.Add(new Separator());
         Add("Close", SymbolRegular.Dismiss24, s.Close);
         cm.PlacementTarget = item;
@@ -1878,7 +1897,7 @@ public partial class MainWindow : FluentWindow
         if (AgentDesktopFor(c)) OpenRdp(c); else OpenAgentDesktop(c);
     }
     private void CmEdit_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) EditNode(n); }
-    private void CmDuplicate_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) _vm.Duplicate(n).IsSelected = true; }
+    private void CmDuplicate_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n && !Refused(Feature.ConnectionEditing)) _vm.Duplicate(n).IsSelected = true; }
     private void CmHistory_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenAuditLog(c); }
 
     private void OpenAuditLog(Connection? c)
@@ -1984,6 +2003,7 @@ public partial class MainWindow : FluentWindow
 
     private void NewConnection_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var parent = _vm.TargetFolderForNew();
         var c = new Connection { Parent = parent };
         if (new EditorWindow(c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
@@ -1995,6 +2015,7 @@ public partial class MainWindow : FluentWindow
 
     private void NewFolder_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var parent = _vm.TargetFolderForNew();
         var f = new Folder { Parent = parent };
         if (new EditorWindow(f, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
@@ -2006,6 +2027,7 @@ public partial class MainWindow : FluentWindow
 
     private void EditNode(NodeBase n)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (new EditorWindow(n, _vm.Data, isNew: false) { Owner = this }.ShowDialog() == true)
         {
             foreach (var s in _vm.Sessions.Where(s => s.Connection == n)) s.Title = n.Name;
@@ -2042,6 +2064,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Deletes every connection the filter shows, after one question (open tabs of them are closed).</summary>
     private async void DeleteUnused_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var list = _vm.SearchResults.Select(h => h.Node).OfType<Connection>().ToList();
         if (list.Count == 0) return;
         var names = string.Join("\n", list.Take(12).Select(c => "• " + c.Name)) + (list.Count > 12 ? $"\n… and {list.Count - 12} more" : "");
@@ -2066,6 +2089,7 @@ public partial class MainWindow : FluentWindow
 
     private async Task DeleteNode(NodeBase n)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (n is Connection { Children.Count: > 0 } jumpHost)
         {
             // What's reached through it: kept by default – it moves next to the jump host and is reached directly.
@@ -2127,6 +2151,19 @@ public partial class MainWindow : FluentWindow
     {
         var ui = _vm.Data.Ui;
         Telemetry.AppStart(ui, Telemetry.Count(_vm.Data.Items));
+        // Policy AllowSavedPasswords = 0: passwords stored on this PC are removed, after saying so (§14 Q2). A shared settings
+        // file keeps them – other PCs may allow them – but they aren't used here either way.
+        if (!Features.IsAllowed(Feature.SavedPasswords) && !SettingsStore.IsShared && SavedPasswords.Remove(_vm.Data, _vm.AllNodes()) is var removed and > 0)
+        {
+            _vm.RequestSave();
+            DiagLog.Write($"Saved passwords: {removed} removed (policy AllowSavedPasswords)");
+            await Dialogs.Info(this, "Passwords", $"Your organisation doesn't allow saved passwords on this PC – {(removed == 1 ? "1 was" : $"{removed} were")} removed. " +
+                                                  "RemoteHub asks for a password when it connects and keeps it in memory only.");
+        }
+        // Policy SettingsLocation = Local with a shared folder chosen before: its settings aren't used – say so, not silently.
+        if (SettingsStore.IgnoredSharedFolder is { } ignored)
+            await Dialogs.Info(this, "Settings location", $"Your organisation keeps RemoteHub's settings on this PC only, so the shared settings in {ignored} " +
+                                                          "aren't used. The shared file isn't changed.");
         // Everything below runs on a background thread (policy lookup, network, parsing); only the result comes back here.
         var check = await Task.Run(async () =>
         {
@@ -2456,6 +2493,7 @@ public partial class MainWindow : FluentWindow
             try
             {
                 var c = RdpFileParser.Parse(file);
+                if (!Features.IsAllowed(Feature.SavedPasswords)) c.Credentials.Password = null; // a password in the file isn't kept (§5.6)
                 // Opening a .rdp file (e.g. via file association) reuses an existing entry for the same server.
                 if (connectAfterImport && _vm.AllNodes().OfType<Connection>().FirstOrDefault(x =>
                         string.Equals(x.Host, c.Host, StringComparison.OrdinalIgnoreCase) && x.Port == c.Port) is { } existing)
@@ -2463,6 +2501,8 @@ public partial class MainWindow : FluentWindow
                     (last, lastIsNew) = (existing, false);
                     continue;
                 }
+                // A read-only tree (policy AllowConnectionEditing = 0) takes no new entries; an existing one still opens above.
+                if (Features.WhyNot(Feature.ConnectionEditing) is { } readOnly) { errors.Add($"{Path.GetFileName(file)}: {readOnly}"); continue; }
                 _vm.Add(c, target);
                 (last, lastIsNew) = (c, true);
             }
@@ -2522,6 +2562,7 @@ public partial class MainWindow : FluentWindow
 
     private async void ImportBackup_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (Refused(Feature.BackupImport)) return;
         var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "RemoteHub backup (*.rhbackup;*.rdpmbackup)|*.rhbackup;*.rdpmbackup|All files (*.*)|*.*" };
         if (dlg.ShowDialog(this) != true) return;
@@ -2532,6 +2573,9 @@ public partial class MainWindow : FluentWindow
         Data.NotesExport? importedNotes;
         try { imported = Backup.Import(dlg.FileName, pw.Password, out importedNotes); }
         catch (Exception ex) { await Dialogs.Info(this, "Import failed", ex.Message); return; }
+        // Policy AllowSavedPasswords = 0: what comes in is stored without its passwords (§5.6).
+        if (!Features.IsAllowed(Feature.SavedPasswords) && SavedPasswords.Remove(imported, imported.Items.SelectMany(i => (IEnumerable<NodeBase>)[i, .. i.Descendants()])) is > 0 and var dropped)
+            DiagLog.Write($"Backup import: {dropped} passwords left out (policy AllowSavedPasswords)");
 
         var choice = await Dialogs.Ask(this, "Import backup",
             "Add the backup as a new folder next to your current connections, or replace everything?",

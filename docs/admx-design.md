@@ -1,6 +1,6 @@
 # RemoteHub – Full configuration through the registry (ADMX)
 
-Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1–4 are built** (§16–§19); phase 5 is not. The principles
+Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1–5 are built** (§16–§20). The principles
 are in §2, and the open questions in §14.
 Owner: Grischa Ernst
 
@@ -916,3 +916,44 @@ What was built, and where it differs from §6, §7 and §11.2:
   locks it, every §6 value a reader in `AppPolicy`); the lock-on values; recordings; and the Policies page conflict.
   `PolicyTemplateTests` now tells the agent's key from the console's `AgentInstall` next to it, and checks that a number box starts inside its range.
 - **Not run yet:** POL-15 (connection settings and settings in the lab) – not automated yet.
+
+## 20. Implementation notes (Phase 5)
+
+What was built, and where it differs from §5.4, §5.6, §6.3–§6.5 and §14 Q2. All since 0.20.2; template revision 1.4,
+121 policies, a new category *Security*, and *Import and export* is now *Passwords, import and export*.
+
+- **Read-only tree (`AllowConnectionEditing` = 0):** *Edit*, *Duplicate*, *Move under*, *Delete*, the *New* menus, the *New*
+  button, *Delete these…*, the toolbar's and the tab menus' *Edit connection…* and the share menu's editing entries
+  aren't shown. F2, Del, Ctrl+N and drag and drop are refused (`WhyNotMove`), and so are adding `.rdp` files (an entry
+  that exists still opens) and importing a backup. Connecting, the tools and the global defaults stay as they are.
+- **Saved passwords (`AllowSavedPasswords` = 0):** `Inheritance` leaves stored passwords out (`WithoutBlockedPassword`), so
+  RDP lets Windows ask and the tools, jump hosts and shares ask in RemoteHub (memory only). The password boxes of the
+  editor, saved credentials and the share editor are greyed out, saving keeps what was there, and a password in an
+  imported `.rdp` file is dropped. Q2: at start, on this PC's own settings, `SavedPasswords.Remove` clears them all
+  (connections, folders, shares, the global defaults, saved credentials) after the notice "Your organisation doesn't allow
+  saved passwords on this PC – N were removed"; a shared settings file keeps them.
+- **Password copy (`AllowPasswordCopy` = 0):** the Windows Security prompt gets nothing on the clipboard, and the connection
+  setting *When Windows asks for the password* is greyed out. There is no other *Copy password* action.
+- **Startup protection:** `Required` – at start without it, the *Startup protection* window opens before anything else,
+  and RemoteHub closes if it isn't set up; *Turn off* is greyed out. `Off` – *Turn on* is greyed out (where it's already on,
+  it can still be turned off). `AllowWindowsHello` = 0 greys out setting it up, and the unlock window doesn't offer it.
+  `AutoLockMinutes` fixes the auto-lock (greyed out in *Startup protection*), and only applies with protection on.
+- **Settings location (`SettingsLocation`, read once at start):** `Local` keeps the settings on this PC and the location is
+  locked; a `SettingsFolder` policy wins over it. `Shared` greys out *This PC only* in the location window, so a shared
+  folder in use stays.
+- **Diagnostic log:** `DiagnosticLog` = 0 writes nothing (read at most every 5 s). Retention is new for everyone:
+  `DiagLog.ApplyRetention` runs at start with `DiagnosticLogRetentionDays` or 30 days, deletes the rotated file when it's
+  older and the old lines of the current one. Settings → Logs says what is in effect; there is no user setting for either.
+- **Tests:** `ConsoleBehaviourPolicyTests` (8): stored passwords unused but kept, `SavedPasswords.Remove`, a duplicate, the log switch, the greyed
+  password prompt row, the features, the start values, and the log's retention. The lock-coverage test of §19 now also
+  covers the start values.
+- **After the review:** `DiagnosticLog` = 0 now takes effect (the first read of the cache never happened); retention
+  drops undated continuation lines with their old line; *Change password* doesn't set up Windows Hello again where it is
+  blocked; a duplicate and a backup import take no passwords while saving them is blocked; the rail's *+*, *Add network
+  share…* and a trailing separator are gone in a read-only tree, and an empty tree menu doesn't open; with
+  `SettingsLocation` = Local a shared folder chosen before is named in a notice instead of being ignored silently.
+- **Left as is:** `SettingsFolder` is still read live (as before phase 5), not only at start; *Use this PC only* with
+  `AllowSavedPasswords` = 0 copies the shared file's passwords to this PC, and they are removed at the next start;
+  *Open diagnostic log* with the log off opens an empty file; messages such as "Right-click it → Edit…" still name
+  entries a read-only tree hides.
+- **Not run yet:** POL-16 in the lab – not automated yet.

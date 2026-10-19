@@ -129,12 +129,25 @@ public static class SettingsStore
     /// <summary>Shared folder preset by policy (IT), with environment variables expanded. Null if none.</summary>
     public static string? PolicyFolder => AppPolicy.SettingsFolder; // also the RdpManager key from before the rename
 
-    public static bool IsPolicyManaged => PolicyFolder is not null;
+    /// <summary>
+    /// Policy SettingsLocation (docs/admx-design.md §6.4), read once at start: "Local" keeps the settings on this PC whatever
+    /// the user chose (a SettingsFolder policy still wins: it names a folder), "Shared" keeps them in the shared folder – the
+    /// user can't switch back to this PC.
+    /// </summary>
+    public static string? LocationPolicy => _locationPolicy.Value;
+    private static readonly Lazy<string?> _locationPolicy = new(() => AppPolicy.SettingsLocation);
+
+    /// <summary>Where the settings are kept is decided by policy: a folder (SettingsFolder), or this PC (SettingsLocation = Local).</summary>
+    public static bool IsPolicyManaged => PolicyFolder is not null || LocationPolicy == "Local";
+
+    /// <summary>The shared folder the user chose that SettingsLocation = Local leaves unused (said once at start), or null.</summary>
+    public static string? IgnoredSharedFolder =>
+        LocationPolicy == "Local" && PolicyFolder is null && _local.SharedFolder is { Length: > 0 } f ? Environment.ExpandEnvironmentVariables(f) : null;
 
     /// <summary>Folder of the shared settings file in use, or null for "this PC only".</summary>
     public static string? SharedFolder =>
         UsingLocalFallback ? null
-        : PolicyFolder ?? (_local.SharedFolder is { Length: > 0 } f ? Environment.ExpandEnvironmentVariables(f) : null);
+        : PolicyFolder ?? (LocationPolicy == "Local" ? null : _local.SharedFolder is { Length: > 0 } f ? Environment.ExpandEnvironmentVariables(f) : null);
 
     public static bool IsShared => SharedFolder is not null;
 

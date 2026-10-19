@@ -45,6 +45,20 @@ public static class AppPolicy
     /// <summary>The highest clipboard level RemoteHub uses in an agent desktop (0–3); the lower of this and the device's applies.</summary>
     public static int? AgentDesktopClipboard => PolicyCatalog.Number(PolicyCatalog.AgentDesktopClipboard, Source);
 
+    // Phase 5 (docs/admx-design.md §6.3–§6.5).
+    /// <summary>"Required" (RemoteHub opens nothing until startup protection is set up, and it can't be turned off), "Off" (it can't be turned on) or null.</summary>
+    public static string? StartupProtection => PolicyCatalog.Text(PolicyCatalog.StartupProtection, Source);
+    /// <summary>0: Windows Hello can't be used for startup protection (the password stays).</summary>
+    public static bool AllowWindowsHello => PolicyCatalog.Number(PolicyCatalog.AllowWindowsHello, Source) != 0;
+    /// <summary>Minutes without use before RemoteHub locks (1–1440); needs startup protection.</summary>
+    public static int? AutoLockMinutes => PolicyCatalog.Number(PolicyCatalog.AutoLockMinutes, Source);
+    /// <summary>"Local" or "Shared" (needs SettingsFolder), read at start; null: the user's choice.</summary>
+    public static string? SettingsLocation => PolicyCatalog.Text(PolicyCatalog.SettingsLocation, Source);
+    /// <summary>0: no diagnostic log is written.</summary>
+    public static bool DiagnosticLog => PolicyCatalog.Number(PolicyCatalog.DiagnosticLog, Source) != 0;
+    /// <summary>Days the diagnostic log keeps entries (1–3650); default 30.</summary>
+    public static int? DiagnosticLogRetentionDays => PolicyCatalog.Number(PolicyCatalog.DiagnosticLogRetentionDays, Source);
+
     /// <summary>A value of the agent install defaults (subkey AgentInstall, §6.9), by name.</summary>
     public static object? AgentInstall(string name) =>
         PolicyCatalog.AgentInstallEntries.FirstOrDefault(e => e.Name == name) is { } e ? PolicyCatalog.Value(e, Source) : null;

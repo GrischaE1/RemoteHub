@@ -92,6 +92,8 @@ public sealed class StartupProtectionWindow : FluentWindow
 
     private void BuildOff()
     {
+        if (AppPolicy.StartupProtection == "Required")
+            _body.Children.Add(Note("Your organisation requires startup protection on this PC. Set a startup password to open RemoteHub."));
         _body.Children.Add(Header("Turn on"));
         var p1 = Pw("New startup password (at least 8 characters)");
         var p2 = Pw("Repeat password");
@@ -100,8 +102,9 @@ public sealed class StartupProtectionWindow : FluentWindow
         var hello = new CheckBox
         {
             Content = "Also unlock with Windows Hello (PIN, fingerprint or face)",
-            IsChecked = _helloAvailable == true, IsEnabled = _helloAvailable == true, Margin = new Thickness(0, 2, 0, 4),
+            IsChecked = _helloAvailable == true && AppPolicy.AllowWindowsHello, IsEnabled = _helloAvailable == true, Margin = new Thickness(0, 2, 0, 4),
         };
+        if (!AppPolicy.AllowWindowsHello) PolicyLock.TurnedOff(hello); // policy AllowWindowsHello = 0 (docs/admx-design.md §6.3)
         _body.Children.Add(hello);
         if (_helloAvailable == false) _body.Children.Add(Text("Windows Hello isn't set up on this PC (Settings → Accounts → Sign-in options).", muted: true, size: 12));
         CheckBox? legacy = null;
@@ -134,6 +137,12 @@ public sealed class StartupProtectionWindow : FluentWindow
             return null;
         });
         _body.Children.Add(on);
+        if (AppPolicy.StartupProtection == "Off")
+        {
+            // Off by policy (kiosk and jump-server PCs): it can't be turned on here.
+            PolicyLock.TurnedOff(on, p1, p2, hello);
+            _body.Children.Add(Text("Startup protection is turned off by your organisation (Settings → Policies).", muted: true, size: 12));
+        }
     }
 
     private void BuildOn()
@@ -168,6 +177,7 @@ public sealed class StartupProtectionWindow : FluentWindow
         else
         {
             var add = new Button { Content = "Set up Windows Hello", Icon = new SymbolIcon(SymbolRegular.Fingerprint24), IsEnabled = _helloAvailable == true };
+            if (!AppPolicy.AllowWindowsHello) PolicyLock.TurnedOff(add);
             add.Click += (_, _) => _ = Run(add, error, async () =>
             {
                 if (await Verify() is { } bad) return bad;
@@ -186,8 +196,12 @@ public sealed class StartupProtectionWindow : FluentWindow
         var lockAfter = new System.Windows.Controls.ComboBox { Width = 220, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 0, 8) };
         foreach (var (minutes, label) in new[] { (0, "Never"), (5, "After 5 minutes"), (15, "After 15 minutes"), (30, "After 30 minutes"), (60, "After 1 hour") })
             lockAfter.Items.Add(new ComboBoxItem { Content = label, Tag = minutes });
-        var currentMinutes = _data().Ui.AutoLockMinutes;
+        // Fixed by policy AutoLockMinutes (§6.3): shown, greyed out, not stored.
+        var currentMinutes = AppPolicy.AutoLockMinutes ?? _data().Ui.AutoLockMinutes;
+        if (!lockAfter.Items.OfType<ComboBoxItem>().Any(i => (int)i.Tag == currentMinutes))
+            lockAfter.Items.Add(new ComboBoxItem { Content = currentMinutes == 1 ? "After 1 minute" : $"After {currentMinutes} minutes", Tag = currentMinutes });
         lockAfter.SelectedItem = lockAfter.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == currentMinutes) ?? lockAfter.Items[0];
+        if (AppPolicy.AutoLockMinutes is not null) PolicyLock.Apply(lockAfter);
         lockAfter.SelectionChanged += (_, _) =>
         {
             if (lockAfter.SelectedItem is not ComboBoxItem { Tag: int minutes }) return;
@@ -214,7 +228,7 @@ public sealed class StartupProtectionWindow : FluentWindow
             await SettingsStore.Reprotect(_data(), () => AppLock.ChangePassword(pw));
             DiagLog.Write("Startup protection: password changed");
             // Windows Hello unlocked the old key: set it up again for the new one.
-            var helloError = hadHello ? await AppLock.AddHello() : null;
+            var helloError = hadHello && AppPolicy.AllowWindowsHello ? await AppLock.AddHello() : null; // not again where the policy blocks it
             await Dialogs.Info(this, "Startup protection", "The startup password was changed." +
                 (helloError is null ? "" : $"\n\nWindows Hello has to be set up again: {helloError}"));
             return null;
@@ -234,5 +248,6 @@ public sealed class StartupProtectionWindow : FluentWindow
             return null;
         });
         _body.Children.Add(off);
+        if (AppPolicy.StartupProtection == "Required") PolicyLock.Apply(off); // required by policy: it can't be turned off
     }
 }

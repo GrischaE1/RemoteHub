@@ -132,7 +132,7 @@ public class ConsoleSettingsPolicyTests
     public void Every_console_setting_has_a_reader()
     {
         // §6 values in the root key: AppPolicy has a property of the same name, which the settings window and the code use.
-        var settings = PolicyCatalog.ConsoleEntries.Where(e => e.Key.Length == 0 && e.Since == "0.18.12" && !PolicyCatalog.FeatureEntries.Contains(e) && e.Name != "AllowSharedSettings");
+        var settings = PolicyCatalog.ConsoleEntries.Where(e => e.Key.Length == 0 && e.Since != "0.18.11" && !PolicyCatalog.FeatureEntries.Contains(e) && e.Name != "AllowSharedSettings");
         Assert.All(settings, e => Assert.True(typeof(AppPolicy).GetProperty(e.Name) is not null, $"AppPolicy has no {e.Name}"));
     }
 

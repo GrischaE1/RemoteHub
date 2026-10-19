@@ -168,14 +168,15 @@ public partial class MainWindow
         MenuEntry(header, icon, () => _ = MoveUnder(node, into), tip: tip);
 
     /// <summary>
-    /// Why <paramref name="node"/> can't go into <paramref name="into"/>: the tree's rules, and – with jump hosts blocked by this
+    /// Why <paramref name="node"/> can't go into <paramref name="into"/>: a read-only tree, the tree's rules, and – with jump hosts blocked by this
     /// PC's policy – not below a connection. Moving out of a jump host stays possible.
     /// </summary>
     private static string? WhyNotMove(NodeBase node, NodeBase? into) =>
-        TreeLayout.WhyNot(node, into) ?? (into is Connection || into?.JumpHost is not null ? Features.WhyNot(Feature.JumpHosts) : null);
+        Features.WhyNot(Feature.ConnectionEditing) ?? TreeLayout.WhyNot(node, into) ?? (into is Connection || into?.JumpHost is not null ? Features.WhyNot(Feature.JumpHosts) : null);
 
     private async Task MoveUnder(NodeBase node, NodeBase? into)
     {
+        if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (WhyNotMove(node, into) is { } why) { await Dialogs.Info(this, "Move", why); return; }
         if (!await ConfirmMove(node, into)) return;
         _vm.Move(node, into);

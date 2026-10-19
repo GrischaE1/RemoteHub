@@ -387,6 +387,8 @@ public sealed partial class MainViewModel : ObservableObject
             foreach (var c in n.Contents ?? []) NewIds(c);
         }
         NewIds(copy);
+        // Policy AllowSavedPasswords = 0: a copy is a new item, and new items take no password (docs/admx-design.md §5.6).
+        if (!Features.IsAllowed(Feature.SavedPasswords)) SavedPasswords.Remove(new AppData(), [copy, .. copy.Descendants()]);
         copy.Name += " (copy)";
         SettingsStore.RelinkParents([copy], node.Parent);
         var list = ChildrenOf(node.Parent);

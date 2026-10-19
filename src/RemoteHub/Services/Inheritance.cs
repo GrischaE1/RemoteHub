@@ -67,9 +67,21 @@ public static class Inheritance
             var saved = FindSaved(data, id);
             return saved is null
                 ? (new CredentialSet(), $"{where} – saved credential was deleted, Windows will prompt")
-                : (saved.ToSet(), $"{where} (saved credential \"{saved.Name}\")");
+                : (WithoutBlockedPassword(saved.ToSet()), $"{where} (saved credential \"{saved.Name}\")");
         }
-        return (inline, where);
+        return (WithoutBlockedPassword(inline), where);
+    }
+
+    /// <summary>
+    /// Policy AllowSavedPasswords = 0 (docs/admx-design.md §5.6, §14 Q2): a stored password isn't used – the user is asked when
+    /// connecting, and what they type is kept in memory only. The stored one isn't changed here.
+    /// </summary>
+    private static CredentialSet WithoutBlockedPassword(CredentialSet c)
+    {
+        if (string.IsNullOrEmpty(c.Password) || Features.IsAllowed(Feature.SavedPasswords)) return c;
+        var copy = c.Clone();
+        copy.Password = null;
+        return copy;
     }
 
     public static SavedCredential? FindSaved(AppData data, Guid id) => data.SavedCredentials.FirstOrDefault(c => c.Id == id);

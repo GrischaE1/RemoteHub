@@ -355,6 +355,7 @@
                     <TextBlock Text="Diagnostic log" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
                                Text="For troubleshooting: connection and password-prompt events – no passwords, usernames or host names. A text file on this PC." />
+                    <TextBlock x:Name="DiagnosticLogText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
                     <ui:Button x:Name="HelpLogButton" Content="Open diagnostic log" Icon="{ui:SymbolIcon Bug24}" />
                 </StackPanel>
 

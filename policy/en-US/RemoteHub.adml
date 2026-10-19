@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                           revision="1.3" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                           revision="1.4" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <displayName>RemoteHub</displayName>
   <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
   <resources>
     <stringTable>
       <string id="SUPPORTED_RemoteHub_0_18_11">RemoteHub 0.18.11 or later</string>
       <string id="SUPPORTED_RemoteHub_0_18_12">RemoteHub 0.18.12 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_20_2">RemoteHub 0.20.2 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
 
@@ -27,6 +28,7 @@ The devices themselves are protected by the RemoteHub Agent's policy (the catego
       <string id="Cat_Console_ConnDevices">Devices and resources</string>
       <string id="Cat_Console_ConnSecurity">Security</string>
       <string id="Cat_Console_ConnRemoting">Remoting and agent</string>
+      <string id="Cat_Console_Security">Startup protection</string>
       <string id="Cat_Console_Storage">Settings storage</string>
       <string id="Cat_Console_Updates">Updates and usage data</string>
       <string id="Cat_Console_Recordings">Recordings</string>
@@ -37,8 +39,8 @@ The devices themselves are protected by the RemoteHub Agent's policy (the catego
       <string id="Cat_Console_Remoting">PowerShell remoting</string>
       <string id="Cat_Console_Connections">Connections</string>
       <string id="Cat_Console_Shares">Jump hosts and network shares</string>
-      <string id="Cat_Console_ImportExport">Import and export</string>
       <string id="Cat_Console_Notes">Notes</string>
+      <string id="Cat_Console_ImportExport">Passwords, import and export</string>
       <string id="Cat_Agent">RemoteHub Agent</string>
       <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
 
@@ -915,6 +917,92 @@ Registry: AgentAutoSignInEndAction (REG_SZ: Lock, SignOut).</string>
       <string id="Console_ConnAgentAutoSignInEndAction_Lock">Lock the session</string>
       <string id="Console_ConnAgentAutoSignInEndAction_SignOut">Sign out</string>
 
+      <!-- Console: phase 5 -->
+      <string id="Console_AllowConnectionEditing">Allow changing folders, connections and shares</string>
+      <string id="Console_AllowConnectionEditing_Help">Enabled or Not configured: allowed.
+
+Disabled: The tree is read-only: creating, editing, duplicating, moving and deleting folders, connections and shares isn't offered (menus, the New button, F2, Del, Ctrl+N, drag and drop), and importing .rdp files or a backup is refused. Connecting, the tools and the settings window still work. For connections IT provides through a shared settings folder.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowConnectionEditing (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowSavedPasswords">Allow saving passwords</string>
+      <string id="Console_AllowSavedPasswords_Help">Enabled or Not configured: allowed.
+
+Disabled: No password can be stored in connections, folders, shares, the global defaults or saved credentials (the password boxes are greyed out), and stored passwords aren't used: RemoteHub (or Windows, for RDP) asks when connecting and keeps what is typed in memory only. On this PC's own settings the stored passwords are removed at the next start, after a notice; a shared settings file keeps them, because other PCs may allow them.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowSavedPasswords (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowPasswordCopy">Allow copying a stored password to the clipboard</string>
+      <string id="Console_AllowPasswordCopy_Help">Enabled or Not configured: allowed.
+
+Disabled: When Windows asks for the password during an RDP sign-in, the stored password is not copied to the clipboard; the connection setting "When Windows asks for the password" is greyed out.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowPasswordCopy (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_StartupProtection">Startup protection</string>
+      <string id="Console_StartupProtection_Help">Fixes this setting of RemoteHub on this PC.
+
+Required: at start without startup protection, RemoteHub asks for a startup password and closes if none is set; it can't be turned off. Off: it can't be turned on (for kiosk or jump-server PCs); where it is already on, it can still be turned off. Read at start.
+
+Not configured: the user decides.
+
+Registry: StartupProtection (REG_SZ: Required, Off).</string>
+      <string id="Console_StartupProtection_Required">Required – RemoteHub opens nothing until it is set up</string>
+      <string id="Console_StartupProtection_Off">Off – it can't be turned on</string>
+
+      <string id="Console_AllowWindowsHello">Allow Windows Hello for startup protection</string>
+      <string id="Console_AllowWindowsHello_Help">Enabled or Not configured: allowed.
+
+Disabled: Windows Hello can't be set up for startup protection, and where it is set up it isn't offered when unlocking – the startup password is asked.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowWindowsHello (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AutoLockMinutes">Lock RemoteHub after</string>
+      <string id="Console_AutoLockMinutes_Help">Enabled: the value set here (minutes without mouse or keyboard input on this PC).
+
+Disabled or Not configured: the user decides in Startup protection (default: never).
+
+Needs startup protection: without it there is nothing to lock, and the value is ignored. The choice in Startup protection is greyed out.
+
+Registry: AutoLockMinutes (REG_DWORD), 1–1440.</string>
+
+      <string id="Console_SettingsLocation">Where settings are stored</string>
+      <string id="Console_SettingsLocation_Help">Fixes this setting of RemoteHub on this PC.
+
+This PC only: a shared folder the user chose isn't used. The shared settings folder: users can't switch back to this PC only; set the folder with "Shared settings folder", which wins over This PC only when both are set. Read at start.
+
+Not configured: the user decides.
+
+Registry: SettingsLocation (REG_SZ: Local, Shared).</string>
+      <string id="Console_SettingsLocation_Local">This PC only</string>
+      <string id="Console_SettingsLocation_Shared">The shared settings folder</string>
+
+      <string id="Console_DiagnosticLog">Write the diagnostic log</string>
+      <string id="Console_DiagnosticLog_Help">Enabled or Not configured: RemoteHub writes its diagnostic log (%APPDATA%\RemoteHub\logs\remotehub.log): connection and password-prompt events, never passwords, user names or host names.
+
+Disabled: no diagnostic log is written.
+
+The Logs page in Settings shows what is in effect.
+
+Registry: DiagnosticLog (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_DiagnosticLogRetentionDays">Keep the diagnostic log</string>
+      <string id="Console_DiagnosticLogRetentionDays_Help">Enabled: the value set here (days).
+
+Disabled or Not configured: 30 days.
+
+Older entries are removed when RemoteHub starts.
+
+Registry: DiagnosticLogRetentionDays (REG_DWORD), 1–3650.</string>
+
       <!-- Agent: features -->
       <string id="Agent_PowerShellEnabled">Allow PowerShell, files, registry, services and processes</string>
       <string id="Agent_PowerShellEnabled_Help">Enabled or Not configured: the agent offers PowerShell sessions to the accounts in "Who may use PowerShell, files, registry, services and processes". RemoteHub's PowerShell, file transfer, registry, services and processes tabs all run in such a session.
@@ -1320,6 +1408,18 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Console_ConnAgentAutoSignInEndAction">
         <dropdownList refId="AgentAutoSignInEndAction" noSort="true">When an automatic sign-in's connection ends:</dropdownList>
+      </presentation>
+      <presentation id="Console_StartupProtection">
+        <dropdownList refId="StartupProtection" noSort="true">Startup protection:</dropdownList>
+      </presentation>
+      <presentation id="Console_AutoLockMinutes">
+        <decimalTextBox refId="AutoLockMinutes" defaultValue="15">Minutes without mouse or keyboard input on this PC:</decimalTextBox>
+      </presentation>
+      <presentation id="Console_SettingsLocation">
+        <dropdownList refId="SettingsLocation" noSort="true">Where settings are stored:</dropdownList>
+      </presentation>
+      <presentation id="Console_DiagnosticLogRetentionDays">
+        <decimalTextBox refId="DiagnosticLogRetentionDays" defaultValue="30">Days:</decimalTextBox>
       </presentation>
     </presentationTable>
   </resources>

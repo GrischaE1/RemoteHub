@@ -75,7 +75,7 @@
                 </StackPanel.Resources>
                 <ui:Button Icon="{ui:SymbolIcon PanelLeftExpand24}" Click="ToggleSidebar_Click" Margin="0,0,0,8"
                            AutomationProperties.Name="Show navigation" ToolTip="Show navigation (Ctrl+B)" />
-                <ui:Button Icon="{ui:SymbolIcon Add24}" Appearance="Primary" Click="NewMenu_Click" Margin="0,0,0,8"
+                <ui:Button x:Name="RailNewButton" Icon="{ui:SymbolIcon Add24}" Appearance="Primary" Click="NewMenu_Click" Margin="0,0,0,8"
                            AutomationProperties.Name="New" ToolTip="New connection, network share, folder or import .rdp files" />
                 <ui:Button Icon="{ui:SymbolIcon Search24}" Click="RailSearch_Click"
                            AutomationProperties.Name="Search" ToolTip="Search folders &amp; connections (Ctrl+F)" Margin="0,0,0,8" />
@@ -516,8 +516,8 @@
                                               ToolTip="The audit log of this connection: its sessions, changes and file transfers" />
                                     <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
                                 </MenuItem>
-                                <Separator />
-                                <MenuItem Header="New" Icon="{ui:SymbolIcon Add24}">
+                                <Separator x:Name="CmNewSep" />
+                                <MenuItem x:Name="CmNew" Header="New" Icon="{ui:SymbolIcon Add24}">
                                     <MenuItem Header="Connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Add24}" />
                                     <MenuItem x:Name="CmNewShare" Header="Network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
                                     <MenuItem Header="Folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" />
@@ -537,7 +537,7 @@
                         <StackPanel>
                             <TextBlock Text="{Binding UnusedSummary}" TextWrapping="Wrap" FontSize="12" />
                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                <ui:Button Content="Delete these…" Icon="{ui:SymbolIcon Delete24}" Appearance="Danger" Click="DeleteUnused_Click"
+                                <ui:Button x:Name="DeleteUnusedButton" Content="Delete these…" Icon="{ui:SymbolIcon Delete24}" Appearance="Danger" Click="DeleteUnused_Click"
                                            Visibility="{Binding SearchResults.Count, Converter={StaticResource BoolToVis}}" Margin="0,0,6,0" />
                                 <ui:Button Content="Show all" Click="ClearUnusedFilter_Click" />
                             </StackPanel>
@@ -681,7 +681,7 @@
                                 <ui:Button x:Name="RecordButton" Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Record24}" Click="Record_Click"
                                            AutomationProperties.Name="Record this tab to a video file" ToolTip="Record this tab to a video file" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon WindowNew24}" Click="Detach_Click" AutomationProperties.Name="Detach into its own window / dock back" ToolTip="Detach into its own window / dock back" />
-                                <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Edit24}" Click="EditSessionConnection_Click" AutomationProperties.Name="Edit connection" ToolTip="Edit connection" />
+                                <ui:Button x:Name="EditConnectionButton" Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Edit24}" Click="EditSessionConnection_Click" AutomationProperties.Name="Edit connection" ToolTip="Edit connection" />
                             </StackPanel>
                         </Grid>
 

@@ -22,6 +22,9 @@ public sealed class UnlockWindow : FluentWindow
     private readonly Button _hello = new() { Content = "Windows Hello", Icon = new SymbolIcon(SymbolRegular.Fingerprint24), Margin = new Thickness(0, 0, 8, 0) };
     private int _failures;
 
+    /// <summary>Windows Hello is set up and this PC's policy allows it (AllowWindowsHello, docs/admx-design.md §6.3).</summary>
+    private static bool HelloAllowed => AppLock.HasHello && AppPolicy.AllowWindowsHello;
+
     public UnlockWindow(bool whileRunning = false)
     {
         Title = "RemoteHub – locked";
@@ -41,7 +44,7 @@ public sealed class UnlockWindow : FluentWindow
         var names = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         names.Children.Add(new TextBlock { Text = "RemoteHub is locked", FontSize = 20, FontWeight = FontWeights.SemiBold });
         var sub = new TextBlock { TextWrapping = TextWrapping.Wrap, Text = (whileRunning ? "Locked after a while without input – your sessions keep running. " : "") +
-            (AppLock.HasHello
+            (HelloAllowed
                 ? "Unlock with Windows Hello (PIN, fingerprint or face) or the startup password."
                 : "Enter the startup password to open your connections.") };
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -54,7 +57,7 @@ public sealed class UnlockWindow : FluentWindow
             ToolTip = whileRunning ? "Disconnects all sessions and closes RemoteHub" : null };
         exit.Click += (_, _) => DialogResult = false;
         var buttons = new DockPanel { Margin = new Thickness(0, 14, 0, 0), LastChildFill = false };
-        if (AppLock.HasHello) { DockPanel.SetDock(_hello, Dock.Left); buttons.Children.Add(_hello); }
+        if (HelloAllowed) { DockPanel.SetDock(_hello, Dock.Left); buttons.Children.Add(_hello); }
         DockPanel.SetDock(exit, Dock.Right);
         DockPanel.SetDock(_unlock, Dock.Right);
         buttons.Children.Add(exit);
@@ -72,7 +75,7 @@ public sealed class UnlockWindow : FluentWindow
         Content = root;
 
         Loaded += (_, _) => _password.Focus();
-        ContentRendered += (_, _) => { if (AppLock.HasHello) _ = UnlockWithHello(); };
+        ContentRendered += (_, _) => { if (HelloAllowed) _ = UnlockWithHello(); };
     }
 
     private void Busy(bool on)
