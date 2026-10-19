@@ -1,8 +1,9 @@
 # RemoteHub – Notes and the view rail
 
-Status: Draft v2 (2026-10-19), checked against the code on `main` (127cbf3). Nothing is built yet. v2 takes in the
-answers to the open questions of v1 (§12): several notebooks, a Markdown editor with preview, Settings and the version
-in the rail, a faster rail, no secret format, no OneNote import.
+Status: Draft v3 (2026-10-19), checked against the code on `main` (127cbf3). Nothing is built yet. v2 took in the
+answers to the open questions of v1 (§12): several notebooks, Settings and the version in the rail, a faster rail, no
+secret format, no OneNote import. v3 replaces v2's Markdown editor with a **WYSIWYG editor with tables, images and
+script blocks** (§4.5); pages are still stored as Markdown.
 Owner: Grischa Ernst
 
 This covers two things that belong together:
@@ -19,7 +20,7 @@ there (§6 schema, notes per connection or folder), this document wins, and §9.
 | Part | What |
 |---|---|
 | **View rail** | Icons only, on the far left of the window, one for each view: **Remote Control** (everything RemoteHub does today) and **Notes**. When the pointer rests on the rail, it expands over the content and shows a label next to each icon. It collapses when the pointer leaves. |
-| **Notes** | Three panes, as in OneNote: notebooks and their sections with a colour, the pages of the selected section, and the page itself. Pages are **Markdown**, shown formatted and edited as Markdown, so they can be exported and used as they are in other tools and with AI. The typical content is commands, SQL and configuration snippets. Notes are saved automatically and can be searched. |
+| **Notes** | Three panes, as in OneNote: notebooks and their sections with a colour, the pages of the selected section, and the page itself. Pages are edited as they look (WYSIWYG) with formatted text, tables, images and – most important – **script blocks** for commands, scripts, SQL and configuration. They are stored as Markdown, so they can be exported and used in other tools and with AI. Notes are saved automatically and can be searched. |
 
 ### 1.1 Principles
 
@@ -30,18 +31,20 @@ there (§6 schema, notes per connection or folder), this document wins, and §9.
    reference example contains a client secret.
 3. **Nothing typed is ever lost.** Autosave, no Save button, and deleting goes through *Recently deleted* (§6.5).
 4. **The rail is navigation, not a toolbar.** It holds views and Settings. Actions belong to the view (the sidebar's
-   *New* button, the Notes toolbar).
+   *New* button, the Notes format bar).
 
 ## 2. Non-goals (v1)
 
 - **Free placement of text boxes on a canvas** (OneNote's page model). Pages are a single flowing document.
-- **Ink, audio, embedded files and tables.** Pictures come in phase 4 (§10), with the `note_files` table planned in
-  local-db-design.md §6.
+- **Ink, audio and attached files** (other than images). Images are in v1 (§4.5.4).
+- **Running scripts from a note.** A script block can be copied, saved or sent to a PowerShell tab without running
+  (§4.5.5). Running belongs to the Scripts view (§3.8).
+- **Fonts, font sizes and text colours.** Pages use the theme's styles, so they look the same everywhere and stay
+  plain Markdown.
 - **Sharing notes with other users.** This waits for a server, as connections do.
 - **Sync between the user's devices.** This comes with device sync (local-db-design.md §8, phase 4 there). Until
   then, notes stay on the PC, also in shared-folder mode.
 - **Section groups** (sections inside sections). Notebooks and sections are enough for v1.
-- **A WYSIWYG editor.** Pages are edited as Markdown text, with a formatted preview (§4.5).
 - **Secret fields in notes** (hidden values, copying through `SecureClipboard`). Notes are protected as a whole (§9).
 - **Import from OneNote.** Copying and pasting a page's text works. A Markdown file can be imported (§4.7).
 
@@ -232,71 +235,152 @@ Above Settings, the rail shows the running version:
   the body.
 - **Date line** – created date and time in the user's regional format, in the secondary text colour. Read-only. The
   tooltip shows the date modified.
-- **Toolbar** on the right of the date line: *Edit* / *Done* (§4.5), *Copy as Markdown*, *Export…* (§4.7).
-- **Body** – the preview or the editor (§4.5), filling the rest of the card, with its own scrolling.
+- **Format bar** – one row above the body (§4.5): text style, bold/italic/strikethrough, lists, *Table*, *Image*,
+  *Script block*, link. On the right: *Copy as Markdown* and *Export…* (§4.7).
+- **Body** – the editor (§4.5), filling the rest of the card, with its own scrolling.
 
-### 4.5 Markdown: preview and editor
+### 4.5 The editor
 
-Pages are **Markdown** (CommonMark plus GitHub's tables, task lists and strikethrough). What is stored is exactly what
-the user typed. Nothing is converted, so a page that is copied or exported goes into another tool, a Git repository or
-an AI prompt as it is. Rich-text storage (the `RichTextBox`'s XAML) is ruled out: loading XAML with `XamlReader` can
-create arbitrary .NET objects, so a page from a backup or later from sync would become an attack path. Markdown is
-data only.
+The page is edited **as it looks** (WYSIWYG), like OneNote: formatted text, tables, images and script blocks, with no
+separate edit and preview modes. Underneath, a page is still stored as **Markdown** (§4.5.6), so export and use in other
+tools and with AI keep working.
 
-**Two modes, one page**
+#### 4.5.1 Technology
 
-| Mode | Shows | How to get there |
+| Option | For | Against |
 |---|---|---|
-| **Preview** (default) | The page formatted: headings, lists, check lists, tables, links, code blocks | Opening a page; *Done*; Esc; Ctrl+E |
-| **Edit** | The Markdown text in a monospace `ui:TextBox` (`AcceptsReturn`, `AcceptsTab`) | *Edit*; double-click in the preview; Ctrl+E; a new page |
+| **A. WPF `RichTextBox`, with script blocks in an embedded code editor** | Native: same theme, fonts, keyboard handling and accessibility as the rest of the app. Note text stays in the process – no browser cache or profile on disk. No JavaScript in the path of secrets. | Table editing (insert row, resize columns) and moving the caret into and out of embedded blocks are our own work. |
+| **B. WebView2 with a JavaScript editor (e.g. TipTap/ProseMirror)** | Mature table, image and code block editing out of the box | A browser engine with its own profile folder on disk (cache, IndexedDB, crash dumps) that can hold note text; a JavaScript dependency chain to keep up to date and audit; a second theme system; WebView2 is an `HwndHost` (airspace, §3.2) |
 
-- **Side by side:** when the page card is at least 1,100 px wide, *Edit* shows the editor on the left and the preview
-  on the right, updated 300 ms after typing stops. When it is narrower, the two modes take turns. The choice is stored
-  in `UiState` (`NotesSplitPreview`).
-- Double-clicking a paragraph in the preview opens the editor with the cursor on that paragraph's line (Markdig keeps
-  each block's source line).
-- A new page opens in Edit mode with the cursor in the title.
+**Recommendation: A.** Notes hold secrets (§1.1, principle 2), and option B would put their text into a browser
+profile on disk and a JavaScript supply chain. The extra editing work in A is bounded: tables are simple (§4.5.3), and
+there is one kind of embedded block.
 
-**The editor** is a text editor, not a formatter, but it helps with the usual things:
+Script blocks use **[AvalonEdit](https://github.com/icsharpcode/AvalonEdit)** (MIT, the editor from SharpDevelop and
+ILSpy) inside a `BlockUIContainer`. It brings syntax colouring, line numbers, its own undo and fast handling of long
+scripts. It goes into `THIRD-PARTY-NOTICES.md`.
 
-| Action | Shortcut | Does |
+#### 4.5.2 Text
+
+| Format | Shortcut | Stored as |
 |---|---|---|
-| Bold, italic | Ctrl+B, Ctrl+I | `**…**`, `*…*` around the selection |
-| Inline code | Ctrl+` | `` `…` `` around the selection |
-| Code block | Ctrl+Shift+` | ```` ``` ```` fences around the selected lines |
-| Link | Ctrl+K | `[selection](…)` |
-| Continue a list | Enter at the end of a list item | the next `-`, `1.` or `- [ ]` |
-| Indent, outdent | Tab, Shift+Tab | two spaces in lists, four elsewhere |
+| Heading 1–3 | Ctrl+Alt+1 … 3 | `#` … `###` |
+| Normal text | Ctrl+Alt+0 | paragraph |
+| Bold, italic, strikethrough | Ctrl+B, Ctrl+I, Ctrl+Shift+X | `**`, `*`, `~~` |
+| Inline code | Ctrl+` | `` ` `` |
+| Bulleted, numbered and check lists (nested) | Ctrl+., Ctrl+/, Ctrl+Shift+C; Tab / Shift+Tab to nest | `-`, `1.`, `- [ ]` |
+| Quote | Ctrl+Shift+Q | `>` |
+| Link | Ctrl+K | `[text](url)` |
+| Horizontal line | `---` + Enter | `---` |
 
-Ctrl+B inside the editor means bold, not "collapse sidebar". In Notes, the editor handles Ctrl+B first.
+- Markdown typed at the start of a line becomes the format at once (`# ` → heading, `- ` → list, `1. ` → numbered
+  list, `[] ` → check box, `> ` → quote, ```` ``` ```` + Enter → script block). This is the quickest way for people who
+  know Markdown, and nobody else needs it.
+- Ctrl+B inside the editor means bold, not "collapse sidebar". In Notes, the editor handles Ctrl+B first.
+- **Links:** only `http`, `https`, `mailto` and `remotehub://note/` (§4.6) are clickable, with Ctrl+click while
+  editing. `http(s)` asks first ("Open https://… in your browser?"). Other targets (`file:`, `javascript:`, UNC paths)
+  stay text.
+- No font, size or colour choice: pages look the same everywhere and stay plain Markdown. Text colour highlighting is a
+  candidate for later (§12).
 
-**The preview** is a read-only `FlowDocumentScrollViewer`. Its `FlowDocument` is built from Markdig's syntax tree by our
-own code (`NoteMarkdown.ToFlowDocument`), so only these elements can ever appear:
+#### 4.5.3 Tables
 
-- Headings, paragraphs, emphasis, strikethrough, inline code, block quotes, bulleted, numbered and task lists, tables,
-  thematic breaks and links.
-- **Code blocks:** monospace (`Cascadia Mono`, then `Consolas`), the theme's code background, their own horizontal
-  scrolling, no wrapping, and a *Copy* button in the top right that copies the block's text. The info string
-  (```` ```sql ````) is shown as a small label. Syntax colouring is not in v1.
-- **Task lists:** clicking a box in the preview ticks it and changes `[ ]` to `[x]` in the text. This is the only
-  change the preview can make.
-- **Links:** only `http`, `https`, `mailto` and `remotehub://note/` (§4.6) are clickable. `http(s)` asks first
-  ("Open https://… in your browser?"). Other links (`file:`, `javascript:`, UNC paths) are shown as text.
-- **Raw HTML** is shown as text (Markdig's HTML extension is off). **Images** are shown as their alt text and address
-  in v1 – no picture is loaded from anywhere (§10, phase 4).
+- *Table* in the format bar inserts a 3 × 3 table with a header row. Typing `| a | b |` + Enter does the same.
+- Tab moves to the next cell and adds a row at the end. A table's context menu: *Insert row above/below*, *Insert column
+  left/right*, *Delete row/column/table*, *Align column left/centre/right*. Columns can be resized by dragging their
+  border. The width is a display setting only and isn't stored.
+- Cells hold **one line of text with inline formats** (bold, italic, inline code, links). Enter in a cell moves to the
+  cell below. This is the limit of Markdown tables (GitHub's pipe tables), and it keeps every table exportable. Merged
+  cells, lists, images or script blocks inside cells are not possible; pasting them into a cell pastes their text.
+- Pasting a table from Excel, a web page or OneNote (HTML or tab-separated text) makes a table.
 
-**Paste and copy**
+#### 4.5.4 Images
 
-- Pasting into the editor pastes plain text. When the clipboard holds only HTML (from a browser or OneNote), it is
-  converted to Markdown for the elements above, and everything else is dropped.
-- *Copy as Markdown* copies the whole page (title as `# Title`, then the body). Copying a selection in the preview
-  copies its plain text. Notes are the user's own content, so this is the normal clipboard, not `SecureClipboard`.
+- An image comes from **paste** (a screenshot from Snipping Tool, an image copied from a browser), **drag and drop** of
+  a file, or *Image* in the format bar (a file dialog for PNG, JPEG, GIF, BMP, WebP).
+- On insert, the image is **re-encoded as PNG** (JPEG stays JPEG at quality 90 when it is a photo larger than 1 MB as
+  PNG). This drops all metadata – EXIF with GPS position, camera and author – and makes sure only a picture is stored,
+  whatever the source file held.
+- Limits: 25 MB per image after re-encoding (the limit planned for attachments in local-db-design.md §8), 16,384 px on
+  the longer side (larger images are scaled down), 200 images per page.
+- An image is shown at its natural size up to the page width. Dragging its corner resizes it (keeps the aspect ratio).
+  The width is stored. Its context menu: *Copy*, *Save as…*, *Alternative text…*, *Original size*, *Delete*.
+- Images are stored in the database (`note_files`, §5.1), never as separate files and never loaded from a URL. Pasted
+  HTML that links to a web image doesn't fetch it – the image is left out and replaced by its alt text.
 
-**Parsing:** [Markdig](https://github.com/xoofx/markdig) (BSD-2-Clause) with the pipelines for the elements above. It
-goes into `THIRD-PARTY-NOTICES.md`.
+#### 4.5.5 Script blocks
 
-**Size limit:** 1 MB of Markdown per page. Beyond that, the editor says "This page is too large – split it into
-several pages" and stops accepting input, rather than saving half a page.
+Script blocks are the most important element: commands, scripts, SQL and configuration that the user keeps and
+copies to a session.
+
+```
+┌─ PowerShell ▾ ─────────────────────────────────────── [⧉ Copy] [⋯] ┐
+│  1  Get-Service -Name 'RemoteHubAgent' |                           │
+│  2      Where-Object Status -ne 'Running' |                        │
+│  3      Start-Service -PassThru                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+- **Insert:** *Script block* in the format bar (Ctrl+Shift+`), or ```` ``` ```` + Enter, or ```` ```sql ```` + Enter
+  for a language. Pasting text that looks like code (several lines that start with spaces or tabs, or start with a
+  common command or keyword such as `Get-`, `$`, `SELECT`, `UPDATE`, `INSERT`, `{`, `<`) into an empty paragraph offers
+  *Paste as script block* (on by default; Ctrl+Z turns it back into text).
+- **Language:** the drop-down in the header: PowerShell, Command Prompt, Bash, SQL, JSON, XML, YAML, Registry (`.reg`),
+  Plain text. The choice is stored as the fence's info string (```` ```powershell ````). A new block guesses from the
+  pasted text and can be changed.
+- **Editing:** monospace (`Cascadia Mono`, then `Consolas`), syntax colouring, line numbers, no wrapping (horizontal
+  scrolling inside the block), Tab indents. The block grows with its content up to 30 lines, then scrolls inside
+  itself; dragging the bottom edge makes it taller.
+  - Arrow keys move the caret out of the block at its first and last line, so it feels like one document. Ctrl+Enter
+    at the end leaves the block and starts a new paragraph below it.
+  - The block has its own undo while the caret is inside. The page's undo treats a block's changes as one step.
+- **Colours:** theme-aware highlighting palettes for dark and light (AvalonEdit's definitions recoloured). PowerShell
+  uses the same palette as the PowerShell console (`PsSyntax` in `Views/PsSyntax.cs`), which today exists for the dark
+  theme only – it gets a light variant.
+- **Copy:** the *Copy* button copies the block's text exactly (no line numbers, line ends as stored) and shows "Copied"
+  for two seconds.
+- **⋯ menu:** *Copy*, *Language ›*, *Wrap long lines* (display only), *Save as file…* (`.ps1`, `.sql` … from the
+  language), *Delete block*.
+- **Send to a session** (phase 3, see §12): for PowerShell blocks, *Send to PowerShell ›* lists the open PowerShell
+  tabs. It **pastes the script into that tab's input line without running it** – the user presses Enter in the tab.
+  Running a script straight from a note, or on several devices at once, is a matter for the Scripts view (§3.8) with
+  its own design, audit and policy.
+
+#### 4.5.6 Storage
+
+The editor's `FlowDocument` is converted to Markdown on every save and back when a page opens. The converter
+(`NoteMarkdown`) is our own code on top of [Markdig](https://github.com/xoofx/markdig) (BSD-2-Clause, into
+`THIRD-PARTY-NOTICES.md`), so only the elements above are ever written or read:
+
+| Element | Markdown |
+|---|---|
+| Text formats, lists, quotes, links, lines | CommonMark, GitHub task lists and strikethrough |
+| Tables | GitHub pipe tables (alignment in the separator row) |
+| Images | `![alt text](note-file:<id>){width=640}` – the id points to `note_files`; the width uses Markdig's generic attributes |
+| Script blocks | Fenced code with the language as info string (```` ```powershell ````) |
+
+- Storing the `RichTextBox`'s own XAML (`XamlPackage`, `XamlWriter`) is ruled out: loading XAML with `XamlReader` can
+  create arbitrary .NET objects, so a page from a backup or later from sync would become an attack path. Markdown is
+  data only.
+- Markdown that the editor can't show as is (raw HTML, a table cell with a line break, nested block quotes deeper than
+  one level, from an import) is kept as text in a paragraph, never dropped. **A page is never changed just by opening
+  it**: when nothing was edited, nothing is written back.
+- A round trip of every element must give the same Markdown (§11). That is what makes the stored text predictable for
+  export and for diffs.
+
+#### 4.5.7 Paste and copy
+
+- **Paste** takes, in this order: our own format (when copying inside RemoteHub, keeps everything including images),
+  HTML (from a browser, Word, OneNote, Teams), an image, plain text. HTML is reduced to the elements above; fonts,
+  colours, styles, scripts, forms and remote images are dropped. Ctrl+Shift+V pastes plain text.
+- **Copy** puts three formats on the clipboard: plain text, HTML (so a paste into Teams, Outlook or Word keeps the
+  formatting), and Markdown as text for a text editor or an AI chat via *Copy as Markdown*. Notes are the user's own
+  content, so this is the normal clipboard, not `SecureClipboard`.
+
+#### 4.5.8 Size limit
+
+1 MB of Markdown text per page plus its images (§4.5.4). Beyond that, the editor says "This page is too large – split
+it into several pages" and stops accepting input, rather than saving half a page.
 
 ### 4.6 Links to connections
 
@@ -314,16 +398,19 @@ is. It is a one-line hint shown in the tree and searched by `NodeSearch`. It is 
 
 ### 4.7 Export and import
 
-Pages are Markdown, so an export is a copy of what is stored:
+Pages are stored as Markdown (§4.5.6), so an export is close to a copy of what is stored:
 
-- **A page:** *Export…* saves `<title>.md` (UTF-8 without BOM). The file starts with the title as `# Title`.
-- **A section or notebook:** *Export as Markdown…* asks for a folder and writes one folder per section, with one `.md`
-  file per page. File names come from the titles: characters that Windows doesn't allow in a file name are replaced
-  with `-`, names are cut at 100 characters, and duplicates get ` (2)`, ` (3)`. Nothing is overwritten – the export
-  goes into a new folder `<notebook> <yyyy-MM-dd HH-mm>`.
+- **A page:** *Export…* asks for a folder and writes `<title>.md` (UTF-8 without BOM, starting with `# Title`). Its
+  images go into `<title>.assets\` next to it, and the `note-file:` links are rewritten to those relative paths
+  (`![alt](Title.assets/image-1.png)`), so the page shows correctly in VS Code, GitHub or Obsidian.
+- **A section or notebook:** *Export as Markdown…* writes one folder per section, with one `.md` file (and its assets
+  folder) per page. File names come from the titles: characters that Windows doesn't allow in a file name are replaced
+  with `-`, reserved names (`CON`, `NUL` …) get a `_`, names are cut at 100 characters, and duplicates get ` (2)`,
+  ` (3)`. Nothing is overwritten – the export goes into a new folder `<notebook> <yyyy-MM-dd HH-mm>`.
 - **Import:** *Import Markdown files…* on a section adds one page per `.md` file (up to 1 MB each). A first-line
-  `# Heading` becomes the title, otherwise the file name does. Files are read as text only – nothing in them is
-  followed or loaded.
+  `# Heading` becomes the title, otherwise the file name does. Images with a **relative** path inside the chosen
+  folder are imported (and re-encoded, §4.5.4). Absolute paths, paths with `..` leaving the folder, UNC paths and URLs
+  are not followed – they stay as text.
 - An export is plain text on disk, outside the encrypted database. The export dialog says so: "Exported pages are not
   encrypted. Keep them somewhere safe." The audit log gets `notes.exported` with the number of pages and no titles.
 
@@ -343,6 +430,9 @@ notes          (id TEXT PK, section_id TEXT, title TEXT, body TEXT,          -- 
                 body_text TEXT,                                            -- body without Markdown, for search
                 sort INT, created_utc INT,
                 version INT, modified_utc INT, dirty INT, deleted_utc INT)
+note_files     (id TEXT PK, note_id TEXT, mime TEXT, width INT, height INT, -- images (§4.5.4), PNG or JPEG only
+                size INT, sha256 BLOB, data BLOB,
+                version INT, modified_utc INT, dirty INT)
 note_links     (note_id TEXT, node_id TEXT, PRIMARY KEY (note_id, node_id)) -- §4.6, node = folder or connection
 notes_fts      FTS5 (title, body_text, content='notes', content_rowid='rowid',
                      tokenize='unicode61 remove_diacritics 2')
@@ -354,8 +444,12 @@ notes_fts      FTS5 (title, body_text, content='notes', content_rowid='rowid',
 - `notes_fts` is kept up to date by triggers on `notes` (insert, update of `title`/`body_text`, delete). The app
   writes `body_text` (`NoteMarkdown`, §5.2) with every save, so the triggers don't parse Markdown and the index doesn't
   contain Markdown markers.
+- `note_files` holds the images of a page, already re-encoded (§4.5.4). An image whose `note-file:` link no longer
+  appears in its page's Markdown is deleted when the page is saved – but only after the page's undo history is gone
+  (page switched or closed), so Ctrl+Z can bring a deleted image back. Copying a page copies its images. Images are
+  loaded when the page opens, not with the page list.
 - Indexes: `note_sections(notebook_id, sort)`, `notes(section_id, sort)`, `notes(modified_utc)`,
-  `note_links(node_id)`.
+  `note_files(note_id)`, `note_links(node_id)`.
 - No field-level encryption for notes: the whole file is already encrypted (ChaCha20-Poly1305, local-db-design.md §3).
   Field-level encryption is for passwords that should stay encrypted in memory and in query results, and notes have
   to be decrypted to be shown and searched anyway.
@@ -366,9 +460,12 @@ notes_fts      FTS5 (title, body_text, content='notes', content_rowid='rowid',
 |---|---|---|
 | `NoteStore` | `Data/NoteStore.cs` | Read and write notebooks, sections, pages and links through `LocalDb` (one writer, as today, §15 there). Search through `LocalDb.Read`. |
 | Migration step 2 | `Data/LocalDb.cs` | Backup (`backup\remotehub-<stamp>-pre-v2.db`), create the tables in one transaction, set `meta.schema_version = 2`. |
-| `NoteMarkdown` | `Services/NoteMarkdown.cs` | Markdown → `FlowDocument` for the preview (§4.5), Markdown → plain text for search, HTML → Markdown for paste, file names for export (§4.7). |
+| `NoteMarkdown` | `Services/NoteMarkdown.cs` | `FlowDocument` ↔ Markdown for the elements in §4.5.6, Markdown → plain text for search, HTML → `FlowDocument` for paste, file names for export (§4.7). |
+| `NoteImages` | `Services/NoteImages.cs` | Decode, scale, re-encode and check images (§4.5.4). |
 | `NotesViewModel` | `ViewModels/NotesViewModel.cs` | Selection, list order, autosave, search. |
 | `NotesView` | `Views/NotesView.cs` | The three panes. |
+| `NoteEditor` | `Views/NoteEditor.cs` | The `RichTextBox`, the format bar, table editing, image handles. |
+| `ScriptBlock` | `Views/ScriptBlock.cs` | The script block (AvalonEdit `TextEditor` with header, copy and menu) inside a `BlockUIContainer`, and the caret hand-over to the page (§4.5.5). |
 | `ViewRail` | `Views/ViewRail.cs` | The rail and its expanded `Popup`. |
 
 The notes are **not** part of `AppData`, and `SettingsStore` doesn't load them. Loading all notes at start would cost
@@ -388,16 +485,20 @@ downgrading needs the pre-v2 backup.
 
 - The page is saved **1 second after the last keystroke**, and at once when the user switches page, section or view,
   when the window loses focus, before auto-lock (`MainWindow.AutoLock.cs`) and when RemoteHub closes.
-- A save writes one row (the page) and is well under a millisecond (local-db-design.md §15). The editor's text is
-  the Markdown itself, so nothing is converted to save; only `body_text` for search is worked out, on a background
-  thread from a copy of the text.
+- A save writes one row (the page, plus any new images) and is well under a millisecond (local-db-design.md §15). The
+  conversion of the `FlowDocument` to Markdown runs on the UI thread, where the document lives. For a large page
+  (1 MB of text) it must stay under 30 ms, measured (§11). `body_text` for search is worked out on a background thread
+  from the Markdown.
+- Images are written when they are inserted, not on every save.
 - If a save fails (disk full, database closed by a lock), the page header shows "Not saved – retrying" and RemoteHub
   retries every 5 seconds. The text stays in the editor. Switching away from an unsaved page is still allowed. The
   unsaved Markdown is kept in memory and saved on the next retry.
 
 ### 6.2 Undo
 
-- The editor's own undo (Ctrl+Z / Ctrl+Y) works within the page while it is open. Switching page clears it.
+- The editor's own undo (Ctrl+Z / Ctrl+Y) works within the page while it is open, including inserting and deleting
+  tables, images and script blocks. Inside a script block, Ctrl+Z undoes that block's typing first (§4.5.5). Switching
+  page clears it.
 - There is no version history for pages in v1. The daily database backup (local-db-design.md §10) is the safety net.
 
 ### 6.3 Auto-lock
@@ -426,7 +527,8 @@ Closing RemoteHub saves the open page synchronously before the database closes.
   bold. Esc clears the search.
 - Query: each word as a prefix (`word*`), all words must match, as in `NodeSearch`. FTS5 syntax that the user types
   (`"`, `NEAR`, `-`) is escaped, so typing a quote can't cause a query error.
-- Opening a result opens the page in Preview and highlights the matches.
+- Search covers titles, text, table cells, the text of script blocks and the images' alternative text.
+- Opening a result opens the page and highlights the matches, also inside script blocks.
 - The connection tree's search (`NodeSearch`) does not search pages. It only searches the short `Notes` field, as today.
 
 ## 8. Policy
@@ -450,16 +552,18 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 | Note text in logs | `DiagLog` never gets titles, bodies, section names or search text – only ids and counts ("Notes: saved page, 3.2 KB"). Exceptions from `NoteMarkdown` are logged with `ex.GetType().Name`, not `ex.Message`, because a parser message can quote the input. |
 | Note text in the audit log | Audit events (`note.added`, `note.changed`, `note.deleted`, `note.restored`) record the page id and the section id only. **No title**: a title like "Password for SRV-UEM01" is content. |
 | Note text in telemetry or crash reports | Telemetry counts views only (`view.notes.opened`), no counts of pages. `CrashReporter` already sends no window content. A test checks that a crash report taken with a page open contains none of its text. |
-| Malicious content (from a backup or later sync) | Stored as Markdown, never loaded as XAML (§4.5). Links: only `http`, `https`, `mailto` and `remotehub://note/` are clickable, and opening an `http(s)` link asks first ("Open https://… in your browser?"). There is no script, no HTML block (Markdig's HTML extension is off – raw HTML stays as text) and no remote image loading. |
+| Malicious content (from a backup, an import or later sync) | Stored as Markdown, never loaded as XAML (§4.5.6). Links: only `http`, `https`, `mailto` and `remotehub://note/` are clickable, and opening an `http(s)` link asks first. Raw HTML stays text (Markdig's HTML extension is off). Images are only ever loaded from `note_files`, never from a path or URL. |
+| Script blocks | Never run by the Notes view. *Send to PowerShell* only pastes into a tab's input line; the user runs it there (§4.5.5). |
+| Malicious images (pasted, dropped or imported) | Decoded by WPF's built-in decoders (WIC) with `BitmapCreateOptions.IgnoreColorProfile` and a size check on the header before the full decode (more than 16,384 px or 25 MB is refused before pixels are read), then re-encoded, so only plain pixels are stored (§4.5.4). |
 | Search queries as SQL | Parameters only; the FTS query is escaped (§7). |
-| Temp files | None. Paste and the preview work in memory. Export writes only the files the user asked for, and says they aren't encrypted (§4.7). |
-| Malicious import files | Imported `.md` files are text up to 1 MB each and go through the same preview rules as any page. |
+| Temp files | None. Paste, images and the editor work in memory. Export writes only the files the user asked for, and says they aren't encrypted (§4.7). |
+| Malicious import files | Imported `.md` files are text up to 1 MB each and go through the same converter as any page. Image paths are followed only inside the chosen folder (§4.7). |
 | Screen recordings of a session | Notes are not inside a session, so `SessionRecorder` never records them. |
 | Clipboard | Copying from a note goes through the normal clipboard (§4.5). Secret fields in notes are a non-goal (§2). Passwords belong in connections and saved credentials, which use `SecureClipboard`. |
 
 ### 9.1 Backup
 
-- `.rhbackup` (`Backup.Export` in `Services/SettingsStore.cs`) gains the notebooks, sections, pages and links,
+- `.rhbackup` (`Backup.Export` in `Services/SettingsStore.cs`) gains the notebooks, sections, pages, images and links,
   encrypted with the backup password like everything else in the file. The backup format gets a version number, so an
   older RemoteHub that imports a newer file ignores the notes and imports the connections.
 - Import: *Add as folder* adds the notes as a second notebook, named after the backup file. *Replace everything* also
@@ -485,9 +589,10 @@ settings folder." This lasts until device sync (local-db-design.md §8) is built
 | Phase | Content | Done when |
 |---|---|---|
 | 1 | **View rail** with Remote Control, Notes (empty view saying "Notes are coming"), version and Settings; Settings removed from the sidebar; hover/keyboard expand; `LastView`; Ctrl+1/2 | Switching views never resizes or disconnects a session (checked with RDP and agent desktop sessions open) |
-| 2 | **Notes core:** schema v2 and migration step, `NoteStore`, notebooks, sections and pages, Markdown editor and preview (§4.5), autosave, delete with undo and *Recently deleted*, search, Markdown export and import (§4.7) | The tests in §11 pass; 10,000 pages load and search within the local-db-design.md §7 targets |
-| 3 | **Integration:** backup export/import, links to connections, `remotehub://note/` links, `AllowNotes` policy, audit events | Backup round trip with notes; the policy hides the view |
-| 4 | Pictures in pages (`note_files`), syntax colouring in code blocks, print / PDF | – |
+| 2 | **Notes core:** schema v2 and migration step, `NoteStore`, notebooks, sections and pages, the WYSIWYG editor with text formats (§4.5.2) and **script blocks** (§4.5.5), paste and copy, autosave, delete with undo and *Recently deleted*, search | The tests in §11 pass; 10,000 pages load and search within the local-db-design.md §7 targets |
+| 3 | **Tables and images** (§4.5.3, §4.5.4), Markdown export and import (§4.7) | Round trip of every element; export opens correctly in VS Code |
+| 4 | **Integration:** backup export/import, links to connections, `remotehub://note/` links, *Send to PowerShell*, `AllowNotes` policy, audit events | Backup round trip with notes and images; the policy hides the view |
+| 5 | Print / PDF, text highlighting colours | – |
 | Later | Scripts and Logs as views (§3.8), each with its own design | – |
 | Later | Sync with device sync (local-db-design.md phase 4) | – |
 
@@ -499,15 +604,23 @@ same `[Collection]` as `LocalDbTests`, because both use a database in a temp fol
 - `Notes_survive_a_restart_of_the_database` – create section and page, close, reopen with the key, read back.
 - `Schema_version_1_database_migrates_to_version_2_and_keeps_its_connections` – with a backup file written first.
 - `A_failed_migration_leaves_the_version_1_database_unchanged`.
-- `Pages_are_stored_exactly_as_typed` – Markdown with every element in §4.5, trailing spaces and CRLF/LF mixed comes
-  back byte for byte.
-- `Preview_shows_only_the_supported_elements` – each element in §4.5 becomes the expected `FlowDocument` block; a
-  `[SkippableFact]` if creating a `FlowDocument` needs an STA thread the runner can't give.
-- `Ticking_a_task_in_the_preview_changes_only_that_box`.
-- `Pasted_html_becomes_markdown_with_only_the_supported_elements` and `Raw_html_in_markdown_stays_text`.
+- `Every_element_survives_a_round_trip` – for each element in §4.5.6, Markdown → `FlowDocument` → Markdown gives the
+  same text. Runs on an STA thread; a `[SkippableFact]` if the runner can't create a `FlowDocument`.
+- `Opening_a_page_without_editing_writes_nothing` and `Unsupported_markdown_is_kept_as_text`.
+- `Script_block_text_is_stored_exactly` – tabs, trailing spaces, backticks and ```` ``` ```` inside the script (the
+  fence gets longer), CRLF; the language survives.
+- `Pasted_code_is_offered_as_a_script_block` – PowerShell, SQL and JSON samples are detected; prose is not.
+- `Table_cells_keep_inline_formats_and_pipes_are_escaped`.
+- `Images_are_re_encoded_without_metadata` – a JPEG with EXIF GPS comes back without it; an image that claims
+  100,000 px in its header is refused before decoding; a file that isn't an image is refused.
+- `Images_no_longer_in_a_page_are_removed_after_the_undo_history_is_gone`.
+- `Pasted_html_keeps_only_the_supported_elements` – fonts, colours, scripts and remote images are dropped;
+  `Raw_html_in_markdown_stays_text`.
+- `Large_page_converts_within_30_ms` (benchmark project).
 - `Export_writes_one_file_per_page_with_safe_unique_names` – titles with `\ / : * ? " < > |`, reserved names (`CON`,
   `NUL`), 300 characters and duplicates; the export never writes outside the chosen folder.
-- `Import_takes_the_first_heading_as_title_and_refuses_files_over_1_MB`.
+- `Import_takes_the_first_heading_as_title_and_refuses_files_over_1_MB`;
+  `Import_follows_image_paths_only_inside_the_chosen_folder` (`..\`, absolute, UNC and URL paths stay text).
 - `Rail_version_shows_major_and_minor_collapsed_and_the_full_version_expanded`.
 - `Only_http_https_mailto_and_note_links_are_clickable` – `javascript:`, `file:`, `\\server\share` links stay text.
 - `Search_finds_words_by_prefix_and_ignores_deleted_pages`; `Search_text_with_quotes_does_not_throw`.
@@ -530,7 +643,7 @@ The questions of Draft v1, answered on 2026-10-19:
 | # | Question | Decision |
 |---|---|---|
 | 1 | One notebook or several? | **Several**, shown as groups in the notebook pane (§4.2). |
-| 2 | Editor | **Markdown editor with preview** (§4.5). It also makes export and use in other tools and with AI easy (§4.7). |
+| 2 | Editor | First a Markdown editor with preview (v2), then changed: a **rich WYSIWYG editor with tables, images and – most important – script blocks** (§4.5), stored as Markdown so export and use with other tools and AI stay easy (§4.7). Native `RichTextBox` with AvalonEdit for script blocks, not WebView2 (§4.5.1). |
 | 3 | Settings in the rail? | **Yes.** Settings moves to the bottom of the rail and leaves the sidebar (§3.1). |
 | 4 | Rail speed | **Faster:** 150 ms to expand, 150 ms to collapse, 100 ms animation (§3.3). |
 | 5 | Secret format in notes | **Not needed** (§2). |
@@ -540,3 +653,7 @@ The questions of Draft v1, answered on 2026-10-19:
 Still open:
 
 - The downgrade check in §5.3 (does 0.18.x accept `schema_version = 2`?) – to be answered when phase 2 starts.
+- **Script blocks and sessions:** is *Send to PowerShell* (paste into a tab's input line, without running) wanted in
+  phase 4, or should script blocks only be copied until the Scripts view exists?
+- **Script languages:** PowerShell, Command Prompt, Bash, SQL, JSON, XML, YAML, Registry and plain text (§4.5.5) –
+  anything missing (e.g. KQL for Intune/Defender queries, Python)?
