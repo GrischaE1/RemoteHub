@@ -72,6 +72,7 @@ public sealed class CredentialsWindow : FluentWindow
         _local.Checked += (_, _) => { if (_domain.Text != CredentialSet.LocalComputerDomain) _domain.Text = CredentialSet.LocalComputerDomain; };
         _local.Unchecked += (_, _) => { if (_domain.Text == CredentialSet.LocalComputerDomain) _domain.Text = ""; };
         _password.PasswordChanged += (_, _) => { if (_current is not null) _current.Password = NullIfEmpty(_password.Password); };
+        if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
         _usage.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
 
         _details.Children.Add(Label("Name")); _details.Children.Add(_name);

@@ -51,6 +51,8 @@ public partial class EditorWindow : FluentWindow
         _host = host;
         DataContext = _vm = new EditorViewModel(node, data, isNew);
         PasswordInput.Password = _vm.Password ?? "";
+        // Policy AllowSavedPasswords = 0: no password can be stored; the one there stays until it is removed (§14 Q2).
+        if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(PasswordInput);
         BuildNav();
         if (_vm.IsDefaults) InitAppPages();
         Show(page ?? (_vm.IsDefaults ? PageAppSettings : "PageGeneral"));
@@ -288,6 +290,9 @@ public partial class EditorWindow : FluentWindow
         BackupHeader.Visibility = BackupText.Visibility =
             ExportButton.Visibility == Visibility.Visible || ImportButton.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
         AuditButton.Click += (_, _) => _host?.AuditLog();
+        // The diagnostic log has no user setting: say what is in effect (policy DiagnosticLog, DiagnosticLogRetentionDays, §6.5).
+        DiagnosticLogText.Text = !AppPolicy.DiagnosticLog ? "Turned off by your organisation (Settings → Policies)."
+            : $"Entries are kept for {DiagLog.RetentionDays} days{(AppPolicy.DiagnosticLogRetentionDays is null ? "" : " (set by your organisation)")}.";
         // How long the audit log keeps entries: the policy wins (shown, not changeable).
         if (AppPolicy.AuditRetentionDays is { } policyDays)
         {
@@ -504,7 +509,7 @@ public partial class EditorWindow : FluentWindow
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        _vm.Password = PasswordInput.Password;
+        if (Features.IsAllowed(Feature.SavedPasswords)) _vm.Password = PasswordInput.Password;
         if (!_vm.Apply())
         {
             // Show the page with the problem.

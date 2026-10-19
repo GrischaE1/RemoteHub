@@ -38,7 +38,9 @@ public sealed class SettingsLocationWindow : FluentWindow
 
         if (SettingsStore.IsPolicyManaged)
         {
-            body.Children.Add(Caption($"The settings location is managed by your organization:\n{SettingsStore.PolicyFolder}", margin: 12));
+            body.Children.Add(Caption(SettingsStore.PolicyFolder is { } folder
+                ? $"The settings location is managed by your organisation:\n{folder}"
+                : "Your organisation keeps the settings on this PC only (Settings → Policies).", margin: 12));
             body.Children.Add(Buttons(null));
             Build(body);
             return;
@@ -85,6 +87,8 @@ public sealed class SettingsLocationWindow : FluentWindow
         // Blocked by this PC's policy: a shared folder can't be chosen (one in use stays until you switch to this PC only).
         if (!Features.IsAllowed(Feature.SharedSettings))
             PolicyLock.TurnedOff([.. row.Children.OfType<FrameworkElement>(), _shared]);
+        // Policy SettingsLocation = Shared (§6.4): the settings stay in the shared folder – this PC only isn't a choice.
+        if (SettingsStore.LocationPolicy == "Shared") PolicyLock.Apply(_local);
         Build(body);
     }
 
@@ -165,6 +169,7 @@ public sealed class SettingsLocationWindow : FluentWindow
                 }
                 DialogResult = true;
             }
+            else if (SettingsStore.IsShared && SettingsStore.LocationPolicy == "Shared") { _error.Text = PolicyReport.ManagedNote; return; }
             else if (SettingsStore.IsShared)
             {
                 if (!await Dialogs.Confirm(this, "Use this PC only",

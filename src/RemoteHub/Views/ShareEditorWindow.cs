@@ -89,6 +89,7 @@ public sealed class ShareEditorWindow : FluentWindow
         _user.Text = share.Credentials.Username ?? "";
         _domain.Text = share.Credentials.Domain ?? "";
         _password.Password = share.Credentials.Password ?? "";
+        if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
 
         var (inherited, source) = server is null ? Inheritance.ResolveCredentials(share, data, includeSelf: false) : Inheritance.ResolveCredentials(server, data);
         _inherit.Content = server is null ? "Inherit from parent folder" : $"Same as the server ({server.Name})";
@@ -301,7 +302,9 @@ public sealed class ShareEditorWindow : FluentWindow
         _share.CredentialId = _saved.IsChecked == true ? (_savedList.SelectedItem as SavedCredential)?.Id : null;
         if (_saved.IsChecked == true && _share.CredentialId is null) _share.InheritCredentials = true;
         _share.Credentials = _custom.IsChecked == true
-            ? new CredentialSet { Username = Null(_user.Text), Domain = Null(_domain.Text), Password = Null(_password.Password) }
+            // Policy AllowSavedPasswords = 0: the password box is greyed out and what was stored is kept (§14 Q2).
+            ? new CredentialSet { Username = Null(_user.Text), Domain = Null(_domain.Text),
+                                  Password = Features.IsAllowed(Feature.SavedPasswords) ? Null(_password.Password) : _share.Credentials.Password }
             : new CredentialSet();
         // A key or certificate belongs to one machine: another host or type asks again.
         _share.TrustedFingerprint = changedTarget ? null : _trusted;

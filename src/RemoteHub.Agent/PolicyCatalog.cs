@@ -222,13 +222,28 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowSftp = Feature("AllowSftp", "Jump hosts and network shares", "Allow SFTP shares");
     public static readonly PolicyEntry AllowFtp = Feature("AllowFtp", "Jump hosts and network shares", "Allow FTP shares");
     public static readonly PolicyEntry AllowWebDav = Feature("AllowWebDav", "Jump hosts and network shares", "Allow WebDAV shares");
-    public static readonly PolicyEntry AllowRdpFileImport = Feature("AllowRdpFileImport", "Import and export", "Allow importing .rdp files");
-    public static readonly PolicyEntry AllowRdpFileExport = Feature("AllowRdpFileExport", "Import and export", "Allow saving .rdp files");
-    public static readonly PolicyEntry AllowBackupExport = Feature("AllowBackupExport", "Import and export", "Allow exporting a backup");
-    public static readonly PolicyEntry AllowBackupImport = Feature("AllowBackupImport", "Import and export", "Allow importing a backup");
+    public static readonly PolicyEntry AllowRdpFileImport = Feature("AllowRdpFileImport", "Passwords, import and export", "Allow importing .rdp files");
+    public static readonly PolicyEntry AllowRdpFileExport = Feature("AllowRdpFileExport", "Passwords, import and export", "Allow saving .rdp files");
+    public static readonly PolicyEntry AllowBackupExport = Feature("AllowBackupExport", "Passwords, import and export", "Allow exporting a backup");
+    public static readonly PolicyEntry AllowBackupImport = Feature("AllowBackupImport", "Passwords, import and export", "Allow importing a backup");
     public static readonly PolicyEntry AllowSharedSettings = Feature("AllowSharedSettings", "Settings storage", "Allow a shared settings folder");
     // notes-view-design.md §8: hides the view only; stored notes are kept and still go into backups.
     public static readonly PolicyEntry AllowNotes = Feature("AllowNotes", "Notes", "Allow Notes");
+
+    // Phase 5 (docs/admx-design.md §5.4, §5.6, §6.3–§6.5): values behind new behaviour of the console.
+    public static readonly PolicyEntry AllowConnectionEditing = Console("AllowConnectionEditing", PolicyKind.Number, "Connections", "Allow changing folders, connections and shares", 0, 1, labels: Allowed, since: Phase5);
+    public static readonly PolicyEntry AllowSavedPasswords = Console("AllowSavedPasswords", PolicyKind.Number, "Passwords, import and export", "Allow saving passwords", 0, 1, labels: Allowed, since: Phase5);
+    public static readonly PolicyEntry AllowPasswordCopy = Console("AllowPasswordCopy", PolicyKind.Number, "Passwords, import and export", "Allow copying a stored password to the clipboard", 0, 1, labels: Allowed, since: Phase5);
+    public static readonly PolicyEntry StartupProtection = Console("StartupProtection", PolicyKind.Text, "Startup protection", "Startup protection", words: ["Required", "Off"],
+        labels: new Dictionary<string, string> { ["Required"] = "Required – RemoteHub opens nothing until it is set up", ["Off"] = "Off – it can't be turned on" }, since: Phase5);
+    public static readonly PolicyEntry AllowWindowsHello = Console("AllowWindowsHello", PolicyKind.Number, "Startup protection", "Allow Windows Hello for startup protection", 0, 1, labels: Allowed, since: Phase5);
+    public static readonly PolicyEntry AutoLockMinutes = Console("AutoLockMinutes", PolicyKind.Number, "Startup protection", "Lock RemoteHub after (minutes without use)", 1, 1440, since: Phase5);
+    public static readonly PolicyEntry SettingsLocation = Console("SettingsLocation", PolicyKind.Text, "Settings storage", "Where settings are stored", words: ["Local", "Shared"],
+        labels: new Dictionary<string, string> { ["Local"] = "This PC only", ["Shared"] = "The shared settings folder" }, since: Phase5);
+    public static readonly PolicyEntry DiagnosticLog = Console("DiagnosticLog", PolicyKind.Number, "Logs", "Write the diagnostic log", 0, 1, labels: OnOff, since: Phase5);
+    public static readonly PolicyEntry DiagnosticLogRetentionDays = Console("DiagnosticLogRetentionDays", PolicyKind.Number, "Logs", "Keep the diagnostic log (days)", 1, 3650, since: Phase5);
+
+    private const string Phase5 = "0.20.2"; // the first release with these
 
     private const string Phase3 = "0.18.12";
 
@@ -328,8 +343,9 @@ public static class PolicyCatalog
         AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
         AllowRemotingSetup,
-        AllowQuickConnect,
+        AllowQuickConnect, AllowConnectionEditing,
         AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
+        AllowSavedPasswords, AllowPasswordCopy,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
         AllowNotes,
     ];
@@ -339,8 +355,9 @@ public static class PolicyCatalog
         .. FeatureEntries,
         Theme, SwitchKeys,
         DisableUpdateCheck, UpdateChannel, DisableTelemetry,
-        SettingsFolder, AllowSharedSettings,
-        AuditRetentionDays,
+        StartupProtection, AllowWindowsHello, AutoLockMinutes,
+        SettingsLocation, SettingsFolder, AllowSharedSettings,
+        AuditRetentionDays, DiagnosticLog, DiagnosticLogRetentionDays,
         DisableRecording, RecordingFolder, RecordingFps, RecordingResolution, RecordingUseGpu, RecordingIncludeDetails,
         ProcessRefreshSeconds, ServiceRefreshSeconds,
         AgentDesktopQuality, AgentDesktopConsent, AgentDesktopViewOnly, AgentDesktopFitToWindow, AgentDesktopShowInfo, AgentDesktopKeyCombinations,

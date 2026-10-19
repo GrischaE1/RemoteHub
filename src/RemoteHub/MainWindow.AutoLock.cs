@@ -26,7 +26,8 @@ public partial class MainWindow
     }
 
     private bool AutoLockDue() =>
-        !_locked && AppLock.IsEnabled && _vm.Data.Ui.AutoLockMinutes is > 0 and var minutes && IdleTime() >= TimeSpan.FromMinutes(minutes)
+        // Policy AutoLockMinutes wins over the user's choice; without startup protection there is nothing to lock (§6.3).
+        !_locked && AppLock.IsEnabled && (AppPolicy.AutoLockMinutes ?? _vm.Data.Ui.AutoLockMinutes) is > 0 and var minutes && IdleTime() >= TimeSpan.FromMinutes(minutes)
         // A dialog is open (e.g. editing a connection): hiding it would end it. Locks when it's closed.
         && !ComponentDispatcher.IsThreadModal;
 
@@ -45,7 +46,7 @@ public partial class MainWindow
             foreach (var w in shown) w.Hide();
             AppLock.Lock();
             DiagLog.Write("Startup protection: locked after a while without input");
-            Data.AuditLog.Write(Data.AuditEvents.AppLocked, null, null, $"After {_vm.Data.Ui.AutoLockMinutes} min without input");
+            Data.AuditLog.Write(Data.AuditEvents.AppLocked, null, null, $"After {AppPolicy.AutoLockMinutes ?? _vm.Data.Ui.AutoLockMinutes} min without input");
             // Not unlocked (Exit, or the window closed): RemoteHub ends – without showing anything again.
             var unlock = new UnlockWindow(whileRunning: true);
             WindowPlacement.CenterOn(unlock, this); // where RemoteHub was, not the middle of the screen

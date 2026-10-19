@@ -106,12 +106,26 @@ public partial class App : Application
                 Remoting.AgentInstaller.CleanTemp(TimeSpan.Zero);
                 Remoting.AgentDesktopSession.CleanReceived(TimeSpan.FromDays(1));
                 LocalDb.BackupIfDue();
+                DiagLog.ApplyRetention(DiagLog.RetentionDays); // first: it catches its own errors
                 AuditLog.ApplyRetention(AuditLog.RetentionDays);
                 if (LocalDb.IsOpen && NoteStore.PurgeDeleted() is > 0 and var purged)
                     DiagLog.Write($"Notes: removed {purged} pages deleted more than {NoteStore.KeepDeletedDays} days ago");
             }
             catch (Exception ex) { DiagLog.Write("Database maintenance failed: " + ex.Message); }
         });
+
+        // Policy StartupProtection = Required (docs/admx-design.md §6.3): nothing opens until it is set up. Set up here, after the
+        // settings are loaded, because turning it on re-protects them; closing the window without it ends RemoteHub.
+        if (AppPolicy.StartupProtection == "Required" && !AppLock.IsEnabled)
+        {
+            DiagLog.Write("Startup protection: required by policy, not set up – asking for it");
+            new Views.StartupProtectionWindow(() => data) { ShowInTaskbar = true, WindowStartupLocation = WindowStartupLocation.CenterScreen }.ShowDialog();
+            if (!AppLock.IsEnabled)
+            {
+                Shutdown();
+                return;
+            }
+        }
 
         StartupTiming.Mark("settings");
         var vm = new MainViewModel(data);
