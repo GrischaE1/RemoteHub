@@ -27,6 +27,7 @@ public sealed class AgentInstallDialog : FluentWindow
     private readonly bool? _hadProvider;
     private readonly bool _portByPolicy; // the device's policy ListenPort decides the port
     private readonly bool _providerAllowed; // this PC's policy AllowCredentialProviderInstall
+    private readonly bool _groupsByPolicy, _firewallByPolicy, _autoSignInByPolicy; // this PC's install defaults (§6.9)
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
@@ -78,17 +79,26 @@ public sealed class AgentInstallDialog : FluentWindow
         _newIdentity.Unchecked += (_, _) => UpdateState();
         _options.Children.Add(_newIdentity);
 
+        // This PC's install defaults (policy subkey AgentInstall, docs/admx-design.md §6.9): shown and greyed out.
+        var policyPort = AppPolicy.AgentInstall("Port") as int?;
+        var policyGroups = AppPolicy.AgentInstall("AllowedGroups") as string[];
+        var policyFirewall = (AppPolicy.AgentInstall("FirewallScope") as string)?.Replace(';', ','); // the policy may separate with ";"
         _label = Field("Device label", existing?.Label is { Length: > 0 } l ? l : c.Name, "Shown in the agent's log and the certificate.");
-        _port = Field("Port", (existing?.Port ?? AgentProtocol.DefaultPort).ToString(), managed.Contains(AgentManaged.Port)
+        _port = Field("Port", ((managed.Contains(AgentManaged.Port) ? null : policyPort) ?? existing?.Port ?? AgentProtocol.DefaultPort).ToString(),
+            managed.Contains(AgentManaged.Port)
             ? "Set by the device's policy (ListenPort) – the agent listens on that port whatever is entered here."
             : "TCP port the agent listens on (default 58732).");
-        _portByPolicy = managed.Contains(AgentManaged.Port);
-        if (_portByPolicy) PolicyLock.Apply(_port); // a setting the device decides: greyed out, not hidden
-        _groups = Field("Allowed accounts", "Administrators",
+        _portByPolicy = managed.Contains(AgentManaged.Port) || policyPort is not null;
+        if (_portByPolicy) PolicyLock.Apply(_port); // a setting the device or this PC's policy decides: greyed out, not hidden
+        _groups = Field("Allowed accounts", policyGroups is { Length: > 0 } ? string.Join(", ", policyGroups) : "Administrators",
             "Members of these groups on the device may connect (comma-separated group names or SIDs). \"Administrators\" works in any Windows language.");
-        _firewall = Field("Allow connections from", "",
+        _groupsByPolicy = policyGroups is { Length: > 0 };
+        _firewall = Field("Allow connections from", policyFirewall ?? "",
             "Firewall scope on the device: empty = any address. Example: 10.1.0.0/16, 192.168.1.20 (all PCs running RemoteHub must be included).");
-        if (localAddress is not null)
+        _firewallByPolicy = policyFirewall is not null;
+        if (_groupsByPolicy) PolicyLock.Apply(_groups);
+        if (_firewallByPolicy) PolicyLock.Apply(_firewall);
+        if (localAddress is not null && !_firewallByPolicy)
         {
             var add = new Button { Content = jumpHost is null ? $"Add this PC ({localAddress})" : $"Add {jumpHost} ({localAddress})", Icon = new SymbolIcon(SymbolRegular.Add24), Margin = new Thickness(0, 4, 0, 0) };
             add.Click += (_, _) => _firewall.Text = string.Join(", ", _firewall.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -96,12 +106,14 @@ public sealed class AgentInstallDialog : FluentWindow
             _options.Children.Add(add);
         }
 
+        var policyDisplay = AppPolicy.AgentInstall("VirtualDisplay") as int?;
         _virtualDisplay = new CheckBox
         {
             Content = "Virtual display for servers without a monitor",
-            IsChecked = existing?.VirtualDisplay ?? true,
+            IsChecked = policyDisplay is { } d ? d == 1 : existing?.VirtualDisplay ?? true,
             Margin = new Thickness(0, 14, 0, 0),
         };
+        if (policyDisplay is not null) PolicyLock.Apply(_virtualDisplay);
         _options.Children.Add(_virtualDisplay);
         _options.Children.Add(Muted("Without a monitor, Windows often offers only 640×480. The agent then adds a virtual monitor at the size of " +
                                     "the RemoteHub window while you're connected (open-source driver by VirtualDrivers, signed by SignPath " +
@@ -116,6 +128,12 @@ public sealed class AgentInstallDialog : FluentWindow
             Visibility = credentialProvider ? Visibility.Visible : Visibility.Collapsed,
         };
         if (!_providerAllowed) PolicyLock.TurnedOff(_autoSignIn);
+        else if (AppPolicy.AgentInstall("AutoSignIn") is int signIn)
+        {
+            _autoSignIn.IsChecked = signIn == 1;
+            _autoSignInByPolicy = true;
+            PolicyLock.Apply(_autoSignIn);
+        }
         _options.Children.Add(_autoSignIn);
         _autoSignInHint = Muted("When nobody is signed in on the device, RemoteHub can sign in with the connection's credentials (remote desktop " +
                                 "through the agent). Installs a sign-in component and allows it for the allowed accounts – a policy IT has set " +
@@ -146,9 +164,24 @@ public sealed class AgentInstallDialog : FluentWindow
                                         $"{jumpHost}'s address in that network.", 26, 0, 0, 4));
 
         // Below a jump host an installed agent is used anyway, unless the connection itself says WinRM (Inheritance.UsesAgent).
-        _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = true, Margin = new Thickness(0, 12, 0, 0),
+        var policyUseAfter = AppPolicy.AgentInstall("UseAgentAfterwards") as int?;
+        _useAfter = new CheckBox { Content = "Use the agent for this connection afterwards", IsChecked = policyUseAfter is not { } u || u == 1, Margin = new Thickness(0, 12, 0, 0),
                                    Visibility = jumpHost is null ? Visibility.Visible : Visibility.Collapsed };
+        if (policyUseAfter is not null) PolicyLock.Apply(_useAfter);
         _options.Children.Add(_useAfter);
+
+        // Methods IT doesn't offer: greyed out, not removed, so the dialog keeps its layout; the choice moves to one that is.
+        if (AppPolicy.AgentInstall("Methods") is string[] { Length: > 0 } methods)
+        {
+            var ways = new (RadioButton Radio, string Method)[] { (_viaRemoting, "Remoting"), (_viaAgent, "ThroughAgent"), (_viaClipboard, "Clipboard"), (_viaFiles, "SaveFiles") };
+            foreach (var (radio, method) in ways.Where(w => !methods.Contains(w.Method, StringComparer.OrdinalIgnoreCase)))
+            {
+                radio.IsChecked = false;
+                PolicyLock.Apply(radio);
+            }
+            if (!ways.Any(w => w.Radio.IsChecked == true) && ways.FirstOrDefault(w => w.Radio.IsEnabled && w.Radio.Visibility == Visibility.Visible) is { Radio: { } next })
+                next.IsChecked = true;
+        }
         foreach (var way in new[] { _viaRemoting, _viaAgent, _viaClipboard, _viaFiles })
         {
             way.Checked += (_, _) => UpdateState();
@@ -178,14 +211,22 @@ public sealed class AgentInstallDialog : FluentWindow
     {
         // A new certificate needs the enrollment fields; a plain update keeps the device's settings.
         var fresh = _newIdentity.IsChecked == true;
-        _label.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
+        _label.IsEnabled = fresh;
+        _groups.IsEnabled = fresh && !_groupsByPolicy;
+        _firewall.IsEnabled = fresh && !_firewallByPolicy;
         _port.IsEnabled = fresh && !_portByPolicy;
         // AUTOSIGNIN goes on msiexec's command line: only the silent ways can pass it.
-        if (_autoSignIn is not null) _autoSignIn.IsEnabled = _providerAllowed && (_viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true);
+        if (_autoSignIn is not null)
+            _autoSignIn.IsEnabled = _providerAllowed && !_autoSignInByPolicy && (_viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true);
+        // No way left (the policy's methods aren't possible for this connection): nothing to start.
+        if (_install is not null) _install.IsEnabled = ChosenWay is not null;
     }
+
+    private RadioButton? ChosenWay => new[] { _viaRemoting, _viaAgent, _viaClipboard, _viaFiles }.FirstOrDefault(r => r?.IsChecked == true && r.IsEnabled);
 
     private void Start()
     {
+        if (ChosenWay is null) { Fail("None of the install methods your organisation allows can be used for this connection."); return; }
         if (!int.TryParse(_port.Text.Trim(), out var port) || port is < 1 or > 65535) { Fail("The port must be a number from 1 to 65535."); return; }
         if (!AgentEnrollment.IsValidAddressList(_firewall.Text)) { Fail("\"Allow connections from\" must be IP addresses or ranges, comma-separated (or empty for any)."); return; }
         if (string.IsNullOrWhiteSpace(_label.Text)) { Fail("Enter a device label."); return; }
@@ -197,7 +238,8 @@ public sealed class AgentInstallDialog : FluentWindow
         var options = new AgentInstallOptions(method, _newIdentity.IsChecked == true, _label.Text.Trim(), port, _firewall.Text.Trim(),
             AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true,
             // Ticked: install and allow. Unticked: removed only if RemoteHub had installed it; otherwise left as the device has it.
-            AutoSignIn: _autoSignIn.Visibility != Visibility.Visible || !_autoSignIn.IsEnabled ? null
+            // Fixed by this PC's policy: passed as set, but only the silent ways can pass it at all.
+            AutoSignIn: _autoSignIn.Visibility != Visibility.Visible || !(_autoSignIn.IsEnabled || _autoSignInByPolicy && (method is AgentInstallMethod.Remoting or AgentInstallMethod.ThroughAgent)) ? null
                 : _autoSignIn.IsChecked == true ? true : _hadProvider == true ? false : null);
 
         Options = options;

@@ -35,11 +35,19 @@ public static class Recordings
         (RecordingResolution.Uhd4K, "4K – 3840 × 2160"),
     ];
 
-    /// <summary>The user's choice; unknown values fall back to the defaults.</summary>
-    public static RecordingOptions Options(UiState ui) => new(
-        FrameRates.Any(f => f.Fps == ui.RecordingFps) ? ui.RecordingFps : RecordingOptions.Default.FramesPerSecond,
-        Enum.TryParse<RecordingResolution>(ui.RecordingResolution, out var r) ? r : RecordingOptions.Default.Resolution,
-        ui.RecordingUseGpu);
+    /// <summary>What IT fixes (docs/admx-design.md §6.6), else the user's choice; unknown values fall back to the defaults.</summary>
+    public static RecordingOptions Options(UiState ui)
+    {
+        var fps = AppPolicy.RecordingFps ?? ui.RecordingFps;
+        var resolution = AppPolicy.RecordingResolution ?? ui.RecordingResolution;
+        return new(
+            FrameRates.Any(f => f.Fps == fps) ? fps : RecordingOptions.Default.FramesPerSecond,
+            Enum.TryParse<RecordingResolution>(resolution, true, out var r) ? r : RecordingOptions.Default.Resolution,
+            AppPolicy.RecordingUseGpu ?? ui.RecordingUseGpu);
+    }
+
+    /// <summary>Whether recordings show the tab's header with the connection's details: IT's value, else the user's.</summary>
+    public static bool IncludeDetails(UiState ui) => AppPolicy.RecordingIncludeDetails ?? ui.RecordingShowDetails;
 
     /// <summary>"10 fps, same as the tab" for the settings overview.</summary>
     public static string Describe(RecordingOptions o) =>

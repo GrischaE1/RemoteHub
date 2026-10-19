@@ -46,7 +46,7 @@ public partial class App : Application
         // Startup protection: nothing is read before the password or Windows Hello unlocks the settings key.
         if (AppLock.IsEnabled)
         {
-            var theme = SettingsStore.PeekTheme();
+            var theme = AppPolicy.Theme ?? SettingsStore.PeekTheme();
             var dark = theme == "System" ? Wpf.Ui.Appearance.ApplicationThemeManager.GetSystemTheme() != Wpf.Ui.Appearance.SystemTheme.Light : theme != "Light";
             Wpf.Ui.Appearance.ApplicationThemeManager.Apply(dark ? Wpf.Ui.Appearance.ApplicationTheme.Dark : Wpf.Ui.Appearance.ApplicationTheme.Light,
                 Wpf.Ui.Controls.WindowBackdropType.None, true);

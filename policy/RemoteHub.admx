@@ -5,7 +5,7 @@
   Names, types and ranges must match src\RemoteHub.Agent\PolicyCatalog.cs; tests\RemoteHub.Tests\PolicyTemplateTests.cs checks it.
 -->
 <policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                   revision="1.2" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                   revision="1.3" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <policyNamespaces>
     <target prefix="remotehub" namespace="RemoteHub.Policies.RemoteHub" />
   </policyNamespaces>
@@ -26,6 +26,15 @@
     <category name="Console" displayName="$(string.Cat_Console)" explainText="$(string.Cat_Console_Help)">
       <parentCategory ref="RemoteHub" />
     </category>
+    <category name="Console_General" displayName="$(string.Cat_Console_General)"><parentCategory ref="Console" /></category>
+    <category name="Console_Tools" displayName="$(string.Cat_Console_Tools)"><parentCategory ref="Console" /></category>
+    <category name="Console_AgentDesktop" displayName="$(string.Cat_Console_AgentDesktop)"><parentCategory ref="Console" /></category>
+    <category name="Console_AgentInstall" displayName="$(string.Cat_Console_AgentInstall)"><parentCategory ref="Console" /></category>
+    <category name="Console_ConnSettings" displayName="$(string.Cat_Console_ConnSettings)"><parentCategory ref="Console" /></category>
+    <category name="Console_ConnDisplay" displayName="$(string.Cat_Console_ConnDisplay)"><parentCategory ref="Console_ConnSettings" /></category>
+    <category name="Console_ConnDevices" displayName="$(string.Cat_Console_ConnDevices)"><parentCategory ref="Console_ConnSettings" /></category>
+    <category name="Console_ConnSecurity" displayName="$(string.Cat_Console_ConnSecurity)"><parentCategory ref="Console_ConnSettings" /></category>
+    <category name="Console_ConnRemoting" displayName="$(string.Cat_Console_ConnRemoting)"><parentCategory ref="Console_ConnSettings" /></category>
     <category name="Console_Storage" displayName="$(string.Cat_Console_Storage)"><parentCategory ref="Console" /></category>
     <category name="Console_Updates" displayName="$(string.Cat_Console_Updates)"><parentCategory ref="Console" /></category>
     <category name="Console_Recordings" displayName="$(string.Cat_Console_Recordings)"><parentCategory ref="Console" /></category>
@@ -68,7 +77,7 @@
       <parentCategory ref="Console_Updates" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
       <enabledValue><decimal value="1" /></enabledValue>
-      <disabledValue><delete /></disabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
     </policy>
 
     <policy name="Console_UpdateChannel" class="Both" displayName="$(string.Console_UpdateChannel)" explainText="$(string.Console_UpdateChannel_Help)"
@@ -88,7 +97,7 @@
       <parentCategory ref="Console_Updates" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
       <enabledValue><decimal value="1" /></enabledValue>
-      <disabledValue><delete /></disabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
     </policy>
 
     <policy name="Console_DisableRecording" class="Both" displayName="$(string.Console_DisableRecording)" explainText="$(string.Console_DisableRecording_Help)"
@@ -335,6 +344,398 @@
       <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <!-- ================================================================ RemoteHub (console): settings and connection settings, docs/admx-design.md §6, §7 -->
+
+    <policy name="Console_Theme" class="Both" displayName="$(string.Console_Theme)" explainText="$(string.Console_Theme_Help)" presentation="$(presentation.Console_Theme)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_General" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="Theme" valueName="Theme" required="true">
+          <item displayName="$(string.Console_Theme_Dark)"><value><string>Dark</string></value></item>
+          <item displayName="$(string.Console_Theme_Light)"><value><string>Light</string></value></item>
+          <item displayName="$(string.Console_Theme_System)"><value><string>System</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_SwitchKeys" class="Both" displayName="$(string.Console_SwitchKeys)" explainText="$(string.Console_SwitchKeys_Help)" presentation="$(presentation.Console_SwitchKeys)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_General" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="SwitchKeys" valueName="SwitchKeys" required="true">
+          <item displayName="$(string.Console_SwitchKeys_Less)"><value><string>Less</string></value></item>
+          <item displayName="$(string.Console_SwitchKeys_Caret)"><value><string>Caret</string></value></item>
+          <item displayName="$(string.Console_SwitchKeys_F1F2)"><value><string>F1F2</string></value></item>
+          <item displayName="$(string.Console_SwitchKeys_PgUpPgDn)"><value><string>PgUpPgDn</string></value></item>
+          <item displayName="$(string.Console_SwitchKeys_LeftRight)"><value><string>LeftRight</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Console_RecordingFps" class="Both" displayName="$(string.Console_RecordingFps)" explainText="$(string.Console_RecordingFps_Help)" presentation="$(presentation.Console_RecordingFps)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="RecordingFps" valueName="RecordingFps" required="true">
+          <item displayName="$(string.Console_RecordingFps_5)"><value><decimal value="5" /></value></item>
+          <item displayName="$(string.Console_RecordingFps_10)"><value><decimal value="10" /></value></item>
+          <item displayName="$(string.Console_RecordingFps_15)"><value><decimal value="15" /></value></item>
+          <item displayName="$(string.Console_RecordingFps_30)"><value><decimal value="30" /></value></item>
+          <item displayName="$(string.Console_RecordingFps_60)"><value><decimal value="60" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_RecordingResolution" class="Both" displayName="$(string.Console_RecordingResolution)" explainText="$(string.Console_RecordingResolution_Help)" presentation="$(presentation.Console_RecordingResolution)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="RecordingResolution" valueName="RecordingResolution" required="true">
+          <item displayName="$(string.Console_RecordingResolution_Tab)"><value><string>Tab</string></value></item>
+          <item displayName="$(string.Console_RecordingResolution_FullHd)"><value><string>FullHd</string></value></item>
+          <item displayName="$(string.Console_RecordingResolution_Uhd4K)"><value><string>Uhd4K</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_RecordingUseGpu" class="Both" displayName="$(string.Console_RecordingUseGpu)" explainText="$(string.Console_RecordingUseGpu_Help)"
+            key="Software\Policies\RemoteHub" valueName="RecordingUseGpu">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_RecordingIncludeDetails" class="Both" displayName="$(string.Console_RecordingIncludeDetails)" explainText="$(string.Console_RecordingIncludeDetails_Help)"
+            key="Software\Policies\RemoteHub" valueName="RecordingIncludeDetails">
+      <parentCategory ref="Console_Recordings" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_ProcessRefreshSeconds" class="Both" displayName="$(string.Console_ProcessRefreshSeconds)" explainText="$(string.Console_ProcessRefreshSeconds_Help)" presentation="$(presentation.Console_ProcessRefreshSeconds)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Tools" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><decimal id="ProcessRefreshSeconds" valueName="ProcessRefreshSeconds" minValue="0" maxValue="3600" required="true" /></elements>
+    </policy>
+    <policy name="Console_ServiceRefreshSeconds" class="Both" displayName="$(string.Console_ServiceRefreshSeconds)" explainText="$(string.Console_ServiceRefreshSeconds_Help)" presentation="$(presentation.Console_ServiceRefreshSeconds)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Tools" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><decimal id="ServiceRefreshSeconds" valueName="ServiceRefreshSeconds" minValue="0" maxValue="3600" required="true" /></elements>
+    </policy>
+
+    <policy name="Console_AgentDesktopQuality" class="Both" displayName="$(string.Console_AgentDesktopQuality)" explainText="$(string.Console_AgentDesktopQuality_Help)" presentation="$(presentation.Console_AgentDesktopQuality)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="AgentDesktopQuality" valueName="AgentDesktopQuality" required="true">
+          <item displayName="$(string.Console_AgentDesktopQuality_Low)"><value><string>Low</string></value></item>
+          <item displayName="$(string.Console_AgentDesktopQuality_Admin)"><value><string>Admin</string></value></item>
+          <item displayName="$(string.Console_AgentDesktopQuality_High)"><value><string>High</string></value></item>
+          <item displayName="$(string.Console_AgentDesktopQuality_Smooth)"><value><string>Smooth</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_AgentDesktopConsent" class="Both" displayName="$(string.Console_AgentDesktopConsent)" explainText="$(string.Console_AgentDesktopConsent_Help)" presentation="$(presentation.Console_AgentDesktopConsent)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="AgentDesktopConsent" valueName="AgentDesktopConsent" required="true">
+          <item displayName="$(string.Console_AgentDesktopConsent_Ask)"><value><string>Ask</string></value></item>
+          <item displayName="$(string.Console_AgentDesktopConsent_Pin)"><value><string>Pin</string></value></item>
+          <item displayName="$(string.Console_AgentDesktopConsent_None)"><value><string>None</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_AgentDesktopViewOnly" class="Both" displayName="$(string.Console_AgentDesktopViewOnly)" explainText="$(string.Console_AgentDesktopViewOnly_Help)"
+            key="Software\Policies\RemoteHub" valueName="AgentDesktopViewOnly">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AgentDesktopFitToWindow" class="Both" displayName="$(string.Console_AgentDesktopFitToWindow)" explainText="$(string.Console_AgentDesktopFitToWindow_Help)"
+            key="Software\Policies\RemoteHub" valueName="AgentDesktopFitToWindow">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AgentDesktopShowInfo" class="Both" displayName="$(string.Console_AgentDesktopShowInfo)" explainText="$(string.Console_AgentDesktopShowInfo_Help)"
+            key="Software\Policies\RemoteHub" valueName="AgentDesktopShowInfo">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AgentDesktopKeyCombinations" class="Both" displayName="$(string.Console_AgentDesktopKeyCombinations)" explainText="$(string.Console_AgentDesktopKeyCombinations_Help)"
+            key="Software\Policies\RemoteHub" valueName="AgentDesktopKeyCombinations">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AgentDesktopClipboard" class="Both" displayName="$(string.Console_AgentDesktopClipboard)" explainText="$(string.Console_AgentDesktopClipboard_Help)" presentation="$(presentation.Console_AgentDesktopClipboard)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_AgentDesktop" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="AgentDesktopClipboard" valueName="AgentDesktopClipboard" required="true">
+          <item displayName="$(string.Console_AgentDesktopClipboard_0)"><value><decimal value="0" /></value></item>
+          <item displayName="$(string.Console_AgentDesktopClipboard_1)"><value><decimal value="1" /></value></item>
+          <item displayName="$(string.Console_AgentDesktopClipboard_2)"><value><decimal value="2" /></value></item>
+          <item displayName="$(string.Console_AgentDesktopClipboard_3)"><value><decimal value="3" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Console_InstallMethods" class="Both" displayName="$(string.Console_InstallMethods)" explainText="$(string.Console_InstallMethods_Help)" presentation="$(presentation.Console_InstallMethods)"
+            key="Software\Policies\RemoteHub\AgentInstall">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><multiText id="Methods" valueName="Methods" required="true" /></elements>
+    </policy>
+    <policy name="Console_InstallPort" class="Both" displayName="$(string.Console_InstallPort)" explainText="$(string.Console_InstallPort_Help)" presentation="$(presentation.Console_InstallPort)"
+            key="Software\Policies\RemoteHub\AgentInstall">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><decimal id="Port" valueName="Port" minValue="1" maxValue="65535" required="true" /></elements>
+    </policy>
+    <policy name="Console_InstallFirewallScope" class="Both" displayName="$(string.Console_InstallFirewallScope)" explainText="$(string.Console_InstallFirewallScope_Help)" presentation="$(presentation.Console_InstallFirewallScope)"
+            key="Software\Policies\RemoteHub\AgentInstall">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><text id="FirewallScope" valueName="FirewallScope" maxLength="1000" required="true" /></elements>
+    </policy>
+    <policy name="Console_InstallAllowedGroups" class="Both" displayName="$(string.Console_InstallAllowedGroups)" explainText="$(string.Console_InstallAllowedGroups_Help)" presentation="$(presentation.Console_InstallAllowedGroups)"
+            key="Software\Policies\RemoteHub\AgentInstall">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><multiText id="AllowedGroups" valueName="AllowedGroups" required="true" /></elements>
+    </policy>
+    <policy name="Console_InstallVirtualDisplay" class="Both" displayName="$(string.Console_InstallVirtualDisplay)" explainText="$(string.Console_InstallVirtualDisplay_Help)"
+            key="Software\Policies\RemoteHub\AgentInstall" valueName="VirtualDisplay">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_InstallAutoSignIn" class="Both" displayName="$(string.Console_InstallAutoSignIn)" explainText="$(string.Console_InstallAutoSignIn_Help)"
+            key="Software\Policies\RemoteHub\AgentInstall" valueName="AutoSignIn">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_InstallUseAgentAfterwards" class="Both" displayName="$(string.Console_InstallUseAgentAfterwards)" explainText="$(string.Console_InstallUseAgentAfterwards_Help)"
+            key="Software\Policies\RemoteHub\AgentInstall" valueName="UseAgentAfterwards">
+      <parentCategory ref="Console_AgentInstall" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_ConnResize" class="Both" displayName="$(string.Console_ConnResize)" explainText="$(string.Console_ConnResize_Help)" presentation="$(presentation.Console_ConnResize)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnDisplay" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="Resize" valueName="Resize" required="true">
+          <item displayName="$(string.Console_ConnResize_DynamicResolution)"><value><string>DynamicResolution</string></value></item>
+          <item displayName="$(string.Console_ConnResize_SmartSizing)"><value><string>SmartSizing</string></value></item>
+          <item displayName="$(string.Console_ConnResize_Fixed)"><value><string>Fixed</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_ConnFixedResolution" class="Both" displayName="$(string.Console_ConnFixedResolution)" explainText="$(string.Console_ConnFixedResolution_Help)" presentation="$(presentation.Console_ConnFixedResolution)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnDisplay" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements><text id="FixedResolution" valueName="FixedResolution" maxLength="11" required="true" /></elements>
+    </policy>
+    <policy name="Console_ConnColorDepth" class="Both" displayName="$(string.Console_ConnColorDepth)" explainText="$(string.Console_ConnColorDepth_Help)" presentation="$(presentation.Console_ConnColorDepth)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnDisplay" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="ColorDepth" valueName="ColorDepth" required="true">
+          <item displayName="$(string.Console_ConnColorDepth_32)"><value><decimal value="32" /></value></item>
+          <item displayName="$(string.Console_ConnColorDepth_24)"><value><decimal value="24" /></value></item>
+          <item displayName="$(string.Console_ConnColorDepth_16)"><value><decimal value="16" /></value></item>
+          <item displayName="$(string.Console_ConnColorDepth_15)"><value><decimal value="15" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_ConnUseMultimon" class="Both" displayName="$(string.Console_ConnUseMultimon)" explainText="$(string.Console_ConnUseMultimon_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="UseMultimon">
+      <parentCategory ref="Console_ConnDisplay" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnQuality" class="Both" displayName="$(string.Console_ConnQuality)" explainText="$(string.Console_ConnQuality_Help)" presentation="$(presentation.Console_ConnQuality)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnDisplay" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="Quality" valueName="Quality" required="true">
+          <item displayName="$(string.Console_ConnQuality_Best)"><value><string>Best</string></value></item>
+          <item displayName="$(string.Console_ConnQuality_Balanced)"><value><string>Balanced</string></value></item>
+          <item displayName="$(string.Console_ConnQuality_Fast)"><value><string>Fast</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Console_ConnRedirectClipboard" class="Both" displayName="$(string.Console_ConnRedirectClipboard)" explainText="$(string.Console_ConnRedirectClipboard_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="RedirectClipboard">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnRedirectDrives" class="Both" displayName="$(string.Console_ConnRedirectDrives)" explainText="$(string.Console_ConnRedirectDrives_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="RedirectDrives">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnRedirectPrinters" class="Both" displayName="$(string.Console_ConnRedirectPrinters)" explainText="$(string.Console_ConnRedirectPrinters_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="RedirectPrinters">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnRedirectSmartCards" class="Both" displayName="$(string.Console_ConnRedirectSmartCards)" explainText="$(string.Console_ConnRedirectSmartCards_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="RedirectSmartCards">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnAudio" class="Both" displayName="$(string.Console_ConnAudio)" explainText="$(string.Console_ConnAudio_Help)" presentation="$(presentation.Console_ConnAudio)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="Audio" valueName="Audio" required="true">
+          <item displayName="$(string.Console_ConnAudio_PlayLocal)"><value><string>PlayLocal</string></value></item>
+          <item displayName="$(string.Console_ConnAudio_PlayRemote)"><value><string>PlayRemote</string></value></item>
+          <item displayName="$(string.Console_ConnAudio_None)"><value><string>None</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_ConnForwardWindowsKeys" class="Both" displayName="$(string.Console_ConnForwardWindowsKeys)" explainText="$(string.Console_ConnForwardWindowsKeys_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="ForwardWindowsKeys">
+      <parentCategory ref="Console_ConnDevices" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_ConnEnableNla" class="Both" displayName="$(string.Console_ConnEnableNla)" explainText="$(string.Console_ConnEnableNla_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="EnableNla">
+      <parentCategory ref="Console_ConnSecurity" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnServerAuthentication" class="Both" displayName="$(string.Console_ConnServerAuthentication)" explainText="$(string.Console_ConnServerAuthentication_Help)" presentation="$(presentation.Console_ConnServerAuthentication)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnSecurity" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="ServerAuthentication" valueName="ServerAuthentication" required="true">
+          <item displayName="$(string.Console_ConnServerAuthentication_Warn)"><value><string>Warn</string></value></item>
+          <item displayName="$(string.Console_ConnServerAuthentication_DoNotConnect)"><value><string>DoNotConnect</string></value></item>
+          <item displayName="$(string.Console_ConnServerAuthentication_ConnectWithoutWarning)"><value><string>ConnectWithoutWarning</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_ConnAdminSession" class="Both" displayName="$(string.Console_ConnAdminSession)" explainText="$(string.Console_ConnAdminSession_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="AdminSession">
+      <parentCategory ref="Console_ConnSecurity" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnAutoReconnect" class="Both" displayName="$(string.Console_ConnAutoReconnect)" explainText="$(string.Console_ConnAutoReconnect_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="AutoReconnect">
+      <parentCategory ref="Console_ConnSecurity" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnPasswordPrompt" class="Both" displayName="$(string.Console_ConnPasswordPrompt)" explainText="$(string.Console_ConnPasswordPrompt_Help)" presentation="$(presentation.Console_ConnPasswordPrompt)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnSecurity" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="PasswordPrompt" valueName="PasswordPrompt" required="true">
+          <item displayName="$(string.Console_ConnPasswordPrompt_Clipboard)"><value><string>Clipboard</string></value></item>
+          <item displayName="$(string.Console_ConnPasswordPrompt_Off)"><value><string>Off</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Console_ConnPsRemoting" class="Both" displayName="$(string.Console_ConnPsRemoting)" explainText="$(string.Console_ConnPsRemoting_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="PsRemoting">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnPsUseSsl" class="Both" displayName="$(string.Console_ConnPsUseSsl)" explainText="$(string.Console_ConnPsUseSsl_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="PsUseSsl">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnUseAgent" class="Both" displayName="$(string.Console_ConnUseAgent)" explainText="$(string.Console_ConnUseAgent_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="UseAgent">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnRemoteDesktopVia" class="Both" displayName="$(string.Console_ConnRemoteDesktopVia)" explainText="$(string.Console_ConnRemoteDesktopVia_Help)" presentation="$(presentation.Console_ConnRemoteDesktopVia)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="RemoteDesktopVia" valueName="RemoteDesktopVia" required="true">
+          <item displayName="$(string.Console_ConnRemoteDesktopVia_Automatic)"><value><string>Automatic</string></value></item>
+          <item displayName="$(string.Console_ConnRemoteDesktopVia_Rdp)"><value><string>Rdp</string></value></item>
+          <item displayName="$(string.Console_ConnRemoteDesktopVia_Agent)"><value><string>Agent</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Console_ConnAgentAutoSignIn" class="Both" displayName="$(string.Console_ConnAgentAutoSignIn)" explainText="$(string.Console_ConnAgentAutoSignIn_Help)"
+            key="Software\Policies\RemoteHub\Connections" valueName="AgentAutoSignIn">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_ConnAgentAutoSignInEndAction" class="Both" displayName="$(string.Console_ConnAgentAutoSignInEndAction)" explainText="$(string.Console_ConnAgentAutoSignInEndAction_Help)" presentation="$(presentation.Console_ConnAgentAutoSignInEndAction)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <elements>
+        <enum id="AgentAutoSignInEndAction" valueName="AgentAutoSignInEndAction" required="true">
+          <item displayName="$(string.Console_ConnAgentAutoSignInEndAction_Lock)"><value><string>Lock</string></value></item>
+          <item displayName="$(string.Console_ConnAgentAutoSignInEndAction_SignOut)"><value><string>SignOut</string></value></item>
+        </enum>
+      </elements>
     </policy>
 
     <!-- ================================================================ RemoteHub Agent: features -->

@@ -8,6 +8,7 @@ using System.Windows.Media;
 using RemoteHub.Agent;
 using RemoteHub.Rdp;
 using RemoteHub.Remoting;
+using RemoteHub.Services;
 using Wpf.Ui.Controls;
 using Button = Wpf.Ui.Controls.Button;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -492,10 +493,19 @@ public sealed class AgentDesktopView : Border, IRecordableView
     /// <summary>Remembered per PC: the connection info and sending key combinations.</summary>
     public void UsePreferences(bool showInfo, bool keyCombinations, Action<bool, bool> save)
     {
-        _showInfo = showInfo;
-        _keyCombinations = keyCombinations;
+        _showInfo = AppPolicy.AgentDesktopShowInfo ?? showInfo;
+        _keyCombinations = AppPolicy.AgentDesktopKeyCombinations ?? keyCombinations;
         _savePreferences = save;
         Refresh();
+    }
+
+    /// <summary>Toolbar options this PC's policy fixes (§6.8): greyed out; called after Refresh set their own tooltips.</summary>
+    private void LockByPolicy()
+    {
+        if (AppPolicy.AgentDesktopShowInfo is not null) PolicyLock.Apply(_infoButton);
+        if (AppPolicy.AgentDesktopKeyCombinations is not null) PolicyLock.Apply(_keysButton);
+        if (AppPolicy.AgentDesktopFitToWindow is not null) PolicyLock.Apply(_fit);
+        if (AppPolicy.AgentDesktopQuality is not null) PolicyLock.Apply(_quality);
     }
 
     private void BuildNoticePanel()
@@ -559,10 +569,13 @@ public sealed class AgentDesktopView : Border, IRecordableView
             });
         _connectChosen.IsEnabled = hello.Sessions.Any(Usable);
 
-        _viewOnly.IsChecked = !hello.Rights.Control;
+        _viewOnly.IsChecked = !hello.Rights.Control || AppPolicy.AgentDesktopViewOnly;
         _viewOnly.IsEnabled = hello.Rights.Control;
+        // Fixed by this PC's policy (docs/admx-design.md §6.8): shown, greyed out.
+        if (AppPolicy.AgentDesktopViewOnly) PolicyLock.Apply(_viewOnly);
         var preset = _defaultQuality();
         _chooseQuality.SelectedItem = _chooseQuality.Items.OfType<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, preset)) ?? _chooseQuality.Items[1];
+        if (AppPolicy.AgentDesktopQuality is not null) PolicyLock.Apply(_chooseQuality);
         UpdateConsentChoices();
         _autoSignIn.Content = $"Sign in automatically as {hello.Account}";
         _autoSignIn.IsChecked = _autoSignInPreferred();
@@ -605,6 +618,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         // until they allow it, the device shows nothing more.
         var later = s.State != DesktopSessionState.Active;
         _consent.IsEnabled = true;
+        _consent.ToolTip = null; // a lock for another session's choice doesn't carry over
         // Your own signed-in session: connecting without asking is always offered (the agent allows it there).
         string[] modes = !later && SameAccount(s.User, hello.Account) && !hello.ConsentModes.Contains(DesktopConsent.None)
             ? [DesktopConsent.None, .. hello.ConsentModes] : hello.ConsentModes;
@@ -619,10 +633,14 @@ public sealed class AgentDesktopView : Border, IRecordableView
                     _ => later ? "don't ask (they see a banner)" : "Connect without asking (they see a banner)",
                 },
             });
-        var remembered = previous ?? _rememberedConsent;
+        // This PC's policy AgentDesktopConsent fixes the mode – when the device accepts it; the device's AllowedConsentModes
+        // still decide, so a mode it doesn't offer leaves the choice as it is (§6.8).
+        var byPolicy = AppPolicy.AgentDesktopConsent is { } p && modes.Contains(p) ? p : null;
+        var remembered = byPolicy ?? previous ?? _rememberedConsent;
         _consent.SelectedItem = _consent.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == remembered)
             ?? _consent.Items.OfType<ComboBoxItem>().FirstOrDefault(i => (string)i.Tag == DesktopConsent.Ask)
             ?? _consent.Items.OfType<ComboBoxItem>().FirstOrDefault();
+        if (byPolicy is not null) PolicyLock.Apply(_consent);
     }
 
     /// <summary>The same account: "DEVICE\user" and ".\user" name the same local account.</summary>
@@ -746,6 +764,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         UpdateKeyHook();
         _quality.SelectedItem = _quality.Items.OfType<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, _session.Quality));
         UpdateFitButton();
+        LockByPolicy();
         if (live) ReportSize();
         _viewOnlyBadge.Visibility = V(live && _session.ViewOnly);
         if (phase == DesktopPhase.Choose) FillChoices();
@@ -812,6 +831,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
             DesktopResolutionKind.Fixed => $"The device runs at {r.Label} – the picture is scaled to this window (back to its own resolution when you disconnect). Click to choose another.",
             _ => "Change the device's resolution – to fit this window, or larger to see more of the screen",
         };
+        if (AppPolicy.AgentDesktopFitToWindow is not null) PolicyLock.Apply(_fit); // fixed by policy: its own tooltip, not the one above
     }
 
     /// <summary>The device's resolution: its own, this window's size or a fixed one (larger than the window too – the picture is scaled down).</summary>

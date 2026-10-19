@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                           revision="1.2" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                           revision="1.3" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <displayName>RemoteHub</displayName>
   <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
   <resources>
@@ -18,6 +18,15 @@
 They are read from HKLM or HKCU\Software\Policies\RemoteHub; the computer's value wins. A value set here can't be changed in RemoteHub, and Settings → Policies lists every value in effect.
 
 The devices themselves are protected by the RemoteHub Agent's policy (the category RemoteHub Agent) and by Windows.</string>
+      <string id="Cat_Console_General">General</string>
+      <string id="Cat_Console_Tools">Remote tools</string>
+      <string id="Cat_Console_AgentDesktop">Agent remote desktop</string>
+      <string id="Cat_Console_AgentInstall">Agent installation</string>
+      <string id="Cat_Console_ConnSettings">Connection settings</string>
+      <string id="Cat_Console_ConnDisplay">Display</string>
+      <string id="Cat_Console_ConnDevices">Devices and resources</string>
+      <string id="Cat_Console_ConnSecurity">Security</string>
+      <string id="Cat_Console_ConnRemoting">Remoting and agent</string>
       <string id="Cat_Console_Storage">Settings storage</string>
       <string id="Cat_Console_Updates">Updates and usage data</string>
       <string id="Cat_Console_Recordings">Recordings</string>
@@ -57,9 +66,11 @@ Registry: SettingsFolder (REG_EXPAND_SZ). The older key Software\Policies\RdpMan
       <string id="Console_DisableUpdateCheck">Turn off the update check</string>
       <string id="Console_DisableUpdateCheck_Help">Enabled: RemoteHub never contacts the update server, for example when updates come through software deployment. The setting is greyed out in RemoteHub.
 
-Disabled or Not configured: the user decides in Settings → Updates &amp; privacy.
+Disabled: RemoteHub checks for updates, and users can't turn it off (since 0.18.12; before, Disabled meant Not configured).
 
-Registry: DisableUpdateCheck (REG_DWORD) = 1.</string>
+Not configured: the user decides in Settings → Updates &amp; privacy.
+
+Registry: DisableUpdateCheck (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_UpdateChannel">Update channel</string>
       <string id="Console_UpdateChannel_Help">Fixes the channel RemoteHub looks for updates in: GA (stable releases) or Beta (pre-releases). The choice is greyed out in RemoteHub.
@@ -73,11 +84,13 @@ Registry: UpdateChannel (REG_SZ) = stable or beta.</string>
       <string id="Console_DisableTelemetry">Turn off usage data and crash reports</string>
       <string id="Console_DisableTelemetry_Help">Enabled: RemoteHub sends no anonymous usage data and no crash reports. The setting is greyed out in RemoteHub.
 
-Disabled or Not configured: the user decides in Settings → Updates &amp; privacy (on by default).
+Disabled: RemoteHub sends usage data and crash reports, and users can't turn it off (since 0.18.12; before, Disabled meant Not configured). The privacy statement describes what is sent.
+
+Not configured: the user decides in Settings → Updates &amp; privacy (on by default).
 
 The RemoteHub Agent never sends usage data.
 
-Registry: DisableTelemetry (REG_DWORD) = 1.</string>
+Registry: DisableTelemetry (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_DisableRecording">Turn off recording</string>
       <string id="Console_DisableRecording_Help">Enabled: tabs can't be recorded. The Record button isn't shown, and the recording settings are greyed out.
@@ -372,6 +385,525 @@ Disabled: Users can't choose a shared settings folder; a folder already in use s
 This binds RemoteHub on this PC only.
 
 Registry: AllowSharedSettings (REG_DWORD) = 1 or 0.</string>
+
+      <!-- Console: settings and connection settings -->
+      <string id="Console_Theme">Theme</string>
+      <string id="Console_Theme_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → General and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Dark).
+
+Registry: Theme (REG_SZ: Dark, Light, System).</string>
+      <string id="Console_Theme_Dark">Dark</string>
+      <string id="Console_Theme_Light">Light</string>
+      <string id="Console_Theme_System">Same as Windows</string>
+
+      <string id="Console_SwitchKeys">Keys to switch between sessions</string>
+      <string id="Console_SwitchKeys_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → General and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Ctrl+Alt+&lt;).
+
+Registry: SwitchKeys (REG_SZ: Less, Caret, F1F2, PgUpPgDn, LeftRight).</string>
+      <string id="Console_SwitchKeys_Less">Ctrl+Alt+&lt; (Shift = previous)</string>
+      <string id="Console_SwitchKeys_Caret">Ctrl+Alt+^ (Shift = previous)</string>
+      <string id="Console_SwitchKeys_F1F2">Ctrl+Alt+F1 / F2</string>
+      <string id="Console_SwitchKeys_PgUpPgDn">Ctrl+Alt+PageUp / PageDown</string>
+      <string id="Console_SwitchKeys_LeftRight">Ctrl+Alt+Left / Right</string>
+
+      <string id="Console_RecordingFps">Recording frame rate</string>
+      <string id="Console_RecordingFps_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → Recordings and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: 10 fps).
+
+Registry: RecordingFps (REG_DWORD: 5, 10, 15, 30, 60).</string>
+      <string id="Console_RecordingFps_5">5 fps</string>
+      <string id="Console_RecordingFps_10">10 fps</string>
+      <string id="Console_RecordingFps_15">15 fps</string>
+      <string id="Console_RecordingFps_30">30 fps</string>
+      <string id="Console_RecordingFps_60">60 fps</string>
+
+      <string id="Console_RecordingResolution">Recording size</string>
+      <string id="Console_RecordingResolution_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → Recordings and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: the tab's size).
+
+Registry: RecordingResolution (REG_SZ: Tab, FullHd, Uhd4K).</string>
+      <string id="Console_RecordingResolution_Tab">The tab's size</string>
+      <string id="Console_RecordingResolution_FullHd">1920 × 1080</string>
+      <string id="Console_RecordingResolution_Uhd4K">3840 × 2160</string>
+
+      <string id="Console_RecordingUseGpu">Encode recordings on the graphics card</string>
+      <string id="Console_RecordingUseGpu_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → Recordings and users can't change it.
+
+Enabled: recordings are encoded on the graphics card when it can.
+
+Disabled: recordings are encoded by the processor.
+
+Not configured: the user decides (default: off).
+
+Registry: RecordingUseGpu (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_RecordingIncludeDetails">Show the connection's details in recordings</string>
+      <string id="Console_RecordingIncludeDetails_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Settings → Recordings and users can't change it.
+
+Enabled: recordings include the tab's header with the connection's name and address.
+
+Disabled: recordings show only the session.
+
+Not configured: the user decides (default: off).
+
+Registry: RecordingIncludeDetails (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ProcessRefreshSeconds">Refresh the processes tab every</string>
+      <string id="Console_ProcessRefreshSeconds_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Global defaults → Remote tools and users can't change it.
+
+Enabled: the value set here (seconds, 0 = only by hand).
+
+Disabled or Not configured: the user decides (default: 15 seconds).
+
+Registry: ProcessRefreshSeconds (REG_DWORD), 0–3600.</string>
+
+      <string id="Console_ServiceRefreshSeconds">Refresh the services tab every</string>
+      <string id="Console_ServiceRefreshSeconds_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Global defaults → Remote tools and users can't change it.
+
+Enabled: the value set here (seconds, 0 = only by hand).
+
+Disabled or Not configured: the user decides (default: 60 seconds).
+
+Registry: ServiceRefreshSeconds (REG_DWORD), 0–3600.</string>
+
+      <string id="Console_AgentDesktopQuality">Picture</string>
+      <string id="Console_AgentDesktopQuality_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's start panel and toolbar and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Admin work – 30 fps).
+
+The device's MaxFramesPerSecond and MaxQuality still cap it.
+
+Registry: AgentDesktopQuality (REG_SZ: Low, Admin, High, Smooth).</string>
+      <string id="Console_AgentDesktopQuality_Low">Slow connection – 15 fps</string>
+      <string id="Console_AgentDesktopQuality_Admin">Admin work – 30 fps</string>
+      <string id="Console_AgentDesktopQuality_High">Sharp – 30 fps, best picture</string>
+      <string id="Console_AgentDesktopQuality_Smooth">Smooth – 60 fps, best picture</string>
+
+      <string id="Console_AgentDesktopConsent">How the signed-in user is asked</string>
+      <string id="Console_AgentDesktopConsent_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's start panel and users can't change it.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: the last one used).
+
+The device's AllowedConsentModes still decide what it accepts: a mode the device doesn't offer leaves the choice to the user.
+
+Registry: AgentDesktopConsent (REG_SZ: Ask, Pin, None).</string>
+      <string id="Console_AgentDesktopConsent_Ask">Ask them to allow it</string>
+      <string id="Console_AgentDesktopConsent_Pin">Show them a code</string>
+      <string id="Console_AgentDesktopConsent_None">Connect without asking</string>
+
+      <string id="Console_AgentDesktopViewOnly">Always view only</string>
+      <string id="Console_AgentDesktopViewOnly_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's start panel and users can't change it.
+
+Enabled: every agent desktop is view only: no mouse and keyboard, no clipboard.
+
+Disabled: users can control the device when the device allows it.
+
+Not configured: the user decides (default: the user decides).
+
+Registry: AgentDesktopViewOnly (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AgentDesktopFitToWindow">Fit the device's resolution to the window</string>
+      <string id="Console_AgentDesktopFitToWindow_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's toolbar and users can't change it.
+
+Enabled: the device's resolution follows the RemoteHub window.
+
+Disabled: the device keeps its own resolution.
+
+Not configured: the user decides (default: fit to the window).
+
+Registry: AgentDesktopFitToWindow (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AgentDesktopShowInfo">Show connection details</string>
+      <string id="Console_AgentDesktopShowInfo_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's toolbar and users can't change it.
+
+Enabled: frames, data rate, round trip and quality are shown.
+
+Disabled: they aren't shown.
+
+Not configured: the user decides (default: off).
+
+Registry: AgentDesktopShowInfo (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AgentDesktopKeyCombinations">Send Windows key combinations</string>
+      <string id="Console_AgentDesktopKeyCombinations_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's toolbar and users can't change it.
+
+Enabled: Alt+Tab, the Windows key and other combinations go to the device while the tab has the focus.
+
+Disabled: they stay on this PC.
+
+Not configured: the user decides (default: on).
+
+Registry: AgentDesktopKeyCombinations (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AgentDesktopClipboard">Clipboard</string>
+      <string id="Console_AgentDesktopClipboard_Help">Limits what the clipboard of an agent desktop started from RemoteHub on this PC may carry.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: text, images and files).
+
+The lower of this and the device's DesktopClipboard applies.
+
+Registry: AgentDesktopClipboard (REG_DWORD: 0, 1, 2, 3).</string>
+      <string id="Console_AgentDesktopClipboard_0">Off</string>
+      <string id="Console_AgentDesktopClipboard_1">Text</string>
+      <string id="Console_AgentDesktopClipboard_2">Text and images</string>
+      <string id="Console_AgentDesktopClipboard_3">Text, images and files</string>
+
+      <string id="Console_InstallMethods">Install methods offered</string>
+      <string id="Console_InstallMethods_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the values set here.
+
+Disabled or Not configured: the user decides (default: all four).
+
+One per line: Remoting (silently over PowerShell remoting), ThroughAgent (update through the running agent), Clipboard (copy the files into an RDP session), SaveFiles (save the files for software distribution). Methods not in the list are greyed out.
+
+Registry: Methods (REG_MULTI_SZ).</string>
+
+      <string id="Console_InstallPort">Port</string>
+      <string id="Console_InstallPort_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the value set here (TCP port).
+
+Disabled or Not configured: the user decides (default: 58732).
+
+Written into the enrollment file. Must match the agent's ListenPort policy if one is set; the device's policy wins.
+
+Registry: Port (REG_DWORD), 1–65535.</string>
+
+      <string id="Console_InstallFirewallScope">Allow connections from</string>
+      <string id="Console_InstallFirewallScope_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the value set here.
+
+Disabled or Not configured: the user decides (default: any address).
+
+The scope of the agent's firewall rule: addresses and ranges, comma-separated, for example 10.1.0.0/16, 192.168.1.20. Empty means any address.
+
+Registry: FirewallScope (REG_SZ).</string>
+
+      <string id="Console_InstallAllowedGroups">Allowed accounts</string>
+      <string id="Console_InstallAllowedGroups_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the values set here.
+
+Disabled or Not configured: the user decides (default: Administrators).
+
+One group name or SID per line, written into the enrollment file. The device's Rights policy wins over it.
+
+Registry: AllowedGroups (REG_MULTI_SZ).</string>
+
+      <string id="Console_InstallVirtualDisplay">Virtual display for servers without a monitor</string>
+      <string id="Console_InstallVirtualDisplay_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the install option is ticked.
+
+Disabled: the install option is unticked.
+
+Not configured: the user decides (default: on).
+
+Registry: VirtualDisplay (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_InstallAutoSignIn">Allow automatic sign-in</string>
+      <string id="Console_InstallAutoSignIn_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the install option is ticked (only for the silent methods, and only when "Allow installing and removing the credential provider" isn't disabled).
+
+Disabled: the install option is unticked.
+
+Not configured: the user decides (default: off).
+
+Registry: AutoSignIn (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_InstallUseAgentAfterwards">Use the agent for the connection afterwards</string>
+      <string id="Console_InstallUseAgentAfterwards_Help">A default of RemoteHub's Install / Update RemoteHub Agent dialog on this PC, greyed out there so users can't change it.
+
+Enabled: the connection switches to the agent after the install.
+
+Disabled: the connection keeps working the way it did.
+
+Not configured: the user decides (default: on).
+
+Registry: UseAgentAfterwards (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnResize">Resize behaviour</string>
+      <string id="Console_ConnResize_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Dynamic resolution).
+
+Registry: Resize (REG_SZ: DynamicResolution, SmartSizing, Fixed).</string>
+      <string id="Console_ConnResize_DynamicResolution">Dynamic resolution</string>
+      <string id="Console_ConnResize_SmartSizing">Smart sizing (scale)</string>
+      <string id="Console_ConnResize_Fixed">Fixed resolution</string>
+
+      <string id="Console_ConnFixedResolution">Fixed resolution</string>
+      <string id="Console_ConnFixedResolution_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value set here.
+
+Disabled or Not configured: the user decides (default: 1920x1080).
+
+As &lt;width&gt;x&lt;height&gt;, for example 1920x1080. Used with the resize behaviour "Fixed resolution".
+
+Registry: FixedResolution (REG_SZ).</string>
+
+      <string id="Console_ConnColorDepth">Colour depth</string>
+      <string id="Console_ConnColorDepth_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: 32-bit).
+
+Registry: ColorDepth (REG_DWORD: 32, 24, 16, 15).</string>
+      <string id="Console_ConnColorDepth_32">32-bit</string>
+      <string id="Console_ConnColorDepth_24">24-bit</string>
+      <string id="Console_ConnColorDepth_16">16-bit</string>
+      <string id="Console_ConnColorDepth_15">15-bit</string>
+
+      <string id="Console_ConnUseMultimon">Use all monitors in full screen</string>
+      <string id="Console_ConnUseMultimon_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: full screen uses all monitors.
+
+Disabled: full screen uses one monitor.
+
+Not configured: the user decides (default: no).
+
+Registry: UseMultimon (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnQuality">Visual quality</string>
+      <string id="Console_ConnQuality_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Balanced).
+
+Registry: Quality (REG_SZ: Best, Balanced, Fast).</string>
+      <string id="Console_ConnQuality_Best">Best (all effects)</string>
+      <string id="Console_ConnQuality_Balanced">Balanced</string>
+      <string id="Console_ConnQuality_Fast">Fast (low bandwidth)</string>
+
+      <string id="Console_ConnRedirectClipboard">Clipboard (copy and paste)</string>
+      <string id="Console_ConnRedirectClipboard_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the clipboard is shared with the session.
+
+Disabled: it isn't.
+
+Not configured: the user decides (default: yes).
+
+Registry: RedirectClipboard (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnRedirectDrives">Local drives</string>
+      <string id="Console_ConnRedirectDrives_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: this PC's drives are available in the session.
+
+Disabled: they aren't.
+
+Not configured: the user decides (default: no).
+
+Registry: RedirectDrives (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnRedirectPrinters">Printers</string>
+      <string id="Console_ConnRedirectPrinters_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: this PC's printers are available in the session.
+
+Disabled: they aren't.
+
+Not configured: the user decides (default: no).
+
+Registry: RedirectPrinters (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnRedirectSmartCards">Smart cards</string>
+      <string id="Console_ConnRedirectSmartCards_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: smart cards on this PC are available in the session.
+
+Disabled: they aren't.
+
+Not configured: the user decides (default: no).
+
+Registry: RedirectSmartCards (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnAudio">Audio</string>
+      <string id="Console_ConnAudio_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Play on this computer).
+
+Registry: Audio (REG_SZ: PlayLocal, PlayRemote, None).</string>
+      <string id="Console_ConnAudio_PlayLocal">Play on this computer</string>
+      <string id="Console_ConnAudio_PlayRemote">Play on the remote computer</string>
+      <string id="Console_ConnAudio_None">Do not play</string>
+
+      <string id="Console_ConnForwardWindowsKeys">Send Windows key combinations</string>
+      <string id="Console_ConnForwardWindowsKeys_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: Win, Alt+Tab and similar keys go to the session while it has the focus.
+
+Disabled: they stay on this PC.
+
+Not configured: the user decides (default: yes).
+
+Registry: ForwardWindowsKeys (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnEnableNla">Network Level Authentication</string>
+      <string id="Console_ConnEnableNla_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: connections use Network Level Authentication.
+
+Disabled: they don't.
+
+Not configured: the user decides (default: yes).
+
+Registry: EnableNla (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnServerAuthentication">Server authentication</string>
+      <string id="Console_ConnServerAuthentication_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Warn me).
+
+What happens if the server's identity can't be verified.
+
+Registry: ServerAuthentication (REG_SZ: Warn, DoNotConnect, ConnectWithoutWarning).</string>
+      <string id="Console_ConnServerAuthentication_Warn">Warn me</string>
+      <string id="Console_ConnServerAuthentication_DoNotConnect">Do not connect</string>
+      <string id="Console_ConnServerAuthentication_ConnectWithoutWarning">Connect without warning</string>
+
+      <string id="Console_ConnAdminSession">Administrative (console) session</string>
+      <string id="Console_ConnAdminSession_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: connections open the administrative session.
+
+Disabled: they open a normal session.
+
+Not configured: the user decides (default: no).
+
+Registry: AdminSession (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnAutoReconnect">Reconnect automatically</string>
+      <string id="Console_ConnAutoReconnect_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: a dropped session reconnects by itself.
+
+Disabled: it doesn't.
+
+Not configured: the user decides (default: yes).
+
+Registry: AutoReconnect (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnPasswordPrompt">When Windows asks for the password</string>
+      <string id="Console_ConnPasswordPrompt_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Copy to the clipboard).
+
+Registry: PasswordPrompt (REG_SZ: Clipboard, Off).</string>
+      <string id="Console_ConnPasswordPrompt_Clipboard">Copy the stored password to the clipboard (cleared after 30 s)</string>
+      <string id="Console_ConnPasswordPrompt_Off">Do nothing</string>
+
+      <string id="Console_ConnPsRemoting">Check PowerShell remoting after the RDP sign-in</string>
+      <string id="Console_ConnPsRemoting_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: WinRM is tested after the first RDP sign-in.
+
+Disabled: it isn't tested automatically.
+
+Not configured: the user decides (default: no).
+
+"Allow PowerShell remoting (WinRM)" disabled wins over it.
+
+Registry: PsRemoting (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnPsUseSsl">PowerShell remoting over HTTPS</string>
+      <string id="Console_ConnPsUseSsl_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: PowerShell remoting uses HTTPS (port 5986).
+
+Disabled: it uses HTTP (port 5985).
+
+Not configured: the user decides (default: no).
+
+Registry: PsUseSsl (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnUseAgent">Tools through the RemoteHub Agent</string>
+      <string id="Console_ConnUseAgent_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: PowerShell, files, registry, services and processes go through the agent.
+
+Disabled: they go over PowerShell remoting, below a jump host too.
+
+Not configured: the user decides (default: no).
+
+"Allow the RemoteHub Agent" disabled wins over it.
+
+Registry: UseAgent (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnRemoteDesktopVia">Remote desktop through</string>
+      <string id="Console_ConnRemoteDesktopVia_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Automatic).
+
+With RemoteHub Agent while "Allow remote desktop through the agent" is disabled, there is no remote desktop; Settings → Policies shows the conflict.
+
+Registry: RemoteDesktopVia (REG_SZ: Automatic, Rdp, Agent).</string>
+      <string id="Console_ConnRemoteDesktopVia_Automatic">Automatic – the agent if installed, otherwise RDP</string>
+      <string id="Console_ConnRemoteDesktopVia_Rdp">RDP</string>
+      <string id="Console_ConnRemoteDesktopVia_Agent">RemoteHub Agent</string>
+
+      <string id="Console_ConnAgentAutoSignIn">Sign in automatically when nobody is signed in</string>
+      <string id="Console_ConnAgentAutoSignIn_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: RemoteHub signs in automatically through the agent where the device allows it.
+
+Disabled: it doesn't.
+
+Not configured: the user decides (default: no).
+
+"Turn off automatic sign-in through the agent" wins over it.
+
+Registry: AgentAutoSignIn (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_ConnAgentAutoSignInEndAction">When an automatic sign-in's connection ends</string>
+      <string id="Console_ConnAgentAutoSignInEndAction_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Enabled: the value chosen here.
+
+Disabled or Not configured: the user decides (default: Lock the session).
+
+The device's AutoSignInEndAction policy may decide instead.
+
+Registry: AgentAutoSignInEndAction (REG_SZ: Lock, SignOut).</string>
+      <string id="Console_ConnAgentAutoSignInEndAction_Lock">Lock the session</string>
+      <string id="Console_ConnAgentAutoSignInEndAction_SignOut">Sign out</string>
 
       <!-- Agent: features -->
       <string id="Agent_PowerShellEnabled">Allow PowerShell, files, registry, services and processes</string>
@@ -712,6 +1244,72 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Agent_MaxSessions">
         <decimalTextBox refId="MaxSessions" defaultValue="20" spinStep="5">Sessions:</decimalTextBox>
+      </presentation>
+      <presentation id="Console_Theme">
+        <dropdownList refId="Theme" noSort="true">Theme:</dropdownList>
+      </presentation>
+      <presentation id="Console_SwitchKeys">
+        <dropdownList refId="SwitchKeys" noSort="true">Keys to switch between sessions:</dropdownList>
+      </presentation>
+      <presentation id="Console_RecordingFps">
+        <dropdownList refId="RecordingFps" noSort="true">Recording frame rate:</dropdownList>
+      </presentation>
+      <presentation id="Console_RecordingResolution">
+        <dropdownList refId="RecordingResolution" noSort="true">Recording size:</dropdownList>
+      </presentation>
+      <presentation id="Console_ProcessRefreshSeconds">
+        <decimalTextBox refId="ProcessRefreshSeconds" defaultValue="15" spinStep="5">Seconds (0 = only by hand):</decimalTextBox>
+      </presentation>
+      <presentation id="Console_ServiceRefreshSeconds">
+        <decimalTextBox refId="ServiceRefreshSeconds" defaultValue="60" spinStep="5">Seconds (0 = only by hand):</decimalTextBox>
+      </presentation>
+      <presentation id="Console_AgentDesktopQuality">
+        <dropdownList refId="AgentDesktopQuality" noSort="true">Picture:</dropdownList>
+      </presentation>
+      <presentation id="Console_AgentDesktopConsent">
+        <dropdownList refId="AgentDesktopConsent" noSort="true">How the signed-in user is asked:</dropdownList>
+      </presentation>
+      <presentation id="Console_AgentDesktopClipboard">
+        <dropdownList refId="AgentDesktopClipboard" noSort="true">Clipboard:</dropdownList>
+      </presentation>
+      <presentation id="Console_InstallMethods">
+        <multiTextBox refId="Methods">Install methods offered:</multiTextBox>
+      </presentation>
+      <presentation id="Console_InstallPort">
+        <decimalTextBox refId="Port" defaultValue="58732">Port:</decimalTextBox>
+      </presentation>
+      <presentation id="Console_InstallFirewallScope">
+        <textBox refId="FirewallScope"><label>Allow connections from:</label></textBox>
+      </presentation>
+      <presentation id="Console_InstallAllowedGroups">
+        <multiTextBox refId="AllowedGroups">Allowed accounts:</multiTextBox>
+      </presentation>
+      <presentation id="Console_ConnResize">
+        <dropdownList refId="Resize" noSort="true">Resize behaviour:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnFixedResolution">
+        <textBox refId="FixedResolution"><label>Fixed resolution:</label></textBox>
+      </presentation>
+      <presentation id="Console_ConnColorDepth">
+        <dropdownList refId="ColorDepth" noSort="true">Colour depth:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnQuality">
+        <dropdownList refId="Quality" noSort="true">Visual quality:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnAudio">
+        <dropdownList refId="Audio" noSort="true">Audio:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnServerAuthentication">
+        <dropdownList refId="ServerAuthentication" noSort="true">Server authentication:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnPasswordPrompt">
+        <dropdownList refId="PasswordPrompt" noSort="true">When Windows asks for the password:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnRemoteDesktopVia">
+        <dropdownList refId="RemoteDesktopVia" noSort="true">Remote desktop through:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnAgentAutoSignInEndAction">
+        <dropdownList refId="AgentAutoSignInEndAction" noSort="true">When an automatic sign-in's connection ends:</dropdownList>
       </presentation>
     </presentationTable>
   </resources>

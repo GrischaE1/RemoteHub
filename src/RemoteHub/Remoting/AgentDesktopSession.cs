@@ -149,7 +149,9 @@ public sealed partial class AgentDesktopSession : SessionBase
     private string? _resumeToken;
 
     private bool Supports(string feature) => Hello?.Features?.Contains(feature) == true;
-    private int ClipboardLevel => ViewOnly ? DesktopClipboardLevel.Off : Hello?.Clipboard ?? DesktopClipboardLevel.Off;
+    // The lower of the device's level and this PC's policy AgentDesktopClipboard (§6.8).
+    private int ClipboardLevel => ViewOnly ? DesktopClipboardLevel.Off
+        : Math.Min(Hello?.Clipboard ?? DesktopClipboardLevel.Off, Services.AppPolicy.AgentDesktopClipboard ?? DesktopClipboardLevel.Files);
 
     public event Action? FocusRequested;
 
@@ -285,7 +287,8 @@ public sealed partial class AgentDesktopSession : SessionBase
     public void Choose(DesktopSessionInfo session, string consent, bool viewOnly, DesktopQualityPreset quality, bool autoSignIn = false, string? endAction = null)
     {
         if (_client is null || Phase != DesktopPhase.Choose) return;
-        ViewOnly = viewOnly || Hello?.Rights.Control == false;
+        // This PC's policy AgentDesktopViewOnly wins over the start panel's choice (docs/admx-design.md §6.8).
+        ViewOnly = viewOnly || Hello?.Rights.Control == false || Services.AppPolicy.AgentDesktopViewOnly;
         Quality = quality;
         _chosen = session;
         _chosenConsent = consent;

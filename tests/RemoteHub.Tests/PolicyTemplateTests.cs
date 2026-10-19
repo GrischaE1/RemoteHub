@@ -120,7 +120,9 @@ public class PolicyTemplateTests
         foreach (var w in Writes())
         {
             var entry = entries[Id(w.Key, w.Name)];
-            var underAgent = w.Key.StartsWith(PolicyCatalog.Root + "\\" + PolicyCatalog.AgentKey, StringComparison.OrdinalIgnoreCase);
+            // The agent's key itself or below it – not the console's AgentInstall next to it.
+            var agentKey = PolicyCatalog.Root + "\\" + PolicyCatalog.AgentKey;
+            var underAgent = w.Key.Equals(agentKey, StringComparison.OrdinalIgnoreCase) || w.Key.StartsWith(agentKey + "\\", StringComparison.OrdinalIgnoreCase);
             if (entry.Product == PolicyProduct.Agent)
             {
                 Assert.Equal("Machine", w.PolicyClass);
@@ -169,6 +171,20 @@ public class PolicyTemplateTests
         }
         foreach (var policy in Admx.Descendants(P + "policy").Where(p => p.Element(P + "elements") is not null))
             Assert.True(policy.Attribute("presentation") is not null, $"{policy.Attribute("name")} has elements but no presentation");
+    }
+
+    [Fact]
+    public void A_number_box_starts_at_a_value_its_element_accepts()
+    {
+        // Enabling a policy without typing writes the box's default: it must be one the element (and so the product) takes.
+        var ranges = Admx.Descendants(P + "decimal").Where(d => d.Attribute("id") is not null)
+            .ToDictionary(d => (string)d.Attribute("id")!, d => ((int)d.Attribute("minValue")!, (int)d.Attribute("maxValue")!));
+        foreach (var box in Adml.Descendants(P + "decimalTextBox"))
+        {
+            var id = (string)box.Attribute("refId")!;
+            var start = (int?)box.Attribute("defaultValue") ?? 1;
+            Assert.True(ranges.TryGetValue(id, out var r) && start >= r.Item1 && start <= r.Item2, $"{id}: the box starts at {start}, outside {r.Item1}–{r.Item2}");
+        }
     }
 
     [Fact]

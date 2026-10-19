@@ -101,6 +101,15 @@ public sealed class RdpOptions
                 p.SetValue(this, p.GetValue(fallback));
         return this;
     }
+
+    /// <summary>Replaces every value of this instance that <paramref name="fixedValues"/> sets.</summary>
+    public RdpOptions OverrideWith(RdpOptions fixedValues)
+    {
+        foreach (var p in typeof(RdpOptions).GetProperties())
+            if (p.GetValue(fixedValues) is { } v)
+                p.SetValue(this, v);
+        return this;
+    }
 }
 
 public sealed class CredentialSet

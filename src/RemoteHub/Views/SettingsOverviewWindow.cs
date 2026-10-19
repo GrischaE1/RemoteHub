@@ -66,7 +66,7 @@ public sealed class SettingsOverviewWindow : FluentWindow
     private List<Section> Sections()
     {
         var d = _data();
-        var o = d.Defaults;
+        var o = d.Defaults.Clone().OverrideWith(AppPolicy.Connections()); // what connections get: IT's connection settings win
         var nodes = _allNodes().ToList();
         var connections = nodes.OfType<Connection>().ToList();
         string OnOff(bool? b) => b == true ? "On" : "Off";
@@ -99,10 +99,10 @@ public sealed class SettingsOverviewWindow : FluentWindow
 
         var tools = new List<(string, string)>
         {
-            ("Processes tab", Interval(d.Tools.ProcessRefreshSeconds)),
-            ("Services tab", Interval(d.Tools.ServiceRefreshSeconds)),
+            ("Processes tab", Interval(AppPolicy.ProcessRefreshSeconds ?? d.Tools.ProcessRefreshSeconds)),
+            ("Services tab", Interval(AppPolicy.ServiceRefreshSeconds ?? d.Tools.ServiceRefreshSeconds)),
             ("Recordings", AppPolicy.RecordingDisabled ? "Turned off by your IT policy"
-                : Recordings.Describe(Recordings.Options(d.Ui)) + (d.Ui.RecordingShowDetails ? " · with connection details" : "") + " · " +
+                : Recordings.Describe(Recordings.Options(d.Ui)) + (Recordings.IncludeDetails(d.Ui) ? " · with connection details" : "") + " · " +
                   Recordings.Folder(d.Ui) + (AppPolicy.RecordingFolder is not null ? " (set by your IT policy)" : "")),
         };
 
@@ -115,8 +115,8 @@ public sealed class SettingsOverviewWindow : FluentWindow
 
         var appearance = new List<(string, string)>
         {
-            ("Theme", d.Ui.Theme),
-            ("Session switch keys", SwitchHotkeys.Get(d.Ui.SwitchKeys).Hint),
+            ("Theme", AppPolicy.Theme ?? d.Ui.Theme),
+            ("Session switch keys", SwitchHotkeys.Get(AppPolicy.SwitchKeys ?? d.Ui.SwitchKeys).Hint),
             ("Navigation", d.Ui.SidebarCollapsed ? "Collapsed" : $"Expanded, {d.Ui.SidebarWidth:0} px"),
         };
 

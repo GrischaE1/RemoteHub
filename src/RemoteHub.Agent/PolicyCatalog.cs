@@ -12,7 +12,7 @@ public enum PolicyProduct { Console, Agent }
 /// <summary>Registry type of a policy value.</summary>
 public enum PolicyKind
 {
-    /// <summary>REG_DWORD within <see cref="PolicyEntry.Min"/>–<see cref="PolicyEntry.Max"/>.</summary>
+    /// <summary>REG_DWORD within <see cref="PolicyEntry.Min"/>–<see cref="PolicyEntry.Max"/>; with <see cref="PolicyEntry.Words"/> only those numbers.</summary>
     Number,
     /// <summary>REG_SZ (or REG_EXPAND_SZ); with <see cref="PolicyEntry.Words"/> only one of them (case-insensitive); <see cref="PolicyEntry.Max"/> &gt; 0 limits the length.</summary>
     Text,
@@ -36,7 +36,8 @@ public sealed record PolicyEntry(
     IReadOnlyList<string>? Words = null,
     IReadOnlyDictionary<string, string>? Labels = null,
     bool Expand = false,
-    string Since = "0.18.11")
+    string Since = "0.18.11",
+    Func<string, string?>? Rule = null)
 {
     public string FullKey => Key.Length == 0 ? PolicyCatalog.Root : PolicyCatalog.Root + "\\" + Key;
 
@@ -50,13 +51,18 @@ public sealed record PolicyEntry(
         {
             case PolicyKind.Number:
                 if (raw is not int n) return (null, $"must be a DWORD, not {TypeName(raw)}");
-                return n >= Min && n <= Max ? (n, null) : (null, $"{n} is outside {Min}–{Max}");
+                if (n < Min || n > Max) return (null, $"{n} is outside {Min}–{Max}");
+                // A fixed set within the range (colour depth, frame rates): only those.
+                return Words is null || Words.Contains(n.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    ? (n, null) : (null, $"{n} isn't one of {string.Join(", ", Words)}");
             case PolicyKind.Text:
                 var s = raw switch { string t => t, string[] { Length: > 0 } l => l[0], _ => null };
                 if (s is null) return (null, $"must be a string, not {TypeName(raw)}");
                 s = s.Trim();
                 if (s.Length == 0) return (null, "is empty");
                 if (Max > 0 && s.Length > Max) return (null, $"is longer than {Max} characters");
+                // A free text with a form of its own (a resolution, an address list): Rule says what is wrong with it.
+                if (Words is null && Rule?.Invoke(s) is { } wrong) return (null, wrong);
                 if (Words is null) return (Expand ? Environment.ExpandEnvironmentVariables(s) : s, null);
                 return Words.FirstOrDefault(w => w.Equals(s, StringComparison.OrdinalIgnoreCase)) is { } word
                     ? (word, null) : (null, $"\"{s}\" isn't one of {string.Join(", ", Words)}");
@@ -137,19 +143,58 @@ public static class PolicyCatalog
     private static readonly Dictionary<string, string> OnOff = new() { ["0"] = "Off", ["1"] = "On" };
     private static readonly Dictionary<string, string> TurnedOff = new() { ["0"] = "Not turned off (the user decides)", ["1"] = "Turned off" };
     private static readonly Dictionary<string, string> Allowed = new() { ["0"] = "Blocked", ["1"] = "Allowed" };
+    private static readonly Dictionary<string, string> YesNo = new() { ["0"] = "No", ["1"] = "Yes" };
+    // DisableTelemetry and DisableUpdateCheck: 0 locks the feature on since 0.18.12 (§12.3, Q3).
+    private static readonly Dictionary<string, string> OffOrLockedOn = new() { ["0"] = "On (users can't turn it off)", ["1"] = "Turned off" };
 
     // ------------------------------------------------------------------ RemoteHub (console)
 
     public static readonly PolicyEntry SettingsFolder = Console("SettingsFolder", PolicyKind.Text, "Settings storage", "Shared settings folder", expand: true);
-    public static readonly PolicyEntry DisableUpdateCheck = Console("DisableUpdateCheck", PolicyKind.Number, "Updates and usage data", "Turn off the update check", 0, 1, labels: TurnedOff);
+    public static readonly PolicyEntry DisableUpdateCheck = Console("DisableUpdateCheck", PolicyKind.Number, "Updates and usage data", "Turn off the update check", 0, 1, labels: OffOrLockedOn);
     public static readonly PolicyEntry UpdateChannel = Console("UpdateChannel", PolicyKind.Text, "Updates and usage data", "Update channel",
         words: ["stable", "beta", "ga", "release", "prerelease", "pre-release"],
         labels: new Dictionary<string, string> { ["stable"] = "GA – stable releases", ["ga"] = "GA – stable releases", ["release"] = "GA – stable releases", ["beta"] = "Beta", ["prerelease"] = "Beta", ["pre-release"] = "Beta" });
-    public static readonly PolicyEntry DisableTelemetry = Console("DisableTelemetry", PolicyKind.Number, "Updates and usage data", "Turn off usage data and crash reports", 0, 1, labels: TurnedOff);
+    public static readonly PolicyEntry DisableTelemetry = Console("DisableTelemetry", PolicyKind.Number, "Updates and usage data", "Turn off usage data and crash reports", 0, 1, labels: OffOrLockedOn);
     public static readonly PolicyEntry DisableRecording = Console("DisableRecording", PolicyKind.Number, "Recordings", "Turn off recording", 0, 1, labels: TurnedOff);
     public static readonly PolicyEntry RecordingFolder = Console("RecordingFolder", PolicyKind.Text, "Recordings", "Recording folder", expand: true);
     public static readonly PolicyEntry AuditRetentionDays = Console("AuditRetentionDays", PolicyKind.Number, "Logs", "Keep audit log entries (days)", 1, 36_500);
     public static readonly PolicyEntry DisableAgentAutoSignIn = Console("DisableAgentAutoSignIn", PolicyKind.Number, "RemoteHub Agent", "Turn off automatic sign-in through the agent", 0, 1, labels: TurnedOff);
+
+    // Phase 4 (docs/admx-design.md §6): the console's settings. Each one set here is greyed out where it is changed.
+    public static readonly PolicyEntry Theme = Setting("Theme", PolicyKind.Text, "General", "Theme", words: ["Dark", "Light", "System"]);
+    public static readonly PolicyEntry SwitchKeys = Setting("SwitchKeys", PolicyKind.Text, "General", "Keys to switch between sessions",
+        words: ["Less", "Caret", "F1F2", "PgUpPgDn", "LeftRight"],
+        labels: new Dictionary<string, string> { ["Less"] = "Ctrl+Alt+<", ["Caret"] = "Ctrl+Alt+^", ["F1F2"] = "Ctrl+Alt+F1 / F2", ["PgUpPgDn"] = "Ctrl+Alt+PageUp / PageDown", ["LeftRight"] = "Ctrl+Alt+Left / Right" });
+    public static readonly PolicyEntry RecordingFps = Setting("RecordingFps", PolicyKind.Number, "Recordings", "Recording frame rate (fps)", 5, 60, words: ["5", "10", "15", "30", "60"]);
+    public static readonly PolicyEntry RecordingResolution = Setting("RecordingResolution", PolicyKind.Text, "Recordings", "Recording size", words: ["Tab", "FullHd", "Uhd4K"],
+        labels: new Dictionary<string, string> { ["Tab"] = "The tab's size", ["FullHd"] = "1920 × 1080", ["Uhd4K"] = "3840 × 2160" });
+    public static readonly PolicyEntry RecordingUseGpu = Setting("RecordingUseGpu", PolicyKind.Number, "Recordings", "Encode recordings on the graphics card", 0, 1, labels: OnOff);
+    public static readonly PolicyEntry RecordingIncludeDetails = Setting("RecordingIncludeDetails", PolicyKind.Number, "Recordings", "Show the connection's details in recordings", 0, 1, labels: OnOff);
+    public static readonly PolicyEntry ProcessRefreshSeconds = Setting("ProcessRefreshSeconds", PolicyKind.Number, "Remote tools", "Refresh the processes tab every (seconds, 0 = by hand)", 0, 3600);
+    public static readonly PolicyEntry ServiceRefreshSeconds = Setting("ServiceRefreshSeconds", PolicyKind.Number, "Remote tools", "Refresh the services tab every (seconds, 0 = by hand)", 0, 3600);
+    public static readonly PolicyEntry AgentDesktopQuality = Setting("AgentDesktopQuality", PolicyKind.Text, "Agent remote desktop", "Picture", words: ["Low", "Admin", "High", "Smooth"],
+        labels: new Dictionary<string, string> { ["Low"] = "Slow connection – 15 fps", ["Admin"] = "Admin work – 30 fps", ["High"] = "Sharp – 30 fps, best picture", ["Smooth"] = "Smooth – 60 fps, best picture" });
+    public static readonly PolicyEntry AgentDesktopConsent = Setting("AgentDesktopConsent", PolicyKind.Text, "Agent remote desktop", "How the signed-in user is asked", words: ["Ask", "Pin", "None"],
+        labels: new Dictionary<string, string> { ["Ask"] = "Ask", ["Pin"] = "With a code", ["None"] = "Don't ask" });
+    public static readonly PolicyEntry AgentDesktopViewOnly = Setting("AgentDesktopViewOnly", PolicyKind.Number, "Agent remote desktop", "Always view only", 0, 1, labels: YesNo);
+    public static readonly PolicyEntry AgentDesktopFitToWindow = Setting("AgentDesktopFitToWindow", PolicyKind.Number, "Agent remote desktop", "Fit the device's resolution to the window", 0, 1, labels: YesNo);
+    public static readonly PolicyEntry AgentDesktopShowInfo = Setting("AgentDesktopShowInfo", PolicyKind.Number, "Agent remote desktop", "Show connection details", 0, 1, labels: OnOff);
+    public static readonly PolicyEntry AgentDesktopKeyCombinations = Setting("AgentDesktopKeyCombinations", PolicyKind.Number, "Agent remote desktop", "Send Windows key combinations", 0, 1, labels: OnOff);
+    public static readonly PolicyEntry AgentDesktopClipboard = Setting("AgentDesktopClipboard", PolicyKind.Number, "Agent remote desktop", "Clipboard", 0, 3,
+        labels: new Dictionary<string, string> { ["0"] = "Off", ["1"] = "Text", ["2"] = "Text and images", ["3"] = "Text, images and files" });
+
+    public const string AgentInstallKey = "AgentInstall";
+    public static readonly IReadOnlyList<PolicyEntry> AgentInstallEntries =
+    [
+        new(PolicyProduct.Console, AgentInstallKey, "Methods", PolicyKind.List, "Agent installation", "Install methods offered", Words: ["Remoting", "ThroughAgent", "Clipboard", "SaveFiles"], Since: Phase4),
+        new(PolicyProduct.Console, AgentInstallKey, "Port", PolicyKind.Number, "Agent installation", "Port", 1, 65535, Since: Phase4),
+        new(PolicyProduct.Console, AgentInstallKey, "FirewallScope", PolicyKind.Text, "Agent installation", "Allow connections from", Max: 1000, Since: Phase4,
+            Rule: s => AgentEnrollment.IsValidAddressList(s.Replace(';', ',')) ? null : "isn't a list of addresses or ranges (10.1.0.0/16, 192.168.1.20, …)"),
+        new(PolicyProduct.Console, AgentInstallKey, "AllowedGroups", PolicyKind.List, "Agent installation", "Allowed accounts", Since: Phase4),
+        new(PolicyProduct.Console, AgentInstallKey, "VirtualDisplay", PolicyKind.Number, "Agent installation", "Virtual display for servers without a monitor", 0, 1, Labels: YesNo, Since: Phase4),
+        new(PolicyProduct.Console, AgentInstallKey, "AutoSignIn", PolicyKind.Number, "Agent installation", "Allow automatic sign-in", 0, 1, Labels: YesNo, Since: Phase4),
+        new(PolicyProduct.Console, AgentInstallKey, "UseAgentAfterwards", PolicyKind.Number, "Agent installation", "Use the agent for the connection afterwards", 0, 1, Labels: YesNo, Since: Phase4),
+    ];
 
     // Phase 3 (docs/admx-design.md §5): what RemoteHub may do at all. 0 blocks a feature, 1 or not set allows it; a main
     // switch (AllowAgent, AllowPowerShellRemoting, AllowNetworkShares) at 0 blocks everything below it.
@@ -184,6 +229,45 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowSharedSettings = Feature("AllowSharedSettings", "Settings storage", "Allow a shared settings folder");
 
     private const string Phase3 = "0.18.12";
+
+    // Phase 4 (docs/admx-design.md §7): one property of every connection's settings each, in the subkey Connections. The
+    // value name is the RdpOptions property name; words are the enum members' names, so a policy doesn't depend on their order.
+    public static readonly IReadOnlyList<PolicyEntry> ConnectionEntries =
+    [
+        ConnWords("Resize", "Display", "Resize behaviour", "DynamicResolution", "SmartSizing", "Fixed"),
+        new(PolicyProduct.Console, ConnectionsKey, "FixedResolution", PolicyKind.Text, "Connection settings – Display", "Fixed resolution", Max: 11, Since: Phase4,
+            Rule: s => s.Split('x') is [var w, var h] && int.TryParse(w, out var width) && int.TryParse(h, out var height) && width is >= 200 and <= 8192 && height is >= 200 and <= 8192
+                ? null : "isn't <width>x<height> between 200 and 8192, for example 1920x1080"),
+        new(PolicyProduct.Console, ConnectionsKey, "ColorDepth", PolicyKind.Number, "Connection settings – Display", "Colour depth", 15, 32, ["15", "16", "24", "32"], Since: Phase4),
+        ConnFlag("UseMultimon", "Display", "Use all monitors in full screen"),
+        ConnWords("Quality", "Display", "Visual quality", "Best", "Balanced", "Fast"),
+        ConnFlag("RedirectClipboard", "Devices and resources", "Clipboard (copy and paste)"),
+        ConnFlag("RedirectDrives", "Devices and resources", "Local drives"),
+        ConnFlag("RedirectPrinters", "Devices and resources", "Printers"),
+        ConnFlag("RedirectSmartCards", "Devices and resources", "Smart cards"),
+        ConnWords("Audio", "Devices and resources", "Audio", "PlayLocal", "PlayRemote", "None"),
+        ConnFlag("ForwardWindowsKeys", "Devices and resources", "Send Windows key combinations"),
+        ConnFlag("EnableNla", "Security", "Network Level Authentication"),
+        ConnWords("ServerAuthentication", "Security", "Server authentication", "ConnectWithoutWarning", "DoNotConnect", "Warn"),
+        ConnFlag("AdminSession", "Security", "Administrative (console) session"),
+        ConnFlag("AutoReconnect", "Security", "Reconnect automatically"),
+        ConnWords("PasswordPrompt", "Security", "When Windows asks for the password", "Clipboard", "Off"),
+        ConnFlag("PsRemoting", "Remoting and agent", "Check PowerShell remoting after the RDP sign-in"),
+        ConnFlag("PsUseSsl", "Remoting and agent", "PowerShell remoting over HTTPS"),
+        ConnFlag("UseAgent", "Remoting and agent", "Tools through the RemoteHub Agent"),
+        ConnWords("RemoteDesktopVia", "Remoting and agent", "Remote desktop through", "Automatic", "Rdp", "Agent"),
+        ConnFlag("AgentAutoSignIn", "Remoting and agent", "Sign in automatically when nobody is signed in"),
+        ConnWords("AgentAutoSignInEndAction", "Remoting and agent", "When an automatic sign-in's connection ends", "Lock", "SignOut"),
+    ];
+
+    public const string ConnectionsKey = "Connections";
+    private const string Phase4 = "0.18.12";
+
+    private static PolicyEntry ConnFlag(string name, string group, string title) =>
+        new(PolicyProduct.Console, ConnectionsKey, name, PolicyKind.Number, "Connection settings – " + group, title, 0, 1, Labels: YesNo, Since: Phase4);
+
+    private static PolicyEntry ConnWords(string name, string group, string title, params string[] words) =>
+        new(PolicyProduct.Console, ConnectionsKey, name, PolicyKind.Text, "Connection settings – " + group, title, Words: words, Since: Phase4);
 
     // ------------------------------------------------------------------ RemoteHub Agent
 
@@ -250,7 +334,16 @@ public static class PolicyCatalog
     public static readonly IReadOnlyList<PolicyEntry> ConsoleEntries =
     [
         .. FeatureEntries,
-        SettingsFolder, AllowSharedSettings, DisableUpdateCheck, UpdateChannel, DisableTelemetry, DisableRecording, RecordingFolder, AuditRetentionDays,
+        Theme, SwitchKeys,
+        DisableUpdateCheck, UpdateChannel, DisableTelemetry,
+        SettingsFolder, AllowSharedSettings,
+        AuditRetentionDays,
+        DisableRecording, RecordingFolder, RecordingFps, RecordingResolution, RecordingUseGpu, RecordingIncludeDetails,
+        ProcessRefreshSeconds, ServiceRefreshSeconds,
+        AgentDesktopQuality, AgentDesktopConsent, AgentDesktopViewOnly, AgentDesktopFitToWindow, AgentDesktopShowInfo, AgentDesktopKeyCombinations,
+        AgentDesktopClipboard,
+        .. AgentInstallEntries,
+        .. ConnectionEntries,
     ];
 
     public static readonly IReadOnlyList<PolicyEntry> AgentEntries =
@@ -309,6 +402,11 @@ public static class PolicyCatalog
     private static PolicyEntry Console(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
         IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, bool expand = false, string since = "0.18.11") =>
         new(PolicyProduct.Console, "", name, kind, group, title, min, max, words, labels, expand, since);
+
+    /// <summary>A console setting of §6, in the root key.</summary>
+    private static PolicyEntry Setting(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null) =>
+        Console(name, kind, group, title, min, max, words, labels, since: Phase4);
 
     /// <summary>A console feature: DWORD 0 = blocked, 1 = allowed.</summary>
     private static PolicyEntry Feature(string name, string group, string title) =>
