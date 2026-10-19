@@ -230,8 +230,14 @@ public static class NoteStore
     /// <summary>Moves a notebook, a section (with its pages) or a page to "Recently deleted".</summary>
     public static void Delete(string kind, string id) => Write(null, (c, t) =>
     {
-        var now = Now();
         // Everything deleted with it gets the same stamp, so restoring brings back exactly that and nothing deleted before.
+        // The stamp is later than every earlier one: a page and then its section deleted within the same millisecond
+        // would otherwise share it, and "Delete now" on the section would remove the page deleted before it too.
+        var last = LocalDb.Scalar(c, """
+            SELECT MAX(m) FROM (SELECT MAX(deleted_utc) AS m FROM notes UNION ALL SELECT MAX(deleted_utc) FROM note_sections
+                                UNION ALL SELECT MAX(deleted_utc) FROM notebooks)
+            """, t);
+        var now = last is long stamp ? Math.Max(Now(), stamp + 1) : Now();
         switch (kind)
         {
             case NotebookKind:
