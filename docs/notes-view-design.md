@@ -740,6 +740,9 @@ Built on the branch `notes-view` (2026-10-19). Code: `Views/ViewRail.cs`, `MainW
 | Page undo covers script blocks as one step (§6.2) | A script block has its own undo while the caret is in it; the page's undo doesn't include typing inside a block | AvalonEdit and the RichTextBox keep separate histories. |
 | Images: over 16,384 px refused (§9) | Scaled down to 16,384 px; refused when the header claims more than 65,535 px a side or 300 megapixels, or the file is over 64 MB | Large screenshots of several monitors stay usable; decompression bombs are still refused before decoding. |
 | Touch: press-and-hold shows the expanded rail (§3.3) | Not built | Tapping an icon switches the view. |
+| F6 from the title bar to the rail; rail items as a list ("Notes, 2 of 2, selected") (§3.3, §3.4) | Not built: Tab reaches the rail, Up/Down move in it, the selected item is announced as "selected" | A list control with its own selection would fight the popup copy of the items; can follow. |
+| Tooltips on the rail only when it can't expand (§3.4) | Every rail button has a tooltip "Label (shortcut)" | The same as every other button in the main window. |
+| Page title in `TitleTextBlockStyle` (§4.4) | 26 px semibold, the same size as a heading 1 in the page | The theme style is for text blocks, not the editable title box. |
 | Notebook export folder name `<notebook> <yyyy-MM-dd HH-mm>` | As planned; a page export writes `Title.md` (+ `Title.assets\`) into the chosen folder, never overwriting (`Title (2).md`) | – |
 
 Audit events: `note.added`, `note.changed` (once per page and run), `note.deleted`, `note.restored`, `notes.exported`,

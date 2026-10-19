@@ -144,6 +144,7 @@ public sealed class ViewRail : Grid
         _updateDot.Visibility = updateAvailable ? Visibility.Visible : Visibility.Collapsed;
         var name = updateAvailable ? $"{fullText} – {secondLine}" : $"{fullText} – about this version";
         AutomationProperties.SetName(_versionItem.Button, name);
+        _versionItem.Button.ToolTip = name;
     }
 
     /// <summary>Closes the expanded rail now (e.g. before a modal dialog or when the window locks).</summary>
@@ -216,6 +217,7 @@ public sealed class ViewRail : Grid
         var item = new Item(railContent, expandedContent, selectable);
         AutomationProperties.SetName(item.Button, name);
         if (shortcut.Length > 0) AutomationProperties.SetAcceleratorKey(item.Button, shortcut);
+        item.Button.ToolTip = shortcut.Length > 0 ? $"{name} ({shortcut})" : name;
         item.Button.Click += (_, _) => click();
         item.ExpandedButton.Click += (_, _) => click();
         railPanel.Children.Add(item.Rail);
@@ -287,10 +289,11 @@ public sealed class ViewRail : Grid
             foreach (var l in new[] { _rail, _expanded })
             {
                 l.Marker.Visibility = _selected ? Visibility.Visible : Visibility.Hidden;
-                if (_selected) l.Back.SetResourceReference(Border.BackgroundProperty, "SubtleFillColorSecondaryBrush");
-                else if (l.Button.IsMouseOver) l.Back.SetResourceReference(Border.BackgroundProperty, "SubtleFillColorTertiaryBrush");
+                if (_selected) l.Back.SetResourceReference(Border.BackgroundProperty, "SessionHeaderBrush");
+                else if (l.Button.IsMouseOver) l.Back.SetResourceReference(Border.BackgroundProperty, "SubtleFillColorSecondaryBrush");
                 else l.Back.Background = Brushes.Transparent;
                 if (focused) l.Back.SetResourceReference(Border.BorderBrushProperty, "BrandAccentBrush");
+                else if (_selected) l.Back.SetResourceReference(Border.BorderBrushProperty, "ChromeStrokeBrush"); // as the selected session tab
                 else l.Back.BorderBrush = Brushes.Transparent;
             }
         }

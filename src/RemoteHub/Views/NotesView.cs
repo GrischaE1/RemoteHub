@@ -40,8 +40,8 @@ public sealed class NotesView : Grid
     private readonly TextBox _search = new() { PlaceholderText = "Search notes (Ctrl+F)", ClearButtonEnabled = true, Icon = new SymbolIcon(SymbolRegular.Search24) };
     private readonly TextBlock _listHeader = new() { FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button _clearFilter = new();
-    private readonly System.Windows.Controls.TextBox _title = new() { FontSize = NoteMarkdown.H1Size, FontWeight = FontWeights.SemiBold, BorderThickness = new Thickness(0, 0, 0, 1), Background = Brushes.Transparent, Padding = new Thickness(0, 2, 0, 4) };
-    private readonly TextBlock _date = new() { FontSize = 12, Margin = new Thickness(0, 4, 0, 0) };
+    private readonly System.Windows.Controls.TextBox _title = new() { FontSize = NoteMarkdown.H1Size, FontWeight = FontWeights.SemiBold, BorderThickness = new Thickness(0, 0, 0, 1), BorderBrush = Brushes.Transparent, Background = Brushes.Transparent, Padding = new Thickness(0, 2, 0, 4) };
+    private readonly TextBlock _date = new() { Margin = new Thickness(0, 4, 0, 0) };
     private readonly WrapPanel _links = new() { Margin = new Thickness(0, 6, 0, 8) };
     private readonly NoteEditor _editor = new();
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
@@ -99,7 +99,7 @@ public sealed class NotesView : Grid
         _searchTimer.Tick += (_, _) => { _searchTimer.Stop(); RunSearch(); };
         _undoTimer.Tick += (_, _) => HideUndo();
         _editor.Changed += OnEdited;
-        _editor.Message += ShowMessage;
+        _editor.Message += ShowError;
         _editor.NoteLinkRequested += id => OpenPage(id, null);
         _editor.StoreImage = StoreImage;
         _title.TextChanged += (_, _) => OnEdited();
@@ -230,9 +230,11 @@ public sealed class NotesView : Grid
         _pageCard.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _pageCard.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _title.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
-        _title.SetResourceReference(Control.BorderBrushProperty, "ChromeStrokeBrush");
+        // No border until focused (§4.4).
+        _title.GotKeyboardFocus += (_, _) => _title.SetResourceReference(Control.BorderBrushProperty, "ChromeStrokeBrush");
+        _title.LostKeyboardFocus += (_, _) => _title.BorderBrush = Brushes.Transparent;
         _title.SetResourceReference(TextBoxBase.CaretBrushProperty, "TextFillColorPrimaryBrush");
-        _date.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        _date.Style = (Style)FindResource("Caption");
         _status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         var head = new StackPanel { Margin = new Thickness(4, 0, 4, 0) };
         head.Children.Add(_title);
@@ -314,7 +316,10 @@ public sealed class NotesView : Grid
             }
             var add = new TreeViewItem { Header = AddSectionHeader(), Focusable = true };
             AutomationProperties.SetName(add, "New section in " + book.Name);
-            add.Selected += (_, e) => { e.Handled = true; if (!_loading) Dispatcher.BeginInvoke(() => NewSection(book)); };
+            // Opens on a click or Enter only: arrowing through the tree must not pop up a dialog.
+            add.Selected += (_, e) => e.Handled = true;
+            add.MouseLeftButtonUp += (_, e) => { e.Handled = true; NewSection(book); };
+            add.KeyDown += (_, e) => { if (e.Key is Key.Enter or Key.Space) { e.Handled = true; NewSection(book); } };
             bookItem.Items.Add(add);
             _tree.Items.Add(bookItem);
         }
@@ -427,7 +432,7 @@ public sealed class NotesView : Grid
     {
         if (_locked) return;
         if (id != _pageId) _ = Save(sync: true);
-        if (NoteStore.Page(id) is not { } page) { ShowMessage("That page no longer exists."); return; }
+        if (NoteStore.Page(id) is not { } page) { ShowError("That page no longer exists."); return; }
         if (page.SectionId != _sectionId && string.IsNullOrEmpty(highlight) && _linkFilter is null)
         {
             _sectionId = page.SectionId;
@@ -440,7 +445,8 @@ public sealed class NotesView : Grid
         var body = Unsaved(id)?.Body ?? NoteStore.Body(id) ?? "";
         var title = Unsaved(id)?.Title ?? page.Title;
         _title.Text = title;
-        _date.Text = page.CreatedUtc.ToLocalTime().ToString("dddd, d MMMM yyyy  HH:mm");
+        var created = page.CreatedUtc.ToLocalTime();
+        _date.Text = created.ToString("D") + "  " + created.ToString("t"); // the user's regional formats
         _date.ToolTip = "Modified " + page.ModifiedUtc.ToLocalTime().ToString("g");
         _editor.Load(body, NoteStore.Images(id));
         _savedTitle = page.Title;
@@ -551,7 +557,7 @@ public sealed class NotesView : Grid
         if (body.Length > NoteStore.MaxBodyLength)
         {
             _editor.UndoLast();
-            ShowMessage("This page is too large – split it into several pages.");
+            ShowError("This page is too large – split it into several pages.");
             return;
         }
         _dirty = false;
@@ -573,7 +579,7 @@ public sealed class NotesView : Grid
             // Kept in memory and tried again; the text stays in the editor.
             if (first) _changeAudited.Remove(id);
             Remember(id, title, body);
-            _status.Text = "Not saved – retrying";
+            ShowError("Not saved – retrying");
             DiagLog.Write("Notes: saving a page failed: " + ex.GetType().Name);
             _retryTimer.Start();
         }
@@ -646,12 +652,23 @@ public sealed class NotesView : Grid
         catch (Exception ex)
         {
             DiagLog.Write("Notes: storing an image failed: " + ex.GetType().Name);
-            ShowMessage("The image could not be stored.");
+            ShowError("The image could not be stored.");
             return null;
         }
     }
 
-    private void ShowMessage(string text) => _status.Text = text;
+    private void ShowMessage(string text)
+    {
+        _status.Text = text;
+        _status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+    }
+
+    /// <summary>A failure on the status line, coloured like the other views' errors.</summary>
+    private void ShowError(string text)
+    {
+        _status.Text = text;
+        _status.Foreground = Brushes.IndianRed;
+    }
 
     // ================================================================== commands
 
@@ -660,7 +677,18 @@ public sealed class NotesView : Grid
         var mods = Keyboard.Modifiers;
         if (mods == ModifierKeys.Control && e.Key == Key.F) { FocusSearch(); e.Handled = true; }
         else if (mods == ModifierKeys.Control && e.Key == Key.N) { NewPage(); e.Handled = true; }
-        else if (mods == ModifierKeys.None && e.Key == Key.F2 && _tree.IsKeyboardFocusWithin && _tree.SelectedItem is TreeViewItem { Tag: SectionInfo s }) { RenameSection(s); e.Handled = true; }
+        else if (mods == ModifierKeys.None && _tree.IsKeyboardFocusWithin && _tree.SelectedItem is TreeViewItem { Tag: var tag } && e.Key is Key.F2 or Key.Delete)
+        {
+            e.Handled = true;
+            switch (tag, e.Key)
+            {
+                case (SectionInfo s, Key.F2): RenameSection(s); break;
+                case (NotebookInfo b, Key.F2): RenameNotebook(b); break;
+                case (SectionInfo s, Key.Delete): DeleteSection(s); break;
+                case (NotebookInfo b, Key.Delete): DeleteNotebook(b); break;
+                default: e.Handled = false; break;
+            }
+        }
     }
 
     public void FocusSearch()
@@ -813,14 +841,14 @@ public sealed class NotesView : Grid
     private ContextMenu BookMenu(NotebookInfo b)
     {
         var m = new ContextMenu();
-        m.Items.Add(RemoteToolChrome.Item("Rename…", SymbolRegular.Rename24, () => RenameNotebook(b)));
+        m.Items.Add(RemoteToolChrome.Item("Rename…", SymbolRegular.Rename24, () => RenameNotebook(b), gesture: "F2"));
         m.Items.Add(RemoteToolChrome.Item("New section…", SymbolRegular.Add24, () => NewSection(b)));
         m.Items.Add(RemoteToolChrome.Item("Move up", SymbolRegular.ArrowUp24, () => Move(NoteStore.NotebookKind, _books.Select(x => x.Id).ToList(), b.Id, -1), _books.FirstOrDefault()?.Id != b.Id));
         m.Items.Add(RemoteToolChrome.Item("Move down", SymbolRegular.ArrowDown24, () => Move(NoteStore.NotebookKind, _books.Select(x => x.Id).ToList(), b.Id, 1), _books.LastOrDefault()?.Id != b.Id));
         m.Items.Add(new Separator());
         m.Items.Add(RemoteToolChrome.Item("Export as Markdown…", SymbolRegular.ArrowExportLtr24, () => ExportTree(b.Name, _sections.Where(s => s.NotebookId == b.Id).ToList())));
         m.Items.Add(new Separator());
-        m.Items.Add(RemoteToolChrome.Item("Delete…", SymbolRegular.Delete24, () => DeleteNotebook(b)));
+        m.Items.Add(RemoteToolChrome.Item("Delete…", SymbolRegular.Delete24, () => DeleteNotebook(b), gesture: "Del"));
         return m;
     }
 
@@ -855,7 +883,7 @@ public sealed class NotesView : Grid
         m.Items.Add(RemoteToolChrome.Item("Export as Markdown…", SymbolRegular.ArrowExportLtr24, () => ExportTree(s.Name, [s])));
         m.Items.Add(RemoteToolChrome.Item("Import Markdown files…", SymbolRegular.ArrowImport24, () => ImportFiles(s.Id)));
         m.Items.Add(new Separator());
-        m.Items.Add(RemoteToolChrome.Item("Delete…", SymbolRegular.Delete24, () => DeleteSection(s)));
+        m.Items.Add(RemoteToolChrome.Item("Delete…", SymbolRegular.Delete24, () => DeleteSection(s), gesture: "Del"));
         return m;
     }
 
@@ -866,11 +894,11 @@ public sealed class NotesView : Grid
         var to = new MenuItem { Header = "Move to section", Icon = new SymbolIcon(SymbolRegular.ArrowForward24) };
         foreach (var b in _books)
         {
-            var bm = new MenuItem { Header = b.Name };
+            var bm = new MenuItem { Header = b.Name, Icon = new SymbolIcon(SymbolRegular.Notebook24) };
             foreach (var s in _sections.Where(s => s.NotebookId == b.Id && s.Id != p.SectionId))
             {
                 var sid = s.Id;
-                bm.Items.Add(new MenuItem { Header = s.Name, Command = new RelayCommand(() => { _ = Save(sync: true); NoteStore.MovePage(p.Id, sid); ShowPages(); }) });
+                bm.Items.Add(RemoteToolChrome.Item(s.Name, SymbolRegular.Folder24, () => { _ = Save(sync: true); NoteStore.MovePage(p.Id, sid); ShowPages(); }));
             }
             if (bm.Items.Count > 0) to.Items.Add(bm);
         }
@@ -887,13 +915,6 @@ public sealed class NotesView : Grid
         m.Items.Add(new Separator());
         m.Items.Add(RemoteToolChrome.Item("Delete", SymbolRegular.Delete24, () => DeletePage(p), gesture: "Del"));
         return m;
-    }
-
-    private sealed class RelayCommand(Action a) : ICommand
-    {
-        public event EventHandler? CanExecuteChanged { add { } remove { } }
-        public bool CanExecute(object? parameter) => true;
-        public void Execute(object? parameter) => a();
     }
 
     // ================================================================== search (§7)

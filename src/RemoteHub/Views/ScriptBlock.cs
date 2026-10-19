@@ -70,7 +70,7 @@ public sealed class ScriptBlock : Border, INoteScriptBlock
         header.Children.Add(_language);
         var more = Tool(SymbolRegular.MoreHorizontal24, "More actions for this script block");
         more.Click += (_, _) => { var m = Menu(); m.PlacementTarget = more; m.Placement = PlacementMode.Bottom; m.IsOpen = true; };
-        _copy = Tool(SymbolRegular.Copy24, "Copy the script");
+        _copy = Tool(SymbolRegular.Copy24, "Copy script block");
         _copy.Click += (_, _) => CopyCode();
         _copiedTimer.Tick += (_, _) => { _copiedTimer.Stop(); _copy.Content = null; _copy.Icon = new SymbolIcon(SymbolRegular.Copy24); };
         DockPanel.SetDock(more, Dock.Right);
@@ -96,7 +96,7 @@ public sealed class ScriptBlock : Border, INoteScriptBlock
         _editor.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
         _editor.SetResourceReference(TextEditor.LineNumbersForegroundProperty, "TextFillColorTertiaryBrush");
         _editor.TextArea.SelectionCornerRadius = 0;
-        AutomationProperties.SetName(_editor, "Script");
+        AutomationProperties.SetName(_editor, "Script block");
         Grid.SetRow(_editor, 1);
         root.Children.Add(_editor);
         _editor.TextChanged += (_, _) => { FitHeight(); Changed?.Invoke(); };
@@ -218,7 +218,7 @@ public sealed class ScriptBlock : Border, INoteScriptBlock
         m.Items.Add(wrap);
         m.Items.Add(RemoteToolChrome.Item("Save as file…", SymbolRegular.Save24, SaveAs));
         m.Items.Add(new Separator());
-        m.Items.Add(RemoteToolChrome.Item("Delete block", SymbolRegular.Delete24, () => DeleteRequested?.Invoke(this)));
+        m.Items.Add(RemoteToolChrome.Item("Delete script block", SymbolRegular.Delete24, () => DeleteRequested?.Invoke(this)));
         return m;
     }
 

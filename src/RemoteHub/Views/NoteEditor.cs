@@ -71,6 +71,9 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
                 if (FindHyperlink(e.OriginalSource as DependencyObject) is { } h) { OpenLink(h); e.Handled = true; }
         };
         DataObject.AddPastingHandler(_box, OnPaste);
+        // Subscribed while shown, like the script blocks, so a closed editor isn't kept alive by the event.
+        Loaded += (_, _) => { AppChrome.PaletteChanged -= OnPaletteChanged; AppChrome.PaletteChanged += OnPaletteChanged; };
+        Unloaded += (_, _) => AppChrome.PaletteChanged -= OnPaletteChanged;
         DataObject.AddCopyingHandler(_box, OnCopy);
         _box.AllowDrop = true;
         _box.PreviewDragOver += (_, e) => { if (e.Data.GetDataPresent(DataFormats.FileDrop)) { e.Effects = DragDropEffects.Copy; e.Handled = true; } };
@@ -85,6 +88,33 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     }
 
     public FlowDocument Document => _box.Document;
+
+    /// <summary>
+    /// Inline code formatted from a selection holds the background as a value (a range can't take a resource
+    /// reference): after a theme switch, every code run gets the new theme's background again.
+    /// </summary>
+    private void OnPaletteChanged() => Dispatcher.BeginInvoke(RefreshCodeBackgrounds);
+
+    private void RefreshCodeBackgrounds()
+    {
+        // Only elements that hold the brush as a fixed value; once they refer to the resource, a theme switch needs nothing.
+        // Not an edit: the page isn't marked as changed.
+        var was = _loading;
+        _loading = true;
+        foreach (var e in Descendants(_box.Document))
+            if (e is Inline i && i.ReadLocalValue(TextElement.BackgroundProperty) is Brush && (i.Tag as string == NoteMarkdown.Code || NoteMarkdown.IsMono(i.FontFamily)))
+                i.SetResourceReference(TextElement.BackgroundProperty, "NoteCodeBackgroundBrush");
+        _loading = was;
+    }
+
+    private static IEnumerable<TextElement> Descendants(DependencyObject root)
+    {
+        foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+        {
+            if (child is TextElement te) yield return te;
+            foreach (var d in Descendants(child)) yield return d;
+        }
+    }
 
     // ================================================================== loading and saving
 
@@ -276,7 +306,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     /// <summary>A flat icon button of the format bar (also used by the view for its page actions).</summary>
     public static Button BarButton(SymbolRegular icon, string tip)
     {
-        var b = new Button { Icon = new SymbolIcon(icon), ToolTip = tip, Padding = new Thickness(7, 4, 7, 4), MinWidth = 0, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Margin = new Thickness(0, 0, 2, 0), Focusable = false };
+        var b = new Button { Icon = new SymbolIcon(icon), ToolTip = tip, Padding = new Thickness(7, 4, 7, 4), MinWidth = 0, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Margin = new Thickness(0, 0, 2, 0) };
         AutomationProperties.SetName(b, tip);
         return b;
     }
@@ -470,6 +500,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         {
             sel.ApplyPropertyValue(TextElement.FontFamilyProperty, NoteMarkdown.MonoFont);
             sel.ApplyPropertyValue(TextElement.BackgroundProperty, TryFindResource("NoteCodeBackgroundBrush"));
+            RefreshCodeBackgrounds(); // from a fixed value to the theme resource, while this is the user's edit
             sel.ApplyPropertyValue(TextElement.FontWeightProperty, FontWeights.Normal);
             sel.ApplyPropertyValue(TextElement.FontStyleProperty, FontStyles.Normal);
         }
@@ -890,6 +921,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
                 ApplyLike(range, inline);
                 pos = range.End;
             }
+            RefreshCodeBackgrounds();
             _box.CaretPosition = pos;
             Changed?.Invoke();
             return;

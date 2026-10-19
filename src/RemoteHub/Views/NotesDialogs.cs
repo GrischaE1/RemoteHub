@@ -66,7 +66,7 @@ public sealed class RecentlyDeletedWindow : FluentWindow
         var entries = NoteStore.Deleted();
         if (entries.Count == 0)
         {
-            var empty = new TextBlock { Text = "Nothing was deleted in the last 30 days.", Margin = new Thickness(4, 8, 4, 8) };
+            var empty = new TextBlock { Text = $"Nothing was deleted in the last {NoteStore.KeepDeletedDays} days.", Margin = new Thickness(4, 8, 4, 8) };
             empty.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
             _list.Items.Add(new ListViewItem { Content = empty, IsEnabled = false });
             return;
