@@ -532,7 +532,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.updateDialog = (Ui '*' -Title 'Update RemoteHub Agent' -Value list -TimeoutSec 60).items
                 $null = Ui 'Update through the running agent' -Title 'Update RemoteHub Agent' -Value check
                 $null = Ui 'Create a new device certificate*' -Title 'Update RemoteHub Agent' -Value uncheck -Optional -TimeoutSec 5
-                # Allow automatic sign-in: offered for this way; left unticked (RemoteHub didn't install the provider)
+                # Allow automatic sign-in: offered for this way and ticked by default; unticked here, so the update passes
+                # AUTOSIGNIN=0 (the MSI would install the provider by default otherwise)
                 $R.updateAutoSignIn = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value read -Optional
                 $null = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value uncheck -Optional -TimeoutSec 5
                 $null = Ui 'Update' -Title 'Update RemoteHub Agent'
@@ -1350,15 +1351,15 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             $R.audit | Should -Match 'Signed in automatically on the console'
         }
 
-        It 'UI-AG-07 "Allow automatic sign-in": shown (the package has the provider), off for the clipboard way, on through the agent; unticked -> AUTOSIGNIN not passed, unticked after RemoteHub installed it -> AUTOSIGNIN=0' -Tag 'UI-AG-07' {
+        It 'UI-AG-07 "Allow automatic sign-in": shown (the package has the provider), off for the clipboard way, on through the agent and ticked by default; unticked -> AUTOSIGNIN=0, also after RemoteHub installed it' -Tag 'UI-AG-07' {
             NoError 'update'
             NoError 'update0'
             $setup.autoSignInShown.found | Should -BeTrue
             $setup.autoSignInClipboard.enabled | Should -BeFalse
             $R.updateAutoSignIn.enabled | Should -BeTrue
-            $R.updateAutoSignIn.value | Should -Be 'Off'
+            $R.updateAutoSignIn.value | Should -Be 'On'
             $R.updateCommandLine | Should -Match 'Command Line:'
-            $R.updateCommandLine | Should -Not -Match 'AUTOSIGNIN'
+            $R.updateCommandLine | Should -Match 'AUTOSIGNIN=0'
             $R.update0Box.value | Should -Be 'On'
             $R.update0Box.enabled | Should -BeTrue
             $R.update0Done.found | Should -BeTrue

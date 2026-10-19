@@ -2700,7 +2700,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated – `D-CON.Tests.ps1`
 
 **Expected:**
 - `protocol` 1, `account` `<acct>` (PSAdmin), `device` = device label or computer name.
-- `rights` = {control: true, secureDesktop: true, consentBypass: false}.
+- `rights` = {control: true, secureDesktop: true, consentBypass: false, autoSignIn: true when the MSI under test carries the credential provider – on by default}; the `autoSignIn` feature with it.
 - `consentModes` = ["Ask", "Pin"] (None missing).
 - `sessions` not empty; `maxFramesPerSecond` 60, `maxQuality` 100, `consentTimeoutSeconds` 30, `clipboard` 3.
 - `features` = allMonitors, stats, ping, resume, transfer, transferReceipt, transferOnPaste; `version` = the installed agent version (same as health).
@@ -6851,7 +6851,7 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 P1 · How: PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 
 **Expected:**
-- DLL and both keys gone; the install's choice (`agent.json` `noUserBehavior` / `autoSignInGroups`) cleared, the policy key stays empty
+- DLL and both keys gone; `agent.json` `noUserBehavior` = SignInScreen (turned off – not set would mean on) and `autoSignInGroups` cleared, the policy key stays empty
 - Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
 
 #### C-PROV-06 · RemoteHub's *Install credential provider*
@@ -6865,7 +6865,7 @@ P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-PROV.Tests.ps1`
 
 **Expected:**
-- removed, DLL and keys gone, the install's choice in `agent.json` cleared again, the policy key still empty; the agent's service process is the same as before both actions and health answers with the same certificate
+- removed, DLL and keys gone, `agent.json` `noUserBehavior` = SignInScreen again, the policy key still empty; the agent's service process is the same as before both actions and health answers with the same certificate
 - Steps: see the test (`lab/tests/C-PROV.Tests.ps1`).
 
 #### C-PROV-08 · Another build on the device
@@ -7023,11 +7023,11 @@ P1 · How: H N PS E · Needs: – · Status: ◐ Written, not yet run in the lab
 **Expected:**
 - cut ≥ 75 s, resumed within 2 min → same session, no lock; fails today (D-RES-10)
 
-#### C-AUTO-07 · Off without the option
+#### C-AUTO-07 · On without the option, off with `AUTOSIGNIN=0`
 P1 · How: H PS · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 
 **Expected:**
-- installed without `AUTOSIGNIN` → no `noUserBehavior` / `autoSignInGroups` in `agent.json`, no `NoUserBehavior` policy value, Hello `autoSignIn` false, no `autoSignIn` feature; a request → "turned off on this device (policy NoUserBehavior)"
+- automatic sign-in is on by default: installed without `AUTOSIGNIN` → provider DLL and keys installed, no `noUserBehavior` / `autoSignInGroups` in `agent.json`, no `NoUserBehavior` policy value, Hello `autoSignIn` true with the `autoSignIn` feature, a request signs the console account in; installed with `AUTOSIGNIN=0` → no provider, `agent.json` `noUserBehavior` = SignInScreen, Hello `autoSignIn` false, no `autoSignIn` feature, a request → "turned off on this device (policy NoUserBehavior)"
 - Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
 
 #### C-AUTO-08 · Rights
@@ -7566,7 +7566,7 @@ P3 · How: U PS · Needs: 2VM · Status: ◐ Written, not yet run in the lab –
 P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `UI-DESKTOP.Tests.ps1`
 
 **Expected:**
-- checkbox shown only when the package contains the provider, enabled only for remoting and through the agent (shown but off for clipboard / save to folder, nothing passed); starts ticked only when RemoteHub's record says it installed the provider; ticked → `AUTOSIGNIN=1`; unticked after RemoteHub installed the provider → `AUTOSIGNIN=0`, unticked otherwise → not passed
+- checkbox shown only when the package contains the provider, enabled only for remoting and through the agent (shown but off for clipboard / save to folder, nothing passed); starts ticked (on by default) unless RemoteHub's record says the provider was removed; ticked → `AUTOSIGNIN=1`; unticked → `AUTOSIGNIN=0` (the MSI installs the provider by default otherwise)
 - Steps: see the test (`lab/tests/UI-DESKTOP.Tests.ps1`).
 
 #### UI-AG-08 · Credential provider from the UI

@@ -305,7 +305,7 @@ Locked in the install dialog. `AllowAgentInstall` = 0 (§5) hides the dialog ent
 | `FirewallScope` | SZ: addresses and ranges, comma-separated; empty = any address | empty | The scope of the MSI's firewall rule. |
 | `AllowedGroups` | MULTI_SZ: group SIDs or names | Administrators | Written into the enrollment file. The device's `Rights` policy wins over it. |
 | `VirtualDisplay` | DWORD 0/1 | 1 | The install option *Virtual display for servers without a monitor*. |
-| `AutoSignIn` | DWORD 0/1 | 0 | The install option *Allow automatic sign-in*. 1 only if `AllowCredentialProviderInstall` isn't 0. |
+| `AutoSignIn` | DWORD 0/1 | 1 | The install option *Allow automatic sign-in*. 1 only if `AllowCredentialProviderInstall` isn't 0. 0: silent installs pass `AUTOSIGNIN=0`, so the provider is left out (an update removes it); the hand-run methods install it unless `AUTOSIGNIN=0` is added. |
 | `UseAgentAfterwards` | DWORD 0/1 | 1 | *Use the agent for this connection afterwards* |
 
 ## 7. Connection settings (`SOFTWARE\Policies\RemoteHub\Connections`)
@@ -407,8 +407,9 @@ The value names are those of `AgentRight`. Each is a MULTI_SZ of group SIDs or n
 They're unchanged ([agent-spec.md §7.1](agent-spec.md)).
 
 **New:** `AllowedGroups` (MULTI_SZ) in the agent key itself. It is the default for every right that isn't set on its
-own, and so replaces `allowedGroups` from `agent.json` (§9.7). `DesktopViewOnly`, `ConsentBypass` and `AutoSignIn` stay
-"nobody" unless they're set themselves.
+own, and so replaces `allowedGroups` from `agent.json` (§9.7). `DesktopViewOnly` and `ConsentBypass` stay "nobody"
+unless they're set themselves. `AutoSignIn` follows it like the other rights (on by default), unless the install chose its
+own groups (`agent.json` `autoSignInGroups`); to allow nobody, set it to `S-1-0-0`.
 
 ### 9.3 Remote desktop
 
@@ -439,7 +440,7 @@ own, and so replaces `allowedGroups` from `agent.json` (§9.7). `DesktopViewOnly
 
 | Value | Type, range | Default |
 |---|---|---|
-| `NoUserBehavior` | SZ `SignInScreen`, `AutoSignIn` | agent.json, then `SignInScreen` (§11.3) |
+| `NoUserBehavior` | SZ `SignInScreen`, `AutoSignIn` | agent.json, then `AutoSignIn` – on by default (§11.3); `SignInScreen` turns it off |
 | `AutoSignInRequirePrivacyScreen` | DWORD 0/1 | 0 |
 | `AutoSignInEndAction` | SZ `Lock`, `SignOut` | the connection's setting |
 | `TunnelTargets`, `TunnelPorts` | MULTI_SZ | anywhere except the device's own special addresses; every port |

@@ -192,7 +192,7 @@ Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {
         $afterRemove.Dll | Should -Be $false
         $afterRemove.Provider | Should -BeNullOrEmpty
         $afterRemove.InprocServer | Should -BeNullOrEmpty
-        $afterRemove.ConfigBehavior | Should -BeNullOrEmpty               # AUTOSIGNIN=0 also clears the install's choice in agent.json
+        $afterRemove.ConfigBehavior | Should -Be 'SignInScreen'           # AUTOSIGNIN=0 also turns it off in agent.json (not set would mean on)
         @($afterRemove.ConfigGroups) | Should -BeNullOrEmpty
         $afterRemove.Behavior | Should -BeNullOrEmpty                     # and the policy key stays empty
     }
@@ -216,7 +216,7 @@ Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {
         $actionRemove.installed | Should -Be $false
         $afterActionRemove.Dll | Should -Be $false
         $afterActionRemove.Provider | Should -BeNullOrEmpty
-        $afterActionRemove.ConfigBehavior | Should -BeNullOrEmpty         # the install's choice in agent.json is gone again
+        $afterActionRemove.ConfigBehavior | Should -Be 'SignInScreen'     # turned off in agent.json again (not set would mean on)
         @($afterActionRemove.ConfigGroups) | Should -BeNullOrEmpty
         $afterActionRemove.Behavior | Should -BeNullOrEmpty
         @($afterActionRemove.Right | Where-Object { $_ }) | Should -BeNullOrEmpty

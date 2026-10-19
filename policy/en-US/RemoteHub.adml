@@ -637,9 +637,9 @@ Registry: VirtualDisplay (REG_DWORD) = 1 or 0.</string>
 
 Enabled: the install option is ticked (only for the silent methods, and only when "Allow installing and removing the credential provider" isn't disabled).
 
-Disabled: the install option is unticked.
+Disabled: the install option is unticked, so a silent install leaves the credential provider out (AUTOSIGNIN=0) and an update removes it.
 
-Not configured: the user decides (default: off).
+Not configured: the user decides (default: on). The other install methods run the MSI by hand, which installs the credential provider unless AUTOSIGNIN=0 is added to its command line.
 
 Registry: AutoSignIn (REG_DWORD) = 1 or 0.</string>
 
@@ -995,9 +995,9 @@ Registry: Rights\Tunnel (REG_MULTI_SZ).</string>
       <string id="Agent_Right_AutoSignIn">Who may sign in automatically</string>
       <string id="Agent_Right_AutoSignIn_Help">Groups whose members may be signed in automatically on this device's console when nobody is signed in. "When nobody is signed in" must allow it, the credential provider must be installed, and the account also needs "Who may see and control the screen" and "Who may use the sign-in screen, lock screen and UAC prompts".
 
-Enter one group per line, as a SID (recommended) or a name.
+Enter one group per line, as a SID (recommended) or a name. To allow nobody, enter S-1-0-0.
 
-Not configured: nobody, unless the agent was installed with automatic sign-in allowed.
+Not configured: the groups of "Default groups for every right", else the groups chosen when the agent was installed (Administrators by default).
 
 Registry: Rights\AutoSignIn (REG_MULTI_SZ).</string>
 
@@ -1102,9 +1102,9 @@ Registry: HiddenApps (REG_MULTI_SZ).</string>
       <string id="Agent_NoUserBehavior">When nobody is signed in</string>
       <string id="Agent_NoUserBehavior_Help">What a remote desktop shows on this device's console when nobody is signed in:
 - Show the sign-in screen: the admin signs in on the sign-in screen.
-- Allow automatic sign-in: RemoteHub may sign in with the connection's account. It also needs the credential provider (installed with the agent's AUTOSIGNIN option), "Who may sign in automatically", and RemoteHub must not have it turned off (RemoteHub Console → Turn off automatic sign-in through the agent).
+- Allow automatic sign-in: RemoteHub may sign in with the connection's account. It also needs the credential provider (installed with the agent unless AUTOSIGNIN=0), "Who may sign in automatically", and RemoteHub must not have it turned off (RemoteHub Console → Turn off automatic sign-in through the agent).
 
-Not configured: the sign-in screen, unless the agent was installed with automatic sign-in allowed.
+Not configured: automatic sign-in is allowed, unless the agent was installed with it turned off (AUTOSIGNIN=0, or Remove credential provider in RemoteHub). To turn it off on every device, enable this policy with "Show the sign-in screen".
 
 Registry: NoUserBehavior (REG_SZ) = SignInScreen or AutoSignIn.</string>
       <string id="Agent_NoUserBehavior_SignInScreen">Show the sign-in screen</string>

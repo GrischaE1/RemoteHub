@@ -219,11 +219,11 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `TunnelEnabled` | DWORD | 0: never a jump host (on) |
 | `TunnelTargets`, `TunnelPorts` | MULTI_SZ | where jump connections may go: ranges and names / ports (anywhere except the device's own loopback, link-local and multicast; every port) |
 | `MaxTunnelStreams` | DWORD | 1–1024 streams per jump connection (64) |
-| `NoUserBehavior` | SZ | `SignInScreen` or `AutoSignIn` (SignInScreen) |
+| `NoUserBehavior` | SZ | `SignInScreen` or `AutoSignIn` (agent.json, else AutoSignIn – on by default) |
 | `AutoSignInRequirePrivacyScreen` | DWORD | 1: no automatic sign-in where the privacy screen can't be shown (0) |
 | `AutoSignInEndAction` | SZ | `Lock` or `SignOut`; wins over RemoteHub's setting (unset) |
 | `Rights\<right>` | MULTI_SZ | groups for PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (§4.2) |
-| `AllowedGroups` | MULTI_SZ | the groups for every right not set on its own, instead of `allowedGroups` in agent.json; never view-only, ConsentBypass or AutoSignIn (agent.json) – since 0.18.12 |
+| `AllowedGroups` | MULTI_SZ | the groups for every right not set on its own, instead of `allowedGroups` in agent.json; never view-only or ConsentBypass, and AutoSignIn only when the install didn't choose its own groups (agent.json) – since 0.18.12 |
 | `PowerShellEnabled` | DWORD | 0: no PowerShell session, so no files, registry, services, processes or update through the agent; `/v1/powershell` answers 404 before any sign-in, and health leaves out `powershell` (on) – since 0.18.12 |
 | `VirtualDisplay` | SZ | `auto`, `always`, `off` (agent.json) – since 0.18.12 |
 | `PrivacyScreenMessage` | SZ | heading of the privacy screen, at most 120 characters (built-in text) – since 0.18.12 |

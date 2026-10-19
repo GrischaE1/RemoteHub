@@ -2125,8 +2125,8 @@ public partial class AgentDesktopFlowTests
     {
         var config = new A.AgentConfig { AllowedGroups = [Admins] };
         var d = A.AgentPolicy.From(config, null);
-        Assert.Equal(A.NoUserBehaviors.SignInScreen, d.NoUserBehavior);
-        Assert.Empty(d.Groups(A.AgentRight.AutoSignIn));  // nobody by default
+        Assert.Equal(A.NoUserBehaviors.AutoSignIn, d.NoUserBehavior);  // on by default ...
+        Assert.Equal([Admins], d.Groups(A.AgentRight.AutoSignIn));    // ... for the allowed groups
         Assert.False(d.AutoSignInRequirePrivacyScreen);
         var p = A.AgentPolicy.From(config, new Values(new()
         {

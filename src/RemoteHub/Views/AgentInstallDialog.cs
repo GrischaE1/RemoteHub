@@ -123,11 +123,15 @@ public sealed class AgentInstallDialog : FluentWindow
         _autoSignIn = new CheckBox
         {
             Content = "Allow automatic sign-in (installs a credential provider)",
-            IsChecked = _hadProvider == true,
+            IsChecked = _hadProvider ?? true, // on by default, like every feature
             Margin = new Thickness(0, 14, 0, 0),
             Visibility = credentialProvider ? Visibility.Visible : Visibility.Collapsed,
         };
-        if (!_providerAllowed) PolicyLock.TurnedOff(_autoSignIn);
+        if (!_providerAllowed)
+        {
+            _autoSignIn.IsChecked = false;
+            PolicyLock.TurnedOff(_autoSignIn);
+        }
         else if (AppPolicy.AgentInstall("AutoSignIn") is int signIn)
         {
             _autoSignIn.IsChecked = signIn == 1;
@@ -137,8 +141,8 @@ public sealed class AgentInstallDialog : FluentWindow
         _options.Children.Add(_autoSignIn);
         _autoSignInHint = Muted("When nobody is signed in on the device, RemoteHub can sign in with the connection's credentials (remote desktop " +
                                 "through the agent). Installs a sign-in component and allows it for the allowed accounts – a policy IT has set " +
-                                "on the device stays as it is. Anyone at the device can see the session while you work. Silent installs only; " +
-                                "unchecked after it was installed: removed." +
+                                "on the device stays as it is. Anyone at the device can see the session while you work. Silent installs only " +
+                                "(the other ways install it); unchecked: not installed, or removed." +
                                 (managed.Contains(AgentManaged.AutoSignIn) ? " The device's policy decides whether and for whom automatic sign-in is allowed; this only installs or removes the sign-in component." : ""),
                                 26, 2, 0, 0);
         _autoSignInHint.Visibility = _autoSignIn.Visibility;
@@ -237,10 +241,13 @@ public sealed class AgentInstallDialog : FluentWindow
                    : AgentInstallMethod.Clipboard;
         var options = new AgentInstallOptions(method, _newIdentity.IsChecked == true, _label.Text.Trim(), port, _firewall.Text.Trim(),
             AgentInstaller.ParseGroups(_groups.Text), _useAfter.IsChecked == true, _virtualDisplay.IsChecked == true,
-            // Ticked: install and allow. Unticked: removed only if RemoteHub had installed it; otherwise left as the device has it.
-            // Fixed by this PC's policy: passed as set, but only the silent ways can pass it at all.
-            AutoSignIn: _autoSignIn.Visibility != Visibility.Visible || !(_autoSignIn.IsEnabled || _autoSignInByPolicy && (method is AgentInstallMethod.Remoting or AgentInstallMethod.ThroughAgent)) ? null
-                : _autoSignIn.IsChecked == true ? true : _hadProvider == true ? false : null);
+            // Only the silent ways can pass it; a hand-run MSI installs the provider, its default. Ticked: install and allow.
+            // Unticked (by the operator or this PC's policy AgentInstall\AutoSignIn): passed as 0, or the MSI's default would
+            // install it. Installing it turned off here (AllowCredentialProviderInstall): never added – and, as removing is
+            // turned off too, one RemoteHub knows is there is left alone.
+            AutoSignIn: _autoSignIn.Visibility != Visibility.Visible || method is not (AgentInstallMethod.Remoting or AgentInstallMethod.ThroughAgent) ? null
+                : !_providerAllowed ? (_hadProvider == true ? null : false)
+                : _autoSignIn.IsChecked == true);
 
         Options = options;
         DialogResult = true;

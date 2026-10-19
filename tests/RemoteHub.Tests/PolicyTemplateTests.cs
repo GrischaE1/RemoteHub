@@ -245,6 +245,30 @@ public class PolicyTemplateTests
     }
 
     [Fact]
+    public void Every_layer_of_automatic_sign_in_that_is_on_by_default_has_a_policy_that_turns_it_off()
+    {
+        var writes = Writes();
+        bool Writes_(string keyEnd, string name, object value) =>
+            writes.Any(w => w.Key.EndsWith(keyEnd, StringComparison.OrdinalIgnoreCase) && w.Name == name && w.Values.Contains(value));
+
+        // The agent: on for the allowed groups when nothing is set ...
+        var config = new A.AgentConfig { AllowedGroups = ["S-1-5-32-544"] };
+        var fresh = A.AgentPolicy.From(config, null);
+        Assert.Equal(A.NoUserBehaviors.AutoSignIn, fresh.NoUserBehavior);
+        Assert.Equal(["S-1-5-32-544"], fresh.Groups(A.AgentRight.AutoSignIn));
+        // ... off with "When nobody is signed in" = Show the sign-in screen, or nobody in "Who may sign in automatically".
+        Assert.True(Writes_(@"RemoteHub\Agent", "NoUserBehavior", "SignInScreen"));
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, A.AgentPolicy.From(config, new Values(new() { ["NoUserBehavior"] = "SignInScreen" })).NoUserBehavior);
+        Assert.Contains(writes, w => w.Key.EndsWith(@"RemoteHub\Agent\Rights", StringComparison.OrdinalIgnoreCase) && w.Name == "AutoSignIn" && w.Element == "multiText");
+        Assert.Equal(["S-1-0-0"], A.AgentPolicy.From(config, new Values(new() { [@"Rights\AutoSignIn"] = new[] { "S-1-0-0" } })).Groups(A.AgentRight.AutoSignIn));
+
+        // The console: the credential provider entries, the install dialog's option (ticked by default) and signing in.
+        Assert.True(Writes_("RemoteHub", "AllowCredentialProviderInstall", 0));
+        Assert.True(Writes_(@"RemoteHub\AgentInstall", "AutoSignIn", 0));
+        Assert.True(Writes_("RemoteHub", "DisableAgentAutoSignIn", 1));
+    }
+
+    [Fact]
     public void The_catalogue_lists_every_agent_right()
     {
         Assert.Equal(Enum.GetNames<A.AgentRight>(), PolicyCatalog.Rights.Select(r => r.Name));

@@ -51,8 +51,7 @@ public static class PolicyCommand
         return e.Name switch
         {
             _ when e.Key == PolicyCatalog.RightsKey => (Groups(Enum.Parse<AgentRight>(e.Name)),
-                e.Name is nameof(AgentRight.DesktopViewOnly) or nameof(AgentRight.ConsentBypass) ? "default"
-                : e.Name == nameof(AgentRight.AutoSignIn) ? (config?.AutoSignInGroups is not null ? "agent.json" : "default") : json),
+                e.Name is nameof(AgentRight.DesktopViewOnly) or nameof(AgentRight.ConsentBypass) ? "default" : json),
             "AllowedGroups" => (config is null ? AgentConfig.AdministratorsSid : string.Join("; ", config.AllowedGroups), json),
             "NoUserBehavior" => (p.NoUserBehavior, config?.NoUserBehavior is not null ? "agent.json" : "default"),
             "VirtualDisplay" => (p.VirtualDisplay, json),

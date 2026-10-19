@@ -30,8 +30,9 @@
     <Property Id="VIRTUALDISPLAY" Secure="yes" />
 <?ifdef CredentialProviderDll?>
     <!-- Automatic sign-in (docs/credential-provider-design.md §8.4): 1 installs and registers the credential provider,
-         0 removes it, empty = an update keeps what is installed (MSI carries the feature's state over to the new
-         version). An installed agent adds or removes it later with ADDLOCAL / REMOVE=CredentialProvider. -->
+         0 removes it, empty = a first install installs it, an update keeps what is installed (MSI carries the
+         feature's state over to the new version). An installed agent adds or removes it later with
+         ADDLOCAL / REMOVE=CredentialProvider. -->
     <Property Id="AUTOSIGNIN" Secure="yes" />
 <?endif?>
 
@@ -47,11 +48,10 @@
       </Files>
     </Feature>
 <?ifdef CredentialProviderDll?>
-    <!-- Not installed by default (level above INSTALLLEVEL 1); AUTOSIGNIN=1 installs it, AUTOSIGNIN=0 rules it out even
-         when an update would carry it over. -->
-    <Feature Id="CredentialProvider" Title="Automatic sign-in (credential provider)" Level="1000" AllowAbsent="yes">
+    <!-- Installed by default, like every feature (admins turn automatic sign-in off by policy: NoUserBehavior, or
+         Windows' ExcludedCredentialProviders); AUTOSIGNIN=0 rules it out even when an update would carry it over. -->
+    <Feature Id="CredentialProvider" Title="Automatic sign-in (credential provider)" Level="1" AllowAbsent="yes">
       <ComponentRef Id="CredentialProvider" />
-      <Level Value="1" Condition="AUTOSIGNIN = &quot;1&quot;" />
       <Level Value="0" Condition="AUTOSIGNIN = &quot;0&quot;" />
     </Feature>
 <?endif?>
@@ -60,8 +60,9 @@
          It also sets "Automatic (Delayed Start)" – MSI's own ServiceConfig table is unreliable for that. -->
     <!-- No ENROLLMENT given: the agent looks for the .rhagent file in the MSI's folder. -->
     <SetProperty Id="ENROLLMENT" Value="[OriginalDatabase]" Before="SetAgentEnroll" Sequence="execute" Condition="NOT ENROLLMENT" />
-    <!-- auto-sign-in=[AUTOSIGNIN]: 1 also allows automatic sign-in by policy (NoUserBehavior, right AutoSignIn for the
-         allowed groups – values IT has set stay as they are), 0 removes what the agent set, empty leaves it. -->
+    <!-- auto-sign-in=[AUTOSIGNIN]: 1 allows automatic sign-in for the allowed groups in agent.json, 0 turns it off there,
+         empty leaves agent.json as it is (a first install: allowed, the agent's default). A policy IT has set
+         (NoUserBehavior, right AutoSignIn) wins either way. -->
     <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot;" Before="AgentEnroll" Sequence="execute" />
     <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
                   Execute="deferred" Impersonate="no" Return="check" />
