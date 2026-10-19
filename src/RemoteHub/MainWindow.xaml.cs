@@ -246,6 +246,8 @@ public partial class MainWindow : FluentWindow
 
     private void HookItems()
     {
+        // Favourites (links, not saved as part of the tree) above the tree itself.
+        Tree.ItemsSource = new System.Windows.Data.CompositeCollection { new System.Windows.Data.CollectionContainer { Collection = _vm.FavoriteRoots }, new System.Windows.Data.CollectionContainer { Collection = _vm.Items } };
         _vm.Items.CollectionChanged -= Items_CollectionChanged;
         _vm.Items.CollectionChanged += Items_CollectionChanged;
         Items_CollectionChanged(null, null);
@@ -603,6 +605,8 @@ public partial class MainWindow : FluentWindow
             }
             return;
         }
+        // Del on a favourite only unpins it: the connection itself stays.
+        if (Tree.SelectedItem is FavoriteLink link && e.Key == Key.Delete) { _vm.SetFavorite(link.Target, false); e.Handled = true; return; }
         if (_vm.SelectedNode is not { } n) return;
         switch (e.Key)
         {
@@ -718,13 +722,19 @@ public partial class MainWindow : FluentWindow
     // =====================================================================
 
     private void Tree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e) =>
-        _vm.SelectedNode = e.NewValue is NetworkShare { Server: not null } ? null : e.NewValue as NodeBase; // a server's share isn't a node of its own
+        _vm.SelectedNode = e.NewValue switch
+        {
+            NetworkShare { Server: not null } => null, // a server's share isn't a node of its own
+            FavoriteLink link => link.Target,     // a favourite acts on the connection itself
+            _ => e.NewValue as NodeBase,
+        };
 
     private void Tree_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         switch (FindAncestor<TreeViewItem>(e.OriginalSource)?.DataContext)
         {
             case Connection c: OpenConnection(c); e.Handled = true; break;
+            case FavoriteLink link: OpenConnection(link.Target); e.Handled = true; break;
             case NetworkShare s: OpenShare(s); e.Handled = true; break;
         }
     }
@@ -772,6 +782,10 @@ public partial class MainWindow : FluentWindow
         CmSaveRdp.Visibility = V(n is not null && Features.IsAllowed(Feature.RdpFileExport));
         CmSaveRdp.Header = n is Folder ? "Export folder as .rdp files…" : "Save as .rdp file…";
         CmNewShare.Visibility = V(Features.IsAllowed(Feature.NetworkShares));
+        CmFavorite.Visibility = V(n is Connection);
+        if (n is Connection fav) CmFavorite.Header = _vm.IsFavorite(fav) ? "Remove from favourites" : "Add to favourites";
+        // On a favourite the connection is moved, duplicated or deleted from its folder, not from here.
+        if (Tree.SelectedItem is FavoriteLink) CmMoveUnder.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = Visibility.Collapsed;
 
         var c = n as Connection;
         var viaAgent = c is not null && UsesAgent(c);
@@ -832,6 +846,7 @@ public partial class MainWindow : FluentWindow
     private void CmAgent_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = InstallAgent(c); }
     private void CmCredentialProvider_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ChangeCredentialProvider(c); }
     private void CmAgentUninstall_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = UninstallAgent(c); }
+    private void CmFavorite_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _vm.SetFavorite(c, !_vm.IsFavorite(c)); }
 
     private void CmPsSetup_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ShowRemotingSetup(c); }
 
@@ -2412,7 +2427,7 @@ public partial class MainWindow : FluentWindow
             Math.Abs(d.Y) < SystemParameters.MinimumVerticalDragDistance) return;
         var node = _dragCandidate;
         _dragCandidate = null;
-        DragDrop.DoDragDrop(Tree, new DataObject(NodeFormat, node), DragDropEffects.Move);
+        DragDrop.DoDragDrop(Tree, new DataObject(NodeFormat, node), DragDropEffects.Move | DragDropEffects.Link); // Link: pinned to Favourites
         HideDropIndicator();
     }
 
@@ -2468,6 +2483,16 @@ public partial class MainWindow : FluentWindow
 
     private void Tree_DragOver(object sender, DragEventArgs e)
     {
+        // Over Favourites: a connection dropped there is pinned (a link); nothing is moved into it.
+        if (OverFavorites(e))
+        {
+            HideDropIndicator();
+            var pin = RdpFiles(e).Length == 0 && e.Data.GetData(NodeFormat) is Connection;
+            e.Effects = pin ? DragDropEffects.Link : DragDropEffects.None;
+            ShowDropRefusal(pin || RdpFiles(e).Length > 0 ? null : "Only connections can be pinned to Favourites");
+            e.Handled = true;
+            return;
+        }
         var (target, pos, header) = HitTest(e);
         if (RdpFiles(e).Length > 0)
         {
@@ -2488,6 +2513,15 @@ public partial class MainWindow : FluentWindow
         e.Handled = true;
     }
 
+
+    /// <summary>The pointer is over the Favourites group or one of its links.</summary>
+    private static bool OverFavorites(DragEventArgs e)
+    {
+        for (var tvi = FindAncestor<TreeViewItem>(e.OriginalSource); tvi is not null; tvi = FindAncestor<TreeViewItem>(VisualTreeHelper.GetParent(tvi)))
+            if (tvi.DataContext is FavoritesGroup or FavoriteLink) return true;
+        return false;
+    }
+
     private void Tree_DragLeave(object sender, DragEventArgs e)
     {
         HideDropIndicator();
@@ -2499,6 +2533,11 @@ public partial class MainWindow : FluentWindow
         HideDropIndicator();
         ShowDropRefusal(null);
         e.Handled = true;
+        if (OverFavorites(e))
+        {
+            if (RdpFiles(e).Length == 0 && e.Data.GetData(NodeFormat) is Connection pinned) _vm.SetFavorite(pinned, true);
+            return;
+        }
         var (target, pos, _) = HitTest(e);
         var files = RdpFiles(e);
         if (files.Length > 0)
