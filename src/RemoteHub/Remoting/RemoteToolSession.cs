@@ -22,6 +22,9 @@ public abstract class RemoteToolSession : SessionBase
     public PsTarget? Target { get; private set; }
     protected bool IsClosed => _closed;
 
+    /// <summary>Which tool this tab is, for the policy switch of its transport (docs/admx-design.md §5).</summary>
+    public abstract Services.RemoteTool Tool { get; }
+
     public event Action<string>? Opened;
     public event Action<string>? OpenFailed;
     /// <summary>The remote side is ready (raised on the UI thread after connecting).</summary>
@@ -37,6 +40,12 @@ public abstract class RemoteToolSession : SessionBase
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";
         DropRunspace();
         var gen = ++_generation;
+        if (Services.Features.WhyNot(Services.Features.For(Tool, target.Agent is not null)) is { } off)
+        {
+            State = SessionState.Failed;
+            StatusText = off;
+            return;
+        }
         State = SessionState.Connecting;
         StatusText = $"Connecting to {target.Display}…";
         Task.Run(() =>

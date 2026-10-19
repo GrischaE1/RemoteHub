@@ -89,10 +89,10 @@
                         <ui:Button.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="New connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Desktop24}" InputGestureText="Ctrl+N" />
-                                <MenuItem Header="New network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
+                                <MenuItem x:Name="NewMenuShare" Header="New network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
                                 <MenuItem Header="New folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" InputGestureText="Ctrl+Shift+N" />
-                                <Separator />
-                                <MenuItem Header="Import .rdp files…" Click="ImportRdp_Click" Icon="{ui:SymbolIcon DocumentAdd24}" />
+                                <Separator x:Name="NewMenuImportSep" />
+                                <MenuItem x:Name="NewMenuImport" Header="Import .rdp files…" Click="ImportRdp_Click" Icon="{ui:SymbolIcon DocumentAdd24}" />
                             </ContextMenu>
                         </ui:Button.ContextMenu>
                     </ui:Button>
@@ -508,7 +508,7 @@
                                 <Separator />
                                 <MenuItem Header="New" Icon="{ui:SymbolIcon Add24}">
                                     <MenuItem Header="Connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Add24}" />
-                                    <MenuItem Header="Network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
+                                    <MenuItem x:Name="CmNewShare" Header="Network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
                                     <MenuItem Header="Folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" />
                                 </MenuItem>
                             </ContextMenu>
@@ -665,8 +665,8 @@
                                            Visibility="{Binding SelectedIsRdp, Converter={StaticResource BoolToVis}}" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon FullScreenMaximize24}" Click="FullScreen_Click" AutomationProperties.Name="Full screen" ToolTip="Full screen (leave with the connection bar or Ctrl+Alt+Break)"
                                            Visibility="{Binding SelectedIsRdp, Converter={StaticResource BoolToVis}}" />
-                                <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon FolderSwap24}" Content="File transfer" Click="ToolbarSendFiles_Click" AutomationProperties.Name="Open file transfer" ToolTip="Open a file transfer tab at the current folder of this PowerShell session"
-                                           Visibility="{Binding SelectedIsPowerShell, Converter={StaticResource BoolToVis}}" />
+                                <ui:Button x:Name="SendFilesButton" Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon FolderSwap24}" Content="File transfer" Click="ToolbarSendFiles_Click" AutomationProperties.Name="Open file transfer" ToolTip="Open a file transfer tab at the current folder of this PowerShell session"
+                                           Visibility="Collapsed" />
                                 <ui:Button x:Name="RecordButton" Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon Record24}" Click="Record_Click"
                                            AutomationProperties.Name="Record this tab to a video file" ToolTip="Record this tab to a video file" />
                                 <ui:Button Style="{StaticResource ToolButton}" Icon="{ui:SymbolIcon WindowNew24}" Click="Detach_Click" AutomationProperties.Name="Detach into its own window / dock back" ToolTip="Detach into its own window / dock back" />

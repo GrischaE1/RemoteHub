@@ -17,6 +17,7 @@ public sealed class FileBrowserSession : RemoteToolSession, IRemoteFiles
 
     public override string KindSymbol => "FolderSwap24";
     public override string KindLabel => "File transfer";
+    public override Services.RemoteTool Tool => Services.RemoteTool.FileTransfer;
     public string DragId { get; } = Guid.NewGuid().ToString("N");
     /// <summary>Remote folder shown first (e.g. the current folder of a PowerShell tab).</summary>
     public string? StartRemotePath { get; set; }

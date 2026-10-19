@@ -73,7 +73,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _unusedDays;
     /// <summary>"12 connections not used for 90 days", shown above the filtered list.</summary>
     [ObservableProperty] private string _unusedSummary = "";
-    public string EmptySearchText => IsFiltering ? "No connection fits the filter." : "Nothing found. Press Enter to quick-connect to this computer name or IP address.";
+    public string EmptySearchText => IsFiltering ? "No connection fits the filter."
+        : Features.IsAllowed(Feature.QuickConnect) ? "Nothing found. Press Enter to quick-connect to this computer name or IP address." : "Nothing found.";
 
     partial void OnUnusedDaysChanged(int value)
     {

@@ -112,6 +112,7 @@ public sealed partial class RdpSession : SessionBase
         ConnectStartedUtc = DateTime.UtcNow;
         _remoteW = _remoteH = 0;
         Title = Connection.Name;
+        if (Services.Features.WhyNot(Services.Feature.Rdp) is { } off) { SetState(SessionState.Failed, off); return; }
         SetState(SessionState.Connecting, "Connecting…");
         if (Route is { } route) { _ = ConnectThroughAsync(route); return; }
         _connectPending = true;

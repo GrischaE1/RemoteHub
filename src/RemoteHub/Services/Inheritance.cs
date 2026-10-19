@@ -7,10 +7,11 @@ public static class Inheritance
 {
     /// <summary>
     /// Tools go through the RemoteHub Agent instead of WinRM. Below a jump host a device with an agent uses it unless the
-    /// connection itself is set to WinRM: an inherited choice was made for devices reached directly.
+    /// connection itself is set to WinRM: an inherited choice was made for devices reached directly. With the agent blocked
+    /// by this PC's policy (AllowAgent = 0) the setting is greyed out and tools go over WinRM.
     /// </summary>
-    public static bool UsesAgent(Connection c, AppData data) =>
-        (c.JumpHost is not null && c.Options.UseAgent is null && c.Agent is { Fingerprint.Length: > 0 }) || ResolveOptions(c, data).UseAgent == true;
+    public static bool UsesAgent(Connection c, AppData data) => Features.IsAllowed(Feature.Agent) &&
+        ((c.JumpHost is not null && c.Options.UseAgent is null && c.Agent is { Fingerprint.Length: > 0 }) || ResolveOptions(c, data).UseAgent == true);
 
     public static RdpOptions ResolveOptions(NodeBase? node, AppData data, bool includeSelf = true)
     {

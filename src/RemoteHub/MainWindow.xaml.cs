@@ -65,7 +65,7 @@ public partial class MainWindow : FluentWindow
         Drop += Window_Drop;
         Loaded += (_, _) => ApplyTheme(vm.Data.Ui.Theme);
         Loaded += (_, _) => StartupChecks();
-        Loaded += (_, _) => UpdateRecordButton();
+        Loaded += (_, _) => { UpdateRecordButton(); UpdateSendFilesButton(); };
         Loaded += (_, _) => StartAutoLock();
         Closing += Window_Closing;
     }
@@ -212,8 +212,10 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateShortcutHint()
     {
-        ShortcutHint.Text = "Ctrl+N new connection  ·  Ctrl+F search / quick connect\n" +
+        var quick = Features.IsAllowed(Feature.QuickConnect);
+        ShortcutHint.Text = $"Ctrl+N new connection  ·  Ctrl+F search{(quick ? " / quick connect" : "")}\n" +
                             SwitchHotkeys.Current.Hint + " – also inside a session and in full screen (use the left Alt key)";
+        if (!quick) SearchBox.ToolTip = "Search folders & connections (Ctrl+F)";
     }
 
 
@@ -223,7 +225,7 @@ public partial class MainWindow : FluentWindow
 
     private void Vm_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) { UpdateSessionVisibility(); UpdateRecordButton(); }
+        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) { UpdateSessionVisibility(); UpdateRecordButton(); UpdateSendFilesButton(); }
         if (e.PropertyName == nameof(MainViewModel.Items)) HookItems();
         if (e.PropertyName is nameof(MainViewModel.HasTransfers) or nameof(MainViewModel.ShowTransfers)) ApplyTransfersPane();
     }
@@ -286,13 +288,48 @@ public partial class MainWindow : FluentWindow
         else OpenRdp(c, forceNew);
     }
 
-    /// <summary>Remote desktop through the agent unless the connection is set to RDP (Automatic: when an agent is installed).</summary>
-    private bool AgentDesktopFor(Connection c) => (Inheritance.ResolveOptions(c, _vm.Data).RemoteDesktopVia ?? DesktopVia.Automatic) switch
+    /// <summary>
+    /// Remote desktop through the agent unless the connection is set to RDP (Automatic: when an agent is installed). With
+    /// the agent desktop blocked by policy its setting is greyed out and doesn't count.
+    /// </summary>
+    private bool AgentDesktopFor(Connection c) => Features.IsAllowed(Feature.AgentDesktop) &&
+        (Inheritance.ResolveOptions(c, _vm.Data).RemoteDesktopVia ?? DesktopVia.Automatic) switch
+        {
+            DesktopVia.Rdp => false,
+            DesktopVia.Agent => true,
+            _ => c.Agent is { Status: AgentStatus.Installed, Fingerprint.Length: > 0 },
+        };
+
+    /// <summary>
+    /// A feature this PC's policy blocks (docs/admx-design.md P3): says so and returns true. Checked where a session or
+    /// action starts, so a shortcut, a dropped file or a reconnect can't get round a hidden menu entry.
+    /// </summary>
+    private bool Refused(Feature feature)
     {
-        DesktopVia.Rdp => false,
-        DesktopVia.Agent => true,
-        _ => c.Agent is { Status: AgentStatus.Installed, Fingerprint.Length: > 0 },
-    };
+        if (Features.WhyNot(feature) is not { } why) return false;
+        _ = Dialogs.Info(this, Features.Topic(feature), why);
+        return true;
+    }
+
+    /// <summary>A remote tool through the transport the connection uses now (agent or WinRM).</summary>
+    private bool Refused(RemoteTool tool, Connection c) => Refused(Features.For(tool, UsesAgent(c)));
+
+    /// <summary>
+    /// A reconnect of a tab whose feature this PC's policy blocks: the tab fails and says why, as it does for any other
+    /// reason it can't connect (no dialog, no password asked).
+    /// </summary>
+    private static bool RefusedIn(SessionBase s, Feature feature)
+    {
+        if (Features.WhyNot(feature) is not { } why) return false;
+        s.State = SessionState.Failed;
+        s.StatusText = why;
+        return true;
+    }
+
+    private void StartRdp(RdpSession s)
+    {
+        if (!RefusedIn(s, Feature.Rdp)) _vm.StartSession(s);
+    }
 
     /// <summary>Opens an RDP session, or switches to the existing one.</summary>
     public void OpenRdp(Connection c, bool forceNew = false)
@@ -300,13 +337,14 @@ public partial class MainWindow : FluentWindow
         if (!forceNew && _vm.FindSession(c) is { } existing)
         {
             _vm.SelectedSession = existing;
-            if (existing.State is SessionState.Disconnected or SessionState.Failed) _vm.StartSession(existing);
+            if (existing.State is SessionState.Disconnected or SessionState.Failed) StartRdp(existing);
             return;
         }
+        if (Refused(Feature.Rdp)) return;
 
         var s = _vm.OpenSession(c);
         s.Route = () => RdpRouteAsync(s.Connection); // asked at each connect: the connection may have moved
-        var view = new SessionView(s, () => _vm.StartSession(s), () => s.Close());
+        var view = new SessionView(s, () => StartRdp(s), () => s.Close());
         _views[s] = view;
         SessionPanel.Children.Add(view);
         s.FocusReleased += dir => SwitchFromSession(s, dir);
@@ -379,6 +417,7 @@ public partial class MainWindow : FluentWindow
                 (SymbolRegular.ArrowClockwise24, null, "Reconnect", () => Restart(s)),
                 (SymbolRegular.PlugDisconnected24, null, "Disconnect", s.Disconnect),
             };
+            var viaAgent = UsesAgent(s.Connection);
             if (s is RdpSession r)
             {
                 tools.Add((SymbolRegular.Keyboard24, "Ctrl+Alt+Del", "Send Ctrl+Alt+Del", r.SendCtrlAltDel));
@@ -392,10 +431,14 @@ public partial class MainWindow : FluentWindow
             if (RecordingAllowed) tools.Add((SymbolRegular.Record24, null, "Start / stop recording this tab (the header shows REC while recording)", () => ToggleRecording(s)));
             if (s is PsSession p)
             {
-                tools.Add((SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder", () => OpenFileTransfer(p.Connection, p.Location, p.Target)));
-                tools.Add((SymbolRegular.CubeTree24, "Registry", "Open the remote registry in a new tab", () => OpenRegistry(p.Connection, p.Target)));
-                tools.Add((SymbolRegular.WrenchScrewdriver24, "Services", "Open the remote services in a new tab", () => OpenServices(p.Connection, p.Target)));
-                tools.Add((SymbolRegular.Pulse24, "Processes", "Open the remote processes in a new tab", () => OpenProcesses(p.Connection, p.Target)));
+                if (Features.IsAllowed(RemoteTool.FileTransfer, viaAgent))
+                    tools.Add((SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder", () => OpenFileTransfer(p.Connection, p.Location, p.Target)));
+                if (Features.IsAllowed(RemoteTool.Registry, viaAgent))
+                    tools.Add((SymbolRegular.CubeTree24, "Registry", "Open the remote registry in a new tab", () => OpenRegistry(p.Connection, p.Target)));
+                if (Features.IsAllowed(RemoteTool.Services, viaAgent))
+                    tools.Add((SymbolRegular.WrenchScrewdriver24, "Services", "Open the remote services in a new tab", () => OpenServices(p.Connection, p.Target)));
+                if (Features.IsAllowed(RemoteTool.Processes, viaAgent))
+                    tools.Add((SymbolRegular.Pulse24, "Processes", "Open the remote processes in a new tab", () => OpenProcesses(p.Connection, p.Target)));
             }
             var win = new DetachedWindow(s, view, tools)
             {
@@ -419,7 +462,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Reconnect button / menu: works for RDP and PowerShell tabs.</summary>
     private void Restart(SessionBase s)
     {
-        if (s is RdpSession r) _vm.StartSession(r);
+        if (s is RdpSession r) StartRdp(r);
         else if (s is AgentDesktopSession d) ConnectAgentDesktop(d);
         else if (s is PsSession p) ConnectPs(p);
         else if (s is FileBrowserSession f) ConnectFileBrowser(f);
@@ -442,6 +485,11 @@ public partial class MainWindow : FluentWindow
     {
         if (_vm.SelectedSession is PsSession p) OpenFileTransfer(p.Connection, p.Location, p.Target);
     }
+
+    /// <summary>The toolbar's File transfer button: only for a PowerShell tab whose connection's transport allows it (as OpenFileTransfer checks).</summary>
+    private void UpdateSendFilesButton() =>
+        SendFilesButton.Visibility = _vm.SelectedSession is PsSession p && Features.IsAllowed(RemoteTool.FileTransfer, UsesAgent(p.Connection))
+            ? Visibility.Visible : Visibility.Collapsed;
     private void Detach_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedSession is { } s) ToggleDetach(s); }
     private void ShowDetached_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedSession is { } s && _detached.TryGetValue(s, out var w)) w.Activate(); }
     private void EditSessionConnection_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedSession is { } s) EditNode(s.Connection); }
@@ -563,7 +611,7 @@ public partial class MainWindow : FluentWindow
 
     private void QuickConnect(string address)
     {
-        if (address.Contains(' ') || address.Length == 0) return;
+        if (address.Contains(' ') || address.Length == 0 || Refused(Feature.QuickConnect)) return;
         var (host, port) = RdpFileParser.SplitAddress(address);
         // Ad-hoc connection: uses global defaults, not saved.
         OpenConnection(new Connection { Name = host, Host = host, Port = port });
@@ -671,37 +719,48 @@ public partial class MainWindow : FluentWindow
     {
         var n = _vm.SelectedNode;
         Visibility V(bool b) => b ? Visibility.Visible : Visibility.Collapsed;
-        CmConnect.Visibility = V(n is Connection);
-        CmConnectNew.Visibility = V(n is Connection);
-        CmConnectNew.Header = n is Connection k && AgentDesktopFor(k) ? "Open an RDP session" : "Open additional session";
-        // The other way to the screen: RDP when the agent is the default, the agent when it is installed but RDP is the default.
+        // What this PC's policy blocks isn't offered (docs/admx-design.md §4.2).
+        var rdpOn = Features.IsAllowed(Feature.Rdp);
+        var agentDesktopOn = Features.IsAllowed(Feature.AgentDesktop);
         var agentDefault = n is Connection dc && AgentDesktopFor(dc);
-        CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault || oc.Agent is { Status: AgentStatus.Installed }));
+        CmConnect.Visibility = V(n is Connection && (agentDefault ? agentDesktopOn : rdpOn));
+        CmConnectNew.Visibility = V(n is Connection && rdpOn);
+        CmConnectNew.Header = agentDefault ? "Open an RDP session" : "Open additional session";
+        // The other way to the screen: RDP when the agent is the default, the agent when it is installed but RDP is the default.
+        CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault ? rdpOn : agentDesktopOn && oc.Agent is { Status: AgentStatus.Installed }));
         CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
         CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
         CmAddShare.ToolTip = AddShareTip(n as Connection);
-        CmMoveUnder.Visibility = V(n is Connection or Folder);
+        // With jump hosts blocked only "out of" a jump host is left to offer.
+        CmMoveUnder.Visibility = V(n is Connection or Folder && (Features.IsAllowed(Feature.JumpHosts) || n.Parent is Connection));
         if (n is Connection or Folder) FillMoveUnder(CmMoveUnder, n);
-        CmConnectAll.Visibility = V(n is Folder);
-        CmSep1.Visibility = V(n is not null);
+        CmConnectAll.Visibility = V(n is Folder && (rdpOn || agentDesktopOn));
         CmEdit.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = V(n is not null);
         CmHistory.Visibility = V(n is Connection);
-        CmSaveRdp.Visibility = V(n is not null);
+        CmSaveRdp.Visibility = V(n is not null && Features.IsAllowed(Feature.RdpFileExport));
         CmSaveRdp.Header = n is Folder ? "Export folder as .rdp files…" : "Save as .rdp file…";
+        CmNewShare.Visibility = V(Features.IsAllowed(Feature.NetworkShares));
 
         var c = n as Connection;
-        var psOn = c is not null; // manual test always offered; the setting only controls the automatic check
+        var viaAgent = c is not null && UsesAgent(c);
+        var psOn = c is not null && Features.AnyTool(viaAgent); // manual test always offered; the setting only controls the automatic check
         var st = c is null ? PsRemotingState.Unknown : PsState(c);
-        var name = c is not null && UsesAgent(c) ? "RemoteHub Agent" : "PowerShell remoting";
-        CmPsSep.Visibility = V(psOn);
-        CmPs.Visibility = CmSendFiles.Visibility = CmRegistry.Visibility = CmServices.Visibility = CmProcesses.Visibility = V(psOn && st == PsRemotingState.Available);
+        var name = viaAgent ? "RemoteHub Agent" : "PowerShell remoting";
+        var available = psOn && st == PsRemotingState.Available;
+        CmPsSep.Visibility = V(c is not null);
+        CmPs.Visibility = V(available && Features.IsAllowed(RemoteTool.PowerShell, viaAgent));
+        CmSendFiles.Visibility = V(available && Features.IsAllowed(RemoteTool.FileTransfer, viaAgent));
+        CmRegistry.Visibility = V(available && Features.IsAllowed(RemoteTool.Registry, viaAgent));
+        CmServices.Visibility = V(available && Features.IsAllowed(RemoteTool.Services, viaAgent));
+        CmProcesses.Visibility = V(available && Features.IsAllowed(RemoteTool.Processes, viaAgent));
         CmPsTest.Visibility = V(psOn && st != PsRemotingState.Available);
         CmPsTest.Header = c?.PsChecking == true ? $"Testing {name}…"
                         : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}";
         CmPsTest.IsEnabled = c?.PsChecking != true;
         CmPsTest.ToolTip = st == PsRemotingState.Unavailable ? $"Last result: {c!.PsRemoting!.Message}" : null;
-        CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !UsesAgent(c!));
-        CmAgent.Visibility = CmAddShare.Visibility = V(c is not null);
+        CmPsSetup.Visibility = V(psOn && st == PsRemotingState.Unavailable && !viaAgent && Features.IsAllowed(Feature.RemotingSetup));
+        CmAgent.Visibility = V(c is not null && Features.IsAllowed(Feature.AgentInstall));
+        CmAddShare.Visibility = V(c is not null && Features.IsAllowed(Feature.NetworkShares));
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
         CmCredentialProvider.Visibility = V(c is not null && CredentialProviderOffered(c));
         if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
@@ -711,7 +770,7 @@ public partial class MainWindow : FluentWindow
         if (c is not null)
         {
             var at = CmTools.Items.IndexOf(CmSharesSep) + 1;
-            foreach (var share in c.Shares)
+            foreach (var share in c.Shares.Where(s => Features.IsAllowed(s.Protocol)))
             {
                 var item = ShareEntry(share);
                 item.Tag = "share";
@@ -719,10 +778,16 @@ public partial class MainWindow : FluentWindow
             }
         }
         // A group shows only when something in it does.
-        CmSharesSep.Visibility = CmAddShare.Visibility;
+        CmSharesSep.Visibility = V(CmAddShare.Visibility == Visibility.Visible &&
+                                   new[] { CmPs, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
         CmTools.Visibility = V(GroupHasItems(CmTools));
         CmManage.Visibility = V(GroupHasItems(CmManage));
         CmMore.Visibility = V(GroupHasItems(CmMore));
+        // Separators only between groups that show: with RDP and the agent desktop blocked the menu may start with Tools or Edit.
+        var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
+        var toolsShown = CmTools.Visibility == Visibility.Visible || CmManage.Visibility == Visibility.Visible;
+        CmPsSep.Visibility = V(connectShown && toolsShown);
+        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown));
     }
 
     private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);
@@ -762,53 +827,65 @@ public partial class MainWindow : FluentWindow
         var agentDesktop = _vm.FindAgentDesktop(c);
         var viaAgent = AgentDesktopFor(c);
         var jumped = c.JumpHost is not null;
+        // What this PC's policy blocks isn't offered (docs/admx-design.md §4.2); a group left empty isn't shown.
+        var rdpOn = Features.IsAllowed(Feature.Rdp);
         if (viaAgent)
         {
             cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
                 tip: jumped ? $"The device's screen through the RemoteHub Agent, reached through {c.JumpHost!.Name}" : "The device's screen through the RemoteHub Agent (no RDP needed)"));
-            cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop via RDP" : "Show RDP session", SymbolRegular.Desktop24, () => OpenRdp(c)));
+            if (rdpOn) cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop via RDP" : "Show RDP session", SymbolRegular.Desktop24, () => OpenRdp(c)));
         }
         else
         {
-            cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.Desktop24, () => OpenRdp(c)));
-            if (rdp is not null) cm.Items.Add(MenuEntry("Additional remote desktop session", SymbolRegular.WindowNew24, () => OpenRdp(c, forceNew: true)));
-            if (c.Agent is { Status: AgentStatus.Installed })
+            if (rdpOn) cm.Items.Add(MenuEntry(rdp is null ? "Remote desktop" : "Show remote desktop", SymbolRegular.Desktop24, () => OpenRdp(c)));
+            if (rdpOn && rdp is not null) cm.Items.Add(MenuEntry("Additional remote desktop session", SymbolRegular.WindowNew24, () => OpenRdp(c, forceNew: true)));
+            if (c.Agent is { Status: AgentStatus.Installed } && Features.IsAllowed(Feature.AgentDesktop))
                 cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop via RemoteHub Agent" : "Show agent desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
                     tip: "The device's screen through the RemoteHub Agent – for devices where RDP is off"));
         }
         var st = PsState(c);
-        var name = UsesAgent(c) ? "RemoteHub Agent" : "PowerShell remoting";
+        var toolsViaAgent = UsesAgent(c);
+        var name = toolsViaAgent ? "RemoteHub Agent" : "PowerShell remoting";
         var ps = from as PsSession;
 
         // Groups open on hover, as in the connection tree's menu: tools for the device, and setting it up.
         var tools = Submenu("Tools", SymbolRegular.Toolbox24);
-        if (st == PsRemotingState.Available)
+        void Tool(RemoteTool tool, string header, SymbolRegular icon, Action open)
         {
-            tools.Items.Add(MenuEntry("PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c)));
-            tools.Items.Add(MenuEntry("File transfer", SymbolRegular.FolderSwap24, () => OpenFileTransfer(c, ps?.Location, ps?.Target ?? KnownTarget(c))));
-            tools.Items.Add(MenuEntry("Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c))));
-            tools.Items.Add(MenuEntry("Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c))));
-            tools.Items.Add(MenuEntry("Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c))));
+            if (Features.IsAllowed(tool, toolsViaAgent)) tools.Items.Add(MenuEntry(header, icon, open));
         }
-        else
+        // No tool allowed over the connection's transport: nothing to test either.
+        if (Features.AnyTool(toolsViaAgent) && st == PsRemotingState.Available)
+        {
+            Tool(RemoteTool.PowerShell, "PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c));
+            Tool(RemoteTool.FileTransfer, "File transfer", SymbolRegular.FolderSwap24, () => OpenFileTransfer(c, ps?.Location, ps?.Target ?? KnownTarget(c)));
+            Tool(RemoteTool.Registry, "Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c)));
+            Tool(RemoteTool.Services, "Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c)));
+            Tool(RemoteTool.Processes, "Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c)));
+        }
+        else if (Features.AnyTool(toolsViaAgent))
             tools.Items.Add(MenuEntry(c.PsChecking ? $"Testing {name}…" : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}",
                 SymbolRegular.ArrowSync24, () => _ = TestPsRemoting(c, interactive: true), !c.PsChecking,
                 st == PsRemotingState.Unavailable ? $"Last result: {c.PsRemoting!.Message}" : null));
-        tools.Items.Add(new Separator());
-        // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
-        foreach (var share in c.Shares) tools.Items.Add(ShareEntry(share));
-        tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
-        cm.Items.Add(tools);
+        if (Features.IsAllowed(Feature.NetworkShares))
+        {
+            if (tools.Items.Count > 0) tools.Items.Add(new Separator());
+            // Network shares need neither remoting nor the agent (behind a jump host only its tunnel; FTP can't go through).
+            foreach (var share in c.Shares.Where(s => Features.IsAllowed(s.Protocol))) tools.Items.Add(ShareEntry(share));
+            tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
+        }
+        if (tools.Items.Count > 0) cm.Items.Add(tools);
 
         var manage = Submenu("RemoteHub Agent", SymbolRegular.Shield24);
-        if (st == PsRemotingState.Unavailable && !UsesAgent(c))
+        if (st == PsRemotingState.Unavailable && !toolsViaAgent && Features.AnyTool(viaAgent: false) && Features.IsAllowed(Feature.RemotingSetup))
             manage.Items.Add(MenuEntry("Set up PowerShell remoting on the target…", SymbolRegular.Code24, () => _ = ShowRemotingSetup(c)));
-        manage.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
-            SymbolRegular.Shield24, () => _ = InstallAgent(c)));
+        if (Features.IsAllowed(Feature.AgentInstall))
+            manage.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
+                SymbolRegular.Shield24, () => _ = InstallAgent(c)));
         if (CredentialProviderOffered(c))
             manage.Items.Add(MenuEntry(CredentialProviderHeader(c), SymbolRegular.Key24, () => _ = ChangeCredentialProvider(c),
                 tip: "Lets the RemoteHub Agent sign in automatically on the device's sign-in screen"));
-        cm.Items.Add(manage);
+        if (manage.Items.Count > 0) cm.Items.Add(manage);
     }
 
 
@@ -830,6 +907,8 @@ public partial class MainWindow : FluentWindow
         if (_vm.SelectedGroup is not { } g) return;
         var cm = new ContextMenu();
         AddConnectionTools(cm, g.Connection, _vm.SelectedSession);
+        if (cm.Items.Count == 0) // every way in is blocked by this PC's policy: say so instead of an empty menu
+            cm.Items.Add(MenuEntry("Nothing else can be opened", SymbolRegular.Info24, () => { }, enabled: false, tip: Features.TurnedOff));
         ShowMenu(cm, AddTabButton, PlacementMode.Bottom);
     }
 
@@ -861,7 +940,7 @@ public partial class MainWindow : FluentWindow
         if (FindAncestor<ListBoxItem>(e.OriginalSource) is not { DataContext: SessionGroup g } item) return;
         var cm = new ContextMenu();
         AddConnectionTools(cm, g.Connection, null);
-        cm.Items.Add(new Separator());
+        if (cm.Items.Count > 0) cm.Items.Add(new Separator()); // nothing above when policy blocks every way in
         cm.Items.Add(MenuEntry("Edit connection…", SymbolRegular.Edit24, () => EditNode(g.Connection)));
         cm.Items.Add(new Separator());
         cm.Items.Add(MenuEntry(g.Sessions.Count > 1 ? $"Close all {g.Sessions.Count} tabs" : "Close", SymbolRegular.Dismiss24, () => CloseGroup(g)));
@@ -877,7 +956,7 @@ public partial class MainWindow : FluentWindow
         var cm = new ContextMenu();
         void Add(string header, SymbolRegular icon, Action action, bool enabled = true, string? tip = null) => cm.Items.Add(MenuEntry(header, icon, action, enabled, tip));
         AddConnectionTools(cm, c, s);
-        cm.Items.Add(new Separator());
+        if (cm.Items.Count > 0) cm.Items.Add(new Separator());
         Add("Reconnect", SymbolRegular.ArrowClockwise24, () => Restart(s));
         Add("Disconnect", SymbolRegular.PlugDisconnected24, async () => { if (await ConfirmSignOut(s)) s.Disconnect(); }, s.State is SessionState.Connected or SessionState.Connecting);
         if (s is RdpSession r)
@@ -997,6 +1076,7 @@ public partial class MainWindow : FluentWindow
     {
         var c = s.Connection;
         if (!(PsEnabled(c) || UsesAgent(c)) || c.PsChecking || PsState(c) != PsRemotingState.Unknown) return;
+        if (!Features.AnyTool(UsesAgent(c))) return; // nothing the result would offer
         if (UsesAgent(c) && c.Agent is null) return;
         var cred = s.UsedCredentials.Clone();
         if (PsRemoting.NeedsPassword(cred)) return; // would have to ask – the user can start the test from the menu
@@ -1006,6 +1086,15 @@ public partial class MainWindow : FluentWindow
     private async Task TestPsRemoting(Connection c, bool interactive, CredentialSet? credentials = null)
     {
         if (c.PsChecking) return;
+        // The test only decides which tools are offered: none allowed over this transport, nothing to test.
+        if (!Features.AnyTool(UsesAgent(c)))
+        {
+            var main = UsesAgent(c) ? Feature.Agent : Feature.PowerShellRemoting;
+            if (interactive && !Refused(main))
+                _ = Dialogs.Info(this, Features.Topic(main), $"PowerShell, file transfer, registry, services and processes through {(UsesAgent(c) ? "the RemoteHub Agent" : "PowerShell remoting")} " +
+                                                             "are turned off by your organisation – see Settings → Policies.");
+            return;
+        }
         PsTarget target;
         if (credentials is not null)
         {
@@ -1027,6 +1116,8 @@ public partial class MainWindow : FluentWindow
         {
             if (st.State == PsRemotingState.Available)
                 await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell, File transfer, Registry, Services or Processes.");
+            else if (!Features.IsAllowed(Feature.AgentInstall))
+                await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent on {c.Name} could not be used.\n\n{st.Message}");
             else if (await Dialogs.Confirm(this, "RemoteHub Agent", $"The RemoteHub Agent on {c.Name} could not be used.\n\n{st.Message}", "Install / update the agent…"))
                 await InstallAgent(c);
             return;
@@ -1053,6 +1144,8 @@ public partial class MainWindow : FluentWindow
         }
         if (st.State == PsRemotingState.Available)
             await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell or File transfer.");
+        else if (!Features.IsAllowed(Feature.RemotingSetup))
+            await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting is not available for {c.Name}.\n\n{st.Message}");
         else if (await Dialogs.Confirm(this, "PowerShell remoting",
                      $"PowerShell remoting is not available for {c.Name}.\n\n{st.Message}\n\n" +
                      "RemoteHub can create a ready-to-run setup script (with this PC's address and a certificate for HTTPS) to paste into an elevated PowerShell on the target.",
@@ -1063,6 +1156,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Setup script for the target: the admin pastes and runs it there; then "Test again".</summary>
     private async Task ShowRemotingSetup(Connection c)
     {
+        if (Refused(Feature.RemotingSetup)) return;
         var host = c.Host.Trim();
         // Behind a jump host the target sees the jump host's address in its network, not this PC's.
         JumpRoute? via = null;
@@ -1087,6 +1181,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Right-click → Install / Update RemoteHub Agent.</summary>
     private async Task InstallAgent(Connection c)
     {
+        if (Refused(Feature.AgentInstall)) return;
         var package = AgentInstaller.FindPackage();
         if (package is null)
         {
@@ -1138,7 +1233,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Offered for an installed agent when RemoteHub's agent package has the credential provider in it.</summary>
     private bool CredentialProviderOffered(Connection c)
     {
-        if (c.Agent is not { Status: AgentStatus.Installed } || AgentInstaller.FindPackage() is not { } package) return false;
+        if (c.Agent is not { Status: AgentStatus.Installed } || !Features.IsAllowed(Feature.CredentialProviderInstall) || AgentInstaller.FindPackage() is not { } package) return false;
         if (_packageHasProvider is not { } known || known.Package != package)
             _packageHasProvider = known = (package, AgentInstaller.PackageHasCredentialProvider(package));
         return known.Has;
@@ -1153,6 +1248,7 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     private async Task ChangeCredentialProvider(Connection c)
     {
+        if (Refused(Feature.CredentialProviderInstall)) return;
         if (c.Agent is not { Status: AgentStatus.Installed } agent || AgentInstaller.FindPackage() is not { } package) return;
         var install = agent.CredentialProvider != true;
         var title = CredentialProviderHeader(c);
@@ -1441,6 +1537,7 @@ public partial class MainWindow : FluentWindow
             if (existing.Phase is DesktopPhase.Ended or DesktopPhase.Idle) ConnectAgentDesktop(existing);
             return;
         }
+        if (Refused(Feature.AgentDesktop)) return;
         if (AgentDesktopTarget(c, null) is not { } t) return;
         var s = _vm.OpenAgentDesktop(c);
         var ui = _vm.Data.Ui;
@@ -1477,7 +1574,7 @@ public partial class MainWindow : FluentWindow
 
     private void ConnectAgentDesktop(AgentDesktopSession s)
     {
-        if (AgentDesktopTarget(s.Connection, s.Target) is not { } t) return;
+        if (RefusedIn(s, Feature.AgentDesktop) || AgentDesktopTarget(s.Connection, s.Target) is not { } t) return;
         s.Connect(t.Target, t.Source, AccentFor(s.Connection));
     }
 
@@ -1495,9 +1592,9 @@ public partial class MainWindow : FluentWindow
     /// <summary>Opens a PowerShell remoting session to the connection's host in a new tab.</summary>
     private void OpenPowerShell(Connection c)
     {
-        if (BuildTarget(c, null) is not { } t) return;
+        if (Refused(RemoteTool.PowerShell, c) || BuildTarget(c, null) is not { } t) return;
         var s = _vm.OpenPsSession(c);
-        var view = new PsConsoleView(s, () => ConnectPs(s), s.Close);
+        var view = new PsConsoleView(s, () => ConnectPs(s), s.Close, canSendFiles: () => Features.IsAllowed(RemoteTool.FileTransfer, UsesAgent(c)));
         view.UploadRequested += files => UploadToConsole(s, files);
         view.UploadPickRequested += () => OpenFileTransfer(c, s.Location, s.Target);
         s.Opened += info => SetPsStatus(c, PsRemotingState.Available, info);
@@ -1510,7 +1607,7 @@ public partial class MainWindow : FluentWindow
 
     private void ConnectPs(PsSession s)
     {
-        if (BuildTarget(s.Connection, s.Target) is not { } t) return;
+        if (RefusedIn(s, Features.For(RemoteTool.PowerShell, UsesAgent(s.Connection))) || BuildTarget(s.Connection, s.Target) is not { } t) return;
         s.Connect(t.Target, t.Source, AccentFor(s.Connection));
     }
 
@@ -1522,6 +1619,7 @@ public partial class MainWindow : FluentWindow
     {
         PsTarget target;
         string source;
+        if (Refused(RemoteTool.FileTransfer, c)) return;
         if (known is not null && (known.Agent is not null) == UsesAgent(c)) { target = known; source = "the PowerShell tab"; }
         else if (BuildTarget(c, null) is { } t) { target = t.Target; source = t.Source; }
         else return;
@@ -1553,7 +1651,7 @@ public partial class MainWindow : FluentWindow
 
     private void ConnectFileBrowser(FileBrowserSession s)
     {
-        if (BuildTarget(s.Connection, s.Target) is not { } t) return;
+        if (RefusedIn(s, Features.For(RemoteTool.FileTransfer, UsesAgent(s.Connection))) || BuildTarget(s.Connection, s.Target) is not { } t) return;
         s.Connect(t.Target, t.Source, AccentFor(s.Connection));
     }
 
@@ -1575,14 +1673,14 @@ public partial class MainWindow : FluentWindow
 
     private void ConnectTool(RemoteToolSession s)
     {
-        if (BuildTarget(s.Connection, s.Target) is not { } t) return;
+        if (RefusedIn(s, Features.For(s.Tool, UsesAgent(s.Connection))) || BuildTarget(s.Connection, s.Target) is not { } t) return;
         s.Connect(t.Target, t.Source, AccentFor(s.Connection));
     }
 
     /// <summary>Opens the remote registry (tree + values) in a new tab, starting at the last key used for this connection.</summary>
     private void OpenRegistry(Connection c, PsTarget? known)
     {
-        if (ToolTarget(c, known) is not { } t) return;
+        if (Refused(RemoteTool.Registry, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenRegistry(c, c.PsRemoting?.RegistryPath);
         var view = new RegistryView(s, () => ConnectTool(s), s.Close);
         view.Navigated += p => { if (c.PsRemoting is { } st && st.RegistryPath != p) { st.RegistryPath = p; _vm.RequestSave(); } };
@@ -1592,7 +1690,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Opens the remote services in a new tab (refreshed regularly, see Global defaults → Remote tools).</summary>
     private void OpenServices(Connection c, PsTarget? known)
     {
-        if (ToolTarget(c, known) is not { } t) return;
+        if (Refused(RemoteTool.Services, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenServices(c);
         ShowTool(s, new ServicesView(s, () => _vm.Data.Tools.ServiceRefreshSeconds, () => ConnectTool(s), s.Close), t);
     }
@@ -1600,7 +1698,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Opens the remote processes in a new tab (refreshed regularly, see Global defaults → Remote tools).</summary>
     private void OpenProcesses(Connection c, PsTarget? known)
     {
-        if (ToolTarget(c, known) is not { } t) return;
+        if (Refused(RemoteTool.Processes, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenProcesses(c);
         ShowTool(s, new ProcessesView(s, () => _vm.Data.Tools.ProcessRefreshSeconds, () => ConnectTool(s), s.Close), t);
     }
@@ -1692,7 +1790,7 @@ public partial class MainWindow : FluentWindow
     /// <summary>Files dropped on a PowerShell tab go into its current folder.</summary>
     private void UploadToConsole(PsSession s, IReadOnlyList<string> files)
     {
-        if (s.Target is not { } target || s.Location is not { } folder) return;
+        if (s.Target is not { } target || s.Location is not { } folder || Refused(Features.For(RemoteTool.FileTransfer, target.Agent is not null))) return;
         _ = Upload(s.Connection, target, files, folder, names => Task.Run(() =>
         {
             using var rs = PsRemoting.Open(target);
@@ -1786,6 +1884,7 @@ public partial class MainWindow : FluentWindow
 
     private async void CmSaveRdp_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.RdpFileExport)) return;
         var n = _vm.SelectedNode;
         var conns = n is Folder f ? f.Descendants().OfType<Connection>().ToList()
                   : n is Connection c ? new List<Connection> { c } : new List<Connection>();
@@ -2071,6 +2170,8 @@ public partial class MainWindow : FluentWindow
     private void NewMenu_Click(object sender, RoutedEventArgs e)
     {
         var cm = NewButton.ContextMenu!;
+        NewMenuShare.Visibility = Features.IsAllowed(Feature.NetworkShares) ? Visibility.Visible : Visibility.Collapsed;
+        NewMenuImport.Visibility = NewMenuImportSep.Visibility = Features.IsAllowed(Feature.RdpFileImport) ? Visibility.Visible : Visibility.Collapsed;
         cm.PlacementTarget = sender as UIElement ?? NewButton;
         cm.Placement = ReferenceEquals(sender, NewButton) ? PlacementMode.Bottom : PlacementMode.Right;
         cm.IsOpen = true;
@@ -2215,7 +2316,7 @@ public partial class MainWindow : FluentWindow
         {
             var (into, _) = DropPlace(node, target, pos);
             if (pos == DropPos.Into && into != target) pos = DropPos.After;
-            var why = target == node ? null : TreeLayout.WhyNot(node, into);
+            var why = target == node ? null : WhyNotMove(node, into);
             var ok = target != node && why is null;
             e.Effects = ok ? DragDropEffects.Move : DragDropEffects.None;
             if (ok) ShowDropIndicator(header, pos); else HideDropIndicator();
@@ -2242,13 +2343,13 @@ public partial class MainWindow : FluentWindow
         {
             // Into the folder or jump host under the pointer; where a connection can't go (below a jump host's child), next to it.
             var into = target is Folder or Connection && pos == DropPos.Into ? target : target?.Parent;
-            if (into is not null && TreeLayout.WhyNot(new Connection(), into) is not null) into = into.Parent;
+            if (into is not null && WhyNotMove(new Connection(), into) is not null) into = into.Parent;
             ImportRdpFiles(files, into, connectAfterImport: false);
         }
         else if (e.Data.GetData(NodeFormat) is NodeBase node && target != node)
         {
             var (into, idx) = DropPlace(node, target, pos);
-            if (TreeLayout.WhyNot(node, into) is not null) return;
+            if (WhyNotMove(node, into) is not null) return;
             if (!await ConfirmMove(node, into)) return;
             _vm.Move(node, into, idx);
             node.IsSelected = true;
@@ -2329,6 +2430,8 @@ public partial class MainWindow : FluentWindow
 
     public void ImportRdpFiles(IEnumerable<string> files, NodeBase? target, bool connectAfterImport)
     {
+        // Opening a .rdp file connects over RDP, so that switch decides too.
+        if (Refused(Feature.RdpFileImport) || (connectAfterImport && Refused(Feature.Rdp))) return;
         var errors = new List<string>();
         Connection? last = null;
         var lastIsNew = false;
@@ -2380,6 +2483,7 @@ public partial class MainWindow : FluentWindow
 
     private void ExportBackup_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.BackupExport)) return;
         var dlg = new Microsoft.Win32.SaveFileDialog
         {
             Filter = "RemoteHub backup (*.rhbackup)|*.rhbackup",
@@ -2400,6 +2504,7 @@ public partial class MainWindow : FluentWindow
 
     private async void ImportBackup_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.BackupImport)) return;
         var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "RemoteHub backup (*.rhbackup;*.rdpmbackup)|*.rhbackup;*.rdpmbackup|All files (*.*)|*.*" };
         if (dlg.ShowDialog(this) != true) return;
         var pw = new PasswordDialog(confirm: false) { Owner = this };

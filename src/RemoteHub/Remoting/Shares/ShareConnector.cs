@@ -16,6 +16,7 @@ public static class ShareConnector
     /// </summary>
     public static ShareFileSystem Open(NetworkShare share, CredentialSet credentials, Func<TrustRequest, bool> trust, Action<string> accepted, JumpRoute? via = null)
     {
+        if (Services.Features.WhyNot(Services.Features.For(share.Protocol)) is { } off) throw new ShareException(off);
         var host = share.EffectiveHost;
         if (host.Length == 0) throw new ShareException("The share has no host – set one for the share or its server.");
         var port = share.EffectivePort;

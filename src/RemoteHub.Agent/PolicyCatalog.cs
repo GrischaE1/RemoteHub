@@ -125,7 +125,7 @@ public sealed class RegistryPolicySource : IPolicySource
     }
 }
 
-/// <summary>Every value IT can set for RemoteHub and the RemoteHub Agent (docs/admx-design.md, phase 1: what exists today).</summary>
+/// <summary>Every value IT can set for RemoteHub and the RemoteHub Agent (docs/admx-design.md; phases 1–3 are built).</summary>
 public static class PolicyCatalog
 {
     public const string Root = @"SOFTWARE\Policies\RemoteHub";
@@ -136,6 +136,7 @@ public static class PolicyCatalog
 
     private static readonly Dictionary<string, string> OnOff = new() { ["0"] = "Off", ["1"] = "On" };
     private static readonly Dictionary<string, string> TurnedOff = new() { ["0"] = "Not turned off (the user decides)", ["1"] = "Turned off" };
+    private static readonly Dictionary<string, string> Allowed = new() { ["0"] = "Blocked", ["1"] = "Allowed" };
 
     // ------------------------------------------------------------------ RemoteHub (console)
 
@@ -149,6 +150,40 @@ public static class PolicyCatalog
     public static readonly PolicyEntry RecordingFolder = Console("RecordingFolder", PolicyKind.Text, "Recordings", "Recording folder", expand: true);
     public static readonly PolicyEntry AuditRetentionDays = Console("AuditRetentionDays", PolicyKind.Number, "Logs", "Keep audit log entries (days)", 1, 36_500);
     public static readonly PolicyEntry DisableAgentAutoSignIn = Console("DisableAgentAutoSignIn", PolicyKind.Number, "RemoteHub Agent", "Turn off automatic sign-in through the agent", 0, 1, labels: TurnedOff);
+
+    // Phase 3 (docs/admx-design.md §5): what RemoteHub may do at all. 0 blocks a feature, 1 or not set allows it; a main
+    // switch (AllowAgent, AllowPowerShellRemoting, AllowNetworkShares) at 0 blocks everything below it.
+    public static readonly PolicyEntry AllowRdp = Feature("AllowRdp", "RDP", "Allow remote desktop over RDP");
+    public static readonly PolicyEntry AllowAgent = Feature("AllowAgent", "RemoteHub Agent", "Allow the RemoteHub Agent");
+    public static readonly PolicyEntry AllowAgentDesktop = Feature("AllowAgentDesktop", "RemoteHub Agent", "Allow remote desktop through the agent");
+    public static readonly PolicyEntry AllowAgentPowerShell = Feature("AllowAgentPowerShell", "RemoteHub Agent", "Allow PowerShell through the agent");
+    public static readonly PolicyEntry AllowAgentFileTransfer = Feature("AllowAgentFileTransfer", "RemoteHub Agent", "Allow file transfer through the agent");
+    public static readonly PolicyEntry AllowAgentRegistry = Feature("AllowAgentRegistry", "RemoteHub Agent", "Allow the registry through the agent");
+    public static readonly PolicyEntry AllowAgentServices = Feature("AllowAgentServices", "RemoteHub Agent", "Allow services through the agent");
+    public static readonly PolicyEntry AllowAgentProcesses = Feature("AllowAgentProcesses", "RemoteHub Agent", "Allow processes through the agent");
+    public static readonly PolicyEntry AllowAgentInstall = Feature("AllowAgentInstall", "RemoteHub Agent", "Allow installing and updating the agent");
+    public static readonly PolicyEntry AllowCredentialProviderInstall = Feature("AllowCredentialProviderInstall", "RemoteHub Agent", "Allow installing and removing the credential provider");
+    public static readonly PolicyEntry AllowPowerShellRemoting = Feature("AllowPowerShellRemoting", "PowerShell remoting", "Allow PowerShell remoting (WinRM)");
+    public static readonly PolicyEntry AllowRemotingPowerShell = Feature("AllowRemotingPowerShell", "PowerShell remoting", "Allow PowerShell over WinRM");
+    public static readonly PolicyEntry AllowRemotingFileTransfer = Feature("AllowRemotingFileTransfer", "PowerShell remoting", "Allow file transfer over WinRM");
+    public static readonly PolicyEntry AllowRemotingRegistry = Feature("AllowRemotingRegistry", "PowerShell remoting", "Allow the registry over WinRM");
+    public static readonly PolicyEntry AllowRemotingServices = Feature("AllowRemotingServices", "PowerShell remoting", "Allow services over WinRM");
+    public static readonly PolicyEntry AllowRemotingProcesses = Feature("AllowRemotingProcesses", "PowerShell remoting", "Allow processes over WinRM");
+    public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
+    public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
+    public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
+    public static readonly PolicyEntry AllowNetworkShares = Feature("AllowNetworkShares", "Jump hosts and network shares", "Allow network shares");
+    public static readonly PolicyEntry AllowSmb = Feature("AllowSmb", "Jump hosts and network shares", "Allow SMB shares");
+    public static readonly PolicyEntry AllowSftp = Feature("AllowSftp", "Jump hosts and network shares", "Allow SFTP shares");
+    public static readonly PolicyEntry AllowFtp = Feature("AllowFtp", "Jump hosts and network shares", "Allow FTP shares");
+    public static readonly PolicyEntry AllowWebDav = Feature("AllowWebDav", "Jump hosts and network shares", "Allow WebDAV shares");
+    public static readonly PolicyEntry AllowRdpFileImport = Feature("AllowRdpFileImport", "Import and export", "Allow importing .rdp files");
+    public static readonly PolicyEntry AllowRdpFileExport = Feature("AllowRdpFileExport", "Import and export", "Allow saving .rdp files");
+    public static readonly PolicyEntry AllowBackupExport = Feature("AllowBackupExport", "Import and export", "Allow exporting a backup");
+    public static readonly PolicyEntry AllowBackupImport = Feature("AllowBackupImport", "Import and export", "Allow importing a backup");
+    public static readonly PolicyEntry AllowSharedSettings = Feature("AllowSharedSettings", "Settings storage", "Allow a shared settings folder");
+
+    private const string Phase3 = "0.18.12";
 
     // ------------------------------------------------------------------ RemoteHub Agent
 
@@ -199,8 +234,24 @@ public static class PolicyCatalog
         Right("AutoSignIn", "Who may sign in automatically"),
     ];
 
+    /// <summary>The console's features (§5), in the template's order.</summary>
+    public static readonly IReadOnlyList<PolicyEntry> FeatureEntries =
+    [
+        AllowRdp,
+        AllowAgent, AllowAgentDesktop, AllowAgentPowerShell, AllowAgentFileTransfer, AllowAgentRegistry, AllowAgentServices, AllowAgentProcesses,
+        AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
+        AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
+        AllowRemotingSetup,
+        AllowQuickConnect,
+        AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
+        AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
+    ];
+
     public static readonly IReadOnlyList<PolicyEntry> ConsoleEntries =
-        [SettingsFolder, DisableUpdateCheck, UpdateChannel, DisableTelemetry, DisableRecording, RecordingFolder, AuditRetentionDays, DisableAgentAutoSignIn];
+    [
+        .. FeatureEntries,
+        SettingsFolder, AllowSharedSettings, DisableUpdateCheck, UpdateChannel, DisableTelemetry, DisableRecording, RecordingFolder, AuditRetentionDays,
+    ];
 
     public static readonly IReadOnlyList<PolicyEntry> AgentEntries =
     [
@@ -256,8 +307,12 @@ public static class PolicyCatalog
         entries.Select(e => Read(e, source)).OfType<PolicyValue>().ToList();
 
     private static PolicyEntry Console(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
-        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, bool expand = false) =>
-        new(PolicyProduct.Console, "", name, kind, group, title, min, max, words, labels, expand);
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, bool expand = false, string since = "0.18.11") =>
+        new(PolicyProduct.Console, "", name, kind, group, title, min, max, words, labels, expand, since);
+
+    /// <summary>A console feature: DWORD 0 = blocked, 1 = allowed.</summary>
+    private static PolicyEntry Feature(string name, string group, string title) =>
+        Console(name, PolicyKind.Number, group, title, 0, 1, labels: Allowed, since: Phase3);
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
         IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11") =>

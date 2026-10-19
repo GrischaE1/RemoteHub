@@ -9,8 +9,8 @@ namespace RemoteHub.Services;
 /// </summary>
 public static class AppPolicy
 {
-    /// <summary>Where the values are read from.</summary>
-    private static IPolicySource Source => RegistryPolicySource.Instance;
+    /// <summary>Where the values are read from: the registry; a dictionary in tests.</summary>
+    internal static IPolicySource Source { get; set; } = RegistryPolicySource.Instance;
 
     /// <summary>DWORD DisableTelemetry = 1: no usage data is sent.</summary>
     public static bool TelemetryDisabled => PolicyCatalog.Number(PolicyCatalog.DisableTelemetry, Source) == 1;
@@ -21,11 +21,14 @@ public static class AppPolicy
     /// <summary>String UpdateChannel = "stable" or "beta": fixes the update channel.</summary>
     public static string? UpdateChannel => UpdateService.NormalizeChannel(PolicyCatalog.Text(PolicyCatalog.UpdateChannel, Source));
 
-    /// <summary>DWORD DisableAgentAutoSignIn = 1: RemoteHub never signs in automatically through the agent (the setting is greyed out).</summary>
-    public static bool AgentAutoSignInDisabled => PolicyCatalog.Number(PolicyCatalog.DisableAgentAutoSignIn, Source) == 1;
+    /// <summary>
+    /// DWORD DisableAgentAutoSignIn = 1 (or AllowAgent = 0): RemoteHub never signs in automatically through the agent (the
+    /// setting is greyed out).
+    /// </summary>
+    public static bool AgentAutoSignInDisabled => !Features.IsAllowed(Feature.AgentAutoSignIn);
 
     /// <summary>DWORD DisableRecording = 1: tabs can't be recorded (the Record button is hidden).</summary>
-    public static bool RecordingDisabled => PolicyCatalog.Number(PolicyCatalog.DisableRecording, Source) == 1;
+    public static bool RecordingDisabled => !Features.IsAllowed(Feature.Recording);
 
     /// <summary>String RecordingFolder (environment variables allowed): where recordings are saved; users can't change it.</summary>
     public static string? RecordingFolder => PolicyCatalog.Text(PolicyCatalog.RecordingFolder, Source);

@@ -9,6 +9,7 @@ public sealed class RegistrySession : RemoteToolSession
 
     public override string KindSymbol => "CubeTree24";
     public override string KindLabel => "Registry";
+    public override Services.RemoteTool Tool => Services.RemoteTool.Registry;
     /// <summary>Key shown first (the last key used for this connection).</summary>
     public string? StartPath { get; set; }
 

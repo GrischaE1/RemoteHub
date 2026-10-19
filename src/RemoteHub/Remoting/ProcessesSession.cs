@@ -7,6 +7,7 @@ public sealed class ProcessesSession(Connection connection) : RemoteToolSession(
 {
     public override string KindSymbol => "Pulse24";
     public override string KindLabel => "Processes";
+    public override Services.RemoteTool Tool => Services.RemoteTool.Processes;
 
     public Task<ProcessSnapshot> ListAsync() => Run(RemoteProcesses.List);
     public Task StopAsync(IReadOnlyCollection<(int Id, string Name)> processes, bool tree) =>
@@ -18,6 +19,7 @@ public sealed class ServicesSession(Connection connection) : RemoteToolSession(c
 {
     public override string KindSymbol => "WrenchScrewdriver24";
     public override string KindLabel => "Services";
+    public override Services.RemoteTool Tool => Services.RemoteTool.Services;
 
     public Task<List<ServiceInfo>> ListAsync() => Run(RemoteServices.List);
     public Task ControlAsync(string name, ServiceAction action) => Run(rs => { RemoteServices.Control(rs, name, action); return true; });

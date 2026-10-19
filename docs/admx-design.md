@@ -1,6 +1,6 @@
 # RemoteHub – Full configuration through the registry (ADMX)
 
-Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1 and 2 are built** (§16, §17); phases 3–5 are not. The principles
+Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1–3 are built** (§16–§18); phases 4 and 5 are not. The principles
 are in §2, and the open questions in §14.
 Owner: Grischa Ernst
 
@@ -811,3 +811,52 @@ What was built, and where it differs from §9, §8 and §11.3:
     kept by IT, nothing to do).
   - `PolicyTemplateTests` also checks `expandable` and `maxLength` of text elements against the catalogue.
 - **Not run yet:** POL-02 to POL-05, POL-08 and POL-09 in the lab.
+
+## 18. Implementation notes (Phase 3)
+
+What was built, and where it differs from §5, §4.2 and §11.2:
+
+- **Values:** 29 `Allow…` DWORDs in `PolicyCatalog` (`FeatureEntries`, plus `AllowSharedSettings` under *Settings storage*),
+  since 0.18.12. `AllowConnectionEditing`, `AllowSavedPasswords` and `AllowPasswordCopy` are new behaviour and stay in
+  phase 5.
+- **`Features`** (`src\RemoteHub\Services\Features.cs`): `IsAllowed(Feature)`, `IsAllowed(RemoteTool, viaAgent)`,
+  `IsAllowed(ShareProtocol)` and `WhyNot`, which names the switch that blocks ("The RemoteHub Agent is turned off by your
+  organisation – see Settings → Policies."). A main switch at 0 wins over its features. `DisableRecording` and
+  `DisableAgentAutoSignIn` go through it too; automatic sign-in and jump hosts are below `AllowAgent`.
+- **Transport:** with `AllowAgent` = 0, `Inheritance.UsesAgent` is false, so the tools of a connection set to the agent go
+  over WinRM, and *Remote desktop through* doesn't count, so the desktop is RDP. With `AllowAgentDesktop` = 0 the same for
+  the desktop only.
+- **Hidden:** the tree's menu, the *+*, tab group and tab menus (`AddConnectionTools`), the detached window's tools, the
+  toolbar's and the PowerShell tab's *File transfer*, the *New* menus (network share, *Import .rdp files…*), *Save as .rdp
+  file…*, *Move under* (also on a share; with jump hosts blocked it stays only to move an item out of one), the share
+  menu's *Open*, and Settings → *Export backup…* / *Import backup…* (with both gone, the *Backup* section too). With no
+  tool allowed over a transport, its test isn't offered either. Separators follow what is left, and a *+* menu with
+  nothing left says "Nothing else can be opened". The quick connect hints go when it is blocked.
+- **Greyed out:** the editor's *Check automatically after RDP login* and *Use HTTPS* (`AllowPowerShellRemoting`),
+  *Connect through* (`AllowAgent`), *Remote desktop through* and the automatic sign-in rows (`AllowAgentDesktop`); the
+  install dialog's *Install silently over PowerShell remoting* and *Allow automatic sign-in*; *Shared folder* in the
+  settings location window.
+- **Refused where it starts:** `MainWindow` checks before it asks for a password. Opening something new shows a dialog
+  titled by its topic (`Features.Topic`: "Remote desktop", "RemoteHub Agent", "Network share" …) with `WhyNot`: `OpenRdp`,
+  `OpenAgentDesktop`, the tool tabs, quick connect, the remoting test and setup, the agent and credential provider
+  installs, shares, `.rdp` import (and RDP when a `.rdp` file is opened), `.rdp` export, backups, and dragging an item
+  below a connection. `TryRoute` refuses a connection below a jump host. A reconnect of an open tab fails the tab with
+  the reason instead, as any other failure to connect does. The sessions check again: `RdpSession`,
+  `AgentDesktopSession`, `PsSession`, `RemoteToolSession` (each tool knows its `RemoteTool`), and `ShareConnector.Open`
+  throws.
+- **Transport of a tab's tools:** everything that offers file transfer from a PowerShell tab (toolbar, the tab's own
+  button, its menus, the detached window) decides by the connection's transport now (`UsesAgent`), as
+  `OpenFileTransfer` does.
+- **Not greyed out yet:** the RDP rows of the connection editor with `AllowRdp` = 0 (the agent desktop uses some of them),
+  and the share editor with a protocol blocked.
+- **Differs from §11.2:** there are no restored tabs to refuse (RemoteHub doesn't restore tabs), no status bar for a
+  refused shortcut (the dialog says it), and no *Copy password* action yet (the prompt copy is phase 5's
+  `AllowPasswordCopy`). The Policies page lists a value below a main switch that is off with *Off because "…" is off*;
+  conflicts with §7's connection values come with phase 4.
+- **Template:** revision 1.2, 68 policies, a category *Features* under *RemoteHub Console* with *RDP*, *RemoteHub Agent*
+  (the old *RemoteHub Agent features*, moved under it), *PowerShell remoting*, *Connections*, *Jump hosts and network
+  shares* and *Import and export*; supported on *RemoteHub 0.18.12 or later*.
+- **Tests:** `ConsoleFeatureTests` (12): catalogue ↔ switches, nothing set, own value, the `Disable…` values, both main
+  switches, a tool over the other transport, shares, the Policies page note, `UsesAgent`, a tool tab refusing in the tab,
+  and `ShareConnector`. They set `AppPolicy.Source` and run in a collection of their own without parallel tests.
+- **Not run yet:** POL-14 (the console features in the lab) – not automated yet.

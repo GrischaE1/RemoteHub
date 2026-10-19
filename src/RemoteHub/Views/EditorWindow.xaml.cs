@@ -278,6 +278,11 @@ public partial class EditorWindow : FluentWindow
         };
         FolderButton.Click += (_, _) => _host?.OpenFolder();
         ExportButton.Click += (_, _) => _host?.ExportBackup();
+        // Actions this PC's policy blocks aren't offered; with both gone, the section goes too.
+        ExportButton.Visibility = Features.IsAllowed(Feature.BackupExport) ? Visibility.Visible : Visibility.Collapsed;
+        ImportButton.Visibility = Features.IsAllowed(Feature.BackupImport) ? Visibility.Visible : Visibility.Collapsed;
+        BackupHeader.Visibility = BackupText.Visibility =
+            ExportButton.Visibility == Visibility.Visible || ImportButton.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
         AuditButton.Click += (_, _) => _host?.AuditLog();
         // How long the audit log keeps entries: the policy wins (shown, not changeable).
         if (AppPolicy.AuditRetentionDays is { } policyDays)
@@ -375,6 +380,12 @@ public partial class EditorWindow : FluentWindow
                         left.Children.Add(new TextBlock { Text = problem, Foreground = System.Windows.Media.Brushes.IndianRed, TextWrapping = TextWrapping.Wrap });
                     var value = new TextBlock { Text = r.Value, TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Top };
                     if (!r.Valid) value.TextDecorations = TextDecorations.Strikethrough;
+                    if (r.OffBecause is { } off)
+                    {
+                        // Greyed out: a main switch above it decides.
+                        left.Children.Add(new TextBlock { Text = off, Style = (Style)FindResource("Caption"), TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.None });
+                        value.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
+                    }
                     Grid.SetColumn(value, 1);
                     row.Children.Add(left);
                     row.Children.Add(value);
