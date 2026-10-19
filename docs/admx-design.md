@@ -1,6 +1,6 @@
 # RemoteHub – Full configuration through the registry (ADMX)
 
-Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1–3 are built** (§16–§18); phases 4 and 5 are not. The principles
+Status: Draft v3 (2026-10-16), written against 0.18.11. **Phases 1–4 are built** (§16–§19); phase 5 is not. The principles
 are in §2, and the open questions in §14.
 Owner: Grischa Ernst
 
@@ -860,3 +860,50 @@ What was built, and where it differs from §5, §4.2 and §11.2:
   switches, a tool over the other transport, shares, the Policies page note, `UsesAgent`, a tool tab refusing in the tab,
   and `ShareConnector`. They set `AppPolicy.Source` and run in a collection of their own without parallel tests.
 - **Not run yet:** POL-14 (the console features in the lab) – not automated yet.
+
+## 19. Implementation notes (Phase 4)
+
+What was built, and where it differs from §6, §7 and §11.2:
+
+- **Values**, since 0.18.12: 15 settings of §6 in the root key (`Theme`, `SwitchKeys`, the four recording values,
+  `ProcessRefreshSeconds`, `ServiceRefreshSeconds` and the seven `AgentDesktop…` values), 7 install defaults in
+  `AgentInstall` (§6.9) and the 22 connection settings in `Connections` (§7). `PolicyEntry.Check` now also takes a fixed
+  set of numbers (`ColorDepth`, `RecordingFps`).
+- **`DisableUpdateCheck` and `DisableTelemetry` = 0** lock the feature on (Q3): the template's *Disabled* writes 0 now
+  instead of deleting the value, and `UpdateService.CheckEnabled` / `Telemetry.Enabled` take `AppPolicy.UpdateCheck` /
+  `AppPolicy.Telemetry` over the user's switch.
+- **Connections (§7):** `AppPolicy.Connections()` returns a partial `RdpOptions` (words → the enum, 0/1 → bool; a
+  `FixedResolution` that isn't `<w>x<h>` is ignored), read again after 2 s at most because it's asked for every row of the
+  tree. `Inheritance.ResolveOptions` applies it last (`RdpOptions.OverrideWith`), so the RDP session, `.rdp` export, the
+  agent desktop and the tree all use it. `UseAgent` by policy also decides below a jump host.
+- **Editor:** the `Row` helper finds the property a row edits by running its setter on an empty `RdpOptions`, so each
+  locked row shows the policy's value at every level (global defaults, folders, connections) with "Set by your
+  organisation", and `Apply` skips it (`OptionRow.FixedByPolicy`), keeping the stored value (§4.3).
+- **Conflicts:** Settings → Policies shows a connection value that asks for a blocked feature in amber
+  (`PolicyRow.Conflict`): `RemoteDesktopVia` = Agent or Rdp, `UseAgent`, `AgentAutoSignIn`, `PsRemoting`, `PsUseSsl`.
+  With `RemoteDesktopVia` = Agent by policy and the agent desktop blocked, opening a connection is refused instead of
+  falling back to RDP.
+- **Where they're locked:** Settings → General (theme, keys), *Updates & privacy* (on by policy: only the switch),
+  *Recordings*, *Global defaults → Remote tools*, the agent desktop's start panel (picture, consent, view only) and
+  toolbar (picture, resolution, details, key combinations), and the install dialog (methods greyed out, not removed;
+  port, groups, firewall scope, virtual display, automatic sign-in, *Use the agent afterwards*).
+- **New behaviour behind §6.8:** `AgentDesktopViewOnly` = 1 also forces view only in `AgentDesktopSession.Choose`, and
+  `AgentDesktopClipboard` caps the clipboard level at the lower of it and the device's. `AgentDesktopConsent` applies only
+  when the device offers that mode. `AgentDesktopFitToWindow` picks *Fit to this window* or *The device's own*; a fixed
+  size can't be set by policy.
+- **Checks:** `PolicyEntry.Rule` rejects a `FixedResolution` that isn't `<w>x<h>` and a `FirewallScope` that isn't an
+  address list (";" is taken like ","), so Settings → Policies shows them as invalid. The install dialog can't start when
+  none of the methods the policy allows is possible for the connection. The clipboard cap applies both ways: text from
+  the device is dropped too, since the device doesn't know this PC's policy. *Settings overview* shows the values in
+  effect (theme, keys, refresh intervals, and the global defaults with the connection settings applied).
+- **Not done:** `RemoteDesktopVia` = Agent by policy doesn't take away *Remote desktop via RDP* from the menus (only
+  `AllowRdp` = 0 does); the policy fixes what *Remote desktop* opens, as the connection setting does.
+- **Left for phase 5:** `AutoLockMinutes`, `SettingsLocation` and `StartupProtection` / `AllowWindowsHello` – they are
+  read at start and belong to startup protection and the settings store, which phase 5 changes anyway.
+- **Template:** revision 1.3, 112 policies; new categories *General*, *Remote tools*, *Agent remote desktop*, *Agent
+  installation* and *Connection settings* with *Display*, *Devices and resources*, *Security* and *Remoting and agent*.
+- **Tests:** `ConsoleSettingsPolicyTests` (11): precedence over connection, folder and defaults; invalid values and the rules; a copy per caller;
+  `UseAgent` below a jump host; the editor's locked row and `Apply`; lock coverage (every connection value has a row that
+  locks it, every §6 value a reader in `AppPolicy`); the lock-on values; recordings; and the Policies page conflict.
+  `PolicyTemplateTests` now tells the agent's key from the console's `AgentInstall` next to it, and checks that a number box starts inside its range.
+- **Not run yet:** POL-15 (connection settings and settings in the lab) – not automated yet.

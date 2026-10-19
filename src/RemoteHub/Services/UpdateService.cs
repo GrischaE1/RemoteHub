@@ -72,7 +72,7 @@ public static class UpdateService
     /// <summary>The channel in use: IT policy, else the user's choice, else <see cref="DefaultChannel"/>.</summary>
     public static string EffectiveChannel(UiState ui) => AppPolicy.UpdateChannel ?? NormalizeChannel(ui.UpdateChannel) ?? DefaultChannel;
 
-    public static bool CheckEnabled(UiState ui) => !AppPolicy.UpdateCheckDisabled && ui.UpdateCheckEnabled;
+    public static bool CheckEnabled(UiState ui) => AppPolicy.UpdateCheck ?? ui.UpdateCheckEnabled;
 
     public static string ChannelName(string channel) => channel == Beta ? "Beta" : "GA (stable)";
 

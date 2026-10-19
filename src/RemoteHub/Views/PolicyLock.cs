@@ -10,7 +10,7 @@ namespace RemoteHub.Views;
 /// </summary>
 internal static class PolicyLock
 {
-    public const string ToolTipText = PolicyReport.ManagedText + " – see Settings → Policies.";
+    public const string ToolTipText = PolicyReport.ManagedNote;
 
     public static void Apply(params FrameworkElement[] controls) => Lock(ToolTipText, controls);
 

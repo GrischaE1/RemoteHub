@@ -206,9 +206,11 @@ public partial class EditorWindow : FluentWindow
     {
         var ui = _data.Ui;
         ThemeBox.ItemsSource = Themes.Select(t => t.Label).ToList();
-        ThemeBox.SelectedIndex = Math.Max(0, Array.FindIndex(Themes, t => t.Id == ui.Theme));
+        ThemeBox.SelectedIndex = Math.Max(0, Array.FindIndex(Themes, t => t.Id == (AppPolicy.Theme ?? ui.Theme)));
         SwitchKeysBox.ItemsSource = SwitchHotkeys.All.Select(p => p.Label).ToList();
-        SwitchKeysBox.SelectedIndex = Math.Max(0, SwitchHotkeys.All.ToList().FindIndex(p => p.Id == SwitchHotkeys.Get(ui.SwitchKeys).Id));
+        SwitchKeysBox.SelectedIndex = Math.Max(0, SwitchHotkeys.All.ToList().FindIndex(p => p.Id == SwitchHotkeys.Get(AppPolicy.SwitchKeys ?? ui.SwitchKeys).Id));
+        if (AppPolicy.Theme is not null) PolicyLock.Apply(ThemeBox);
+        if (AppPolicy.SwitchKeys is not null) PolicyLock.Apply(SwitchKeysBox);
         DefaultAppButton.Click += (_, _) => _host?.DefaultApp();
 
         // Updates & privacy
@@ -217,19 +219,21 @@ public partial class EditorWindow : FluentWindow
         var channel = UpdateService.EffectiveChannel(ui);
         ChannelStable.IsChecked = channel == UpdateService.Stable;
         ChannelBeta.IsChecked = channel == UpdateService.Beta;
-        if (AppPolicy.UpdateCheckDisabled || AppPolicy.UpdateChannel is not null)
+        if (AppPolicy.UpdateCheck is not null || AppPolicy.UpdateChannel is not null)
         {
+            // Off by policy: the button goes too. On by policy: only the switch is locked.
             if (AppPolicy.UpdateCheckDisabled) PolicyLock.Apply(UpdateCheckToggle, CheckNowButton);
+            else if (AppPolicy.UpdateCheck == true) PolicyLock.Apply(UpdateCheckToggle);
             if (AppPolicy.UpdateChannel is not null) PolicyLock.Apply(ChannelStable, ChannelBeta);
             UpdatePolicyText.Text = "Some of these settings are managed by your organisation (Settings → Policies).";
             UpdatePolicyText.Visibility = Visibility.Visible;
         }
         CheckNowButton.Click += (_, _) => _host?.CheckForUpdates(SelectedChannel);
         TelemetryToggle.IsChecked = Telemetry.Enabled(ui);
-        if (AppPolicy.TelemetryDisabled)
+        if (AppPolicy.Telemetry is { } telemetryOn)
         {
             PolicyLock.Apply(TelemetryToggle);
-            TelemetryPolicyText.Text = "Turned off by your organisation (Settings → Policies).";
+            TelemetryPolicyText.Text = telemetryOn ? "Turned on by your organisation (Settings → Policies)." : "Turned off by your organisation (Settings → Policies).";
             TelemetryPolicyText.Visibility = Visibility.Visible;
         }
         LicenseButton.Click += (_, _) => OpenProgramFile("LICENSE.txt", "The license");
@@ -315,7 +319,7 @@ public partial class EditorWindow : FluentWindow
         RecordingResolutionBox.ItemsSource = Recordings.Resolutions.Select(r => r.Label).ToList();
         RecordingResolutionBox.SelectedIndex = Array.FindIndex(Recordings.Resolutions, r => r.Value == recordingOptions.Resolution);
         RecordingGpuToggle.IsChecked = recordingOptions.UseGpu;
-        RecordingDetailsToggle.IsChecked = _data.Ui.RecordingShowDetails;
+        RecordingDetailsToggle.IsChecked = Recordings.IncludeDetails(_data.Ui);
         RefreshRecordingSection();
         RecordingFolderButton.Click += (_, _) =>
         {
@@ -386,6 +390,13 @@ public partial class EditorWindow : FluentWindow
                         left.Children.Add(new TextBlock { Text = off, Style = (Style)FindResource("Caption"), TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.None });
                         value.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
                     }
+                    if (r.Conflict is { } conflict)
+                    {
+                        // Amber: the value asks for something a feature switch blocks (the block wins).
+                        var conflictText = new TextBlock { Text = conflict, TextWrapping = TextWrapping.Wrap };
+                        conflictText.SetResourceReference(TextBlock.ForegroundProperty, "SystemFillColorCautionBrush");
+                        left.Children.Add(conflictText);
+                    }
                     Grid.SetColumn(value, 1);
                     row.Children.Add(left);
                     row.Children.Add(value);
@@ -422,6 +433,10 @@ public partial class EditorWindow : FluentWindow
         RecordingDefaultButton.Visibility = string.IsNullOrWhiteSpace(_recordingFolder) ? Visibility.Collapsed : Visibility.Visible;
         if (managed || AppPolicy.RecordingDisabled) PolicyLock.Apply(RecordingFolderButton, RecordingDefaultButton);
         if (AppPolicy.RecordingDisabled) PolicyLock.Apply(RecordingOpenButton, RecordingFpsBox, RecordingResolutionBox, RecordingGpuToggle, RecordingDetailsToggle);
+        if (AppPolicy.RecordingFps is not null) PolicyLock.Apply(RecordingFpsBox);
+        if (AppPolicy.RecordingResolution is not null) PolicyLock.Apply(RecordingResolutionBox);
+        if (AppPolicy.RecordingUseGpu is not null) PolicyLock.Apply(RecordingGpuToggle);
+        if (AppPolicy.RecordingIncludeDetails is not null) PolicyLock.Apply(RecordingDetailsToggle);
     }
 
     private string SelectedChannel => ChannelBeta.IsChecked == true ? UpdateService.Beta : UpdateService.Stable;
@@ -443,16 +458,17 @@ public partial class EditorWindow : FluentWindow
     private void ApplyAppSettings()
     {
         var ui = _data.Ui;
+        // What a policy fixes is shown, not stored as the user's choice.
         var theme = Themes[Math.Max(0, ThemeBox.SelectedIndex)].Id;
-        if (theme != ui.Theme) _host?.ApplyTheme(theme);
+        if (AppPolicy.Theme is null && theme != ui.Theme) _host?.ApplyTheme(theme);
         var keys = SwitchHotkeys.All[Math.Max(0, SwitchKeysBox.SelectedIndex)].Id;
-        if (keys != ui.SwitchKeys) _host?.ApplySwitchKeys(keys);
+        if (AppPolicy.SwitchKeys is null && keys != ui.SwitchKeys) _host?.ApplySwitchKeys(keys);
 
-        if (!AppPolicy.UpdateCheckDisabled) ui.UpdateCheckEnabled = UpdateCheckToggle.IsChecked == true;
+        if (AppPolicy.UpdateCheck is null) ui.UpdateCheckEnabled = UpdateCheckToggle.IsChecked == true;
         // Only store the channel when it differs from what was in effect, so the default can still follow the version.
         if (AppPolicy.UpdateChannel is null && SelectedChannel != UpdateService.EffectiveChannel(ui)) ui.UpdateChannel = SelectedChannel;
         if (AppPolicy.RecordingFolder is null) ui.RecordingFolder = string.IsNullOrWhiteSpace(_recordingFolder) ? null : _recordingFolder;
-        if (RecordingFpsBox.SelectedIndex >= 0) ui.RecordingFps = Recordings.FrameRates[RecordingFpsBox.SelectedIndex].Fps;
+        if (AppPolicy.RecordingFps is null && RecordingFpsBox.SelectedIndex >= 0) ui.RecordingFps = Recordings.FrameRates[RecordingFpsBox.SelectedIndex].Fps;
         if (AppPolicy.AuditRetentionDays is null && AuditRetentionBox.SelectedIndex >= 0)
         {
             var days = _retentionChoices[AuditRetentionBox.SelectedIndex];
@@ -462,10 +478,11 @@ public partial class EditorWindow : FluentWindow
             // Shortening it removes history, so the change itself is in the log.
             if (days != before) AuditLog.Write(AuditEvents.AuditRetentionChanged, null, "Audit log", $"Entries kept for {AuditLog.RetentionLabel(days)} (before: {AuditLog.RetentionLabel(before)})");
         }
-        ui.RecordingUseGpu = RecordingGpuToggle.IsChecked == true;
-        ui.RecordingShowDetails = RecordingDetailsToggle.IsChecked == true;
-        if (RecordingResolutionBox.SelectedIndex >= 0) ui.RecordingResolution = Recordings.Resolutions[RecordingResolutionBox.SelectedIndex].Value.ToString();
-        if (!AppPolicy.TelemetryDisabled)
+        if (AppPolicy.RecordingUseGpu is null) ui.RecordingUseGpu = RecordingGpuToggle.IsChecked == true;
+        if (AppPolicy.RecordingIncludeDetails is null) ui.RecordingShowDetails = RecordingDetailsToggle.IsChecked == true;
+        if (AppPolicy.RecordingResolution is null && RecordingResolutionBox.SelectedIndex >= 0)
+            ui.RecordingResolution = Recordings.Resolutions[RecordingResolutionBox.SelectedIndex].Value.ToString();
+        if (AppPolicy.Telemetry is null)
         {
             var on = TelemetryToggle.IsChecked == true;
             if (ui.TelemetryEnabled && !on) { Telemetry.ForgetInstallId(); Telemetry.RunTime.Forget(); DiagLog.Write("Telemetry: turned off"); }

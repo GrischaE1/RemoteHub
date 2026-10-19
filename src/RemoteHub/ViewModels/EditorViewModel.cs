@@ -30,6 +30,8 @@ public sealed partial class OptionRow : ObservableObject
     /// <summary>Set when a policy decides this row: it stays visible but greyed out, with this text (docs/admx-design.md P2).</summary>
     public string? PolicyNote { get; init; }
     public bool IsEditable => PolicyNote is null;
+    /// <summary>The row shows the value IT fixes, not the stored one: saving leaves the stored value as it is (§4.3).</summary>
+    public bool FixedByPolicy { get; init; }
     [ObservableProperty] private Choice _selected = null!;
 }
 
@@ -216,9 +218,17 @@ public sealed partial class EditorViewModel : ObservableObject
         var own = IsDefaults ? _data.Defaults : _node!.Options;
         var parent = IsDefaults ? RdpOptions.BuiltInDefaults() : Inheritance.ResolveOptions(_node, _data, includeSelf: false);
 
+        // When IT fixes the property a row edits (subkey Connections), the row shows that value at every level, greyed out,
+        // and the value stored here is kept but not used (docs/admx-design.md §7, §4.2). Which property: the one the row's
+        // setter writes on an empty RdpOptions.
         OptionRow Row(string label, object? current, object? inherited, (object Value, string Label)[] values,
                       Action<RdpOptions, object?> set, string? hint = null, string? policyNote = null)
         {
+            var probe = new RdpOptions();
+            set(probe, values[0].Value);
+            var policy = typeof(RdpOptions).GetProperties().FirstOrDefault(p => p.GetValue(probe) is not null)?.Name;
+            var fixedValue = policy is null ? null : AppPolicy.Connection(policy);
+            if (fixedValue is not null && !values.Any(v => Equals(v.Value, fixedValue))) values = [.. values, (fixedValue, fixedValue.ToString()!)];
             var choices = new List<Choice>();
             if (CanInherit)
             {
@@ -226,8 +236,12 @@ public sealed partial class EditorViewModel : ObservableObject
                 choices.Add(new Choice($"Inherit · {inhLabel}", null));
             }
             choices.AddRange(values.Select(v => new Choice(v.Label, v.Value)));
-            var sel = choices.FirstOrDefault(c => Equals(c.Value, current)) ?? choices[0];
-            return new OptionRow { Label = label, Hint = hint, Choices = choices, Selected = sel, Setter = set, PolicyNote = policyNote };
+            var sel = choices.FirstOrDefault(c => fixedValue is not null ? c.Value is not null && Equals(c.Value, fixedValue) : Equals(c.Value, current)) ?? choices[0];
+            return new OptionRow
+            {
+                Label = label, Hint = hint, Choices = choices, Selected = sel, Setter = set,
+                PolicyNote = policyNote ?? (fixedValue is null ? null : PolicyReport.ManagedNote), FixedByPolicy = fixedValue is not null,
+            };
         }
 
         BuildAppearance(own.ColorTag, parent.ColorTag);
@@ -311,24 +325,28 @@ public sealed partial class EditorViewModel : ObservableObject
         {
             var tools = _data.Tools;
             ToolRows.Add(RefreshRow("Processes tab – refresh every", tools.ProcessRefreshSeconds, RemoteToolSettings.DefaultProcessRefresh,
-                v => tools.ProcessRefreshSeconds = v, "Only while the tab is visible. CPU % is the average since the previous refresh."));
+                v => tools.ProcessRefreshSeconds = v, "Only while the tab is visible. CPU % is the average since the previous refresh.", AppPolicy.ProcessRefreshSeconds));
             ToolRows.Add(RefreshRow("Services tab – refresh every", tools.ServiceRefreshSeconds, RemoteToolSettings.DefaultServiceRefresh,
-                v => tools.ServiceRefreshSeconds = v, "Only while the tab is visible. F5 or the refresh button always reads the list again."));
+                v => tools.ServiceRefreshSeconds = v, "Only while the tab is visible. F5 or the refresh button always reads the list again.", AppPolicy.ServiceRefreshSeconds));
         }
     }
 
     private static readonly int[] RefreshChoices = [0, 5, 10, 15, 30, 60, 120, 300, 600];
 
-    private static OptionRow RefreshRow(string label, int current, int builtIn, Action<int> apply, string hint)
+    /// <param name="fixedByPolicy">The interval IT fixes (§6.7): shown, greyed out, and not stored.</param>
+    private static OptionRow RefreshRow(string label, int current, int builtIn, Action<int> apply, string hint, int? fixedByPolicy)
     {
-        var values = RefreshChoices.Append(current).Where(v => v >= 0).Distinct().Order();
+        var shown = fixedByPolicy ?? current;
+        var values = RefreshChoices.Append(shown).Where(v => v >= 0).Distinct().Order();
         var choices = values.Select(v => new Choice(
             (v == 0 ? "Off (refresh by hand)" : Views.RemoteToolChrome.Every(v)) + (v == builtIn ? "  (default)" : ""), v)).ToList();
         return new OptionRow
         {
             Label = label, Hint = hint, Choices = choices,
-            Selected = choices.First(c => Equals(c.Value, current)),
+            Selected = choices.First(c => Equals(c.Value, shown)),
             Setter = (_, v) => apply((int)v!),
+            PolicyNote = fixedByPolicy is null ? null : PolicyReport.ManagedNote,
+            FixedByPolicy = fixedByPolicy is not null,
         };
     }
 
@@ -367,7 +385,8 @@ public sealed partial class EditorViewModel : ObservableObject
         if (colourError is not null) { Error = colourError; return false; }
 
         var options = IsDefaults ? _data.Defaults : _node!.Options;
-        foreach (var row in DisplayRows.Concat(ResourceRows).Concat(SecurityRows).Concat(PsRows).Concat(ToolRows)) row.Setter(options, row.Selected.Value);
+        foreach (var row in DisplayRows.Concat(ResourceRows).Concat(SecurityRows).Concat(PsRows).Concat(ToolRows).Where(r => !r.FixedByPolicy))
+            row.Setter(options, row.Selected.Value);
         options.ColorTag = colour;
         if (_node is not null)
         {

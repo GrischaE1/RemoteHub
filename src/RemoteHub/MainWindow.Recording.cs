@@ -159,7 +159,7 @@ public partial class MainWindow
             if (!_views.TryGetValue(s, out var tab)) return RecordingSource.Hidden;
             // The content below the tab's header (the remote screen, console, lists) – or, with the setting, the whole tab
             // including the header with the connection's name, address and how it connects.
-            var view = _vm.Data.Ui.RecordingShowDetails ? tab : (tab as IRecordableView)?.RecordingArea ?? tab;
+            var view = Recordings.IncludeDetails(_vm.Data.Ui) ? tab : (tab as IRecordableView)?.RecordingArea ?? tab;
             if (!view.IsVisible || view.ActualWidth < 1 || view.ActualHeight < 1) return RecordingSource.Hidden;
             if (Window.GetWindow(view) is not { WindowState: not WindowState.Minimized } window) return RecordingSource.Hidden;
             var hwnd = new WindowInteropHelper(window).Handle;

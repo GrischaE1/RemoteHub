@@ -48,7 +48,7 @@ public partial class MainWindow : FluentWindow
         SidebarColumn.Width = new GridLength(ui.SidebarWidth);
         ApplySidebarState();
         if (ui.Maximized) WindowState = WindowState.Maximized;
-        SwitchHotkeys.Current = SwitchHotkeys.Get(ui.SwitchKeys);
+        SwitchHotkeys.Current = SwitchHotkeys.Get(AppPolicy.SwitchKeys ?? ui.SwitchKeys);
         _promptWatcher.PromptShown += OnCredentialPrompt;
         vm.Conflict += () => Dispatcher.BeginInvoke(OnSettingsConflict);
         SettingsStore.ExternalChange += () => Dispatcher.BeginInvoke(OnExternalSettingsChange);
@@ -63,7 +63,7 @@ public partial class MainWindow : FluentWindow
         PreviewKeyDown += Window_PreviewKeyDown;
         DragOver += Window_DragOver;
         Drop += Window_Drop;
-        Loaded += (_, _) => ApplyTheme(vm.Data.Ui.Theme);
+        Loaded += (_, _) => ApplyTheme(AppPolicy.Theme ?? vm.Data.Ui.Theme);
         Loaded += (_, _) => StartupChecks();
         Loaded += (_, _) => { UpdateRecordButton(); UpdateSendFilesButton(); };
         Loaded += (_, _) => StartAutoLock();
@@ -76,7 +76,7 @@ public partial class MainWindow : FluentWindow
 
     private void ApplyTheme(string theme)
     {
-        _vm.Data.Ui.Theme = theme;
+        if (AppPolicy.Theme is null) _vm.Data.Ui.Theme = theme; // a theme set by policy isn't stored as the user's
         SystemThemeWatcher.UnWatch(this);
         if (theme == "System")
         {
@@ -205,7 +205,7 @@ public partial class MainWindow : FluentWindow
     private void SetSwitchKeys(string id)
     {
         SwitchHotkeys.Current = SwitchHotkeys.Get(id);
-        _vm.Data.Ui.SwitchKeys = SwitchHotkeys.Current.Id;
+        if (AppPolicy.SwitchKeys is null) _vm.Data.Ui.SwitchKeys = SwitchHotkeys.Current.Id;
         foreach (var s in _vm.Sessions.OfType<RdpSession>()) s.RefreshSwitchHotkeys();
         UpdateShortcutHint();
     }
@@ -284,6 +284,8 @@ public partial class MainWindow : FluentWindow
     /// </summary>
     public void OpenConnection(Connection c, bool forceNew = false)
     {
+        // IT fixes remote desktop to the agent but blocks the agent desktop: no remote desktop, not RDP instead (§7).
+        if (AppPolicy.Connections().RemoteDesktopVia == DesktopVia.Agent && Refused(Feature.AgentDesktop)) return;
         if (AgentDesktopFor(c)) OpenAgentDesktop(c, forceNew);
         else OpenRdp(c, forceNew);
     }
@@ -1542,17 +1544,19 @@ public partial class MainWindow : FluentWindow
         var s = _vm.OpenAgentDesktop(c);
         var ui = _vm.Data.Ui;
         var view = new AgentDesktopView(s, () => ConnectAgentDesktop(s), s.Close, () => { s.Close(); OpenRdp(c); },
-            () => DesktopQualityPreset.Find(ui.AgentDesktopQuality),
+            // What this PC's policy fixes (docs/admx-design.md §6.8) is used, and not remembered as the user's choice.
+            () => DesktopQualityPreset.Find(AppPolicy.AgentDesktopQuality ?? ui.AgentDesktopQuality),
             (quality, consent) =>
             {
-                ui.AgentDesktopQuality = quality.Id;
-                ui.AgentDesktopConsent = consent;
+                if (AppPolicy.AgentDesktopQuality is null) ui.AgentDesktopQuality = quality.Id;
+                if (consent != AppPolicy.AgentDesktopConsent) ui.AgentDesktopConsent = consent; // chosen by the user, not the policy's
                 _vm.RequestSave();
             },
-            () => DesktopResolution.FromSettings(ui.AgentDesktopResolution, ui.AgentDesktopFitToWindow),
+            () => AppPolicy.AgentDesktopFitToWindow is { } fit ? (fit ? DesktopResolution.Fit : DesktopResolution.Device)
+                : DesktopResolution.FromSettings(ui.AgentDesktopResolution, ui.AgentDesktopFitToWindow),
             resolution =>
             {
-                if (ui.AgentDesktopResolution == resolution.Id) return;
+                if (AppPolicy.AgentDesktopFitToWindow is not null || ui.AgentDesktopResolution == resolution.Id) return;
                 ui.AgentDesktopResolution = resolution.Id;
                 ui.AgentDesktopFitToWindow = resolution.Kind == DesktopResolutionKind.Fit;
                 _vm.RequestSave();
@@ -1562,8 +1566,8 @@ public partial class MainWindow : FluentWindow
         view.RememberedConsent(ui.AgentDesktopConsent);
         view.UsePreferences(ui.AgentDesktopShowInfo, ui.AgentDesktopKeyCombinations, (info, keys) =>
         {
-            ui.AgentDesktopShowInfo = info;
-            ui.AgentDesktopKeyCombinations = keys;
+            if (AppPolicy.AgentDesktopShowInfo is null) ui.AgentDesktopShowInfo = info;
+            if (AppPolicy.AgentDesktopKeyCombinations is null) ui.AgentDesktopKeyCombinations = keys;
             _vm.RequestSave();
         });
         _views[s] = view;
@@ -1692,7 +1696,7 @@ public partial class MainWindow : FluentWindow
     {
         if (Refused(RemoteTool.Services, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenServices(c);
-        ShowTool(s, new ServicesView(s, () => _vm.Data.Tools.ServiceRefreshSeconds, () => ConnectTool(s), s.Close), t);
+        ShowTool(s, new ServicesView(s, () => AppPolicy.ServiceRefreshSeconds ?? _vm.Data.Tools.ServiceRefreshSeconds, () => ConnectTool(s), s.Close), t);
     }
 
     /// <summary>Opens the remote processes in a new tab (refreshed regularly, see Global defaults → Remote tools).</summary>
@@ -1700,7 +1704,7 @@ public partial class MainWindow : FluentWindow
     {
         if (Refused(RemoteTool.Processes, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenProcesses(c);
-        ShowTool(s, new ProcessesView(s, () => _vm.Data.Tools.ProcessRefreshSeconds, () => ConnectTool(s), s.Close), t);
+        ShowTool(s, new ProcessesView(s, () => AppPolicy.ProcessRefreshSeconds ?? _vm.Data.Tools.ProcessRefreshSeconds, () => ConnectTool(s), s.Close), t);
     }
 
     /// <summary>Asks what to do when some of the names already exist. Null = cancel.</summary>

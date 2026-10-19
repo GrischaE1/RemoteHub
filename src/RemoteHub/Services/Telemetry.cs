@@ -23,7 +23,7 @@ public static class Telemetry
     /// <summary>%LOCALAPPDATA%\RemoteHub\install-id: per PC and Windows user, not roamed with the profile.</summary>
     public static string InstallIdPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RemoteHub", "install-id");
 
-    public static bool Enabled(UiState ui) => !AppPolicy.TelemetryDisabled && ui.TelemetryEnabled;
+    public static bool Enabled(UiState ui) => AppPolicy.Telemetry ?? ui.TelemetryEnabled;
 
     /// <summary>The stored install ID, or a new random one (stored for next time).</summary>
     public static string GetOrCreateInstallId(string? path = null)
