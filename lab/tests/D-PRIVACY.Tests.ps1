@@ -128,40 +128,120 @@ Describe 'D-PRIV <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
         BeforeAll {
             $h = [ordered]@{}
             $text = 'RHLABSECRETAPPTEXT'
+            # The secret as OCR reads it: an exact match or a word at most 3 characters off - Server 2025's frame read
+            # "BHLABSECRETAPPTEXT" (run 20261016-212514) though the window was plainly in the picture.
+            function Find-Secret($ocr) {
+                if ("$($ocr.text)" -match $text) { return $text }
+                @($ocr.words | ForEach-Object { "$($_.text)" } | Where-Object {
+                        $t = ($_ -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+                        $t.Length -ge $text.Length - 3 -and (Get-LabTextDistance $t $text) -le 3 }) | Select-Object -First 1
+            }
+            # The app's window in the session: waited for (60 s), restored when minimised, brought to the front (an Alt tap
+            # lets the task's process set the foreground window); answers its title, program, rectangle (physical pixels)
+            # and whether it has the foreground.
+            $frontCode = @'
+Add-Type -Namespace RhLab -Name Win -MemberDefinition '
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, IntPtr e);
+public struct RECT { public int Left, Top, Right, Bottom; }'
+$null = [RhLab.Win]::SetProcessDPIAware()
+$p = $null
+$until = (Get-Date).AddSeconds(60)
+while ($true) {
+    $p = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and $_.MainWindowTitle -like 'rhlab-secret*' }) | Select-Object -First 1
+    if ($p -or (Get-Date) -gt $until) { break }
+    Start-Sleep -Milliseconds 500
+}
+if (-not $p) { 'WIN=' + (@{ found = $false } | ConvertTo-Json -Compress); return }
+$hw = $p.MainWindowHandle
+$iconic = [RhLab.Win]::IsIconic($hw)
+if ($iconic) { $null = [RhLab.Win]::ShowWindow($hw, 9) }
+for ($i = 0; $i -lt 5 -and [RhLab.Win]::GetForegroundWindow() -ne $hw; $i++) {
+    [RhLab.Win]::keybd_event(0x12, 0, 0, [IntPtr]::Zero); [RhLab.Win]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
+    $null = [RhLab.Win]::SetForegroundWindow($hw)
+    Start-Sleep -Milliseconds 400
+}
+$r = New-Object RhLab.Win+RECT
+$null = [RhLab.Win]::GetWindowRect($hw, [ref]$r)
+'WIN=' + ([ordered]@{ found = $true; title = $p.MainWindowTitle; path = $p.Path; wasMinimised = $iconic; foreground = ([RhLab.Win]::GetForegroundWindow() -eq $hw)
+    x = $r.Left; y = $r.Top; width = $r.Right - $r.Left; height = $r.Bottom - $r.Top } | ConvertTo-Json -Compress)
+'@
+            function Front-App {
+                $raw = Invoke-LabInSession -Name $VmName -TimeoutSec 120 -ScriptBlock ([scriptblock]::Create($frontCode))
+                if ("$raw" -match 'WIN=(\{.*\})') { $Matches[1] | ConvertFrom-Json } else { [pscustomobject]@{ found = $false; error = "$raw".Trim() } }
+            }
             $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content `$env:TEMP\rhlab-secret.txt '$text'; notepad.exe `$env:TEMP\rhlab-secret.txt"))
-            Start-Sleep -Seconds 5
+            # Precondition of D-HIDE-01: the app's window on screen and in front before the visible baseline. Still not in
+            # front after the session's attempt: the person clicks into its text (console mouse), then it is asked again.
+            $h.window = Front-App
+            if ($h.window.found -and -not $h.window.foreground) {
+                Send-LabMouse -Name $VmName -X ($h.window.x + [int]($h.window.width / 2)) -Y ($h.window.y + [int]($h.window.height / 2))
+                Start-Sleep -Seconds 1
+                $h.window = Front-App
+                $h.window | Add-Member -NotePropertyName clicked -NotePropertyValue $true -Force
+            }
+            $console = Join-Path $EvidenceDir 'd-priv-apps-console.png'
+            $null = Get-LabScreenshot -Name $VmName -Path $console
+            $h.consoleSeen = Find-Secret (Get-LabOcr -Path $console)
             $h.control = Receive-LabDesktop (Begin 'apps-control' @(@{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'visible.png' }))
-            $notepad = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Process notepad | Select-Object -First 1).Path }
+            # the program of the process that owns the window - on Windows 11 the Store Notepad under WindowsApps (a
+            # packaged app; System32\notepad.exe only starts it), kept in the evidence with its package
+            $notepad = if ($h.window.found -and $h.window.path) { $h.window.path } else { Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Process notepad | Select-Object -First 1).Path } }
+            $h.hiddenPath = $notepad
+            $h.package = Invoke-LabGuest -Name $VmName -ScriptBlock { try { $a = Get-AppxPackage -AllUsers Microsoft.WindowsNotepad -ErrorAction Stop | Select-Object -First 1; if ($a) { $a.PackageFamilyName } } catch { '' } }
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ HiddenApps = @($notepad) }
             $h.policy = Receive-LabDesktop (Begin 'apps-policy' @(@{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'hidden.png' }))
             Set-LabAgentPolicy -Name $VmName -Clear
             $h.visibleOcr = Get-LabOcr -Path (Join-Path (Out 'apps-control') 'visible.png')
             $h.hiddenOcr = Get-LabOcr -Path (Join-Path (Out 'apps-policy') 'hidden.png')
+            $h.visibleSeen = Find-Secret $h.visibleOcr
+            $h.hiddenSeen = Find-Secret $h.hiddenOcr
             # the user hides the screen from the banner; kept after a resume
             $since = Get-LabGuestTime -Name $VmName
             $o = Out 'user-hides'
             $job = Begin 'user-hides' @((Mark $o 'connected'), (Park $o 'hidden'), @{ do = 'sleep'; seconds = 3 }, @{ do = 'drop' }, @{ do = 'reconnect' }
                 @{ do = 'start'; session = 'console'; consent = 'auto'; resume = 'last' }, @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser'); timeout = 60 }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'after-resume.png' })
-            Reached $o 'connected'
-            $null = Invoke-LabPerson -Name $VmName -Do hover -Title 'RemoteHub'
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Hide' -Title 'RemoteHub'
-            $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Black' -TimeoutSec 20
-            Start-Sleep -Seconds 3
-            Release $o 'hidden'
-            $h.user = Receive-LabDesktop $job
-            Start-Sleep -Seconds 2
-            $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
-            Stop-LabInSession -Name $VmName -Task $task
-            Save 'apps' $h
+            # (finally: the harness released and the notepad's session task stopped whatever happens here - a session left
+            # parked kept its banner up for the next context)
+            try {
+                Reached $o 'connected'
+                # the whole label: "Hide" alone is also on "Hide apps..." (see Invoke-LabBannerClick)
+                $h.hideClick = Invoke-LabBannerClick -Name $VmName -Label 'Hide screen' -EvidencePath (Join-Path $EvidenceDir 'd-priv-user-hides-banner.png')
+                $h.blackClick = if ($h.hideClick.clicked) { Invoke-LabPerson -Name $VmName -Do click -Text 'Black' -TimeoutSec 20 } else { $null }
+                # hidden when event 1105 is there: waited for (up to 20 s) before the session drops and resumes
+                $until = (Get-Date).AddSeconds(20)
+                do {
+                    Start-Sleep -Seconds 1
+                    $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
+                } while ($h.events.Count -eq 0 -and (Get-Date) -lt $until)
+            }
+            finally {
+                Release $o 'hidden'
+                $h.user = Receive-LabDesktop $job
+                Start-Sleep -Seconds 2
+                $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
+                Stop-LabInSession -Name $VmName -Task $task
+                Save 'apps' $h
+            }
         }
 
         It 'D-HIDE-01 HiddenApps (full path): the app''s window is never in the picture' -Tag 'D-HIDE-01' {
-            $h.visibleOcr.text | Should -Match $text -Because 'without the policy the app is visible (control)'
-            $h.hiddenOcr.text | Should -Not -Match $text
+            # precondition: without the policy the app's window is in the picture - otherwise the hiding isn't tested at all
+            $w = $h.window
+            $where = if ($w.found) { "window '$($w.title)' at $($w.x),$($w.y) $($w.width)x$($w.height), foreground $($w.foreground), was minimised $($w.wasMinimised)" } else { "no window titled rhlab-secret* in the session ($($w.error))" }
+            [bool]$h.visibleSeen | Should -BeTrue -Because "precondition: the app's window wasn't in the visible picture ($where; console screenshot showed the text: $([bool]$h.consoleSeen); frame OCR: $($h.visibleOcr.text))"
+            $h.hiddenSeen | Should -BeNullOrEmpty -Because "HiddenApps = $($h.hiddenPath) (package: $($h.package)) covers the app's window (hidden frame OCR: $($h.hiddenOcr.text))"
         }
 
         It 'D-HIDE-02 the user hides the screen: event 1105, a Privacy message; still hidden after a resume without a new question' -Tag 'D-HIDE-02' {
-            $h.events.Count | Should -BeGreaterThan 0
+            $h.hideClick.clicked | Should -BeTrue -Because "the person clicked 'Hide screen' on the banner ($($h.hideClick.why); OCR: $(@($h.hideClick.lines) -join ' | '))"
+            $h.blackClick.clicked | Should -BeTrue -Because 'the person chose "Black out" in "Hide your screen"'
+            $h.events.Count | Should -BeGreaterThan 0 -Because 'the screen was hidden (event 1105)'
             @($h.user.privacy | Where-Object { $_.privacy.user -ne 'None' }).Count | Should -BeGreaterThan 0
             @($h.user.statuses | Where-Object { $_.connection -eq 2 -and $_.state -eq 'WaitingForUser' }) | Should -BeNullOrEmpty
             @($h.user.privacy | Where-Object { $_.connection -eq 2 -and $_.privacy.user -ne 'None' }).Count | Should -BeGreaterThan 0

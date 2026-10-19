@@ -40,6 +40,17 @@ BeforeAll {
     function Clear-Requests { Invoke-LabGuest -Name $VmName -ScriptBlock { Remove-Item 'C:\ProgramData\RemoteHubLab\mock\requests.jsonl' -ErrorAction SilentlyContinue } }
     function Settings-Page([string]$Page) { $null = Ui 'Settings'; $null = Ui $Page -Title 'Settings' }
     function Settings-Text { (Ui '*' -Title 'Settings' -Value list).items -join "`n" }
+    # The text of the 'RemoteHub updates' window once it matches $Pattern (a download error is shown there, not in a
+    # message box), or its last text after $TimeoutSec.
+    function Wait-UpdateText([string]$Pattern, [int]$TimeoutSec = 90) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $text = @((Ui '*' -Title 'RemoteHub updates' -Value list -Optional -TimeoutSec 10).items) -join "`n"
+            if ($text -match $Pattern) { break }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $until)
+        $text
+    }
     $script:task = $null
 }
 
@@ -73,18 +84,20 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             Start-Sleep -Seconds 15
             $p.stable = Requests '/latest'
-            # recording off, and the HKCU / HKLM order
-            Policy @{ DisableRecording = 1 }
+            # recording off, and the HKCU / HKLM order. The update check is off again: its bar appears about 3 s after the
+            # start and moves the list down, so a double-click on 'Local' could land beside it and open no tab.
+            Policy @{ DisableRecording = 1; DisableUpdateCheck = 1 }
             New-LabClientConnection -Name $VmName -Display 'Local' -TargetHost '127.0.0.1'
             Restart-Client
             $null = Ui 'Local' -Value doubleclick
-            Start-Sleep -Seconds 5
+            # the tab is open once the main window is named after it ('Local - Remote desktop - RemoteHub')
+            $p.tabHidden = Ui '*' -Title 'Local*' -Value list -Optional -TimeoutSec 20
             $p.recordHidden = Ui 'Record this tab to a video file' -Optional -TimeoutSec 5
             Policy @{ DisableRecording = 0 }
             Policy @{ DisableRecording = 1 } -Hive HKCU
             Restart-Client
             $null = Ui 'Local' -Value doubleclick
-            Start-Sleep -Seconds 5
+            $p.tabHklmWins = Ui '*' -Title 'Local*' -Value list -Optional -TimeoutSec 20
             $p.recordHklmWins = Ui 'Record this tab to a video file' -Optional -TimeoutSec 10
             Policy @{ DisableRecording = $null } -Hive HKCU
             # recording folder with %USERPROFILE%
@@ -130,6 +143,9 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
                 $rows
             }
             $p.autoSignInRowsBefore = AutoSignInRows
+            # SettingsFolder off again: while it points at the empty folder every start shows the warning before the main
+            # window, and Restart-Client (which waits for that window) would time out on it
+            Policy @{ SettingsFolder = $null } -Key 'RdpManager'
             Policy @{ DisableAgentAutoSignIn = 1 }
             Restart-Client
             $p.autoSignInRows = AutoSignInRows
@@ -159,6 +175,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-POL-05 DisableRecording: the Record button is gone' -Tag 'C-POL-05' {
+            $p.tabHidden.found | Should -BeTrue -Because 'the Local tab must be open for a missing Record button to mean anything'
             $p.recordHidden.found | Should -BeFalse
         }
 
@@ -168,6 +185,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-POL-07 HKLM before HKCU; SettingsFolder also from the legacy RdpManager key' -Tag 'C-POL-07' {
+            $p.tabHklmWins.found | Should -BeTrue -Because 'the Local tab must be open for the Record button to be checked'
             $p.recordHklmWins.found | Should -BeTrue -Because 'HKLM DisableRecording=0 wins over HKCU 1'
             "$($p.folderWarning.value)$($p.folderWarning.name)" | Should -Match 'LabSettings' -Because 'SettingsFolder was read from the legacy RdpManager key'
         }
@@ -206,20 +224,19 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
-            Start-Sleep -Seconds 15
-            $u.badSum = (Ui '*' -Title '*' -Value list -Optional).items -join "`n"
-            $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 5
+            # the error is shown in the update window itself ('*' as the title would read the taskbar)
+            $u.badSum = Wait-UpdateText 'checksum'
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $u.badSumFiles = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates' -Filter *.msi -ErrorAction SilentlyContinue).Count }
             $u.badSumVersion = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe').VersionInfo.ProductVersion }
             # a download host that isn't allowed
             Set-LabMockLatest -Name $VmName -Version $currentVersion -File (Split-Path $current -Leaf) -Url 'https://evil.example.com/RemoteHub.msi'
+            # (the checksum step above downloaded from /download/: only this step's requests count)
+            Clear-Requests
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
-            Start-Sleep -Seconds 8
-            $u.badHost = (Ui '*' -Title '*' -Value list -Optional).items -join "`n"
-            $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 5
+            $u.badHost = Wait-UpdateText 'trusted'
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $u.badHostRequests = @(Get-LabMockRequests -Name $VmName | Where-Object path -like '/download/*').Count
             # skip / mandatory
@@ -227,6 +244,12 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Skip this version' -Title 'RemoteHub updates'
+            # RemoteHub saves a change 600 ms later (MainViewModel's save timer) and on exit; Restart-Client kills it at
+            # once, which could lose the skip. Closed the way a user closes it, so the skip is saved on exit.
+            $null = Invoke-LabInSession -Name $VmName -Account Console -TimeoutSec 60 -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() } }
+            $null = Ui 'Exit' -Title '?*' -Optional -TimeoutSec 5
+            $left = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue; @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }
+            if ($left) { throw "RemoteHub didn't exit within 20 s of closing its window after 'Skip this version'" }
             Restart-Client
             Start-Sleep -Seconds 12
             $u.skipped = Ui 'Details?' -Optional -TimeoutSec 5
@@ -241,8 +264,15 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $null = Ui 'Download and install' -Title 'RemoteHub updates'
             $until = (Get-Date).AddSeconds(120)
             while (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+            $u.uacShown = (Get-Date) -lt $until
             Start-Sleep -Seconds 2
-            Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59
+            try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-polupd-uac.png') } catch { }
+            # Yes is Alt+Y
+            $u.uacKeys = @()
+            if (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) {
+                Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59
+                $u.uacKeys += 'Alt+Y'
+            }
             $until = (Get-Date).AddMinutes(5)
             do { Start-Sleep -Seconds 5; $v = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion } } while ($v -notlike "$currentVersion*" -and (Get-Date) -lt $until)
             $u.installed = $v
@@ -257,18 +287,18 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-UPD-02 a checksum mismatch: the download deleted, not installed' -Tag 'C-UPD-02' {
-            $u.badSum | Should -Match 'checksum|SHA|damaged|didn''t match'
+            $u.badSum | Should -Match 'doesn''t match the published SHA-256 checksum'
             $u.badSumFiles | Should -Be 0
             $u.badSumVersion | Should -Not -BeLike "$currentVersion*"
         }
 
         It 'C-UPD-03 a download URL outside GitHub / remotehub.dev is refused' -Tag 'C-UPD-03' {
-            $u.badHost | Should -Match 'not allowed|refus|trusted|isn''t'
+            $u.badHost | Should -Match 'download address isn''t trusted'
             $u.badHostRequests | Should -Be 0
         }
 
         It 'C-UPD-04 Download and install: UAC approved, the package installs, RemoteHub restarts with the new version' -Tag 'C-UPD-04' {
-            $u.installed | Should -BeLike "$currentVersion*"
+            $u.installed | Should -BeLike "$currentVersion*" -Because "UAC prompt seen: $($u.uacShown), keys sent: $($u.uacKeys -join ', ')"
             @($u.restarted | Where-Object { $_ -like "$currentVersion*" }).Count | Should -BeGreaterThan 0
         }
 
@@ -295,13 +325,13 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Start-Sleep -Seconds 75
             Restart-Client
             Start-Sleep -Seconds 15
-            $t.events = @(Requests '/telemetry' | ForEach-Object json)
+            $t.events = @((Requests '/telemetry') | ForEach-Object json)
             # killed as Task Manager would: UnexpectedExit at the next start (the earlier kill's report cleared first)
             Clear-Requests
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub | Stop-Process -Force }
             $script:task = Start-LabClient -Name $VmName
             Start-Sleep -Seconds 15
-            $t.afterKill = @(Requests '/telemetry' | ForEach-Object json)
+            $t.afterKill = @((Requests '/telemetry') | ForEach-Object json)
             # off: the install ID goes
             $t.idBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }
             Settings-Page 'Updates & privacy'

@@ -54,6 +54,49 @@ public interface IDesktopHelper : IDisposable
     int ProcessId { get; }
 }
 
+/// <summary>
+/// Reads a helper's messages, one frame at a time, for whoever reads it now: the connection's relay, then – after a drop –
+/// the cover that drains it. A read is never cancelled half-way: the relay stops waiting when its connection ends, but the
+/// read itself goes on and its frame goes to the next reader. Cancelling it instead left the stream in the middle of a
+/// frame (or a sync pipe read still running beside the next reader), so the cover read garbage, took the helper for ended
+/// and signed the session out at once (lab C-END-12, run 20261018-133341).
+/// </summary>
+internal sealed class HelperOutput
+{
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IDesktopHelper, HelperOutput> Readers = new();
+    private readonly Stream _stream;
+    private readonly Lock _gate = new();
+    private Task<byte[]?>? _pending; // the read whose frame nobody has taken yet
+
+    private HelperOutput(Stream stream) => _stream = stream;
+
+    /// <summary>The helper's next message (null: it ended). Cancelling <paramref name="ct"/> stops only this wait.</summary>
+    public static Task<byte[]?> ReadAsync(IDesktopHelper helper, CancellationToken ct) =>
+        Readers.GetValue(helper, h => new HelperOutput(h.Output)).NextAsync(ct);
+
+    private async Task<byte[]?> NextAsync(CancellationToken ct)
+    {
+        while (true)
+        {
+            Task<byte[]?> read;
+            lock (_gate) read = _pending ??= DesktopWire.ReadFramedAsync(_stream, CancellationToken.None);
+            byte[]? m;
+            try { m = await read.WaitAsync(ct).ConfigureAwait(false); }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                lock (_gate) if (_pending == read) _pending = null;
+                throw;
+            }
+            lock (_gate)
+            {
+                if (_pending != read) continue; // another reader took this frame
+                _pending = null;
+            }
+            return m;
+        }
+    }
+}
+
 public interface IDesktopHelperLauncher
 {
     IDesktopHelper Start(int sessionId);

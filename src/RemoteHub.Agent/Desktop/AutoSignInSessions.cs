@@ -194,7 +194,7 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
     {
         try
         {
-            while (await DesktopWire.ReadFramedAsync(helper.Output, CancellationToken.None) is { } m)
+            while (await HelperOutput.ReadAsync(helper, CancellationToken.None) is { } m)
                 if (m.Length > 0 && m[0] == (byte)HelperMessage.End)
                     return DesktopWire.ReadJson(m, HelperJson.Default.HelperEnd).ByUser;
         }
@@ -219,9 +219,8 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
                 List<AutoSignInRecord> all;
                 lock (_lock) all = [.. _records.Values];
                 if (all.Count == 0) { File.Delete(stateFile); return; }
-                var temp = stateFile + ".tmp";
-                File.WriteAllText(temp, JsonSerializer.Serialize(all, AutoSignInJson.Default.ListAutoSignInRecord)); // no secrets: session, SID, account, end action
-                File.Move(temp, stateFile, overwrite: true);
+                // Flushed before the replace: a power loss just after it must still leave the records Recover needs.
+                DurableFile.WriteAllText(stateFile, JsonSerializer.Serialize(all, AutoSignInJson.Default.ListAutoSignInRecord)); // no secrets: session, SID, account, end action
             }
             catch { /* best effort – the record is for crash safety only */ }
         }

@@ -152,24 +152,23 @@ function Dw([string]$n) { try { $d = $o.GetData($n) } catch { return $null }; if
         if ($raw -match '(?m)^JSON:(.*)$') { $Matches[1].Trim() | ConvertFrom-Json } else { [pscustomobject]@{ length = -1; raw = $raw } }
     }
     # a 200x200 test picture (pattern @@K@@) on the clipboard, or the clipboard's picture compared with it ("0" = equal)
+    # (not named Diff: in Windows PowerShell 5.1 the alias diff = Compare-Object wins over a function of that name, and
+    # Compare-Object of two bitmaps answers nothing - "DIFF=" with no number)
     $patCode = @'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 function Pat([int]$k) { $b = New-Object Drawing.Bitmap 200, 200; for ($y = 0; $y -lt 200; $y++) { for ($x = 0; $x -lt 200; $x++) { $b.SetPixel($x, $y, [Drawing.Color]::FromArgb(255, ($x * $k) % 256, ($y * 3 + $k * 40) % 256, (($x + $y) * 5) % 256)) } }; $b }
-function Diff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return "size $($b.Width)x$($b.Height)" }; $d = 0; for ($y = 0; $y -lt $a.Height; $y++) { for ($x = 0; $x -lt $a.Width; $x++) { $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y); if ($p.R -ne $q.R -or $p.G -ne $q.G -or $p.B -ne $q.B) { $d++ } } }; "$d" }
+function Get-PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($a.Width -ne $b.Width -or $a.Height -ne $b.Height) { return "size $($b.Width)x$($b.Height)" }; $d = 0; for ($y = 0; $y -lt $a.Height; $y++) { for ($x = 0; $x -lt $a.Width; $x++) { $p = $a.GetPixel($x, $y); $q = $b.GetPixel($x, $y); if ($p.R -ne $q.R -or $p.G -ne $q.G -or $p.B -ne $q.B) { $d++ } } }; "$d" }
 '@
     $setImageCode = $patCode + "`n[Windows.Forms.Clipboard]::SetImage((Pat @@K@@)); 'set'"
-    $getImageCode = $patCode + "`n`$img = [Windows.Forms.Clipboard]::GetImage(); if (`$img) { `$img = New-Object Drawing.Bitmap `$img }; 'DIFF=' + (Diff (Pat @@K@@) `$img)"
+    $getImageCode = $patCode + "`n`$img = [Windows.Forms.Clipboard]::GetImage(); if (`$img) { `$img = New-Object Drawing.Bitmap `$img }; 'DIFF=' + (Get-PicDiff (Pat @@K@@) `$img)"
     function SetFileList([string]$Vm, [string]$Account, [string[]]$Paths) {
         $add = ($Paths | ForEach-Object { "`$c.Add('" + ($_ -replace "'", "''") + "') | Out-Null" }) -join '; '
         InSession $Vm $Account "Add-Type -AssemblyName System.Windows.Forms; `$c = New-Object System.Collections.Specialized.StringCollection; $add; [Windows.Forms.Clipboard]::SetFileDropList(`$c); 'set'"
     }
-    # Explorer's Paste into a folder of the session's user, started and left running (the copy is cancelled meanwhile)
-    $pasteCode = @'
-$f = Join-Path $env:USERPROFILE '@@DIR@@'
-$null = New-Item -ItemType Directory -Path $f -Force
-(New-Object -ComObject Shell.Application).NameSpace($f).Self.InvokeVerb('paste')
-Start-Sleep -Seconds 600
-'@
+    # Explorer's Paste into a folder of the session's user, started and left running with messages pumped for 600 s (the
+    # copy is cancelled meanwhile): Get-LabPasteCode -Hold - without the pump the shell can't fetch the offered file and
+    # the copy never starts
+    function PasteCode([string]$Dir) { Get-LabPasteCode -Folder $Dir -Count 1 -TimeoutSec 600 -Hold }
 
     # ---- the agent desktop tab
     # every tab closed: the group's x ("Close this tab" only shows in the second tab row, with more than one tab of a
@@ -379,7 +378,8 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             $R.tl08Ask | Should -Match 'Device answers over HTTPS, but this PC doesn.t trust its certificate yet\.'
             $R.tl08Trust | Should -Match 'Is it the same thumbprint the setup script printed'
             $R.tl08Declined | Should -Match 'Not trusted\. Nothing was changed on this PC\.'
-            "$($R.tl08RootAfterDecline)" | Should -BeNullOrEmpty -Because 'declined: no certificate trusted'
+            # (Invoke-LabInSession answers the session's output as text: an empty answer is a bare line break)
+            "$($R.tl08RootAfterDecline)".Trim() | Should -BeNullOrEmpty -Because 'declined: no certificate trusted'
             $R.tl08Windows.found | Should -BeTrue
             $R.tl08Works | Should -Match 'PowerShell remoting works'
             "$($R.tl08Root)" | Should -Match 'RemoteHub.*WinRM'
@@ -552,7 +552,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     $mark = NoticeMark
                     $null = SetFileList $VmName 'Console' @('C:\lab\big\big99.bin')
                     Start-Sleep -Seconds 4
-                    $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create($pasteCode.Replace('@@DIR@@', 'cp15')))
+                    $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create((PasteCode 'cp15')))
                     $R.cp15Progress = WaitFor -TimeoutSec 90 -Every 1 { @(Notices $mark | Where-Object { $_ -match 'Copying 1 file to the device' }).Count -gt 0 }
                     if (-not $R.cp15Progress) { $R.cp15Notices = @(Notices $mark); throw 'no "Copying 1 file to the device" within 90 s' }
                     Start-Sleep -Seconds 3
@@ -587,8 +587,10 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $switches = Disconnect-LabNetwork -Name $dn
                 try {
                     $R.net03Reconnecting = WaitFor -TimeoutSec 120 -Every 1 { (Ui 'Stop reconnecting' -Value exists -Optional -TimeoutSec 1).found }
-                    $t0 = Get-Date
+                    # timed from the click's answer: each UI step is a round trip into the VM of a second or more, and
+                    # the click itself is not part of what RemoteHub takes
                     $null = Ui 'Stop reconnecting'
+                    $t0 = Get-Date
                     $null = WaitFor -TimeoutSec 30 -Every 1 { (Ui 'Use RDP instead' -Value exists -Optional -TimeoutSec 1).found }
                     $R.net03StopSeconds = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
                     $R.net03StopText = TabTexts
@@ -641,7 +643,11 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             $n | Should -Match 'The connection dropped and couldn.t be restored within 30 s: '
             $R.net03Ended | Should -BeTrue
             $R.net03Reconnecting | Should -BeTrue
-            $R.net03StopSeconds | Should -BeLessOrEqual 5
+            # "at once": ended by the click ("Disconnected."), not by the attempt running on (about 20 s against a cut
+            # network) or the 30 s running out; 10 s leaves room for the lab's UI round trips while waiting
+            $R.net03StopText | Should -Match 'Text\|Disconnected\.\|'
+            $R.net03StopText | Should -Not -Match 'couldn.t be restored'
+            $R.net03StopSeconds | Should -BeLessOrEqual 10
         }
     }
 
@@ -787,6 +793,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 # the tab's own x shows only in the second tab row (more than one tab of the connection,
                 # MainWindow.xaml "Tabs"): missing, it is written down and the rest goes on
                 $x = Ui 'Close this tab' -Optional -TimeoutSec 5
+                $R.soTabX = [bool]$x.found
                 $R.soAskTab = if ($x.found) { Box $signOutBox -Button 'Cancel' -TimeoutSec 20 } else { 'no "Close this tab" (one tab of the connection: only the group''s x)' }
                 # Ctrl+W with the focus outside the picture (in the tab, the keys go to the device)
                 $null = Ui 'Device' -Value realclick
@@ -857,7 +864,9 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             NoError 'ag10-policy'
             $R['so-signed'] | Should -BeTrue
             ($R['so-notices'] -join "`n") | Should -Match 'When you disconnect, the session is signed out\.'
-            foreach ($k in 'soAskDisconnect', 'soAskTab', 'soAskCtrlW', 'soAskGroup') {
+            # the tab's own x only with a second tab of the connection; with one tab its x is the group's (soAskGroup)
+            $asks = @('soAskDisconnect', 'soAskCtrlW', 'soAskGroup') + @(if ($R.soTabX) { 'soAskTab' })
+            foreach ($k in $asks) {
                 $R[$k] | Should -Match 'When you disconnect, that session is signed out and unsaved work in it is lost\.' -Because "$k asks"
             }
             $R.soLive1 | Should -BeTrue

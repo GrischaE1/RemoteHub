@@ -191,14 +191,19 @@ internal sealed class AutoSignInBroker : IAutoSignIn, IDisposable
     public async Task<AutoSignInResult> SignInAsync(AutoSignInRequest request, CancellationToken ct)
     {
         if (!await _busy.WaitAsync(0, ct)) return AutoSignInResult.Failed(AutoSignInFailure.Busy, "Another automatic sign-in is running on this device.");
+        Client? client = null;
+        var ticketSent = false; // from here on Windows may have signed the account in, whatever happens to the pipe
         try
         {
-            using var expiry = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
-            expiry.CancelAfter(TimeSpan.FromSeconds(60)); // the ticket's life (§7.3)
+            // The ticket's life (§7.3). Once the ticket has gone out, only that life and the service stopping end the wait for
+            // Windows' answer – not the RemoteHub connection: the account may be signed in, and the caller must learn it.
+            using var life = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+            life.CancelAfter(TimeSpan.FromSeconds(60));
+            using var expiry = CancellationTokenSource.CreateLinkedTokenSource(ct, life.Token);
 
             // The provider in the console's LogonUI. Where the sign-in screen waits for Ctrl+Alt+Del (or behind the
             // lock-screen picture), LogonUI loads the providers only after it.
-            var client = await WaitForClient((uint)request.Session, TimeSpan.FromSeconds(3), expiry.Token);
+            client = await WaitForClient((uint)request.Session, TimeSpan.FromSeconds(3), expiry.Token);
             if (client is null)
             {
                 var sas = request.SecureAttention();
@@ -207,6 +212,10 @@ internal sealed class AutoSignInBroker : IAutoSignIn, IDisposable
             }
             if (client is null)
                 return AutoSignInResult.Failed(AutoSignInFailure.NoProvider, "The device's sign-in screen didn't load the RemoteHub credential provider.");
+
+            // §6.2: someone may have signed in at the device while RemoteHub sent the password. The client is then the
+            // LogonUI that has gone, and writing to it fails with a broken pipe instead of saying why (lab C-AUTO-15).
+            if (request.Recheck() is { } early) return AutoSignInResult.Failed(AutoSignInFailure.SessionChanged, early);
 
             var nonce = RandomNumberGenerator.GetBytes(AutoSignInWire.NonceBytes);
             await Write(client, AutoSignInWire.WritePending(nonce, client.Session), expiry.Token);
@@ -230,29 +239,44 @@ internal sealed class AutoSignInBroker : IAutoSignIn, IDisposable
                 var length = 0;
                 request.Password.Reveal(password =>
                     length = AutoSignInWire.WriteTicket(message, nonce, request.Domain, request.User, request.Sid, password));
-                await Write(client, message.AsMemory(0, length), expiry.Token);
+                expiry.Token.ThrowIfCancellationRequested(); // the connection ended meanwhile: the ticket never goes out
+                ticketSent = true; // set before the write: a write that fails half way may still have delivered it
+                await Write(client, message.AsMemory(0, length), life.Token);
             }
             finally { ProtectedSecret.CryptographicWipe(message); } // the only clear copy: gone once written
 
-            var result = await Read(client, TimeSpan.FromSeconds(50), expiry.Token);
+            var result = await Read(client, TimeSpan.FromSeconds(50), life.Token);
+            // The sign-in screen doesn't list the account and won't take the ticket (the provider has dropped it): no
+            // answer from Windows will come, so the service asks Windows itself with the same password (lab C-AUTO-20).
+            if (result is not null && AutoSignInWire.IsNotOffered(result, nonce))
+                return AutoSignInNotOffered.Result(request.Domain, request.User, request.Password, AutoSignInNotOffered.CheckLogon);
             if (result is null || AutoSignInWire.ReadResult(result, nonce) is not { } r)
             {
                 Drop(client);
-                // Typically the sign-in screen still shows the message of a failed attempt: it takes nothing until it is closed.
-                return AutoSignInResult.Failed(AutoSignInFailure.Timeout,
+                // Typically the sign-in screen still shows the message of a failed attempt: it takes nothing until it is
+                // closed. But the pipe also ends when LogonUI signed the account in and went away before the provider
+                // sent its result (lab C-END-10), so the caller checks the console before calling it a failure.
+                return AutoSignInResult.Lost(AutoSignInFailure.Timeout,
                     "The sign-in screen didn't take the sign-in. If it shows a message (for example after a failed attempt), click OK and try again.");
             }
             return r.Status == 0
                 ? new AutoSignInResult(true, "", "Signed in.")
                 : new AutoSignInResult(false, AutoSignInFailure.Windows, AutoSignInStatus.Describe(r.Status, r.Substatus), r.Status, r.Substatus);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (ticketSent || !ct.IsCancellationRequested)
         {
-            return AutoSignInResult.Failed(AutoSignInFailure.Timeout, "The automatic sign-in took too long.");
+            if (client is not null) Drop(client);
+            const string message = "The automatic sign-in took too long.";
+            return ticketSent ? AutoSignInResult.Lost(AutoSignInFailure.Timeout, message) : AutoSignInResult.Failed(AutoSignInFailure.Timeout, message);
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            return AutoSignInResult.Failed(AutoSignInFailure.NoProvider, "The connection to the credential provider broke: " + ex.Message);
+            if (client is not null) Drop(client);
+            if (ticketSent) return AutoSignInResult.Lost(AutoSignInFailure.NoProvider, "The connection to the credential provider broke: " + ex.Message);
+            // Before the ticket: a LogonUI that went away because someone signed in at the device meanwhile (C-AUTO-15).
+            return request.Recheck() is { } changed
+                ? AutoSignInResult.Failed(AutoSignInFailure.SessionChanged, changed)
+                : AutoSignInResult.Failed(AutoSignInFailure.NoProvider, "The connection to the credential provider broke: " + ex.Message);
         }
         finally { _busy.Release(); }
     }

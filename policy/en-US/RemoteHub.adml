@@ -1092,7 +1092,7 @@ Registry: PrivacyScreenMessage (REG_SZ).</string>
       <string id="Agent_HiddenApps">Apps never shown to an admin</string>
       <string id="Agent_HiddenApps_Help">Apps whose windows are always covered in the admin's picture, whatever the user at the device chooses, for example a password manager.
 
-One per line: the full path of a program (C:\Program Files\KeePass\KeePass.exe), or aumid: followed by a Store app's AppUserModelID.
+One per line: the full path of a program (C:\Program Files\KeePass\KeePass.exe), or aumid: followed by a Store app's AppUserModelID. A Store app can also be listed by the path of its program (as Task Manager shows it, under C:\Program Files\WindowsApps); it still matches after the app updates, although its folder name carries the version. C:\Windows\System32\notepad.exe on Windows 11 only starts the Store Notepad and hides nothing – list the Store app instead.
 
 Not configured: none; the user can still hide apps.
 

@@ -1,6 +1,7 @@
 #include "Channel.h"
 
 #include "Logon.h"
+#include "Trace.h"
 #include "Wire.h"
 
 #include <dpapi.h>
@@ -22,6 +23,12 @@ namespace rhcp
         constexpr DWORD RetryMs = 2000;
         constexpr DWORD TicketTimeoutMs = 5000;
         constexpr DWORD WriteTimeoutMs = 5000;
+        // How long LogonUI gets to take a ticket for an account its user list lacks before the service is told it won't
+        // (NotListed). Windows 11 never takes one for a locked or disabled account; a ticket it uses it takes within
+        // milliseconds of the enumeration (lab C-AUTO-20 trace). Server may take one even for an account it doesn't list
+        // (C-PROV-03), possibly only once the lock-screen curtain is gone – hence a margin well above that, still far
+        // below the service's 50 s wait for a result.
+        constexpr ULONGLONG NotOfferedGraceMs = 10000;
 
         volatile long g_threads = 0;
 
@@ -116,11 +123,13 @@ namespace rhcp
             return ExpectedServerPath(expected) && SameText(image, expected) && IsSystem(process.Value);
         }
 
-        // Waits for an overlapped operation; false on stop, timeout or failure (the operation is then cancelled).
+        // Waits for an overlapped operation; false on stop, timeout or failure (the operation is then cancelled). A null
+        // stop means only the time limit ends the wait.
         bool Await(HANDLE pipe, OVERLAPPED& ov, HANDLE stop, DWORD timeoutMs, DWORD& transferred)
         {
             const HANDLE waits[2] = { stop, ov.hEvent };
-            const DWORD r = WaitForMultipleObjects(2, waits, FALSE, timeoutMs);
+            const DWORD r = stop != nullptr ? WaitForMultipleObjects(2, waits, FALSE, timeoutMs)
+                : WaitForSingleObject(ov.hEvent, timeoutMs) == WAIT_OBJECT_0 ? WAIT_OBJECT_0 + 1 : WAIT_TIMEOUT;
             if (r == WAIT_OBJECT_0 + 1 && GetOverlappedResult(pipe, &ov, &transferred, FALSE)) return true;
             CancelIoEx(pipe, &ov);
             GetOverlappedResult(pipe, &ov, &transferred, TRUE);
@@ -159,6 +168,8 @@ namespace rhcp
         size_t PasswordBytes = 0;      // a multiple of CRYPTPROTECTMEMORY_BLOCK_SIZE
 
         bool ResultPending = false;
+        bool NotOfferedPending = false; // instead of a result: LogonUI won't take the ticket (Result.Nonce holds it)
+        ULONGLONG NotListedAt = 0;      // when LogonUI's list was first seen without the account; 0: listed or no list
         ResultMessage Result;
 
         void FreePassword()
@@ -173,7 +184,7 @@ namespace rhcp
         }
     };
 
-    Channel::Channel() : _s(std::make_unique<State>()) {}
+    Channel::Channel(long id) : _s(std::make_unique<State>()), _id(id) {}
 
     Channel::~Channel()
     {
@@ -184,9 +195,9 @@ namespace rhcp
         ReleaseSRWLockExclusive(&_s->Lock);
     }
 
-    std::shared_ptr<Channel> Channel::Start()
+    std::shared_ptr<Channel> Channel::Start(long id)
     {
-        std::shared_ptr<Channel> channel(new Channel());
+        std::shared_ptr<Channel> channel(new Channel(id));
         if (!channel->_s->StopEvent || !channel->_s->ResultEvent) return nullptr;
         // The thread owns a reference, so the channel outlives the provider until the thread has ended.
         auto* self = new std::shared_ptr<Channel>(channel);
@@ -240,9 +251,11 @@ namespace rhcp
         ReleaseSRWLockShared(&_s->Lock);
         if (events)
         {
-            events->CredentialsChanged(context);
+            const HRESULT hr = events->CredentialsChanged(context);
             events->Release();
+            Trace("provider %ld: CredentialsChanged -> 0x%08lX", _id, static_cast<unsigned long>(hr));
         }
+        else Trace("provider %ld: CredentialsChanged not sent, LogonUI isn't advised", _id);
     }
 
     bool Channel::HasTicket()
@@ -284,10 +297,11 @@ namespace rhcp
         return hr;
     }
 
-    void Channel::ReportResult(NTSTATUS status, NTSTATUS substatus)
+    bool Channel::ReportResult(NTSTATUS status, NTSTATUS substatus)
     {
         AcquireSRWLockExclusive(&_s->Lock);
-        if (_s->Ticket && _s->Taken)
+        const bool accepted = _s->Ticket && _s->Taken;
+        if (accepted)
         {
             memcpy(_s->Result.Nonce, _s->Nonce, NonceBytes);
             _s->Result.Status = status;
@@ -296,13 +310,58 @@ namespace rhcp
         }
         ReleaseSRWLockExclusive(&_s->Lock);
         SetEvent(_s->ResultEvent.Value);
+        return accepted;
+    }
+
+    void Channel::NotListed(bool notListed)
+    {
+        bool wake = false;
+        AcquireSRWLockExclusive(&_s->Lock);
+        if (!notListed) _s->NotListedAt = 0;
+        else if (_s->Ticket && !_s->Taken && _s->NotListedAt == 0)
+        {
+            _s->NotListedAt = GetTickCount64();
+            wake = true; // the thread starts counting the grace
+        }
+        ReleaseSRWLockExclusive(&_s->Lock);
+        if (wake)
+        {
+            Trace("provider %ld: account not in LogonUI's list, %llu ms for LogonUI to take the ticket", _id, NotOfferedGraceMs);
+            SetEvent(_s->ResultEvent.Value);
+        }
+    }
+
+    DWORD Channel::NotOfferedWaitMs()
+    {
+        AcquireSRWLockShared(&_s->Lock);
+        const bool armed = _s->Ticket && !_s->Taken && _s->NotListedAt != 0;
+        const ULONGLONG since = armed ? GetTickCount64() - _s->NotListedAt : 0;
+        ReleaseSRWLockShared(&_s->Lock);
+        if (!armed) return INFINITE;
+        return since >= NotOfferedGraceMs ? 0 : static_cast<DWORD>(NotOfferedGraceMs - since);
+    }
+
+    bool Channel::ReportNotOffered()
+    {
+        AcquireSRWLockExclusive(&_s->Lock);
+        const bool expired = _s->Ticket && !_s->Taken && _s->NotListedAt != 0 && GetTickCount64() - _s->NotListedAt >= NotOfferedGraceMs;
+        if (expired)
+        {
+            _s->Taken = true;     // single use: no GetSerialization can take it now
+            _s->FreePassword();   // never used, gone at once
+            memcpy(_s->Result.Nonce, _s->Nonce, NonceBytes);
+            _s->NotOfferedPending = true;
+        }
+        ReleaseSRWLockExclusive(&_s->Lock);
+        return expired;
     }
 
     void Channel::ClearTicket(bool notify)
     {
         AcquireSRWLockExclusive(&_s->Lock);
         const bool had = _s->Ticket;
-        _s->Ticket = _s->Taken = _s->ResultPending = false;
+        _s->Ticket = _s->Taken = _s->ResultPending = _s->NotOfferedPending = false;
+        _s->NotListedAt = 0;
         Wipe(_s->Nonce);
         _s->Domain.clear();
         _s->User.clear();
@@ -326,13 +385,46 @@ namespace rhcp
                 {
                     DWORD mode = PIPE_READMODE_MESSAGE;
                     if (SetNamedPipeHandleState(pipe.Value, &mode, nullptr, nullptr) && VerifyServer(pipe.Value))
+                    {
+                        Trace("provider %ld: pipe connected to the agent", _id);
                         Serve(pipe.Value);
+                        Trace("provider %ld: pipe closed", _id);
+                    }
+                    else Trace("provider %ld: pipe server not verified, closed", _id);
                     ClearTicket(true);
                 }
             }
             WaitForSingleObject(stop, RetryMs);
         }
         ClearTicket(false);
+    }
+
+    // Sends the result LogonUI reported, or that it won't take the ticket (NotOffered), if one waits (sent = true then).
+    // The stop doesn't cut this write short – only its own time limit does – so a provider released right after
+    // ReportResult still delivers it (§8.2). False when the write failed.
+    bool Channel::SendPendingResult(HANDLE pipe, bool& sent)
+    {
+        AcquireSRWLockExclusive(&_s->Lock);
+        const bool notOffered = _s->NotOfferedPending;
+        sent = _s->ResultPending || notOffered;
+        ResultMessage result = _s->Result;
+        _s->ResultPending = _s->NotOfferedPending = false;
+        ReleaseSRWLockExclusive(&_s->Lock);
+        if (!sent) return true;
+        uint8_t out[64];
+        size_t n;
+        if (notOffered)
+        {
+            NotOfferedMessage message;
+            memcpy(message.Nonce, result.Nonce, NonceBytes);
+            n = WriteNotOffered(message, out, sizeof(out));
+        }
+        else n = WriteResult(result, out, sizeof(out));
+        ClearTicket(false); // §8.2: the ticket is gone after ReportResult, whatever the outcome
+        const bool written = n != 0 && WriteMessage(pipe, nullptr, out, n);
+        if (notOffered) Trace("provider %ld: not offered sent to the agent: %s", _id, written ? "yes" : "write failed");
+        else Trace("provider %ld: result 0x%08lX sent to the agent: %s", _id, static_cast<unsigned long>(result.Status), written ? "yes" : "write failed");
+        return written;
     }
 
     // One connection: Pending -> Claim -> Ticket -> (LogonUI) -> Result, any number of times. Anything unexpected ends it.
@@ -359,36 +451,47 @@ namespace rhcp
             ResetEvent(readDone.Value);
             if (!ReadFile(pipe, buffer, sizeof(buffer), nullptr, &ov) && GetLastError() != ERROR_IO_PENDING) return;
 
-            // Wait for the message, the stop, or LogonUI's result to send.
+            // Wait for LogonUI's result to send, the stop, or the message (WaitServe's order).
             DWORD read = 0;
             bool gotMessage = false;
             for (;;)
             {
-                const HANDLE waits[3] = { stop, readDone.Value, _s->ResultEvent.Value };
-                const DWORD timeout = phase == Phase::AwaitTicket ? TicketTimeoutMs : INFINITE;
-                const DWORD r = WaitForMultipleObjects(3, waits, FALSE, timeout);
-                if (r == WAIT_OBJECT_0 + 1)
+                const DWORD grace = phase == Phase::HaveTicket ? NotOfferedWaitMs() : INFINITE;
+                const DWORD timeout = phase == Phase::AwaitTicket ? TicketTimeoutMs : grace;
+                const Wake wake = WaitServe(_s->ResultEvent.Value, stop, readDone.Value, timeout);
+                if (wake == Wake::Timeout && grace != INFINITE)
+                {
+                    // The grace for an account LogonUI doesn't list has run out (NotListed). If LogonUI still hasn't
+                    // taken the ticket, it won't: drop it and tell the service. If it has, wait for its result as usual.
+                    if (ReportNotOffered())
+                    {
+                        bool sent = false;
+                        if (!SendPendingResult(pipe, sent)) break;
+                        if (sent) phase = Phase::Idle;
+                        NotifyChanged(); // the tile goes
+                    }
+                    continue;
+                }
+                if (wake == Wake::Message)
                 {
                     // ERROR_MORE_DATA (a message over 4 KB) fails here and ends the connection.
                     gotMessage = GetOverlappedResult(pipe, &ov, &read, FALSE) != FALSE;
                     break;
                 }
-                if (r == WAIT_OBJECT_0 + 2)
+                if (wake == Wake::Result)
                 {
-                    AcquireSRWLockExclusive(&_s->Lock);
-                    const bool send = _s->ResultPending;
-                    ResultMessage result = _s->Result;
-                    _s->ResultPending = false;
-                    ReleaseSRWLockExclusive(&_s->Lock);
-                    if (!send) continue;
-                    uint8_t out[64];
-                    const size_t n = WriteResult(result, out, sizeof(out));
-                    ClearTicket(false); // §8.2: the ticket is gone after ReportResult, whatever the outcome
-                    phase = Phase::Idle;
-                    if (n == 0 || !WriteMessage(pipe, stop, out, n)) break;
+                    bool sent = false;
+                    if (!SendPendingResult(pipe, sent)) break;
+                    if (sent) phase = Phase::Idle;
                     continue;
                 }
-                break; // stop, timeout or failure
+                // Stop, timeout or failure. A result reported just before still goes out: it is the only way the
+                // service learns that the account was signed in (C-END-10).
+                Trace("provider %ld: %s while %s", _id, wake == Wake::Stop ? "stopped" : wake == Wake::Timeout ? "no ticket in time" : "wait failed",
+                    phase == Phase::HaveTicket ? "a ticket was here" : "no ticket was here");
+                bool sent = false;
+                SendPendingResult(pipe, sent);
+                break;
             }
             if (!gotMessage)
             {
@@ -409,6 +512,7 @@ namespace rhcp
                 uint8_t out[64];
                 const size_t n = WriteClaim(claim, out, sizeof(out));
                 if (n == 0 || !WriteMessage(pipe, stop, out, n)) return;
+                Trace("provider %ld: Pending claimed", _id);
                 phase = Phase::AwaitTicket;
             }
             else if (type == MessageType::Ticket && phase == Phase::AwaitTicket)
@@ -434,6 +538,7 @@ namespace rhcp
                 _s->FreePassword();
                 _s->Ticket = true;
                 _s->Taken = false;
+                _s->NotListedAt = 0;
                 memcpy(_s->Nonce, nonce, NonceBytes);
                 _s->Domain.assign(ticket->Domain.Chars, ticket->Domain.Length);
                 _s->User.assign(ticket->User.Chars, ticket->User.Length);
@@ -443,9 +548,15 @@ namespace rhcp
                 _s->PasswordBytes = bytes;
                 ReleaseSRWLockExclusive(&_s->Lock);
                 phase = Phase::HaveTicket;
+                Trace("provider %ld: ticket received (account SID %s), telling LogonUI", _id, ticket->Sid.Length != 0 ? "given" : "none");
                 NotifyChanged();
             }
-            else return; // out of order, or a type the provider never receives
+            else
+            {
+                // Out of order, or a type the provider never receives.
+                Trace("provider %ld: message type %d unexpected in phase %d, closing", _id, static_cast<int>(type), static_cast<int>(phase));
+                return;
+            }
         }
     }
 }

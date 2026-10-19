@@ -11,20 +11,16 @@
 #     the device (Enable-LabShareServers there): the password prompt, the trust dialog and Forget, New > Network share,
 #     the editor's messages and a pasted \\host\share\folder.
 # Needs: the Server VM (both parts), a client VM (UI part). No jump host. See docs/network-shares.md.
-# Runs on every kind: the harness part on a Server VM, the UI part on the admin PC (Test-LabConsoleVm); on any other VM
-# both parts are skipped.
+# Runs on every kind: the harness part on a Server VM, the UI part on the admin PC (Test-LabConsoleVm) with its lane's
+# Server VM (Get-LabDevice -For); the part that isn't for this VM reports each of its cases as skipped with the reason
+# ($notServer / $notClient) - the 12 harness cases skipped on the admin PC and the 6 UI cases on the Server VM are
+# expected, and every case of the file is skipped on a W11 VM.
 # LabRole: any
 # LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
 )
-
-BeforeDiscovery {
-    Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
-    $isServer = (Get-LabVm $VmName).Os -eq 'Server'
-    $isClient = Test-LabConsoleVm -Name $VmName
-}
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
@@ -35,6 +31,10 @@ BeforeAll {
     $isClient = Test-LabConsoleVm -Name $VmName
     $device = if ($isClient) { Get-LabDevice -For $VmName } else { $null }
     $script:task = $null
+    # Why a part doesn't run here, shown with each of its cases (a skipped Describe gives no reason). The runner
+    # schedules the file on every kind (LabRole: any); each part has its own kind.
+    $notServer = "the harness part runs on the run's Server VM (Server-2025 kind, against its own share servers); $VmName is not a Server VM"
+    $notClient = "the UI part runs on the admin PC (a Console VM, or a client Windows VM in a lab without one) with its lane's Server VM as the device; $VmName is not that PC"
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $EvidenceDir "s-share2-$name.json") -Encoding UTF8 }
     function Shot([string]$name) { try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "s-share2-$name.png") } catch { } }
@@ -382,11 +382,12 @@ AfterAll {
     if ($isServer -or $isClient) { Set-LabVmDirty -Name $VmName }
 }
 
-Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', 'S-FTP', 'S-DAV', 'S-SHR' -Skip:(-not $isServer) {
+Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', 'S-FTP', 'S-DAV', 'S-SHR' {
 
     Context 'SMB' {
         # first in the file: a session the host still has to the server from an earlier test would keep its token
         It 'S-SMB-08 access denied for a local admin over the network: Windows'' message plus the remote UAC hint' -Tag 'S-SMB-08' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = [ordered]@{}
             $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
             $r.policyBefore = Invoke-LabGuest -Name $VmName -ArgumentList $key -ScriptBlock { param($k) (Get-ItemProperty $k -Name LocalAccountTokenFilterPolicy -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy }
@@ -428,6 +429,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SMB-05 no account: SMB connects with the signed-in Windows account, "SMB . Windows . your Windows account"' -Tag 'S-SMB-05' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             # Proposed harness option --windows-user: the scenario runs with that account as the process' Windows account
             # for the network (LogonUser LOGON32_LOGON_NEW_CREDENTIALS + impersonation, like runas /netonly) - the lab
             # host's own account (labop) has no account on the VM. No --user: the share has no account.
@@ -440,6 +442,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SMB-06 Windows connection lifetime: no drive letter, one connection for two users, removed with the last; one that existed before stays; exit removes RemoteHub''s own' -Tag 'S-SMB-06' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             # Proposed harness command share-lifetime (WindowsSmbShare through ShareConnector.Open, connections listed
             # with WNetOpenEnum like "net use"): open A, open B on the same share, close A, close B, open C, ReleaseAll
             # (what RemoteHub does when it exits). --existing 1: the harness connects the share itself first (like
@@ -466,6 +469,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SMB-07 port other than 445 and an empty share name are refused with their messages' -Tag 'S-SMB-07' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $port = Invoke-LabShare @('--protocol', 'smb', '--host', $ip, '--port', '1445', '--path', 'rhshare', '--user', $admin)
             $noName = Invoke-LabShare @('--protocol', 'smb', '--host', $ip, '--user', $admin)
             Save 'smb-rules' @{ Port = $port; NoName = $noName }
@@ -479,6 +483,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
 
     Context 'SFTP' {
         It 'S-SFTP-04 SFTP needs an account; password and keyboard-interactive only (a key-only server is refused like a wrong password)' -Tag 'S-SFTP-04' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = [ordered]@{}
             $r.noAccount = Invoke-LabShare @('--protocol', 'sftp', '--host', $ip, '--port', '2222', '--accept', '1')
             # the server offers only public keys: RemoteHub has nothing else to sign in with
@@ -505,6 +510,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SFTP-05 a wrong password: "The user name or password is incorrect (or the server doesn''t allow password sign-in)."' -Tag 'S-SFTP-05' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = Invoke-LabShare -WrongPassword 'not-the-password' @('--protocol', 'sftp', '--host', $ip, '--port', '2222', '--user', $admin, '--accept', '1')
             Save 'sftp-wrong' $r
             $r.ok | Should -BeFalse
@@ -514,6 +520,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
 
     Context 'FTP' {
         It 'S-FTP-03 FTP without TLS: "FTP . not encrypted", no certificate question, copies both ways' -Tag 'S-FTP-03' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = Invoke-LabShare @('--protocol', 'ftp', '--host', $ip, '--port', '2121', '--ftp-security', 'none', '--user', $admin)
             Save 'ftp-plain' $r
             $r.ok | Should -BeTrue -Because (Steps $r)
@@ -523,6 +530,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-FTP-04 implicit TLS on port 990, anonymous without an account, a wrong password' -Tag 'S-FTP-04' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = [ordered]@{}
             # no --port: the default for implicit TLS (990) - the only port that site listens on
             $r.implicit = Invoke-LabShare @('--protocol', 'ftp', '--host', $ip, '--ftp-security', 'implicit', '--user', $admin, '--accept', '1')
@@ -544,6 +552,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
 
     Context 'WebDAV' {
         It 'S-DAV-04 no account: the Windows credentials; redirects and status codes in words' -Tag 'S-DAV-04' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = [ordered]@{}
             # IIS /dav over HTTP, Windows authentication, no account: the process' Windows account (proposed --windows-user)
             $r.windows = Invoke-LabShare @('--protocol', 'webdav', '--host', $ip, '--path', '/dav', '--https', '0', '--windows-user', "$computer\$admin")
@@ -573,6 +582,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
 
     Context 'the share tab''s connection and transfers' {
         BeforeAll {
+            if (-not $isServer) { return }
             # Proposed harness command share-session: RemoteHub's ShareSession (the share tab's connection) on a
             # dispatcher thread, ShareSession.IdleTime = --idle-sec: connect, list, delete the share's top folder
             # (DeleteAsync), create a.txt and b.txt and rename a.txt to b.txt (RenameAsync), wait until the idle timer
@@ -590,6 +600,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SHR-03 idle: the connection is closed after the idle time ("Idle - ... opens again when you use it.") and the next listing reconnects without asking' -Tag 'S-SHR-03' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $script:sessError | Should -BeNullOrEmpty
             $script:sess.connected | Should -Match '^Connected . SFTP'
             $script:sess.idle | Should -Match '^Idle . the connection to the share was closed and opens again when you use it\.$'
@@ -600,12 +611,14 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
         }
 
         It 'S-SHR-05 browse actions: the share itself can''t be deleted; renaming onto an existing name is refused' -Tag 'S-SHR-05' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $script:sessError | Should -BeNullOrEmpty
             $script:sess.deleteRoot | Should -Match 'The share itself can.t be deleted\.'
             $script:sess.renameExisting | Should -Match '^"b\.txt" already exists\.$'
         }
 
         It 'S-SHR-04 transfer safety: written as .remotehub-part, size checked, renamed; skipped file / folder; a size mismatch fails and leaves no part file' -Tag 'S-SHR-04' {
+            if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             # Proposed harness option --safety 1 for 'share': after the scenario, through ShareTransfer on a wrapped
             # ShareFileSystem that records what is written and moved: safety.writes (paths written), safety.moves
             # ("from -> to"), safety.doneText (status of an upload), safety.existingFile (the same file again, no
@@ -627,10 +640,11 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
     }
 }
 
-Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-SFTP', 'S-FTP', 'S-SHR' -Skip:(-not $isClient) {
+Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-SFTP', 'S-FTP', 'S-SHR' {
 
     Context 'shares on their own and the editor' {
         BeforeAll {
+            if (-not $isClient) { return }
             $n = [ordered]@{}
             Step $n folder {
                 # a folder with an account: a share on its own in it inherits it
@@ -701,6 +715,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
         }
 
         It 'S-SHR-06 New > Network share: host required, inherits the folder''s account, Duplicate / Move under in its menu; Remove deletes nothing on the share and closes its tab' -Tag 'S-SHR-06' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             $n.hostRequired | Should -Match 'Enter the host the share is on \(name or address\)\.'
             $n.inherit | Should -Match ([regex]::Escape($devAdmin) + ' . from folder .ShareFolder.')
             $n.connected | Should -BeTrue
@@ -715,15 +730,18 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
         }
 
         It 'S-SMB-07 a pasted \\host\share\folder fills in the host and the path in the editor' -Tag 'S-SMB-07' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             $n.pasted | Should -BeTrue -Because "the share's address shows \\$deviceIp\rhshare\sub"
         }
 
         It 'S-SFTP-04 the editor: "SFTP needs a user name."; opened without an account: "[name] (SFTP) needs an account. Right-click it ..."' -Tag 'S-SFTP-04' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             $n.sftpEditor | Should -Match 'SFTP needs a user name\.'
             $n.sftpOpen | Should -Match 'SftpNoUser \(SFTP\) needs an account\. Right-click it . Edit. and set one'
         }
 
         It 'S-FTP-03 the editor warns about FTP without TLS; the address is ftp://' -Tag 'S-FTP-03' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             $n.ftpWarning | Should -Match '^Not encrypted: the password and every file go over the network in plain text\.'
             $n.ftpAddress | Should -BeTrue
         }
@@ -731,6 +749,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
 
     Context 'a password that isn''t stored' {
         BeforeAll {
+            if (-not $isClient) { return }
             $p = [ordered]@{}
             Step $p add {
                 # a share of the server, its own account without a password
@@ -765,6 +784,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
         }
 
         It 'S-SHR-01 asked "No password is stored for [user]. Enter it to open [server] > [share] - it is kept in memory only."; Reconnect doesn''t ask; a new start asks again' -Tag 'S-SHR-01' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             $p.ask | Should -Match ('No password is stored for ' + [regex]::Escape($devAdmin) + '\. Enter it to open Device . SmbAsk . it is kept in memory only\.')
             $p.connected | Should -BeTrue
             $p.askedAgain | Should -BeFalse
@@ -775,7 +795,17 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
 
     Context 'the trust dialog and Forget' {
         BeforeAll {
+            if (-not $isClient) { return }
             $t = [ordered]@{}
+            # The question is answered after $think seconds, like a user who compares the fingerprint with the server's
+            # (the dialog asks for that). It is longer than SftpShare's connection timeout (20 s): an answer after the
+            # timeout must still connect (first time) or be refused with its message (changed key). Before this, how
+            # fast the lab clicked (OCR and UI Automation round trips) decided whether the first connection worked.
+            $think = 30
+            function Wait-Think([Diagnostics.Stopwatch]$Since) {
+                $left = $think - [int]$Since.Elapsed.TotalSeconds
+                if ($left -gt 0) { Start-Sleep -Seconds $left }
+            }
             Step $t add {
                 New-Share @{ Name = 'SftpTrust'; Type = 'SFTP*'; Host = $deviceIp; Port = '2222'; PathLabel = 'Start folder'; Path = ''; User = $devAdmin; Password = $password }
                 Submit
@@ -784,9 +814,14 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
             Step $t first {
                 $null = Menu 'Open' -Node 'SftpTrust'
                 $null = Ui '*doesn*t know yet*' -Title '?*' -Value exists -TimeoutSec 60
+                $asked = [Diagnostics.Stopwatch]::StartNew()
                 $t.firstScreen = Screen
+                Wait-Think $asked
+                $t.firstAnsweredSec = [int]$asked.Elapsed.TotalSeconds
                 $t.first = Box '*doesn*t know yet*' -Button 'Trust and connect'
                 $t.connected1 = (Ui 'SFTP ?*' -Value exists -Optional -TimeoutSec 60).found
+                # not connected: what the tab says instead (its status line, read from the screen)
+                if (-not $t.connected1) { $t.firstFailScreen = Screen }
                 $null = Menu 'Edit*' -Node 'SftpTrust'
                 $t.accepted1 = (Ui 'Accepted host key: *' -Title 'Network share SftpTrust' -Value read -TimeoutSec 30).name
                 $null = Ui 'Cancel' -Title 'Network share SftpTrust'
@@ -831,9 +866,13 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
                 # the title ("Server key changed") isn't in the dialog's UI Automation tree (only its text and buttons):
                 # read from the screen while the dialog is open
                 $null = Ui '*presents a DIFFERENT*' -Title '?*' -Value exists -TimeoutSec 60
+                $asked = [Diagnostics.Stopwatch]::StartNew()
                 $t.changedScreen = Screen
+                Wait-Think $asked
+                $t.changedAnsweredSec = [int]$asked.Elapsed.TotalSeconds
                 $t.changed = Box '*presents a DIFFERENT*' -Button 'Cancel'
                 $t.refused = (Ui 'The server*s key wasn*t accepted*' -Value exists -Optional -TimeoutSec 30).found
+                if (-not $t.refused) { $t.changedFailScreen = Screen }
                 $null = Close-Tab 'SftpTrust'
                 $null = Menu 'Edit*' -Node 'SftpTrust'
                 $t.accepted2 = (Ui 'Accepted host key: *' -Title 'Network share SftpTrust' -Value read -TimeoutSec 30).name
@@ -853,11 +892,12 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
         }
 
         It 'S-SHR-02 "Trust this server?" the first time, nothing the second time; a changed key "Server key changed" (refused, the accepted key kept); Forget asks again' -Tag 'S-SHR-02' {
+            if (-not $isClient) { Set-ItResult -Skipped -Because $notClient; return }
             # the window name is the message text: RemoteHub's AskTrust wording; the title only on the screen (OCR)
             $t.first | Should -Match 'presents a SSH host key that RemoteHub doesn.t know yet'
             $t.first | Should -Match 'Trust and connect'
             $t.firstScreen | Should -Match 'Trust this server'
-            $t.connected1 | Should -BeTrue
+            $t.connected1 | Should -BeTrue -Because "Trust and connect was clicked $($t.firstAnsweredSec) s after the question appeared; the tab then showed: $($t.firstFailScreen)"
             $t.accepted1 | Should -Match '^Accepted host key: SHA256:'
             $t.askedAgain | Should -BeFalse
             $t.connected2 | Should -BeTrue
@@ -865,7 +905,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
             $t.newKey.Changed | Should -BeTrue
             $t.changed | Should -Match 'presents a DIFFERENT SSH host key than the one you accepted before'
             $t.changedScreen | Should -Match 'Server key changed'
-            $t.refused | Should -BeTrue
+            $t.refused | Should -BeTrue -Because "Cancel was clicked $($t.changedAnsweredSec) s after the question appeared; the tab then showed: $($t.changedFailScreen)"
             $t.accepted2 | Should -Be $t.accepted1
             $t.afterForget | Should -BeFalse
             $t.again | Should -Match 'doesn.t know yet'

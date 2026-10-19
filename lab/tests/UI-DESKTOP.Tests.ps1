@@ -54,13 +54,38 @@ BeforeAll {
     function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 400 }
     # one independent UI section: a failure is written down (error, screenshot, open dialogs), the next section runs
     function Step([string]$Name, [scriptblock]$Do) {
-        try { . $Do }
+        try { EnsureClient $Name; . $Do }
         catch {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             $R["$Name-dialogs"] = @((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60)
             foreach ($i in 1..2) { Esc }
         }
+    }
+    # RemoteHub still running on the admin's PC, else what is known about its end (crash / hang / .NET entries of the
+    # Application log, the end of its diagnostic log - no secrets there) and RemoteHub started again, so the following
+    # steps don't all fail on the missing window. In the run of 16.10.2026 21:25 its process ended about 9 s after the
+    # agent refused the PowerShell tab's wrong password (UI-AG-04) while the PIN tab was live, and UI-AG-04, -07 and -08
+    # failed on "windows: Program Manager". Only a missing process counts: a slow UI Automation answer must not start a
+    # second RemoteHub.
+    function EnsureClient([string]$Name) {
+        if (-not $clientTasks) { return }
+        $consoleUser = (Get-LabVm $VmName).ConsoleAccount
+        $state = Invoke-LabGuest -Name $VmName -ArgumentList $consoleUser -ScriptBlock {
+            param($u)
+            $p = @(Get-Process RemoteHub -ErrorAction SilentlyContinue)
+            if ($p.Count) { return $null }
+            [ordered]@{
+                at = (Get-Date).ToString('HH:mm:ss')
+                events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-30) } -ErrorAction SilentlyContinue |
+                        Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', '.NET Runtime', 'Windows Error Reporting' -and $_.Message -match 'RemoteHub' } |
+                        Select-Object -First 10 | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.ProviderName) $($_.Id): $(($_.Message -split "`n" | Select-Object -First 15) -join ' ')" })
+                diagLog = @(Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 40 -ErrorAction SilentlyContinue)
+            }
+        }
+        if (-not $state) { return }
+        $R["$Name-clientGone"] = $state
+        $clientTasks.Add((Start-LabClient -Name $VmName))
     }
     function NoError([string]$Name) { $R["$Name-error"] | Should -BeNullOrEmpty -Because "the UI steps of '$Name' ran" }
     function InSession([string]$Vm, [string]$Account, [string]$Code, [int]$TimeoutSec = 120) {
@@ -151,16 +176,6 @@ function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($
 '@
     $setImageCode = $patCode + "`n[Windows.Forms.Clipboard]::SetImage((Pat @@K@@)); 'set'"
     $getImageCode = $patCode + "`n`$img = [Windows.Forms.Clipboard]::GetImage(); if (`$img) { `$img = New-Object Drawing.Bitmap `$img }; 'DIFF=' + (PicDiff (Pat @@K@@) `$img)"
-    # Explorer's Paste into a folder of the session's user (the shell's own verb); answers "relative path=SHA-256" lines
-    $pasteCode = @'
-$f = Join-Path $env:USERPROFILE '@@DIR@@'
-$null = New-Item -ItemType Directory -Path $f -Force
-(New-Object -ComObject Shell.Application).NameSpace($f).Self.InvokeVerb('paste')
-$until = (Get-Date).AddSeconds(@@WAIT@@)
-do { Start-Sleep -Seconds 2; $n = @(Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue).Count } while ($n -lt @@N@@ -and (Get-Date) -lt $until)
-Start-Sleep -Seconds 5
-Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { 'FILE=' + $_.FullName.Substring($f.Length).TrimStart('\') + '=' + (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
-'@
     function SetFileList([string]$Vm, [string]$Account, [string[]]$Paths) {
         $add = ($Paths | ForEach-Object { "`$c.Add('" + ($_ -replace "'", "''") + "') | Out-Null" }) -join '; '
         InSession $Vm $Account "Add-Type -AssemblyName System.Windows.Forms; `$c = New-Object System.Collections.Specialized.StringCollection; $add; [Windows.Forms.Clipboard]::SetFileDropList(`$c); 'set'"
@@ -169,9 +184,13 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
     function ClipFormats([string]$Vm, [string]$Account) {
         @(Lines (InSession $Vm $Account "Add-Type -AssemblyName System.Windows.Forms; @([Windows.Forms.Clipboard]::GetDataObject().GetFormats()) -join '|'"))
     }
+    # Explorer's Paste into a folder of the session's user (the shell's own verb, Invoke-LabPaste: messages pumped while
+    # the shell fetches the offered files); answers "relative path=SHA-256" lines. The clipboard's formats before the
+    # paste, the thread's apartment and whether the files came complete go to $R.<Dir>Paste.
     function PasteAt([string]$Vm, [string]$Account, [string]$Dir, [int]$Count, [int]$WaitSec = 120) {
-        $out = InSession $Vm $Account ($pasteCode.Replace('@@DIR@@', $Dir).Replace('@@WAIT@@', "$WaitSec").Replace('@@N@@', "$Count")) -TimeoutSec ($WaitSec + 120)
-        @(Lines $out | Where-Object { $_ -like 'FILE=*' } | ForEach-Object { $_.Substring(5) } | Sort-Object)
+        $p = Invoke-LabPaste -Name $Vm -Account $Account -Folder $Dir -Count $Count -TimeoutSec $WaitSec
+        $R["$($Dir)Paste"] = [ordered]@{ formats = @($p.formats); apartment = $p.apartment; complete = $p.complete; seconds = $p.seconds }
+        @($p.files | ForEach-Object { "$($_.Path)=$($_.Hash)" } | Sort-Object)
     }
     function Windows([string]$Vm, [string]$Account) {
         $l = Lines (InSession $Vm $Account $winCode)
@@ -242,6 +261,31 @@ Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
         $null = Invoke-LabPerson -Name $dn -Do uia -Title "$leaf*" -Text '*' -Value exists -TimeoutSec 30
         Start-Sleep -Seconds 2
     }
+    # the screen rectangle of the first visible window whose title starts with @@T@@ (the person's click at the device)
+    $rectOfCode = @'
+Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class RhWr { public delegate bool P(IntPtr h, IntPtr l); [DllImport("user32.dll")] public static extern bool EnumWindows(P f, IntPtr l); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n); [StructLayout(LayoutKind.Sequential)] public struct Rc { public int L, T, R, B; } [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out Rc r); public static string Find(string prefix) { string res = ""; EnumWindows((h, p) => { if (!IsWindowVisible(h)) return true; var s = new StringBuilder(512); GetWindowTextW(h, s, 512); if (!s.ToString().StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true; Rc r; GetWindowRect(h, out r); res = r.L + "," + r.T + "," + (r.R - r.L) + "," + (r.B - r.T); return false; }, IntPtr.Zero); return res; } }'
+'WR=' + [RhWr]::Find('@@T@@')
+'@
+    # The device's window -Leaf (the start of its title) in front before keys go to it. The tab's click (FocusTab, the
+    # admin's way) first. The consent dialog takes the foreground and Windows needn't give it back when it closes (D-INPUT:
+    # keys reached Windows but no window); in the run of 16.10.2026 21:25 the text typed right after Allow (UI-AD-02) and
+    # the Ctrl+V of UI-CP-01 left Notepad empty. So the device's foreground is checked, and when it is another window the
+    # person at the device clicks the window with the console mouse. Answers how the window got the focus: 'tab',
+    # 'device (...)' or 'none (...)' - evidence whether the admin's click through the tab activates a window.
+    function DeviceFocus([string]$Leaf) {
+        FocusTab
+        $fg = (Windows $dn 'User').Fg
+        if ($fg -like "$Leaf*") { return 'tab' }
+        $o = "$(InSession $dn 'User' $rectOfCode.Replace('@@T@@', $Leaf))"
+        if ($o -match 'WR=(-?\d+),(-?\d+),(\d+),(\d+)') {
+            Send-LabMouse -Name $dn -X ([int]([int]$Matches[1] + [int]$Matches[3] / 2)) -Y ([int]([int]$Matches[2] + [int]$Matches[4] / 2))
+            Start-Sleep -Seconds 1
+        }
+        $fg2 = (Windows $dn 'User').Fg
+        # the keyboard focus in the tab again (the keys go from there)
+        FocusTab
+        if ($fg2 -like "$Leaf*") { "device (the tab's click left '$fg' in front)" } else { "none ('$fg2' in front after the device's click; window: $o)" }
+    }
     # The classic Notepad's edit control by WM_GETTEXT first (definite); UI Automation only when there is no such window.
     # (UI Automation's read of the edit came back empty for every case in the run of 16.10.2026 13:55 - typed, pasted -
     # so an empty answer from it proves nothing.)
@@ -287,8 +331,23 @@ public static class RhRes {
     function DeviceRes { "$(InSession $dn 'User' "Add-Type -AssemblyName System.Windows.Forms; `$b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; 'RES=' + `$b.Width + 'x' + `$b.Height")" -replace '(?s).*RES=(\d+x\d+).*', '$1' }
 
     # ---- the agent tab
-    # tabs of the connection closed (the next one starts fresh)
-    function CloseTabs { foreach ($i in 1..8) { $c = Ui 'Close this tab' -Optional -TimeoutSec 3; if (-not $c.found) { break }; Start-Sleep -Seconds 2 } }
+    # tabs of the connection closed (the next one starts fresh): the group's x. "Close this tab" only shows in the second
+    # tab row (more than one tab of a connection - as UI-MORE found), so in the run of 16.10.2026 21:25 nothing was closed:
+    # Connect reused a disconnected or refused tab, but with the PIN tab still live it only showed that tab, and every
+    # later "Signed in as" wait failed (UI-AD-06 to R-AGENT-03, UI-SAS-03). A session RemoteHub signed in automatically
+    # with the end action Sign out asks first - signed out then.
+    function CloseTabs {
+        foreach ($i in 1..8) {
+            $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3
+            if (-not $c.found) { $c = Ui 'Close this tab' -Optional -TimeoutSec 2 }
+            if (-not $c.found) { break }
+            Start-Sleep -Seconds 2
+            foreach ($t in 'RemoteHub signed in on *automatically*', 'Sign out on the device?') {
+                $m = Ui 'Disconnect' -Title $t -Optional -TimeoutSec 1
+                if ($m.found) { Start-Sleep -Seconds 2; break }
+            }
+        }
+    }
     # a new agent tab at its connect page ("Signed in as ... Choose what to show.")
     function OpenChoose { CloseTabs; Menu 'Connect'; Ui 'Signed in as *' -Value exists -TimeoutSec 90 }
     function ConnectChosen([string]$Session = 'Console*', [string]$Consent = 'Ask them to allow it', [switch]$ViewOnly) {
@@ -394,7 +453,9 @@ public static class RhRes {
         # RemoteHub installed (kept from an earlier file when it left the VM so)
         $null = Initialize-LabVm -Name $VmName -Client
         $clientIp = Get-LabVmAddress -Name $VmName
-        $task = Start-LabClient -Name $VmName
+        # (a list: EnsureClient starts RemoteHub again after it ended)
+        $clientTasks = New-Object System.Collections.Generic.List[string]
+        $clientTasks.Add((Start-LabClient -Name $VmName))
         New-LabClientConnection -Name $VmName -Display 'Device' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
         # the watcher of RemoteHub's texts
         $watchFile = 'C:\ProgramData\RemoteHubLab\session\ui-desktop-texts.log'
@@ -454,7 +515,7 @@ AfterAll {
         try { [IO.File]::WriteAllLines((Join-Path $EvidenceDir 'ui-desktop-texts.log'), [string[]]@(Notices)) } catch { }
         if ($watch) { try { Stop-LabInSession -Name $VmName -Task $watch } catch { } }
         Save 'results' $R
-        Stop-LabClient -Name $VmName -Task $task
+        foreach ($t in @($clientTasks)) { if ($t) { Stop-LabClient -Name $VmName -Task $t } }
         try { Save-LabAgentEvidence -Name $dn -Destination (Join-Path $EvidenceDir 'ui-desktop-device-logs') } catch { }
         Stop-LabVm -Name $dn
     }
@@ -538,19 +599,24 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.allowEvents = @(Get-LabAgentEvent -Name $dn -Since $since)
             }
             Step 'control' {
-                FocusTab
+                $R.typedFocus = DeviceFocus 'ad02.txt'
                 TypeText 'RemoteHub lab 123 !@#'
                 Start-Sleep -Seconds 3
                 $R.typed = NotepadText
+                if ("$($R.typed)" -ne 'RemoteHub lab 123 !@#') { $R.typedFg = (Windows $dn 'User').Fg; $null = DevShot 'typed' }
             }
             Step 'cp01' {
                 DeviceNotepad 'C:\Users\Public\cp01.txt'
-                $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $uni
+                $R.cp01Set = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $uni
                 Start-Sleep -Seconds 3
-                FocusTab
+                $R.cp01Focus = DeviceFocus 'cp01.txt'
+                # what the device's clipboard holds before the Ctrl+V: tells a copy that didn't arrive from a key that didn't
+                # (text comes at once, nothing is fetched by reading it)
+                $R.cp01DeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
                 Combo 0x11, 0x56
                 Start-Sleep -Seconds 3
                 $R.cp01 = NotepadText
+                if ((Norm $R.cp01) -ne (Norm $uni)) { $R.cp01Fg = (Windows $dn 'User').Fg; $null = DevShot 'cp01' }
             }
             Step 'cp02' {
                 DeviceNotepad 'C:\Users\Public\cp02.txt' $uni2
@@ -615,7 +681,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.cp06Partial = @(Invoke-LabGuest -Name $dn -ScriptBlock { @(Get-ChildItem 'C:\Users\*\AppData\Local\Temp' -Recurse -File -ErrorAction SilentlyContinue | Where-Object Length -gt 1MB | Where-Object { $_.FullName -match 'RemoteHub' } | ForEach-Object FullName) })
             }
             Step 'keys' {
-                # two windows on the device: Alt+Tab switches between them there
+                # two windows on the device: Alt+Tab switches between them there (either may be in front first)
                 DeviceNotepad 'C:\Users\Public\keys-b.txt'
                 DeviceNotepad 'C:\Users\Public\keys-a.txt' -Keep
                 FocusTab
@@ -715,14 +781,21 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 FocusTab
                 $since = Get-LabGuestTime -Name $dn
                 $mark = NoticeMark
-                $cut = Get-Date
+                # The 30 s count from the moment the adapter is off, and each check's time is taken when its answer came:
+                # in the run of 16.10.2026 21:25 the clock started before Disconnect-LabNetwork and stopped after a second
+                # UI lookup, so 38.9 s were measured while the tab never showed a reconnect (no notice, no event 1103).
+                # Every check is written down (seconds since the cut, live, reconnecting).
                 $switches = Disconnect-LabNetwork -Name $dn
-                try { Start-Sleep -Seconds 10 } finally { Connect-LabNetwork -Name $dn -Switches $switches }
+                $cut = Get-Date
+                try { Start-Sleep -Seconds 10 } finally { Connect-LabNetwork -Name $dn -Switches $switches; $R.netRestored = [math]::Round(((Get-Date) - $cut).TotalSeconds, 1) }
                 $R.netBack = $null
+                $R.netPolls = New-Object System.Collections.Generic.List[string]
                 $null = WaitFor -TimeoutSec 90 -Every 1 {
-                    $live = Live 2
                     $rec = Ui 'Stop reconnecting' -Value exists -Optional -TimeoutSec 1
-                    if ($live.found -and -not $rec.found) { $R.netBack = [math]::Round(((Get-Date) - $cut).TotalSeconds, 1); return $true }
+                    $live = Live 2
+                    $at = [math]::Round(((Get-Date) - $cut).TotalSeconds, 1)
+                    $R.netPolls.Add("$at live=$($live.found) reconnecting=$($rec.found)")
+                    if ($live.found -and -not $rec.found) { $R.netBack = $at; return $true }
                     $false
                 }
                 Start-Sleep -Seconds 3
@@ -759,9 +832,15 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 foreach ($i in 1..60) { Send-LabKey -Name $VmName -Key 'Back' }
                 TypeText $password
                 Key 'Enter'
-                # the request to normaluser comes once the session is unlocked (before that the screen can't be read)
+                # normaluser allowed this connection before locking: the user who allowed it isn't asked again after the
+                # unlock (agent-desktop-draft.md section 4.2 step 4; DesktopEndpoint.cs HoldUserDesktop) - the tab goes on.
+                # (The run of 16.10.2026 21:25 expected a question: no dialog came, the tab stayed live.) Someone else
+                # unlocking or signing in is asked - D-LOCK-02 and UI-SAS-03 cover that. A dialog that comes anyway is
+                # written down and answered, so the next steps can go on.
                 $R.lockUnlocked = (WaitFor -TimeoutSec 60 { (LockedCount $dn) -eq 0 })
-                $R.lockAllow = Allow
+                Start-Sleep -Seconds 8
+                $R.lockAsked = @(Invoke-LabPerson -Name $dn -Do windows | Where-Object { $_.Title -and $_.Title -ne 'RemoteHub' } | ForEach-Object { "$($_.Title)" })
+                if ($R.lockAsked.Count) { $R.lockAllow = Allow }
                 $R.lockLive = Live 90
                 $R.lockNotices = @(Notices $mark)
                 # unlocked and allowed: copy and paste work again
@@ -787,9 +866,10 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = WaitFor -TimeoutSec 60 -Every 2 { Invoke-LabGuest -Name $dn -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) } }
                 Start-Sleep -Seconds 4
                 $R.uacOcr = Ocr (TabPicture 'uac')
-                # normaluser isn't an administrator: the prompt asks for an administrator's credentials
-                TypeText $device.AdminAccount
-                Key 'Tab'
+                # normaluser isn't an administrator: the prompt offers the device's administrators with the first one (the
+                # console account, "Admin") chosen and its password field focused - so only the password is typed (as in
+                # D-SECURE's D-UAC-01). The run of 16.10.2026 21:25 typed "PSAdmin<Tab>password" into that field and
+                # nothing was elevated (ui-desktop-uac-tab.png: "Admin", Password).
                 TypeText $password
                 Key 'Enter'
                 Start-Sleep -Seconds 10
@@ -799,6 +879,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Invoke-LabGuest -Name $dn -ScriptBlock { Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object CommandLine -match 'RHLAB-ELEVATED' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
                 Stop-LabInSession -Name $dn -Task $uac
             }
+            # A prompt left open keeps normaluser's session on the secure desktop: the agent's consent dialog of the next
+            # connection can't be read there (UI-AD-05's Deny: OCR read nothing, the question ran out after 30 s in the
+            # run of 16.10.2026 21:25) - closed whatever happened above
+            try { $R.uacLeftOpen = Invoke-LabGuest -Name $dn -ScriptBlock { $p = @(Get-Process consent -ErrorAction SilentlyContinue); $p | Stop-Process -Force -ErrorAction SilentlyContinue; $p.Count } }
+            catch { $R.uacLeftOpen = "not checked: $_" }
             Step 'end' {
                 $null = Ui 'Disconnect'
                 Start-Sleep -Seconds 10
@@ -818,7 +903,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
 
         It 'UI-AD-02 a click into the tab and typing: Notepad on the device gets the text' -Tag 'UI-AD-02' {
             NoError 'control'
-            Norm $R.typed | Should -Be 'RemoteHub lab 123 !@#'
+            Norm $R.typed | Should -Be 'RemoteHub lab 123 !@#' -Because "the device's Notepad got the focus by: $($R.typedFocus)"
             # the German layout case needs a de-DE device and characters the Hyper-V keyboard can't type (ASCII only)
         }
 
@@ -841,8 +926,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
 
         It 'UI-AD-04 Alt+Tab and Win+R in the tab act on the device, not this PC; Win+L locks this PC, not the device' -Tag 'UI-AD-04' {
             NoError 'keys'
-            $R.keysFgBefore | Should -BeLike 'keys-a*'
-            $R.keysFgAfter | Should -BeLike 'keys-b*'
+            # which of the two Notepads is in front before doesn't matter (the one started second needn't get the foreground:
+            # in the run of 16.10.2026 21:25 keys-b stayed in front, and Alt+Tab went to keys-a) - Alt+Tab switches to the other
+            $R.keysFgBefore | Should -BeLike 'keys-?.txt*'
+            $R.keysFgAfter | Should -BeLike 'keys-?.txt*'
+            $R.keysFgAfter | Should -Not -Be $R.keysFgBefore
             $R.keysClientFg | Should -BeLike '*RemoteHub'
             $R.keysRunDevice | Should -BeGreaterThan 0
             $R.keysRunClient | Should -Be 0
@@ -852,7 +940,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
 
         It 'UI-CP-01 text copied on the admin''s PC, Ctrl+V in Notepad on the device through the tab: the same text (Unicode, multi-line)' -Tag 'UI-CP-01' {
             NoError 'cp01'
-            Norm $R.cp01 | Should -Be (Norm $uni)
+            Norm $R.cp01 | Should -Be (Norm $uni) -Because "Notepad got the focus by: $($R.cp01Focus); the device's clipboard before Ctrl+V: $(if ($R.cp01DeviceClip.sha256 -eq (Sha $uni)) { 'the copied text' } else { "'$($R.cp01DeviceClip.start)'" })"
         }
 
         It 'UI-CP-02 Ctrl+A, Ctrl+C in Notepad on the device through the tab: the same text on the admin''s PC' -Tag 'UI-CP-02' {
@@ -869,14 +957,14 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
 
         It 'UI-CP-04 3 files and a folder copied on the admin''s PC, pasted on the device: all arrive with equal hashes; progress and the device''s confirmation in the tab' -Tag 'UI-CP-04' {
             NoError 'cp04'
-            @($R.cp04Arrived | Sort-Object) | Should -Be @($R.cp04Source | Sort-Object)
+            @($R.cp04Arrived | Sort-Object) | Should -Be @($R.cp04Source | Sort-Object) -Because "the device's clipboard offered: $(@($R.cp04DeviceClip) -join ', ') (paste: $(@($R.cp04Paste.formats) -join ', '); $($R.cp04Paste.apartment) thread)"
             ($R.cp04Notices -join "`n") | Should -Match 'Copying 5 files to the device'
             ($R.cp04Notices -join "`n") | Should -Match 'Copied 5 files to the device'
         }
 
         It 'UI-CP-05 files copied on the device, pasted on the admin''s PC: they arrive, hashes equal' -Tag 'UI-CP-05' {
             NoError 'cp05'
-            @($R.cp05Arrived | Sort-Object) | Should -Be @($R.cp05Source | Sort-Object)
+            @($R.cp05Arrived | Sort-Object) | Should -Be @($R.cp05Source | Sort-Object) -Because "this PC's clipboard offered: $(@($R.cp05ClientClip) -join ', ') (paste: $(@($R.cp05Paste.formats) -join ', '); $($R.cp05Paste.apartment) thread)"
             # the sheet: "Copied <n> files from the device - paste them here." - with paste-on-demand the code says "Pasted <n> files ..."
             ($R.cp05Notices -join "`n") | Should -Match '(Copied|Pasted) 4 files from the device'
         }
@@ -903,12 +991,12 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             $R.sasBack | Should -Not -Match 'Task Manager'
         }
 
-        It 'UI-SAS-02 the device locked: Send Ctrl+Alt+Del shows the password field, the password typed in the tab unlocks, then normaluser is asked' -Tag 'UI-SAS-02' {
+        It 'UI-SAS-02 the device locked: Send Ctrl+Alt+Del shows the password field, the password typed in the tab unlocks; normaluser, who allowed it, isn''t asked again' -Tag 'UI-SAS-02' {
             NoError 'lock'
             $R.lockOcr | Should -Match ([regex]::Escape($device.UserAccount))
             $R.lockUnlocked | Should -BeTrue
-            ($R.lockNotices -join "`n") | Should -Match 'Waiting for .* to allow access'
-            $R.lockAllow.clicked | Should -BeTrue
+            @($R.lockAsked) | Should -BeNullOrEmpty -Because 'the user who allowed the connection is not asked again after an unlock'
+            ($R.lockNotices -join "`n") | Should -Not -Match 'Waiting for .* to allow access'
             $R.lockLive.found | Should -BeTrue
             # the own-account half (connected as normaluser) needs normaluser as an agent user - not covered here
         }
@@ -916,7 +1004,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
         It 'UI-SAS-04 UAC in normaluser''s session is in the tab; an administrator''s credentials typed there elevate' -Tag 'UI-SAS-04' {
             NoError 'uac'
             $R.uacOcr | Should -Match 'User Account Control|Do you want to allow'
-            @($R.uacElevated) | Should -Contain $device.AdminAccount
+            # the prompt's first administrator is the console account - its password was typed
+            @($R.uacElevated) | Should -Contain $device.ConsoleAccount
         }
 
         It 'UI-SAS-05 Ctrl+Alt+Del on the admin''s own keyboard stays local: this PC''s security screen, nothing on the device' -Tag 'UI-SAS-05' {

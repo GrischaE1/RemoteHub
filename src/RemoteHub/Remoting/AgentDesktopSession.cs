@@ -1136,7 +1136,9 @@ public sealed partial class AgentDesktopSession : SessionBase
         var c = _client;
         _client = null;
         if (c is null) return false;
-        c.Dispose();
+        // On purpose (Disconnect, closing the tab or the app, another target) – or already broken (Lost), where this ends
+        // at once: the agent must read the close before the connection goes, or it takes the end for a drop.
+        c.CloseQuietly();
         return true;
     }
 
@@ -1313,8 +1315,8 @@ public sealed class AgentDesktopClient : IDisposable
     /// <summary>Starts receiving and sending (after the events are attached).</summary>
     public void Start()
     {
-        _ = Task.Run(ReceiveLoop);
-        _ = Task.Run(SendLoop);
+        _receiveLoop = Task.Run(ReceiveLoop);
+        _sendLoop = Task.Run(SendLoop);
     }
 
     public void Send(byte[] message)
@@ -1368,6 +1370,7 @@ public sealed class AgentDesktopClient : IDisposable
             _out.Writer.TryComplete();
             try { await _ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, new CancellationTokenSource(2000).Token).ConfigureAwait(false); }
             catch { /* already gone */ }
+            _agentAnswered = true;
             Close("The RemoteHub Agent ended the session.");
         }
         catch (OperationCanceledException) { }
@@ -1392,6 +1395,54 @@ public sealed class AgentDesktopClient : IDisposable
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
         Closed?.Invoke(why);
+    }
+
+    private Task? _receiveLoop, _sendLoop;
+    private volatile bool _agentAnswered;
+
+    /// <summary>How long a close on purpose waits for the agent's answer before the connection is dropped anyway.</summary>
+    public static TimeSpan CloseLimit { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Connections still being closed on purpose (awaited briefly on exit, like <see cref="PsSession.Closing"/>).</summary>
+    internal static readonly ConcurrentDictionary<Task, byte> Closing = new();
+
+    /// <summary>
+    /// Ends the connection on purpose in the background (<see cref="CloseAsync"/> within <see cref="CloseLimit"/>), so
+    /// nothing waits on the UI thread. No <see cref="Closed"/> event: whoever closes it knows.
+    /// </summary>
+    public void CloseQuietly()
+    {
+        Interlocked.Exchange(ref _closed, 1);
+        var t = Task.Run(() => CloseAsync(CloseLimit));
+        Closing[t] = 0;
+        t.ContinueWith(x => Closing.TryRemove(x, out _), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Ends the connection on purpose and waits (at most <paramref name="timeout"/>) until the agent has answered the
+    /// close, so it has read it; then disposes. <see cref="Dispose"/> sends the close too but drops the connection right
+    /// after – with the agent's frames still unread that resets it, and the agent may see the reset before the close and
+    /// take the end for a dropped connection (automatic sign-in: the 2-minute cover, then a sign-out, instead of the end
+    /// action chosen). True if the agent answered.
+    /// </summary>
+    public async Task<bool> CloseAsync(TimeSpan timeout)
+    {
+        Interlocked.Exchange(ref _closed, 1); // ended here: no Closed event
+        using var limit = new CancellationTokenSource(timeout);
+        // What is queued (acknowledgements, a sign-in request) still goes, nothing after it; the send loop ends once it is
+        // out, so the close below is the only send then (a WebSocket takes one at a time).
+        _out.Writer.TryComplete();
+        try
+        {
+            if (_sendLoop is { } sending) await sending.WaitAsync(limit.Token).ConfigureAwait(false);
+            if (_ws.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                await _ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, null, limit.Token).ConfigureAwait(false);
+            // Until the agent's close arrives (or the connection broke anyway).
+            if (_receiveLoop is { } receiving) await receiving.WaitAsync(limit.Token).ConfigureAwait(false);
+            return _agentAnswered;
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or InvalidOperationException or ObjectDisposedException) { return false; }
+        finally { Dispose(); }
     }
 
     public void Dispose()

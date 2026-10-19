@@ -127,6 +127,34 @@ public class SharedSettingsTests
     }
 
     [Fact]
+    public void First_edit_after_opening_an_existing_shared_file_is_written()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        var shared = Path.Combine(Path.GetTempPath(), "rdpm-shared-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var data = new AppData();
+            data.Items.Add(new Connection { Name = "web01", Host = "web01" });
+            SettingsStore.CreateShared(shared, "shared-password", data);
+            SettingsStore.SwitchToLocal(data);
+
+            // a second PC: its own settings first, then it opens the existing shared file and edits once
+            var opened = SettingsStore.OpenShared(shared, "shared-password", new UiState());
+            var before = File.ReadAllBytes(SettingsStore.FilePath);
+            opened.Items[0].Name = "web01-renamed";
+            SettingsStore.Save(opened);
+            Assert.NotEqual(before, File.ReadAllBytes(SettingsStore.FilePath));
+            Assert.Equal("web01-renamed", SettingsStore.Load().Items[0].Name);
+        }
+        finally
+        {
+            try { Directory.Delete(shared, true); } catch { }
+            StoreReset.Clean();
+        }
+    }
+
+    [Fact]
     public void Old_narrow_sidebar_and_system_theme_are_upgraded_once()
     {
         Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard

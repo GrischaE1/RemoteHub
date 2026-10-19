@@ -284,9 +284,13 @@ public sealed record DesktopPrivacyScreen(string Style, bool BlockLocalInput = f
 /// <param name="Screen">The admin's privacy screen as it is on the device (<see cref="DesktopPrivacyStyle"/>).</param>
 /// <param name="LocalInputBlocked">The mouse and keyboard at the device are blocked.</param>
 /// <param name="Reason">Why the last privacy screen request didn't work ("" when it did).</param>
-/// <param name="HiddenApps">How many apps the user at the device hides – never which.</param>
-/// <param name="Regions">Where hidden apps cover the picture now (picture pixels), for the viewer's labels; null when none.</param>
-public sealed record DesktopPrivacy(string User, string Screen, bool LocalInputBlocked, string Reason = "", int HiddenApps = 0, DesktopRect[]? Regions = null)
+/// <param name="HiddenApps">How many apps the user at the device hides – never which. Apps only the policy hides aren't counted.</param>
+/// <param name="Regions">Where hidden apps (the user's and the policy's) cover the picture now (picture pixels), for the viewer's labels; null when none.</param>
+/// <param name="PolicyHiddenApps">
+/// How many apps the device's policy always hides (policy HiddenApps) – never which. Older agents don't send it (0), and
+/// older RemoteHub versions ignore it.
+/// </param>
+public sealed record DesktopPrivacy(string User, string Screen, bool LocalInputBlocked, string Reason = "", int HiddenApps = 0, DesktopRect[]? Regions = null, int PolicyHiddenApps = 0)
 {
     public static readonly DesktopPrivacy Nothing = new(DesktopScreenHide.None, DesktopPrivacyStyle.Off, false);
 }

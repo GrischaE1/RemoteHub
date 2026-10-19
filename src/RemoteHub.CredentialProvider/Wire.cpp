@@ -154,7 +154,7 @@ namespace rhcp
     {
         if (data == nullptr || size < HeaderBytes || size > MaxMessageBytes) return false;
         if (data[0] != WireVersion) return false;
-        if (data[1] < static_cast<uint8_t>(MessageType::Pending) || data[1] > static_cast<uint8_t>(MessageType::Result)) return false;
+        if (data[1] < static_cast<uint8_t>(MessageType::Pending) || data[1] > static_cast<uint8_t>(MessageType::NotOffered)) return false;
         const size_t payload = static_cast<size_t>(data[2]) | (static_cast<size_t>(data[3]) << 8);
         if (payload != size - HeaderBytes) return false;
         type = static_cast<MessageType>(data[1]);
@@ -196,6 +196,14 @@ namespace rhcp
         return false;
     }
 
+    bool ParseNotOffered(const uint8_t* data, size_t size, NotOfferedMessage& out)
+    {
+        Reader r(nullptr, 0);
+        if (Payload(data, size, MessageType::NotOffered, r) && r.Bytes(out.Nonce, NonceBytes) && r.AtEnd()) return true;
+        Wipe(out);
+        return false;
+    }
+
     size_t WritePending(const PendingMessage& message, uint8_t* buffer, size_t capacity)
     {
         return WriteNonceSession(message, MessageType::Pending, buffer, capacity);
@@ -226,6 +234,14 @@ namespace rhcp
         w.U32(static_cast<uint32_t>(message.Status));
         w.U32(static_cast<uint32_t>(message.Substatus));
         return w.Finish(MessageType::Result);
+    }
+
+    size_t WriteNotOffered(const NotOfferedMessage& message, uint8_t* buffer, size_t capacity)
+    {
+        Writer w(buffer, capacity);
+        w.SkipHeader();
+        w.Bytes(message.Nonce, NonceBytes);
+        return w.Finish(MessageType::NotOffered);
     }
 
     void Wipe(void* data, size_t size)

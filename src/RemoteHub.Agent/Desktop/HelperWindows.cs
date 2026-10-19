@@ -205,7 +205,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         catch { running = []; }
         var items = running.Select(a =>
         {
-            var locked = offer.Always.Contains(a.Id);
+            var locked = AppIds.IsHidden(offer.Always, a.Id, a.Exe);
             var detail = locked ? "Always hidden (IT policy)" : a.Windows == 1 ? "1 window" : $"{a.Windows} windows";
             return new PickItem(a.Id, a.Name, detail, a.Icon, locked || offer.Hidden.Contains(a.Id), locked);
         }).ToList();
@@ -670,6 +670,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
                         case WM_RENDERFORMAT: ui.Render((uint)wParam); return 0;
                         case WM_RENDERALLFORMATS: return 0; // the helper ends: an offer not pasted yet is gone, nothing is fetched
                         case WM_DESTROYCLIPBOARD: ui.OfferEnded(); return 0;
+                        case WM_TIMER when wParam == ClipboardTimer: ui.ReadAgain(); return 0;
                         case WM_TIMER when wParam == TopTimer: ui.KeepOnTop(); if (ui._screen.BlockLocalInput) ui.HideSasActions(); return 0;
                     }
                 if (ui._windows.TryGetValue(hwnd, out var w))
@@ -683,45 +684,111 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 
+    /// <summary>Attempts at reading the current change (one per timer tick, never a waiting loop).</summary>
+    private int _readTries;
+
+    private const int ClipboardTimer = 2;
+
+    /// <summary>
+    /// WM_CLIPBOARDUPDATE: the clipboard is read 200 ms after the last change, not at once. A program copying through
+    /// OLE (Windows Forms, PowerShell's Set-Clipboard) announces its data first and renders it right after; reading in
+    /// between makes Windows ask that program to render while it is itself waiting to open the clipboard – the copy
+    /// fails there ("Requested Clipboard operation did not succeed") and the data never arrives here. A burst of
+    /// changes (announced, rendered) is read once, after it settled.
+    /// </summary>
     private void OnClipboard()
     {
-        if (GetClipboardSequenceNumber() == _ownSequence) return; // what we put there ourselves
-        if (GetClipboardOwner() == _messageWindow) return;        // still ours (e.g. an offer that was just pasted): never sent back
-        if (VirtualFiles.IsCurrent(_virtual)) return;             // our virtual files (OLE owns the clipboard for us)
-        if (!IsClipboardFormatAvailable(13))
-        {
-            HelperClipboard? other = null;
-            if (OpenClipboardRetry())
-            {
-                try { other = ReadOther(); }
-                finally { CloseClipboard(); }
-            }
-            if (other is not null)
-            {
-                _lastClipboard = "";
-                ClipboardContent?.Invoke(other);
-            }
-            return;
-        }
-        if (!OpenClipboardRetry()) return;
-        string? text = null;
+        _readTries = 0;
+        _changes++;
+        SetTimer(_messageWindow, ClipboardTimer, 200, IntPtr.Zero); // restarts the wait on every change
+    }
+
+    private void ReadAgain()
+    {
+        KillTimer(_messageWindow, ClipboardTimer);
+        ReadClipboard();
+    }
+
+    /// <summary>
+    /// Reads the settled clipboard: one OpenClipboard, the bytes copied out, closed again at once – the events go out
+    /// afterwards. If another program holds the clipboard, this gives way and tries again on the timer (100 ms, up to
+    /// 30 times) instead of waiting while holding anything. Reading never changes the clipboard, so it can't set off
+    /// another WM_CLIPBOARDUPDATE.
+    /// </summary>
+    private void ReadClipboard()
+    {
         try
         {
-            var data = GetClipboardData(13);
-            if (data != IntPtr.Zero)
+            if (GetClipboardSequenceNumber() == _ownSequence) return; // what we put there ourselves
+            if (GetClipboardOwner() == _messageWindow) return;        // still ours (e.g. an offer that was just pasted): never sent back
+            if (VirtualFiles.IsCurrent(_virtual)) return;             // our virtual files (OLE owns the clipboard for us)
+            // Data a program announced but hasn't rendered yet is rendered on request: GetClipboardData sends the owner
+            // WM_RENDERFORMAT and waits – holding the clipboard open – until that program's thread takes it. A copier
+            // that is busy (Windows Forms waiting to open the clipboard for its own flush, a script still running)
+            // never takes it, every other program's copy then fails, and the read gets nothing. So the owner must
+            // answer first; a busy one is given time and asked again, never waited for with the clipboard open.
+            var owner = GetClipboardOwner();
+            var busy = owner != IntPtr.Zero && SendMessageTimeoutW(owner, 0 /* WM_NULL */, 0, 0, 0x0001 | 0x0002 /* SMTO_BLOCK | SMTO_ABORTIFHUNG */, 100, out _) == 0;
+            if (busy || !OpenClipboard(_messageWindow))
             {
-                var p = (char*)GlobalLock(data);
-                if (p != null)
-                {
-                    try { text = new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
-                    finally { GlobalUnlock(data); }
-                }
+                if (++_readTries <= 30) SetTimer(_messageWindow, ClipboardTimer, 100, IntPtr.Zero);
+                else Noted?.Invoke($"clipboard: a copy at the device could not be read ({(busy ? "the copying program didn't answer" : "another program kept the clipboard open")} for 3 s)");
+                return;
             }
+            IReadOnlyList<string>? files = null;
+            HelperClipboard? image = null;
+            string? text = null, why = null, formats = null;
+            var dataObject = false;
+            try
+            {
+                // Files first: a program may put the paths as text next to a file list; what was copied is the files.
+                if (IsClipboardFormatAvailable(CF_HDROP)) files = ReadFiles(out why);
+                else if (IsClipboardFormatAvailable(13)) text = ReadText();
+                else if ((image = ReadImage()) is null) formats = Formats(out dataObject);
+            }
+            finally { CloseClipboard(); }
+
+            if (files is not null)
+            {
+                _lastClipboard = "";
+                ClipboardContent?.Invoke(new HelperClipboard(Files: files));
+            }
+            else if (why is not null) ReadFilesAsUser(_changes, $"its file list: {why}");
+            else if (image is not null)
+            {
+                _lastClipboard = "";
+                ClipboardContent?.Invoke(image);
+            }
+            else if (text is not null)
+            {
+                if (text == _lastClipboard) return;
+                _lastClipboard = text;
+                ClipboardChanged?.Invoke(text);
+            }
+            // Nothing RemoteHub takes: only the format numbers go to the log, so a copy that should have arrived can be
+            // told apart from one that was never seen.
+            else if (dataObject) ReadFilesAsUser(_changes, $"formats {formats}"); // an OLE copy the helper isn't shown: read as the user
+            else if (formats is not null and not "none") Noted?.Invoke($"clipboard: a copy at the device with nothing to send (formats {formats})");
         }
-        finally { CloseClipboard(); }
-        if (text is null || text == _lastClipboard) return;
-        _lastClipboard = text;
-        ClipboardChanged?.Invoke(text);
+        catch (Exception ex)
+        {
+            // WndProc would swallow it: a copy that silently never arrives is what this line is for.
+            Noted?.Invoke($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+        }
+    }
+
+    /// <summary>WM_CLIPBOARDUPDATEs so far: a result that arrives after a newer one is dropped.</summary>
+    private int _changes;
+
+    /// <summary>CF_UNICODETEXT, at most 1,000,000 characters (the clipboard is open).</summary>
+    private static string? ReadText()
+    {
+        var data = GetClipboardData(13);
+        if (data == IntPtr.Zero) return null;
+        var p = (char*)GlobalLock(data);
+        if (p == null) return null;
+        try { return new string(p, 0, (int)Math.Min(GlobalSize(data) / 2, 1_000_000)).Split('\0')[0]; }
+        finally { GlobalUnlock(data); }
     }
 
     // =====================================================================
@@ -802,14 +869,30 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         private bool _collapsed;
         private const int CollapseTimer = 2;
 
-        private (int W, int H) BannerSize()
+        private (int W, int H) BannerSize() => BannerSize(GetSystemMetrics(0));
+
+        /// <summary>
+        /// The banner's size on a screen this wide. Open, it is one line while the heading and subtitle fit beside the
+        /// buttons; otherwise it is taller and they wrap (<see cref="Stacked"/>), so nothing the user must read is cut.
+        /// </summary>
+        internal (int W, int H) BannerSize(int screenWidth)
         {
-            var h = S(_collapsed ? 36 : 46);
-            var sx = GetSystemMetrics(0);
-            var text = _collapsed ? TextWidth(_small, ShortHeading) : TextWidth(_bold, Heading) + S(14) + TextWidth(_small, Subtitle);
+            var text = _collapsed ? TextWidth(_small, ShortHeading) : OneLineWidth();
             var buttons = BannerButtons().Sum(b => ButtonWidth(b) + S(8)) - S(8);
-            return (Math.Min(sx - S(24), S(16 + 12 + 12) + text + S(20) + buttons + S(10)), h);
+            var w = Math.Min(screenWidth - S(24), S(16 + 12 + 12) + text + S(20) + buttons + S(10));
+            if (!Stacked(w)) return (w, S(_collapsed ? 36 : 46));
+            var room = TextRoom(w);
+            return (w, Math.Max(S(46), S(8) + TextHeight(_bold, Heading, room) + S(2) + TextHeight(_small, Subtitle, room) + S(8)));
         }
+
+        /// <summary>The open banner's heading, gap and subtitle side by side, as <see cref="PaintBanner"/> draws them.</summary>
+        private int OneLineWidth() => TextWidth(_bold, Heading) + S(4) + S(10) + TextWidth(_small, Subtitle) + S(4);
+
+        /// <summary>The width left for the banner's text: after the dot, before the buttons.</summary>
+        private int TextRoom(int w) => w - S(7) - BannerButtons().Sum(b => ButtonWidth(b) + S(8)) - S(12) - (S(16) + S(12) + S(12));
+
+        /// <summary>Open, and the heading and subtitle don't fit on one line (a narrow screen, a long account name).</summary>
+        internal bool Stacked(int w) => !_collapsed && OneLineWidth() > TextRoom(w);
 
         /// <summary>The banner's buttons as shown: all of them, or only the last one ("Disconnect") on the pill.</summary>
         private FluentButton[] BannerButtons() => _collapsed && Buttons.Length > 1 ? [Buttons[^1]] : Buttons;
@@ -1161,10 +1244,18 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             Ellipse(g, S(16), (h - dot) / 2, dot, dot, Accent ? Theme.Accent : Theme.Danger);
             var x = S(16) + dot + S(12);
             var shown = BannerButtons();
-            // The text ends before the buttons: on a narrow screen it is cut with "…", the subtitle goes first.
-            var room = w - S(7) - shown.Sum(b => ButtonWidth(b) + S(8)) - S(12) - x;
+            // The text ends before the buttons. Open, it is never cut: where it doesn't fit on one line the banner is taller
+            // (BannerSize) and the heading wraps with the subtitle under it - "mouse and keyboard blocked" must be read.
+            var room = TextRoom(w);
             if (_collapsed)
                 Text(dc, _small, ShortHeading, x, 0, Math.Min(room, TextWidth(_small, ShortHeading) + S(4)), h, theme.Text, vcenter: true);
+            else if (Stacked(w))
+            {
+                var hh = TextHeight(_bold, Heading, room);
+                var y = (h - hh - S(2) - TextHeight(_small, Subtitle, room)) / 2;
+                TextBlock(dc, _bold, Heading, x, y, room, theme.Text);
+                TextBlock(dc, _small, Subtitle, x, y + hh + S(2), room, theme.Secondary);
+            }
             else
             {
                 var tw = Math.Min(room, TextWidth(_bold, Heading) + S(4));
@@ -1174,11 +1265,13 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             }
             _buttonRects.Clear();
             var bx = w - S(7);
+            // the buttons keep their height on a taller banner, centred
+            var bh = S(_collapsed ? 24 : 34);
             for (var i = shown.Length - 1; i >= 0; i--)
             {
                 var bw = ButtonWidth(shown[i]);
                 bx -= bw;
-                DrawButton(dc, g, shown[i], bx, S(6), bw, h - S(12), _collapsed ? _small : _bold);
+                DrawButton(dc, g, shown[i], bx, (h - bh) / 2, bw, bh, _collapsed ? _small : _bold);
                 bx -= S(8);
             }
         }
@@ -1700,6 +1793,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr hwnd, ref POINT pt);
     [DllImport("user32.dll")] private static extern nint SetTimer(IntPtr hwnd, nint id, uint ms, IntPtr proc);
     [DllImport("user32.dll")] private static extern bool KillTimer(IntPtr hwnd, nint id);
+    [DllImport("user32.dll")] private static extern nint SendMessageTimeoutW(IntPtr hwnd, uint msg, nint wParam, nint lParam, uint flags, uint timeout, out nint result);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] private static extern uint GetDpiForSystem();
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hwnd);
@@ -1723,7 +1817,7 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
     [DllImport("user32.dll")] private static extern bool CloseClipboard();
     [DllImport("user32.dll")] private static extern bool EmptyClipboard();
     [DllImport("user32.dll")] private static extern bool IsClipboardFormatAvailable(uint format);
-    [DllImport("user32.dll")] private static extern IntPtr GetClipboardData(uint format);
+    [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr GetClipboardData(uint format);
     [DllImport("user32.dll")] private static extern IntPtr SetClipboardData(uint format, IntPtr data);
     [DllImport("kernel32.dll")] private static extern IntPtr GlobalAlloc(uint flags, nuint bytes);
     [DllImport("kernel32.dll")] private static extern IntPtr GlobalFree(IntPtr mem);

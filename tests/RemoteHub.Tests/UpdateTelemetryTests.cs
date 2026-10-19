@@ -191,6 +191,33 @@ public class UpdateTelemetryTests
     }
 
     [Fact]
+    public void Telemetry_off_deletes_pending_crash_reports_and_the_install_id()
+    {
+        var oldFolder = CrashReporter.Folder;
+        var dir = Path.Combine(Path.GetTempPath(), "rh-telemetry-off-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            CrashReporter.Folder = Path.Combine(dir, "crash");
+            Directory.CreateDirectory(CrashReporter.Folder);
+            var t = DateTime.UtcNow;
+            File.WriteAllText(Path.Combine(CrashReporter.Folder, $"crash-{t.Ticks}-{Guid.NewGuid():N}.json"),
+                JsonSerializer.Serialize(new CrashReport { Version = "0.9.0", ErrorType = "E", Message = "m", Stack = "s", TimeUtc = t }));
+            var idPath = Path.Combine(dir, "install-id");
+            Telemetry.GetOrCreateInstallId(idPath);
+
+            Telemetry.DiscardLocalRecords(CrashReporter.TakePending(), idPath);
+
+            Assert.Empty(Directory.GetFiles(CrashReporter.Folder, "crash-*.json"));
+            Assert.False(File.Exists(idPath));
+        }
+        finally
+        {
+            CrashReporter.Folder = oldFolder;
+            try { Directory.Delete(dir, true); } catch { /* temp */ }
+        }
+    }
+
+    [Fact]
     public void Telemetry_sends_exactly_the_documented_fields()
     {
         var id = Guid.NewGuid().ToString("D");

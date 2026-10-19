@@ -173,9 +173,13 @@ Describe 'S-THR <VmName>' -Tag Agent, Security, 'S-THR', 'S-LIM', 'S-POL' {
             Save 'policy' @{ Result = $result; Log = $log }
         }
 
-        It 'S-POL-01 an unreadable policy key allows nothing: health says powershell only, every sign-in refused, log says why' -Tag 'S-POL-01' {
-            @($result.healthUnreadable.features) | Should -Be @('powershell')
-            Status $result.psUnreadable | Should -Be @(403)
+        It 'S-POL-01 an unreadable policy key allows nothing: health offers no feature, every sign-in refused, log says why' -Tag 'S-POL-01' {
+            # since PowerShellEnabled (policies phase 2) health leaves out powershell when it's off - and an unreadable
+            # key allows nothing (AgentPolicy.Load), so not even powershell is offered
+            @($result.healthUnreadable.features | Where-Object { $_ }) | Should -BeNullOrEmpty
+            # PowerShell counts as turned off (PowerShellEnabled not allowed): 404 like the desktop, before any sign-in
+            # (403 would be "signed in, but no right") - run 20261017-054704
+            Status $result.psUnreadable | Should -Be @(404)
             Status $result.desktopUnreadable | Should -Be @(404)
             @($log | Where-Object { $_ -match "can't be read" }).Count | Should -BeGreaterThan 0
             Status $result.psRestored | Should -Be @(101)

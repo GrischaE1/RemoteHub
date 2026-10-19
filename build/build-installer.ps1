@@ -21,7 +21,8 @@ param(
     [string]$Version,
     [string]$Configuration = "Release",
     [string]$OutputPath,
-    # Leaves out the start-time check (Test-StartTime.ps1), e.g. on a machine without a screen session
+    # Leaves out the start-time check (Test-StartTime.ps1), e.g. on a machine without a screen session (always left out
+    # with -LabSigning)
     [switch]$SkipStartTime,
     [string]$SigningCertificate,
     [switch]$LabSigning,
@@ -109,7 +110,9 @@ New-Item -ItemType Directory -Force -Path "$publish\Agent" | Out-Null
 Copy-Item $agentMsi "$publish\Agent\RemoteHub-Agent-x64.msi"
 
 # Start-time baseline (< 3 s with 500 connections). Not on CI runners: their speed varies too much for a time limit.
-if ($SkipStartTime -or $env:GITHUB_ACTIONS) { Write-Warning "Start-time check skipped." }
+# Not for lab builds either: they are made on the lab host, often while VMs run, and a busy host fails the limit
+# without anything being wrong with the build. Release builds keep the check.
+if ($SkipStartTime -or $LabSigning -or $env:GITHUB_ACTIONS) { Write-Warning "Start-time check skipped." }
 else {
     & "$PSScriptRoot\Test-StartTime.ps1" -Publish $publish
 }

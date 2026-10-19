@@ -228,8 +228,23 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         _lost = !IsProtocolError(error);
                         _endReason = (_lost ? "connection lost: " : "invalid message from RemoteHub: ") + error.Message;
                     }
+                    else if (fromClient.IsCanceled)
+                    {
+                        // The agent noticed the drop first: the keep-alive timeout or the aborted request ends the pending
+                        // receive with an OperationCanceledException, so the loop ends cancelled, not faulted. Nothing here
+                        // cancels it on purpose – only a takeover by a new connection, which continues the session too.
+                        _lost = true;
+                        _endReason = _resume?.TakenOver == true ? "continued in a new connection" : "connection lost";
+                    }
+                    // Closed by RemoteHub or an invalid message: ended on purpose, so the token goes now rather than after the
+                    // close handshake, which waits up to 2 s. A receive that ended because this connection was cancelled (a
+                    // takeover by a new connection) is no such end.
+                    if (!_lost && !ct.IsCancellationRequested) _resume?.Revoke();
                     break;
                 }
+                // The aborted request (a drop) or a takeover cancels the helper's loop too, often before the receive: that
+                // is no helper ending, and starting a new helper for a connection that is gone only delays the end.
+                ct.ThrowIfCancellationRequested();
                 if (ended == watch && await IdleCheck(ct)) break;
                 if (ended == watch && _live) await PausedCheck(desktop, ct);
                 var target = session.Console ? desktop.Sessions.ConsoleSessionId() ?? _helperSession : _helperSession;
@@ -335,6 +350,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
             }
         }
+        // Already ended on purpose (the token is revoked) when the connection broke, e.g. while the end was being reported:
+        // it stays ended on purpose – it may not be continued, and a session automatic sign-in created gets its end action.
+        catch (Exception ex) when ((ex is OperationCanceledException or WebSocketException or IOException or InvalidDataException) && _resume?.Revoked == true) { }
         catch (OperationCanceledException)
         {
             _lost = true;
@@ -372,6 +390,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 o.Log.Audit(AuditEvent.DesktopEnded, $"Desktop session ended: {identity.Account} from {source} after {(DateTime.UtcNow - started):hh\\:mm\\:ss} – {what} ({_endReason})");
             // A session automatic sign-in created (§9.2): ended on purpose → its end action; dropped → its screen stays covered
             // by this helper for a while (a continued connection takes over), then it is signed out.
+            // A sign-in still under way confirms its session after this point and applies the end action itself.
+            lock (_autoSignedLock) _autoSignClosed = true;
             if (_autoSigned is { } mine && _resume?.TakenOver != true)
             {
                 if (_lost && _helper is { } cover && _helperSession == mine.Session)
@@ -384,9 +404,30 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             }
             _parkedHelper?.Dispose();
             _helper?.Dispose();
-            if (_virtualShown) VirtualDisplay.Hide(); // switched off with the last connection that needed it
-            // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not.
-            if (_resume is { } r) { if (_lost) r.Release(_autoSigned is not null ? AutoSignInSessions.HoldAfterDrop : null); else r.Revoke(); }
+            {
+                // Switched off with the last connection that had it on – in the background, since it may be tried again for
+                // a few seconds while the ended helper still holds the display. Always released: a switch-on still under
+                // way for this connection then switches it off again itself. Every outcome goes to the log.
+                var log = o.Log;
+                var session = _helperSession;
+                var lease = _virtualLease;
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        if (VirtualDisplay.Hide(lease, line => log.Write($"Desktop: session {session}: {line}")) is { } off)
+                            log.Write($"Desktop: session {session}: {off}");
+                    }
+                    catch (Exception ex) { log.Write($"Desktop: session {session}: Virtual display not switched off: {ex.Message}"); }
+                });
+            }
+            // Only a broken connection may be continued; ended on purpose (RemoteHub, the user, idle, refused) it may not – that
+            // was revoked when the end was reported. A takeover still under way (nothing revoked it) is let through.
+            if (_resume is { } r)
+            {
+                if (_lost || r.TakenOver) r.Release(_autoSigned is not null ? AutoSignInSessions.HoldAfterDrop : null);
+                else r.Revoke();
+            }
             if (_signInRequest.Task.IsCompletedSuccessfully) _signInRequest.Task.Result.Dispose(); // sent but never used
         }
     }
@@ -398,6 +439,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     // aborted the WebSocket, which could drop that status (seen as "connection lost" in RemoteHub).
     private readonly TaskCompletionSource _endRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private (int Session, string EndAction)? _autoSigned; // the session automatic sign-in created, while this connection owns it
+    private readonly object _autoSignedLock = new();     // _autoSigned against _autoSignClosed: exactly one side applies the end action
+    private bool _autoSignClosed;                          // the connection's end has run; a sign-in confirmed later ends its session itself
     private bool _screenByService;                         // the privacy screen is the service's (automatic sign-in), not the admin's
     private volatile bool _autoSignInPending;              // the sign-in went to Windows; its session isn't confirmed yet
     private IDesktopHelper? _parkedHelper;                 // the dropped connection's helper, ended once this one covers the screen
@@ -497,10 +540,26 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 result = await o.Desktop!.AutoSignIn!.SignInAsync(new AutoSignInRequest(sessionId, domain, user, identity.UserSid!, secret,
                     () => RecheckAutoSignIn(sessionId), o.Desktop.SecureAttention), ct);
             }
+            // The ticket went out but Windows' answer was lost (lab C-END-10: LogonUI signed the account in and went away
+            // before the provider sent the result). Fail safe: if the console now has this account's session, it is the
+            // one this sign-in created and gets the cover and the end action like any other; otherwise it failed.
+            var lost = !result.Ok && result.Unconfirmed;
+            // Not cancelled with the connection: once the ticket has gone out, the outcome must be known even when nobody is connected.
+            var (console, sid) = result.Ok || lost ? await ConsoleUser() : (null, null);
+            if (lost && string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
+            {
+                o.Log.Write($"Automatic sign-in: Windows' answer didn't arrive ({result.Code}), but console session {console} has the account – treated as signed in");
+                result = new AutoSignInResult(true, "", "Signed in.");
+            }
             if (!result.Ok)
             {
                 if (result.Code == AutoSignInFailure.Windows)
                     o.Log.Audit(AuditEvent.AutoSignInFailed, $"Automatic sign-in failed: {identity.Account} from {source} – Windows reported 0x{result.Status:X8} (0x{result.Substatus:X8}): {result.Message}");
+                else if (result.Code == AutoSignInFailure.NotOffered)
+                    // Not LogonUI's answer: the sign-in screen doesn't list the account, and the service checked with Windows itself.
+                    o.Log.Audit(AuditEvent.AutoSignInFailed, $"Automatic sign-in failed: {identity.Account} from {source} – the sign-in screen didn't offer the account" +
+                        (result.CheckedError is { } error ? $"; checked with Windows: error {error}{(result.Status != 0 ? $" (0x{result.Status:X8})" : "")}" : "; Windows couldn't be asked") +
+                        $": {result.Message}");
                 else o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {result.Message} ({result.Code})");
                 if (_screenByService) { _screen = null; _screenByService = false; _resume?.Screen = null; _resume?.ScreenByService = false; }
                 await Status(DesktopStatusState.SignInFailed, result.Message, ct);
@@ -508,14 +567,6 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             }
 
             // §6.3: the console's new session must belong to exactly this account – otherwise it is signed out at once.
-            int? console = null;
-            string? sid = null;
-            for (var i = 0; i < 60 && sid is null; i++)
-            {
-                console = o.Desktop.Sessions.ConsoleSessionId();
-                sid = console is { } c ? o.Desktop.Sessions.UserSid(c) : null;
-                if (sid is null) await Task.Delay(500, ct);
-            }
             if (!string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
             {
                 if (console is { } wrong && sid is not null) o.Desktop.Sessions.LogOff(wrong);
@@ -527,9 +578,24 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 return;
             }
             o.Desktop.AutoSigned.Signed(console!.Value, sid!, identity.Account, endAction);
-            _autoSigned = (console.Value, endAction);
             o.Log.Audit(AuditEvent.AutoSignInSucceeded, $"Automatic sign-in: {identity.Account} from {source} signed in to console session {console} " +
-                $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")})");
+                $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")}" +
+                $"{(lost ? "; Windows' answer was lost, the console session confirmed it" : "")})");
+            // Hand the session to the connection's end – unless that has already run (the connection ended while the
+            // sign-in was under way). Then nothing else will give the session its end action, so it gets it here, as the
+            // end would have: a drop with nothing covering the screen signs out, an end on purpose takes the end action.
+            bool closed;
+            lock (_autoSignedLock)
+            {
+                closed = _autoSignClosed;
+                if (!closed) _autoSigned = (console.Value, endAction);
+            }
+            if (closed)
+            {
+                o.Desktop.AutoSigned.EndOnPurpose(console.Value, o.Log, _lost ? "connection lost, nothing to cover the screen" : _endReason,
+                    _lost ? AutoSignInEndActions.SignOut : null);
+                return;
+            }
             await SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(DesktopStatusState.SignedIn, $"Signed in as {identity.Account}.", EndAction: endAction),
                 DesktopJson.Default.DesktopStatus), ct);
         }
@@ -541,6 +607,23 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             try { await Status(DesktopStatusState.SignInFailed, "The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
         }
         finally { _autoSignInPending = false; } // confirmed (_autoSigned from now on), failed or undone
+    }
+
+    /// <summary>How long the console's new session gets to show its user after a sign-in (§6.3), in polls of 500 ms; tests shorten it.</summary>
+    internal static int ConsoleUserPolls = 60;
+
+    /// <summary>The console session and its user's SID, once Windows reports one (up to 30 s); the SID is null if it never does.</summary>
+    private async Task<(int? Console, string? Sid)> ConsoleUser()
+    {
+        int? console = null;
+        string? sid = null;
+        for (var i = 0; i < ConsoleUserPolls && sid is null; i++)
+        {
+            console = o.Desktop!.Sessions.ConsoleSessionId();
+            sid = console is { } c ? o.Desktop.Sessions.UserSid(c) : null;
+            if (sid is null) await Task.Delay(500);
+        }
+        return (console, sid);
     }
 
     /// <summary>Right before the ticket goes out (§6.2): the policy and right still allow it, and the console is still waiting.</summary>
@@ -783,7 +866,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     }
 
     private volatile bool _gdi;
-    private bool _virtualShown;
+    /// <summary>This connection's hold on the virtual monitor (counted once it is on for it, whichever way).</summary>
+    private readonly VirtualDisplay.Lease _virtualLease = VirtualDisplay.NewLease();
     private bool? _secureShown;
     private int _framesSinceSwitch;
 
@@ -900,7 +984,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         if (helper is null) return new HelperExit(false, "no desktop helper");
         try
         {
-            while (await DesktopWire.ReadFramedAsync(helper.Output, ct) is { } m)
+            while (await HelperOutput.ReadAsync(helper, ct) is { } m)
             {
                 switch ((byte)DesktopWire.TypeOf(m))
                 {
@@ -912,8 +996,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var size = DesktopWire.ReadText(m).Split(' ');
                         if (size.Length == 2 && int.TryParse(size[0], out var vw) && int.TryParse(size[1], out var vh))
                         {
-                            var shown = await Task.Run(() => VirtualDisplay.Show(vw, vh, resizeOnly: _virtualShown), ct);
-                            if (shown is null && !_virtualShown) _virtualShown = true;
+                            var lease = _virtualLease;
+                            var (shown, recovered) = await Task.Run(() => (VirtualDisplay.Show(lease, vw, vh, out var r), r), ct);
+                            if (recovered is not null) o.Log.Write($"Desktop: session {_helperSession}: {recovered}");
                             o.Log.Write($"Desktop: session {_helperSession}: virtual monitor {(shown is null ? $"on at {VirtualDisplay.Normalize(vw, vh).W}×{VirtualDisplay.Normalize(vw, vh).H}" : "not switched on: " + shown)}");
                         }
                         break;
@@ -983,8 +1068,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         return new HelperExit(false, "the desktop helper ended");
     }
 
-    private Task Status(string state, string message, CancellationToken ct, int attempts = 0, string? resume = null) =>
-        SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(state, message, attempts, resume), DesktopJson.Default.DesktopStatus), ct);
+    private Task Status(string state, string message, CancellationToken ct, int attempts = 0, string? resume = null)
+    {
+        // An end is final: the token is void before RemoteHub – or anyone else holding the token – can learn of the end.
+        if (state is DesktopStatusState.Ended or DesktopStatusState.Denied or DesktopStatusState.Failed) _resume?.Revoke();
+        return SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(state, message, attempts, resume), DesktopJson.Default.DesktopStatus), ct);
+    }
 
     private async Task SendWs(byte[] m, CancellationToken ct)
     {
@@ -1043,7 +1132,15 @@ internal static class DesktopResume
         public string Token => token;
         public string Account => account;
         public string AllowedBy { get; private set; } = allowedBy;
-        public bool TakenOver { get; set; }
+        private readonly Lock _gate = new();
+        private bool _revoked, _takenOver;
+
+        /// <summary>A new connection took the session over while this one still looked alive.</summary>
+        public bool TakenOver { get { lock (_gate) return _takenOver; } }
+
+        /// <summary>Ended on purpose: the token can't continue anything, not even a takeover that had already begun.</summary>
+        public bool Revoked { get { lock (_gate) return _revoked; } }
+
         internal DateTime? ExpiresUtc;
         internal readonly TaskCompletionSource Ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal CancellationTokenSource Owner => owner;
@@ -1069,11 +1166,27 @@ internal static class DesktopResume
             Ended.TrySetResult();
         }
 
-        /// <summary>Ended on purpose: not usable.</summary>
+        /// <summary>
+        /// Ended on purpose: not usable. The endpoint calls it before the end is reported, so the token doesn't outlive the
+        /// user's (or RemoteHub's) decision during the close handshake. It also wins over a takeover that has begun but not
+        /// finished: as far as the user is concerned the end came first, so the new connection is asked again.
+        /// </summary>
         public void Revoke()
         {
-            Entries.TryRemove(token, out _);
+            lock (_gate) { _revoked = true; _takenOver = false; }
+            Entries.TryRemove(new KeyValuePair<string, Entry>(token, this));
             Ended.TrySetResult();
+        }
+
+        /// <summary>Marks the takeover – unless the connection was already ended on purpose.</summary>
+        internal bool TryTakeOver()
+        {
+            lock (_gate)
+            {
+                if (_revoked) return false;
+                _takenOver = true;
+                return true;
+            }
         }
     }
 
@@ -1098,11 +1211,12 @@ internal static class DesktopResume
         if (e.ExpiresUtc is { } x && x < DateTime.UtcNow) return null;
         if (e.ExpiresUtc is null)
         {
-            // The old connection hasn't noticed yet: end it, then continue here.
-            e.TakenOver = true;
+            // The old connection hasn't noticed yet: end it, then continue here – unless it is being ended on purpose (the
+            // user's Disconnect, a refusal, idle, RemoteHub's close), which no token may skip.
+            if (!e.TryTakeOver()) return null;
             try { e.Owner.Cancel(); } catch (ObjectDisposedException) { }
             await Task.WhenAny(e.Ended.Task, Task.Delay(TimeSpan.FromSeconds(5)));
         }
-        return e;
+        return e.Revoked ? null : e; // ended on purpose while it was being taken over
     }
 }

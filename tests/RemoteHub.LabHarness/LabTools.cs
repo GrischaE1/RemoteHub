@@ -156,10 +156,16 @@ internal static class LabTools
     }
 
     // PsRemoting.Open, or - for a pinned WinRM session - the same connection info with the CA/CN checks skipped; with
-    // the PowerShell tab's host for ps-host
+    // the PowerShell tab's host for ps-host. A refused agent session fails with the text RemoteHub shows: PowerShell's
+    // own exception only says "An error has occurred which PowerShell cannot handle", the agent's reason is inside it.
     private static Runspace Open(PsTarget t, System.Management.Automation.Host.PSHost? host = null)
     {
-        if (t.Agent is not null || _pinned is null) return PsRemoting.Open(t, host);
+        if (t.Agent is not null)
+        {
+            try { return PsRemoting.Open(t, host); }
+            catch (Exception ex) { throw new InvalidOperationException(PsRemoting.Explain(ex, t), ex); }
+        }
+        if (_pinned is null) return PsRemoting.Open(t, host);
         // behind a jump host through a local forward, as PsRemoting.Open does it
         var forward = t.Via is { } via ? JumpForwarders.Open(via, t.Host, t.Port) : null;
         var ci = (WSManConnectionInfo)PsRemoting.ConnectionInfo(t, forward);

@@ -62,7 +62,7 @@ RemoteHub (operator PC)                               Device
   - Events 4624 and 4625 are written to the Security log.
 - **UAC:** for an administrator, the agent uses the full linked token. LocalSystem is allowed to obtain it.
   - Deliberately more permissive than WinRM: WinRM gives local administrators other than the built-in Administrator only a filtered token (UAC remote restrictions) unless `LocalAccountTokenFilterPolicy=1`. The agent gives them full rights without that setting, so local accounts (LAPS) work for admin tasks out of the box.
-- **Windows' answer:** errors 1326, 1327, 1330, 1331 and 1909 (wrong password, restriction, expired password, disabled, locked out) → 401; 1385 (logon type not granted) → 403. Any other Windows error → 500 and isn't counted by the throttle (§4.3). **Finding:** that includes 1793 (account expired) and 1907 (password must be changed) – they should be refusals (401), not 500 (`WindowsShell.cs`).
+- **Windows' answer** (`SignInRefusal.cs`): Windows refusing the account → 401 – errors 1326 (wrong password), 1317 (no such user), 1355 (no such domain), 1327 (account restriction, e.g. a blank password), 1328 (logon hours), 1329 (workstation), 1330 (password expired), 1907 (password must be changed), 1331 (disabled), 1793 (account expired) and 1909 (locked out). The account may not sign in this way → 403 – 1385 (logon type not granted) and 1935 (authentication firewall). Windows can't check the account → 500 and isn't counted by the throttle (§4.3) – 1311 (no domain controller), 1786–1789 (trust relationship) and any other error. Each refusal is audited as event 2000 with the reason and the Windows error number, never the password.
 - **Allowed accounts:** each right is granted to Windows groups of the device (§7.1). Default: the groups in `allowedGroups` (local Administrators, `S-1-5-32-544`) get PowerShell, Desktop, SecureDesktop, PrivacyScreen and Tunnel; DesktopViewOnly, ConsentBypass and AutoSignIn go to nobody. The policy subkey `Rights` replaces the groups of a right. Entries are SIDs or names, resolved on the device. In RemoteHub's install dialog only the English name "Administrators" is turned into the SID (`AgentInstaller.ParseGroups`); a localized name ("Administratoren") is passed on as typed and must resolve on the device.
 - **PowerShell runs as the signed-in user,** with their profile and environment, in a job object that is killed when the session ends. Rights and auditing are the same as with PowerShell remoting, except for the UAC point above.
 - Kerberos and NTLM aren't used. Kerberos doesn't work across untrusted forests, and NTLM is deprecated by Microsoft.
@@ -116,7 +116,7 @@ RemoteHub (operator PC)                               Device
   5. Delete the `.rhagent` file (if that fails, the log says to delete it by hand).
   6. Virtual display and automatic sign-in as chosen (their failure doesn't fail the install).
 
-  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json`, `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
+  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json` with its backup `agent.json.bak` (§7.2), `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
 - **Firewall:** inbound rule "RemoteHub Agent" for the agent program and its port (TCP, all profiles), limited to the remote addresses given in the enrollment, or Any if none are given.
 - **Port in use:** the agent logs a clear error and doesn't start. It never moves silently to another port.
 
@@ -144,11 +144,11 @@ Out of scope for v1. The design keeps it possible:
   | 403 | account has none of the groups of the right, or network logon denied |
   | 404 | `/v1/desktop` or `/v1/tunnel` turned off by policy |
   | 429 | too many failed sign-ins from this address |
-  | 500 | PowerShell could not start; or a Windows sign-in error the agent doesn't map (e.g. 1793, 1907 – see the finding in §4.2) |
+  | 500 | PowerShell could not start; or Windows couldn't check the account (no domain controller, broken trust, an unknown error – §4.2) |
   | 503 | session limit reached, or no free sign-in slot within 30 s (8 sign-ins at once) |
 
 - Messages are at most 16 MB. WebSocket keep-alive: a ping every 30 s; no answer within 30 s ends the connection (and its PowerShell).
-- **Known issue:** a PowerShell session ended by the keep-alive timeout is logged as "PowerShell ended" instead of "connection lost" (`AgentHost.cs`, `Tunnel.RunAsync`).
+- A PowerShell session ended by a drop is logged as "connection lost" (1001), whichever side of the relay notices it first: a receive cancelled by the keep-alive timeout or by the aborted request is a drop, not "closed by RemoteHub" or "PowerShell ended".
 - Versioned through the path (`/v1`). The contract lives in `src/RemoteHub.Agent/AgentProtocol.cs`, which is compiled into both sides.
 
 ## 7. Configuration: `%ProgramData%\RemoteHub\Agent\agent.json`
@@ -173,8 +173,25 @@ default on). The driver – the third-party Virtual Display Driver (MIT, IddCx, 
 unchanged and hash-checked) – is installed with the device switched off; the service switches it on at the viewer's
 window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml`, reloaded through its control pipe on a resize),
 the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the service switches it off when the last
-connection that asked for it ends (and at service start). Uninstall removes device, driver package, settings and the
-publisher trust (Trusted Publishers – only if the agent added it).
+connection that asked for it ends (and at service start). After a restart of the device Windows may no longer report
+the switched-off device (pnputil: *Disconnected*, enabling fails with 1167 "not connected"); switching it on then
+rescans the devices and, if that doesn't bring it back, removes the device node and creates it again from the
+hash-checked files as at install, keeps the new instance ID in `virtual-display.txt` and logs what it repaired.
+Switching off covers every device with the hardware ID `Root\MttVDD` that Windows reports, plus the one in the state
+file, and counts only when Windows no longer shows it as OK (reported without a problem): while the ended connection
+still holds it, it is tried again after 1, 2 and 3 s, then the device node is removed (created again by the next
+connection). Every switch-off writes one log line – which devices were switched off, found off and in what state, or
+why not – and a line for each failed try as it happens; an end that leaves it on for others says for how many. Each
+connection is counted once the monitor is on for it, whichever way it was switched on (enabled, rescan, created again,
+size kept), and released once at its end; a connection that ends while its monitor is being switched on switches it
+off again. Counting has its own lock, so a connection's end never waits for another one's pnputil call or driver pipe;
+the device lock is held only for each pnputil call or pipe request, not during the waits, and a connection that
+switches the monitor on meanwhile ends the tries. At service start it is switched off in the background, without
+holding up the service's start, and never removed there. Every pnputil call is stopped after 20 s. If the driver's
+control pipe doesn't answer a resize within 3 s while the monitor is on for another connection, the new connection
+still counts and the log says the monitor kept its size.
+Uninstall removes device (also one Windows no longer reports), driver package, settings and the publisher trust
+(Trusted Publishers – only if the agent added it).
 
 Other files in the same folder (SYSTEM and Administrators only): `autosignin.json` – the sessions automatic sign-in
 created (session, SID, account, end action; no secrets), so a session left open by a crash is dealt with at the next
@@ -198,7 +215,7 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `DesktopIdleTimeoutMinutes` | DWORD | 0–1440, 0 = never (0) |
 | `AuditToEventLog` | DWORD | 0: audit only in the log file (1) |
 | `PrivacyScreen` | DWORD | 0 not allowed, 1 allowed, 2 allowed and may block the device's mouse and keyboard (2) |
-| `HiddenApps` | MULTI_SZ | programs (full path) or Store apps (`aumid:` + AppUserModelID) never shown to an admin (none) |
+| `HiddenApps` | MULTI_SZ | programs (full path) or Store apps (`aumid:` + AppUserModelID, or their program's path under `WindowsApps`, matched in any version of the package) never shown to an admin (none) |
 | `TunnelEnabled` | DWORD | 0: never a jump host (on) |
 | `TunnelTargets`, `TunnelPorts` | MULTI_SZ | where jump connections may go: ranges and names / ports (anywhere except the device's own loopback, link-local and multicast; every port) |
 | `MaxTunnelStreams` | DWORD | 1–1024 streams per jump connection (64) |
@@ -220,6 +237,37 @@ agent.json, default). Health (`/v1/health`) lists in `managed` which of RemoteHu
 Automatic sign-in as chosen at install is in agent.json (`noUserBehavior`, `autoSignInGroups`) since 0.18.12; the policy
 values win. Older versions wrote it into this key (recorded in `autosignin.policy`); the service moves those values to
 agent.json at its first start, unless IT changed them since.
+
+### 7.2 Writing and damage
+
+A device that loses power at the wrong moment must not end up unreachable (lab finding A-CFG-JSON: agent.json was
+zero-filled after a hard power-off, and the service didn't start).
+
+- **Writes are atomic and durable.** agent.json, `autosignin.json`, `virtual-display.txt` and the records in
+  `rdp-minimized-*.txt` and `sas-actions-*.txt` are written to a temporary file in the same folder, flushed to the disk
+  and only then put in place (`DurableFile`): a power loss leaves the old file or the new one, never a torn one. The
+  temporary file inherits the folder's ACL (§5.3); an existing file is replaced with `ReplaceFile`, which keeps that
+  file's own ACL.
+- **A last good copy.** Every save of agent.json also writes `agent.json.bak`, once agent.json itself has been
+  replaced. At every service start a readable and valid agent.json refreshes the backup, so a hand edit becomes the last
+  good copy too.
+- **At service start, a damaged agent.json** – one that isn't a configuration at all: empty, zero-filled, cut off, not
+  JSON – is kept as `agent.json.damaged`, and:
+  - with a readable backup, the service starts with the backup and writes it back to agent.json. Log and Application
+    log: event 2300 (warning), saying what couldn't be read and that the backup was used.
+  - without one, the service starts with a fresh install's defaults – never more than a fresh install allows: the
+    device's own certificate (the single agent certificate in LocalMachine\My; its CN is the device ID), the port the
+    agent's firewall rule opens (else the default port), allowed groups the local Administrators, automatic sign-in
+    off, default limits. The defaults aren't saved, and automatic sign-in isn't read from the file again while the
+    service runs. Event 3300 (error) says so at every start, until agent.json is repaired or the agent is installed
+    again with the enrollment file. The Administrators get no access they couldn't give themselves – they can edit
+    agent.json. Policy values still win over the defaults, as over agent.json. Without a single agent certificate the
+    service doesn't start, and the log says to install it again.
+- **Not treated as damage:** a file that reads but holds an invalid value (a port of 0, no allowed groups) is what
+  someone wrote. Replacing it with an older copy could undo a restriction they made, so the service refuses to start
+  and logs why, as before. A missing agent.json means the device isn't enrolled (uninstall deletes it).
+- **Limit:** the backup can be older than a hand edit made since the last service start or save. Whoever narrows
+  `allowedGroups` by hand restarts the service, which makes the edit the last good copy.
 
 ## 8. Logging
 
@@ -246,7 +294,7 @@ agent.json at its first start, unless IT changed them since.
 |---|---|
 | Custom transport in RemoteHub (`Remoting/AgentTransport.cs`) | done, tested |
 | Agent host: TLS, health, sign-in on upgrade, throttle, tunnel, log (`src/RemoteHub.Agent`) | done, tested with a test sign-in and in the lab (S-AUTH, S-THR) |
-| Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); errors 1793 / 1907 give 500 (§4.2) |
+| Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); Windows errors mapped in `SignInRefusal.cs` (§4.2) |
 | Connection setting "Connect through: PowerShell remoting (WinRM) / RemoteHub Agent" plus device data (`AgentDevice`) | done |
 | Enrollment generator (`AgentEnrollment.cs`), `.rhagent` import (`RemoteHubAgent.exe enroll`), cleanup on uninstall | done, tested (import itself needs LocalSystem) |
 | Agent MSI: service, delayed start, recovery, firewall rule | done |

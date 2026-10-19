@@ -3,6 +3,13 @@ using RemoteHub.Agent;
 
 // RemoteHub Agent – Windows service "RemoteHubAgent" (runs as LocalSystem).
 // Config: %ProgramData%\RemoteHub\Agent\agent.json; certificate: LocalMachine\My (thumbprint in the config).
+// The desktop helper's clipboard reader, started as the signed-in user: before anything else, it touches no agent files.
+if (args.Length == 1 && args[0] == ClipboardFilesReader.Verb)
+{
+    using var stdout = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false));
+    return ClipboardFilesReader.Run(stdout);
+}
+
 var log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), 30);
 
 // Setup commands, run by the MSI: enroll <file|folder>, cleanup.
@@ -15,12 +22,14 @@ if (args.Length > 0 && args[0] == "desktop") return DesktopHelperProgram.Run();
 
 try
 {
-    var config = AgentConfig.Load(AgentConfig.DefaultPath);
+    // A damaged agent.json falls back to its last good copy, else a fresh install's defaults (docs/agent-spec.md §7.2).
+    var config = AgentConfig.LoadForService(AgentConfig.DefaultPath, Enrollment.InstalledIdentity);
     log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), config.LogRetentionDays)
     {
         EventLogEnabled = () => AgentPolicy.Load(config).AuditToEventLog,
         RetentionDays = () => AgentPolicy.Load(config).LogRetentionDays,
     };
+    if (config.Recovery is { } recovery) log.Audit(config.IsSafeDefaults ? AuditEvent.ConfigDefaults : AuditEvent.ConfigRestored, recovery);
     // Automatic sign-in values an older version wrote into the policy key move to agent.json (once; docs/admx-design.md §11.3).
     if (AutoSignInSetup.Migrate(config) is { } moved) log.Write(moved);
     // The port: policy ListenPort, else agent.json; read only here. The firewall rule follows it.
@@ -44,7 +53,9 @@ try
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
     try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
     catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
-    VirtualDisplay.Reset(); // the virtual monitor is off until a connection needs it (a crash may have left it on)
+    // The virtual monitor is off until a connection needs it (a crash may have left it on) – in the background: the
+    // service must report running within Windows' 30 s, whatever pnputil does.
+    _ = VirtualDisplay.ResetInBackground(log.Write);
     await app.RunAsync();
     log.Write("RemoteHub Agent stopped");
     return 0;

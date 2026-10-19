@@ -45,12 +45,29 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'close' })
             $sasMarker = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\ProgramData\RemoteHub\Agent\sas.agent' }
-            # repair: msiexec /fa
-            $repair = Invoke-LabGuest -Name $VmName -ScriptBlock {
-                $code = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' }).PSChildName
-                $p = Start-Process msiexec.exe -ArgumentList '/fa', $code, '/qn', '/norestart', '/l*v', 'C:\Windows\Temp\rh-repair.log' -Wait -PassThru
+            # repair: msiexec /fa with the package as its source. RemoteHub deletes the folder it installed from, and the
+            # cached package in C:\Windows\Installer has no files (the cabinet is embedded), so /fa by product code alone
+            # finds no source and ends with 1603 after the service was stopped - as an admin would, the MSI is given
+            $msiName = Split-Path (Get-LabAgentMsi) -Leaf
+            Copy-LabFile -Name $VmName -Path (Get-LabAgentMsi) -Destination 'C:\LabRepair'
+            # Windows Installer only takes a source package with the name it was registered under (RemoteHub uploads it
+            # as RemoteHub-Agent-x64.msi): run 20261017-054704 got error 1706 with the copy under its build name
+            $repair = Invoke-LabGuest -Name $VmName -ArgumentList "C:\LabRepair\$msiName" -ScriptBlock {
+                param($msi)
+                $registered = Get-ChildItem 'HKLM:\SOFTWARE\Classes\Installer\Products' -ErrorAction SilentlyContinue |
+                    Where-Object { (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).ProductName -eq 'RemoteHub Agent' } |
+                    ForEach-Object { (Get-ItemProperty (Join-Path $_.PSPath 'SourceList') -ErrorAction SilentlyContinue).PackageName } |
+                    Select-Object -First 1
+                if ($registered -and $registered -ne (Split-Path $msi -Leaf)) {
+                    $target = Join-Path (Split-Path $msi) $registered
+                    Copy-Item $msi $target -Force
+                    $msi = $target
+                }
+                $p = Start-Process msiexec.exe -ArgumentList '/fa', "`"$msi`"", '/qn', '/norestart', '/l*v', 'C:\Windows\Temp\rh-repair.log' -Wait -PassThru
                 $p.ExitCode
             }
+            # the verbose log, to trace a failed repair
+            try { Get-LabFile -Name $VmName -Path 'C:\Windows\Temp\rh-repair.log' -Destination (Out 'repair') } catch { }
             $afterRepair = Get-LabAgentState -Name $VmName
             $health = Wait-LabAgent -Name $VmName -Pin $install.pin
             Save 'sas-repair' @{ State = $state; Cad = $cad; Repair = $repair; After = $afterRepair }
@@ -78,17 +95,36 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
             $e = New-LabEnrollment -Name $VmName -Path (Join-Path (Out 'interactive') 'device.rhagent')
             Copy-LabFile -Name $VmName -Path (Get-LabAgentMsi), $e.file -Destination 'C:\LabInteractive'
             $msiName = Split-Path (Get-LabAgentMsi) -Leaf
-            # Windows Installer's progress window in the console session; nothing to click
-            $task = Start-LabInSession -Name $VmName -Account Console -Elevated -ScriptBlock ([scriptblock]::Create("msiexec.exe /i 'C:\LabInteractive\$msiName' /qb /l*v C:\LabInteractive\install.log"))
-            $seen = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title '*RemoteHub Agent*' -Text '*' -Value exists -TimeoutSec 60
+            # Windows Installer's progress window in the console session; nothing to click. A first install is over in a
+            # few seconds - a look from outside afterwards can miss the window (run 20261016-212514 saw only the desktop) -
+            # so the session that starts msiexec notes the titles of its visible main window until msiexec ends
+            $code = @'
+$p = Start-Process msiexec.exe -ArgumentList '/i', '"C:\LabInteractive\__MSI__"', '/qb', '/l*v', 'C:\LabInteractive\install.log' -WindowStyle Normal -PassThru
+$null = $p.Handle
+$titles = @()
+while (-not $p.HasExited) {
+    $p.Refresh()
+    $t = $p.MainWindowTitle
+    if ($t -and $titles -notcontains $t) { $titles += $t }
+    Start-Sleep -Milliseconds 100
+}
+@{ exitCode = $p.ExitCode; titles = $titles } | ConvertTo-Json -Compress
+'@
+            $raw = Invoke-LabInSession -Name $VmName -Account Console -Elevated -TimeoutSec 600 -ScriptBlock ([scriptblock]::Create($code.Replace('__MSI__', $msiName)))
+            $seen = [ordered]@{ found = $false; titles = @(); exitCode = $null; raw = "$raw".Trim() }
+            try {
+                $r = "$raw".Trim() | ConvertFrom-Json
+                $seen.titles = @($r.titles); $seen.exitCode = $r.exitCode
+                $seen.found = @($seen.titles | Where-Object { $_ -like '*RemoteHub Agent*' }).Count -gt 0
+            } catch { }
             $until = (Get-Date).AddMinutes(5)
-            do { Start-Sleep -Seconds 5; $state = Get-LabAgentState -Name $VmName } while (-not ($state.Service -and $state.Service.State -eq 'Running') -and (Get-Date) -lt $until)
-            Stop-LabInSession -Name $VmName -Task $task
+            do { $state = Get-LabAgentState -Name $VmName; if ($state.Service -and $state.Service.State -eq 'Running') { break }; Start-Sleep -Seconds 5 } while ((Get-Date) -lt $until)
             Save 'interactive' @{ Seen = $seen; State = $state }
         }
 
         It 'A-HAND-06 the interactive install (Windows Installer''s progress window, no own dialogs) installs and enrolls' -Tag 'A-HAND-06' {
-            $seen.found | Should -BeTrue
+            $seen.found | Should -BeTrue -Because "msiexec's window titles: $(@($seen.titles) -join ', '); output: $($seen.raw)"
+            $seen.exitCode | Should -BeIn 0, 3010
             $state.Config.deviceId | Should -Be $e.deviceId
             $state.Service.State | Should -Be 'Running'
         }
@@ -109,18 +145,21 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
             $again = Invoke-LabDesktop -Name $VmName -Pin $install.pin -Account Console -Out (Out 'upd-again') -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }, @{ do = 'close' })
             # uninstall with a session open
-            $resBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" }
+            $resBefore = Get-LabResolution -Name $VmName
+            # fitted to a size the console isn't at, so "restored" can tell
+            $size = if ($resBefore -eq '1280x720') { @(1024, 768) } else { @(1280, 720) }
             $o = Out 'uninst'
             $job = Start-LabDesktop -Name $VmName -Pin $install.pin -Account Console -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
-                @{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 6 }, @{ do = 'markFile'; path = (Join-Path $o 'fitted.txt') }, @{ do = 'wait'; anyOf = @('Ended', 'Failed'); timeout = 180 })
+                @{ do = 'settings'; fitWidth = $size[0]; fitHeight = $size[1] }, @{ do = 'sleep'; seconds = 6 }, @{ do = 'markFile'; path = (Join-Path $o 'fitted.txt') }, @{ do = 'wait'; anyOf = @('Ended', 'Failed'); timeout = 180 })
             Wait-LabHostFile (Join-Path $o 'fitted.txt')
+            $fitted = Wait-LabResolution -Name $VmName -Not $resBefore -TimeoutSec 15 -NoThrow
             $uninstall = Uninstall-LabAgent -Name $VmName
             $un = Receive-LabDesktop $job
             Start-Sleep -Seconds 5
             $afterUninstall = [ordered]@{ Helpers = Helper; Banner = @(Invoke-LabPerson -Name $VmName -Account Console -Do windows)
-                Resolution = Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" } }
-            Save 'during-session' @{ Update = $update; Upd = $upd; Before = $before; AfterUpdate = $afterUpdate; Banner = $banner; Again = $again; Uninstall = $uninstall; Un = $un; After = $afterUninstall; ResBefore = $resBefore }
+                Resolution = Wait-LabResolution -Name $VmName -Is $resBefore -TimeoutSec 20 -NoThrow }
+            Save 'during-session' @{ Update = $update; Upd = $upd; Before = $before; AfterUpdate = $afterUpdate; Banner = $banner; Again = $again; Uninstall = $uninstall; Un = $un; After = $afterUninstall; ResBefore = $resBefore; Fitted = $fitted }
         }
 
         It 'A-UPD-09 an update during a remote desktop: that session ends, its helper and banner go, a new session works' -Tag 'A-UPD-09' {
@@ -137,6 +176,7 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
             @($un.closes).Count | Should -BeGreaterThan 0
             @($afterUninstall.Helpers) | Should -BeNullOrEmpty
             @($afterUninstall.Banner) | Should -BeNullOrEmpty
+            $fitted | Should -Not -Be $resBefore -Because 'the fit changed the console''s resolution (precondition: else "restored" says nothing)'
             $afterUninstall.Resolution | Should -Be $resBefore
         }
     }
@@ -174,11 +214,28 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
             Invoke-LabGuest -Name $VmName -ScriptBlock { Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name ConsentPromptBehaviorAdmin -Value 0 }
             $null = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { Start-Process 'ms-settings:appsfeatures' }
             $s = [ordered]@{}
-            $s.search = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text '*Search apps*' -Value 'set:RemoteHub Agent' -TimeoutSec 60
-            Start-Sleep -Seconds 3
-            $s.more = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text 'More options*' -TimeoutSec 30
-            $s.menu = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text 'Uninstall' -TimeoutSec 30
-            $s.confirm = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title '*' -Text 'Uninstall' -TimeoutSec 30
+            # the list is up when the apps' "More options" buttons are
+            $s.page = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text 'More options' -Value exists -TimeoutSec 60
+            # the page's search box: its name differs between Windows builds ('*Search apps*' found nothing on 26H2), so
+            # it is picked from the page's elements - an Edit or ComboBox that isn't Settings' own "Find a setting"
+            $s.elements = @((Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text '*' -Value list -TimeoutSec 30).items)
+            $boxes = @($s.elements | ForEach-Object { $f = "$_" -split '\|', 3; if ($f.Count -eq 3 -and $f[0] -in 'Edit', 'ComboBox' -and "$($f[1]) $($f[2])" -notlike '*setting*') { [pscustomobject]@{ Name = $f[1]; Id = $f[2] } } })
+            $box = @($boxes | Where-Object { "$($_.Name) $($_.Id)" -like '*app*' }) + @($boxes | Select-Object -Last 1) | Select-Object -First 1
+            if ($box) {
+                $s.searchBox = $box
+                # typed like a person, not set through UI Automation: the list filters on typed input
+                $s.search = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text $(if ($box.Name) { $box.Name } else { $box.Id }) -Value 'keys:RemoteHub Agent' -TimeoutSec 30
+            }
+            # "More options" of RemoteHub Agent's own row - never the first app's in the list (without a working search the
+            # old step uninstalled whichever app came first)
+            $s.more = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text 'RemoteHub Agent' -Value 'row:More options*' -TimeoutSec 30
+            if ($s.more.found -and -not $s.more.PSObject.Properties['error']) {
+                $s.menu = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Settings' -Text 'Uninstall' -TimeoutSec 30
+                # the flyout "This app and its related info will be uninstalled." and its own Uninstall button
+                $s.confirm = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title '*' -Text 'Uninstall' -TimeoutSec 30
+                # Windows Installer's own question, where this Windows build asks it for an MSI
+                $s.prompt = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'Windows Installer' -Text 'Yes' -TimeoutSec 10
+            }
             $until = (Get-Date).AddMinutes(5)
             do { Start-Sleep -Seconds 5; $after = Get-LabAgentState -Name $VmName } while ($after.Product -and (Get-Date) -lt $until)
             Save 'settings' @{ Steps = $s; After = $after }

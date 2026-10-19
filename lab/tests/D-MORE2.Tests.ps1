@@ -6,8 +6,8 @@
 #        (RhPerson.ps1) and network control (Disconnect-LabNetwork / Connect-LabNetwork) for D-RES-10; the virtual
 #        display driver (Install-LabAgent -VirtualDisplay, the default) for D-VD-05. normaluser is signed in on the
 #        console and allows PSAdmin.
-# Known product bug: D-RES-10 - the agent notices the drop first, the end is taken as "closed by RemoteHub" and the
-#        resume token revoked (DesktopEndpoint.cs:220-230). Tested for the correct behaviour: fails until fixed.
+# D-RES-10 keeps the network cut until the agent has ended the connection itself, then resumes at once: the token is
+#        valid for a minute from that end, however long the agent took to notice.
 # D-VID-12 can only be checked where Desktop Duplication stands still by itself (no hook to force it): skipped otherwise.
 # LabRole: device
 param(
@@ -34,7 +34,6 @@ BeforeAll {
         if ($Answer) { $null = Invoke-LabPerson -Name $VmName -Do click -Text $Answer -TimeoutSec 60 }
         $job
     }
-    function Resolution { Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" } }
     function Get-Vdd { Invoke-LabGuest -Name $VmName -ScriptBlock { $d = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1; if ($d) { [string]$d.Status } } }
     function Set-AgentJsonValue([string]$Key, $Value) {
         Invoke-LabGuest -Name $VmName -ArgumentList $Key, $Value -ScriptBlock {
@@ -46,18 +45,11 @@ BeforeAll {
         }
         $null = Restart-LabAgent -Name $VmName -Pin $pin
     }
-    # pastes the clipboard into a folder of normaluser's, as Explorer's Paste does; answers the files that arrived
-    function Paste-AtDevice([string]$Folder) {
-        $null = Invoke-LabInSession -Name $VmName -TimeoutSec 240 -ScriptBlock ([scriptblock]::Create(@"
-`$null = New-Item -ItemType Directory -Path '$Folder' -Force
-(New-Object -ComObject Shell.Application).NameSpace('$Folder').Self.InvokeVerb('paste')
-`$until = (Get-Date).AddSeconds(120)
-do { Start-Sleep -Seconds 2; `$n = @(Get-ChildItem '$Folder' -Recurse -File -ErrorAction SilentlyContinue).Count } while (`$n -eq 0 -and (Get-Date) -lt `$until)
-Start-Sleep -Seconds 5
-"@))
-        Invoke-LabGuest -Name $VmName -ArgumentList $Folder -ScriptBlock {
-            param($f) @(Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Path = $_.FullName.Substring($f.Length).TrimStart('\'); Length = $_.Length } })
-        }
+    # pastes the clipboard into a folder of normaluser's, as Explorer's Paste does, until $Count files are there
+    # (Invoke-LabPaste: it pumps messages while the shell fetches the offered files); answers the paste's result - files
+    # (Path, Name, Length, Hash), the clipboard's formats before the paste and the thread's apartment
+    function Paste-AtDevice([string]$Folder, [int]$Count = 1) {
+        Invoke-LabPaste -Name $VmName -Account User -Folder $Folder -Count $Count -TimeoutSec 120
     }
     function Ends($r) { , @($r.transfers | Where-Object kind -eq 'end') }
 
@@ -145,22 +137,29 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             Invoke-LabGuest -Name $VmName -ScriptBlock { powercfg.exe /change monitor-timeout-ac 0; powercfg.exe /change monitor-timeout-dc 0 }
 
             # fit bounds: 300x150 ignored, 10000x6000 capped at 7680x4320
-            $v.resBefore = Resolution
+            # (the console's resolution from Hyper-V's video head: a PowerShell Direct session sees its own 1024x768)
+            $v.resBefore = Get-LabResolution -Name $VmName
             $o = Out 'fit-bounds'
             $job = Begin 'fit-bounds' @(
                 @{ do = 'settings'; fitWidth = 300; fitHeight = 150 }, @{ do = 'sleep'; seconds = 8 }, (Mark $o 'small'), (Park $o 'small-read')
-                @{ do = 'settings'; fitWidth = 10000; fitHeight = 6000 }, @{ do = 'sleep'; seconds = 10 }, (Mark $o 'large'), @{ do = 'close' })
+                @{ do = 'settings'; fitWidth = 10000; fitHeight = 6000 }, @{ do = 'sleep'; seconds = 10 }, (Mark $o 'large'), (Park $o 'large-read'), @{ do = 'close' })
             Reached $o 'small'
-            $v.resSmall = Resolution
+            $v.resSmall = Get-LabResolution -Name $VmName
             Release $o 'small-read'
+            # recorded only: the largest mode the display offers may be the one it was at
+            Reached $o 'large'
+            $v.resLarge = Get-LabResolution -Name $VmName
+            Release $o 'large-read'
             $v.fit = Receive-LabDesktop $job
             $v.smallMs = MarkMs $o 'small'
-            Start-Sleep -Seconds 5
-            $v.resAfter = Resolution
+            $v.resAfter = Wait-LabResolution -Name $VmName -Is $v.resBefore -TimeoutSec 20 -NoThrow
             Save 'picture' $v
         }
 
         It 'D-VID-11 while connected RemoteDesktop_SuppressWhenMinimized = 2 (rdp-minimized-[sid].txt keeps the old value), put back afterwards; a log line' -Tag 'D-VID-11' {
+            # the value is set by the helper and put back when it ends: a refused connection (consent not clicked in time)
+            # has it back at 0 before it is read
+            (Of $v.drawing 'Connected').Count | Should -BeGreaterThan 0 -Because "the person allowed the connection (statuses: $((@($v.drawing.statuses) | ForEach-Object state) -join ', '))"
             $v.rdpBefore.Value | Should -Be 0
             $v.rdpDuring.Value | Should -Be 2
             $v.rdpDuring.Record | Should -Be '0'
@@ -217,10 +216,13 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
                 }
             }
             $o = Out 'vd-restart'
+            $since = Get-LabGuestTime -Name $VmName
             # "always" switches the virtual monitor on once a Fit size is sent
             $job = Begin 'vd-restart' @(@{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 10 }, (Mark $o 'on'), (Park $o 'end'), @{ do = 'sleep'; seconds = 1 })
             Reached $o 'on'
             $d.on = Get-Vdd
+            # the agent's own word on switching it on ("virtual monitor on at ..." or "... not switched on: <why>")
+            $d.onLog = @(Get-LabAgentLog -Name $VmName -Since $since | ForEach-Object { "$_" } | Where-Object { $_ -match 'virtual monitor' })
             # the service killed (nothing switched off on the way out), then started again
             Invoke-LabGuest -Name $VmName -ScriptBlock { Stop-Process -Id (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId -Force }
             Invoke-LabGuest -Name $VmName -ScriptBlock {
@@ -237,7 +239,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
         }
 
         It 'D-VD-05 the virtual display is switched off when the service starts again' -Tag 'D-VD-05' {
-            $d.on | Should -Be 'OK' -Because 'the virtual monitor was on while connected'
+            $d.on | Should -Be 'OK' -Because "the virtual monitor was on while connected (agent log: $(@($d.onLog) -join ' / '))"
             $d.afterRestart | Should -Not -Be 'OK'
         }
     }
@@ -257,7 +259,8 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
                 (Mark $o 'images'), (Park $o 'clipset'), @{ do = 'clipboardImage'; path = "$data\broken.bmp"; offer = $false; waitReceipt = 20 }
                 @{ do = 'clipboardImage'; path = "$data\short.bmp"; offer = $false; waitReceipt = 20 }, @{ do = 'sleep'; seconds = 3 }, (Mark $o 'imagessent'), (Park $o 'end'), @{ do = 'close' })
             Reached $o 'offered'
-            $c.pasted = Paste-AtDevice "C:\Users\$($vm.UserAccount)\Desktop\Newer"
+            $c.paste = Paste-AtDevice "C:\Users\$($vm.UserAccount)\Desktop\Newer"
+            $c.pasted = @($c.paste.files)
             Release $o 'pasted'
             Reached $o 'long'
             # 1,200,000 characters copied at the device
@@ -285,11 +288,12 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
         It 'D-CLIP-19 a second copy offered while the first is still offered replaces it silently: the paste gets the second' -Tag 'D-CLIP-19' {
             $ids = @($c.r.steps | Where-Object do -eq 'files' | ForEach-Object { $_.detail.id })
             $first = $ids[0]; $second = $ids[1]
-            @($c.pasted | ForEach-Object { Split-Path $_.Path -Leaf }) | Should -Be @('file3.txt')
+            @($c.pasted | ForEach-Object { Split-Path $_.Path -Leaf }) | Should -Be @('file3.txt') -Because "normaluser's clipboard offered: $(@($c.paste.formats) -join ', '); $($c.paste.apartment) thread"
             @($c.r.transfers | Where-Object { $_.kind -eq 'request' -and $_.fromDevice } | ForEach-Object { [int]$_.id }) | Should -Not -Contain $first
             @($c.r.transfers | Where-Object { $_.kind -eq 'request' -and $_.fromDevice } | ForEach-Object { [int]$_.id }) | Should -Contain $second
             # silently: no end of the first, no message
-            @(Ends $c.r | Where-Object { $_.id -eq $first }) | Should -BeNullOrEmpty
+            # ((Ends ...)): Ends hands its list back as one object - the parentheses unroll it for Where-Object
+            @((Ends $c.r) | Where-Object { $_.id -eq $first }) | Should -BeNullOrEmpty
             @($c.r.statuses | Where-Object { $_.ms -lt $c.ms.long -and $_.message -match 'replaced|copy' }) | Should -BeNullOrEmpty
         }
 
@@ -305,7 +309,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             $offer = @($c.r.transfers | Where-Object { $_.kind -eq 'offer' -and $_.fromDevice -and $_.ms -gt $c.ms.many -and $_.ms -lt $c.ms.images })
             $offer.Count | Should -Be 1
             @($offer[0].transfer.items).Count | Should -Be 1000
-            @(Ends $c.r | Where-Object { $_.ms -gt $c.ms.many -and $_.ms -lt $c.ms.images -and -not $_.ok }) | Should -BeNullOrEmpty
+            @((Ends $c.r) | Where-Object { $_.ms -gt $c.ms.many -and $_.ms -lt $c.ms.images -and -not $_.ok }) | Should -BeNullOrEmpty
             @($c.r.statuses | Where-Object { $_.ms -gt $c.ms.many -and $_.ms -lt $c.ms.images }) | Should -BeNullOrEmpty
         }
 
@@ -391,7 +395,10 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
     Context 'resume after a drop the agent noticed first' {
         BeforeAll {
             $r = [ordered]@{}
-            # the agent notices the drop first: the network cut for ~75 s (beyond the 30 s keep-alive), resumed right after
+            # the agent notices the drop first: the network stays cut until the agent has ended the connection itself (its
+            # keep-alive gives up after 30-60 s, TCP sometimes sooner), then RemoteHub resumes at once. The token is valid
+            # for a minute from that end - a fixed cut (75 s, lab run 20261017-160133) resumed 61.5 s after an end the
+            # agent noticed 20 s into the cut, so the token had expired and the test failed on its own timing.
             $since = Get-LabGuestTime -Name $VmName
             $o = Out 'res-long-cut'
             $job = Begin 'res-long-cut' @(
@@ -400,14 +407,26 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
                 @{ do = 'sleep'; seconds = 3 }, @{ do = 'close' })
             Reached $o 'connected'
             Start-Sleep -Seconds 3
+            $cutAt = Get-LabGuestTime -Name $VmName
+            $lost = @()
             $cut = Disconnect-LabNetwork -Name $VmName
-            try { Start-Sleep -Seconds 75 }
+            try {
+                # PowerShell Direct still reaches the guest while its network is cut
+                $until = (Get-Date).AddSeconds(120)
+                do {
+                    $lost = @(Get-LabAgentEvent -Name $VmName -Since $cutAt -Id 1101 | Where-Object { $_.Message -match '\(connection lost' })
+                    if ($lost.Count -gt 0) { break }
+                    Start-Sleep -Seconds 2
+                } while ((Get-Date) -lt $until)
+            }
             finally { Connect-LabNetwork -Name $VmName -Switches $cut }
-            Start-Sleep -Seconds 5
+            if ($lost.Count -eq 0) { throw 'D-RES-10: the agent did not end the connection as "connection lost" within 120 s of the network cut' }
+            $r.noticedAfterSec = [math]::Round(([datetime]$lost[0].Time - $cutAt).TotalSeconds)
             Release $o 'restored'
             Reached $o 'second'
+            $r.resumedAfterEndSec = [math]::Round(((Get-LabGuestTime -Name $VmName) - [datetime]$lost[0].Time).TotalSeconds)
             Start-Sleep -Seconds 3
-            # asked again (the bug): deny so the run goes on
+            # asked again (the token was revoked or had expired): deny so the run goes on
             try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 10 } catch { }
             $r.cut = Receive-LabDesktop $job
             Start-Sleep -Seconds 2
@@ -415,12 +434,15 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             Save 'resume-long-cut' $r
         }
 
-        # Known product bug (DesktopEndpoint.cs:220-230): a drop the agent notices first ends "cancelled", is taken as
-        # "closed by RemoteHub" and the token is revoked. Tested for the correct behaviour - fails until fixed.
-        It 'D-RES-10 the agent notices the drop first (cut ~75 s), resumed within the minute: 1101 "(connection lost ...)", 1103, no new question' -Tag 'D-RES-10' {
+        # Before 0.18.16 a drop the agent noticed first ended "cancelled", was taken as "closed by RemoteHub" and the token
+        # was revoked (DesktopEndpoint.cs, the main loop's fromClient check).
+        It 'D-RES-10 the agent notices the drop first, resumed within the minute: 1101 "(connection lost ...)", 1103, no new question' -Tag 'D-RES-10' {
+            $r.resumedAfterEndSec | Should -BeLessThan 50 -Because 'the resume must come within the token''s minute for this test to say anything'
             @($r.cut.statuses | Where-Object { $_.connection -eq 1 -and $_.state -eq 'Connected' }).Count | Should -BeGreaterThan 0
             @($r.cutEvents | Where-Object { $_.Id -eq 1101 -and $_.Message -match '\(connection lost' }).Count | Should -BeGreaterThan 0
-            @($r.cutEvents | Where-Object { $_.Id -eq 1101 -and $_.Message -match '\(closed by RemoteHub\)' }) | Should -BeNullOrEmpty
+            # the dropped connection's end only: the resumed one ("continued after a dropped connection") is closed by
+            # RemoteHub at the end of the test, as it should be
+            @($r.cutEvents | Where-Object { $_.Id -eq 1101 -and $_.Message -match '\(closed by RemoteHub\)' -and $_.Message -notmatch 'continued after a dropped connection' }) | Should -BeNullOrEmpty
             @($r.cut.statuses | Where-Object { $_.connection -eq 2 -and $_.state -eq 'WaitingForUser' }) | Should -BeNullOrEmpty
             @($r.cut.statuses | Where-Object { $_.connection -eq 2 -and $_.state -eq 'Connected' }).Count | Should -BeGreaterThan 0
             @($r.cutEvents | Where-Object Id -eq 1103).Count | Should -BeGreaterThan 0

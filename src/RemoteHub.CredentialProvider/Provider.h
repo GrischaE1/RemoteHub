@@ -7,6 +7,8 @@
 
 #include <memory>
 
+#include "UserList.h"
+
 namespace rhcp
 {
     class Channel;
@@ -49,14 +51,20 @@ namespace rhcp
         IFACEMETHODIMP GetCredentialCount(DWORD* count, DWORD* defaultIndex, BOOL* autoLogonWithDefault) override;
         IFACEMETHODIMP GetCredentialAt(DWORD index, ICredentialProviderCredential** credential) override;
 
-        // ICredentialProviderSetUserArray: not needed for the tile, but LogonUI's V2 UI expects providers to take it.
+        // ICredentialProviderSetUserArray: kept to tell whether LogonUI lists the ticket's account – if it doesn't, it
+        // would never take the ticket (UserList.h, lab C-AUTO-20).
         IFACEMETHODIMP SetUserArray(ICredentialProviderUserArray* users) override;
 
     private:
         Provider();
         ~Provider();
 
+        // Looks the ticket's SID up in the user array LogonUI handed over last (UserList.h).
+        UserListed CheckTicketUser();
+
         volatile long _refs = 1;
+        const long _id;                      // this instance's number in the trace
+        ICredentialProviderUserArray* _users = nullptr;
         std::shared_ptr<Channel> _channel;   // null unless CPUS_LOGON in the console session
         Credential* _credential = nullptr;
     };

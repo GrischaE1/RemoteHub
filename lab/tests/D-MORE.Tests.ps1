@@ -5,7 +5,6 @@
 #        the person at the device (RhPerson.ps1: OCR + console mouse) and the marker app. D-BAN-10 needs the agent MSI
 #        built with the credential provider and signed (build-installer.ps1 -LabSigning -CredentialProvider), as
 #        C-AUTO2 / C-END do. normaluser is signed in on the console and allows PSAdmin unless a context says otherwise.
-# Known product bugs: none of these rows is one.
 # LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
@@ -47,6 +46,18 @@ BeforeAll {
         if (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 }) {
             $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
             Start-Sleep -Seconds 3
+        }
+        # no session of an earlier context left: its banner or dialog (an app picker in the middle of the screen) would
+        # take the clicks and keys meant for this context's marker
+        $until = (Get-Date).AddSeconds(90)
+        while ($true) {
+            $left = @(Invoke-LabPerson -Name $VmName -Do windows)
+            if ($left.Count -eq 0) { break }
+            if ((Get-Date) -gt $until) {
+                $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "d-more-start-$name.png")
+                throw "The agent's windows of an earlier context are still up after 90 s: $(@($left | ForEach-Object Title) -join ', ')"
+            }
+            Start-Sleep -Seconds 2
         }
         $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "d-more-start-$name.png")
         Save "start-state-$name" (Invoke-LabGuest -Name $VmName -ScriptBlock { quser 2>&1 | Out-String; @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count })
@@ -321,36 +332,54 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 @{ do = 'keys'; text = 'zz' }, @{ do = 'mouse'; action = 'Move'; x = 300; y = 300 }, @{ do = 'mouse'; action = 'Down'; button = 'Left'; x = 300; y = 300 }
                 @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 300; y = 300 }, @{ do = 'mouse'; action = 'Wheel'; x = 300; y = 300; delta = 120 }
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, (Mark $o 'sent'), (Park $o 'end'), @{ do = 'close' })
-            Reached $o 'held'
-            $h.heldBefore = KeyDown 0x41
-            Start-Sleep -Seconds 10
-            $h.pill = Banner
             $since = Get-LabGuestTime -Name $VmName
-            $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
-            $null = Invoke-LabPerson -Name $VmName -Do hover -Title 'RemoteHub'
-            $h.hideClick = Invoke-LabPerson -Name $VmName -Do click -Text 'Hide' -Title 'RemoteHub'
-            $h.blackClick = Invoke-LabPerson -Name $VmName -Do click -Text 'Black' -TimeoutSec 20
-            Start-Sleep -Seconds 3
-            $h.heldAfter = KeyDown 0x41
-            $h.atHide = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
-            $h.open = Banner
-            $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
-            Release $o 'hidden'
-            Reached $o 'sent'
-            Start-Sleep -Seconds 2
-            $h.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
-            $h.logonUi = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count }
-            Start-Sleep -Seconds 8
-            $h.later = Banner
-            $h.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub' -TimeoutSec 30
-            Release $o 'end'
-            $h.r = Receive-LabDesktop $job
-            Stop-LabInSession -Name $VmName -Task $marker.Task
-            $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
-            Save 'user-hides' $h
+            # (finally: the harness released and the session closed whatever happens here - a session left parked kept
+            # its dialog in the middle of the screen, and the next context's input went into it)
+            try {
+                Reached $o 'held'
+                $h.heldBefore = KeyDown 0x41
+                Start-Sleep -Seconds 10
+                $h.pill = Banner
+                $since = Get-LabGuestTime -Name $VmName
+                $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
+                # (the whole label: "Hide" alone is also on "Hide apps..." - see Invoke-LabBannerClick)
+                $h.hideClick = Invoke-LabBannerClick -Name $VmName -Label 'Hide screen' -EvidencePath (Join-Path $EvidenceDir 'd-more-user-hides-banner.png')
+                $h.blackClick = if ($h.hideClick.clicked) { Invoke-LabPerson -Name $VmName -Do click -Text 'Black' -TimeoutSec 20 } else { $null }
+                # hidden when event 1105 is there: waited for (up to 20 s) before the admin's keys, clicks and Ctrl+Alt+Del go out
+                $until = (Get-Date).AddSeconds(20)
+                do {
+                    Start-Sleep -Seconds 1
+                    $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
+                } while ($h.events.Count -eq 0 -and (Get-Date) -lt $until)
+                $h.heldAfter = KeyDown 0x41
+                $h.atHide = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
+                $h.open = Banner
+                $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
+                Release $o 'hidden'
+                Reached $o 'sent'
+                Start-Sleep -Seconds 2
+                $h.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
+                $h.logonUi = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count }
+                Start-Sleep -Seconds 8
+                $h.later = Banner
+                # the banner is read from the console picture; the session's screen capture fails on the secure desktop
+                # (a Ctrl+Alt+Del that got through): then the error is kept and D-SAS-12 says what happened
+                try { $h.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub' -TimeoutSec 30 }
+                catch { $h.read = [pscustomobject]@{ found = $false; text = ''; error = $_.Exception.Message } }
+            }
+            finally {
+                Release $o 'hidden'
+                Release $o 'end'
+                $h.r = Receive-LabDesktop $job
+                Stop-LabInSession -Name $VmName -Task $marker.Task
+                $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
+                Save 'user-hides' $h
+            }
         }
 
         It 'D-IN-09 the user hides the screen: the key the admin held is released, no input passes afterwards' -Tag 'D-IN-09' {
+            $h.hideClick.clicked | Should -BeTrue -Because "the person clicked 'Hide screen' on the banner (OCR: $(@($h.hideClick.lines) -join ' | '))"
+            $h.blackClick.clicked | Should -BeTrue -Because 'the person chose "Black out" in "Hide your screen"'
             $h.heldBefore | Should -BeTrue -Because 'the admin''s A is down before the user hides the screen'
             @($h.events).Count | Should -BeGreaterThan 0 -Because 'the screen was hidden (event 1105)'
             $h.heldAfter | Should -BeFalse -Because 'released when the user hid the screen'
@@ -365,7 +394,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
         It 'D-BAN-08 the user hid the screen: the banner opens and stays open (no pill)' -Tag 'D-BAN-08' {
             $h.open.Width | Should -BeGreaterThan $h.pill.Width
             $h.later.Width | Should -BeGreaterOrEqual $h.open.Width
-            $h.read.text | Should -Match 'hidden for'
+            $h.read.text | Should -Match 'hidden for' -Because "the banner's text (read error: $(if ($h.read -and $h.read.PSObject.Properties['error']) { $h.read.error } else { 'none' }))"
         }
     }
 
@@ -388,6 +417,17 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 $job = Begin "hidden-input-$run" (@((Mark $o 'connected'), (Park $o 'go')) + $inputSteps + @(@{ do = 'close' }))
                 Reached $o 'connected'
                 Start-Sleep -Seconds 2
+                # The keyboard focus to the marker first: the consent dialog took the foreground and Windows needn't give
+                # it back when it closes (D-INPUT). A click of the person at the device (console mouse) - not the admin's,
+                # which the hidden run drops - and it must have arrived before the admin's input is counted.
+                $before = @(Get-LabMarker -Name $VmName -Marker $marker).Count
+                Send-LabMouse -Name $VmName -X 150 -Y 600
+                $i["$run-focused"] = $false
+                $until = (Get-Date).AddSeconds(15)
+                while (-not $i["$run-focused"] -and (Get-Date) -lt $until) {
+                    Start-Sleep -Seconds 1
+                    $i["$run-focused"] = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $before | Where-Object e -eq 'mup').Count -gt 0
+                }
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 Release $o 'go'
                 $i[$run] = Receive-LabDesktop $job
@@ -400,13 +440,16 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
         }
 
         It 'D-IN-08 over a hidden app: mouse down and wheel dropped, keys dropped while it has the focus; moves still pass' -Tag 'D-IN-08' {
+            $i['visible-focused'] | Should -BeTrue -Because 'the person''s click on the marker (for the keyboard focus) reached it'
+            $i['hidden-focused'] | Should -BeTrue -Because 'the person''s click on the marker (for the keyboard focus) reached it'
             # control: without the policy the same input reaches the marker
             @($i['visible-seen'] | Where-Object e -eq 'mdown').Count | Should -BeGreaterThan 0
             @($i['visible-seen'] | Where-Object e -eq 'char').Count | Should -BeGreaterThan 0
             # hidden: only the moves (and the release of the button) arrive
             @($i['hidden-seen'] | Where-Object e -eq 'move').Count | Should -BeGreaterThan 0
             @($i['hidden-seen'] | Where-Object e -in 'mdown', 'wheel', 'down', 'char') | Should -BeNullOrEmpty
-            @($i.hidden.privacy | Where-Object { $_.privacy.hiddenApps -ge 1 }).Count | Should -BeGreaterThan 0
+            # hidden by the policy: counted as the policy's (policyHiddenApps), not as the user's choice (D-HIDE-03)
+            @($i.hidden.privacy | Where-Object { $_.privacy.policyHiddenApps -ge 1 }).Count | Should -BeGreaterThan 0
         }
     }
 

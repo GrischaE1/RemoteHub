@@ -38,9 +38,28 @@ BeforeAll {
         Invoke-LabUi -Name $VmName -Text $Text -Value $Value -Title $Title -TimeoutSec $TimeoutSec -Optional:$Optional
     }
     # an entry of an item's context menu (right-click and the entry in one step; "A>B" = submenu, a parent that isn't
-    # there is skipped)
+    # there is skipped). Answers the step's result, error included.
+    # No menu at all (no entries): the right-click missed the item. A row the tree has scrolled partly or fully above
+    # its top still counts as on the screen for UI Automation, so the click lands on the search box (the run of
+    # 16.10.2026 21:25: every menu on JumpHost and Behind after the .rdp drop, 8 steps). The row is scrolled into view
+    # (Reveal), clicked, and the menu tried once more; the retries are written down in the results.
+    function MenuTry([string]$Entry, [string]$Node, [int]$TimeoutSec = 30) {
+        $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        $none = $m.found -and $m.PSObject.Properties['error'] -and "$($m.error)" -like 'no menu entry*' -and
+            -not @(@($m.PSObject.Properties['entries'] | ForEach-Object { $_.Value }) | Where-Object { $_ }).Count
+        if ($none) {
+            if (-not $R.Contains('menuRetries')) { $R.menuRetries = New-Object System.Collections.ArrayList }
+            $v = Reveal $Node
+            $null = $R.menuRetries.Add("$Node > ${Entry}: $(ConvertTo-Json -InputObject $v -Compress)")
+            $null = Ui $Node -Value realclick -Optional
+            Start-Sleep -Milliseconds 500
+            $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        }
+        $m
+    }
     function Menu([string]$Entry, [string]$Node, [int]$TimeoutSec = 30) {
-        $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec
+        $m = MenuTry $Entry -Node $Node -TimeoutSec $TimeoutSec
+        if (-not $m.found) { throw "menu ${Node}: not found; windows: $(@($m.windows) -join ', ')" }
         if ($m.PSObject.Properties['error'] -and $m.error) { throw "menu ${Node}: $($m.error) - entries: $(@($m.entries) -join ', ')" }
         $m
     }
@@ -158,6 +177,52 @@ $out
         $a = ConvertTo-Json -Compress -InputObject @{ texts = @($Texts); title = $Title }
         InSession $probeCode @{ ARGS = (B64 $a) }
     }
+    # A tree row (by its name) scrolled into the tree's visible part: its item's ScrollItemPattern, then - still not
+    # inside - the tree's ScrollPattern by the missing distance. Answers how and the row's place.
+    $revealCode = @'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$name = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME__'))
+$AE = [Windows.Automation.AutomationElement]
+$TS = [Windows.Automation.TreeScope]
+$walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+$main = @($AE::RootElement.FindAll($TS::Children, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -like 'RemoteHub*' -or $_.Current.Name -like '* RemoteHub' }) | Select-Object -First 1
+if (-not $main) { return @{ error = 'no main window' } }
+$tree = $main.FindFirst($TS::Descendants, (New-Object Windows.Automation.PropertyCondition ($AE::AutomationIdProperty), 'Tree'))
+if (-not $tree) { return @{ error = 'no tree' } }
+$byName = New-Object Windows.Automation.PropertyCondition ($AE::NameProperty), $name
+$t = $tree.Current.BoundingRectangle
+function Outside($r) { $r.IsEmpty -or $r.Top -lt $t.Top + 6 -or $r.Bottom -gt $t.Bottom - 6 }
+$e = $tree.FindFirst($TS::Descendants, $byName)
+if (-not $e) { return @{ error = "not in the tree: $name" } }
+$how = 'visible'
+if (Outside $e.Current.BoundingRectangle) {
+    $ti = $walker.GetParent($e)
+    while ($ti -and $ti.Current.ControlType -ne [Windows.Automation.ControlType]::TreeItem) { $ti = $walker.GetParent($ti) }
+    $p = $null
+    if ($ti -and $ti.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$p)) { try { $p.ScrollIntoView(); $how = 'item' } catch { } }
+    Start-Sleep -Milliseconds 400
+    $sp = $null
+    for ($i = 0; $i -lt 3; $i++) {
+        $e = $tree.FindFirst($TS::Descendants, $byName)
+        if (-not $e) { break }
+        $r = $e.Current.BoundingRectangle
+        if ($r.IsEmpty -or -not (Outside $r)) { break }
+        if (-not $tree.TryGetCurrentPattern([Windows.Automation.ScrollPattern]::Pattern, [ref]$sp) -or -not $sp.Current.VerticallyScrollable) { break }
+        $extent = $t.Height * 100 / [math]::Max(1, $sp.Current.VerticalViewSize)
+        $delta = if ($r.Top -lt $t.Top + 6) { $r.Top - $t.Top - 40 } else { $r.Bottom - $t.Bottom + 40 }
+        $pct = [math]::Min(100, [math]::Max(0, $sp.Current.VerticalScrollPercent + $delta * 100 / [math]::Max(1, $extent - $t.Height)))
+        $sp.SetScrollPercent([Windows.Automation.ScrollPattern]::NoScroll, $pct)
+        $how = 'scrolled'
+        Start-Sleep -Milliseconds 400
+    }
+}
+$e = $tree.FindFirst($TS::Descendants, $byName)
+$r = if ($e) { $e.Current.BoundingRectangle } else { [Windows.Rect]::Empty }
+@{ how = $how; inside = -not (Outside $r); y = $(if ($r.IsEmpty) { $null } else { [int]$r.Top }); treeTop = [int]$t.Top; treeBottom = [int]$t.Bottom }
+'@
+    function Reveal([string]$Name) {
+        try { InSession $revealCode @{ NAME = (B64 $Name) } } catch { [pscustomobject]@{ error = "$_" } }
+    }
     function Hits($probe, [string]$Text) { $p = $probe.PSObject.Properties[$Text]; if ($p) { @($p.Value) } else { @() } }
     # the match that is in the navigation tree
     function TreeHit($probe, [string]$Text) { @(Hits $probe $Text | Where-Object { $_.treeItem }) | Select-Object -First 1 }
@@ -186,7 +251,10 @@ Add-Type -Namespace RhLab -Name Tip -MemberDefinition '[DllImport("user32.dll")]
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 function Go([int]$x, [int]$y) { [RhLab.Tip]::mouse_event(0x8001, [int]($x * 65535 / ($b.Width - 1)), [int]($y * 65535 / ($b.Height - 1)), 0, [IntPtr]::Zero) }
 # the pointer onto the item from here, then the tooltip looked for until it shows (WPF hides it again after 5 s: read
-# from the lab host after a new session task it was gone - empty in the run of 16.10.2026 13:55)
+# from the lab host after a new session task it was gone - empty in the run of 16.10.2026 13:55). The pointer leaves
+# the window first: the click on the item (Tip) closed its tooltip, and WPF shows it again only after the pointer has
+# left the item (still empty in the runs of 16.10.2026 13:55 and 21:25, when it only moved within the item).
+Go 1010 700; Start-Sleep -Milliseconds 800
 Go (__X__ + 4) (__Y__ + 1); Start-Sleep -Milliseconds 300; Go __X__ __Y__
 $ids = @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object Id)
 $tips = @()
@@ -207,12 +275,19 @@ Go 1010 700
 '@
     # the tooltip of a tree item: the item clicked, the pointer moved onto its name in the session ($tipCode)
     function Tip([string]$Text) {
+        $null = Reveal $Text
         $h = TreeHit (Probe @($Text)) $Text
         if (-not $h -or -not $h.rect) { return "not in the tree: $Text" }
         $x = [int]($h.rect.x + [math]::Min($h.rect.w / 2, 20)); $y = [int]($h.rect.y + $h.rect.h / 2)
         $null = Ui $Text -Value realclick
         $t = InSession $tipCode @{ X = $x; Y = $y }
-        (@($t.tips) -join "`n")
+        if (@($t.tips).Count) { return (@($t.tips) -join "`n") }
+        # Still nothing (every run of 16 and 17.10.2026): the tooltip did show while the pointer rested on an item after
+        # a real click - the window list of a failed step had "ToolTip|Top level > Anchor ..." in it. The item is
+        # clicked again and the open windows are listed at once; the ToolTip entries are the answer.
+        $null = Ui $Text -Value realclick
+        $l = Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 10
+        @(@($l.items) | Where-Object { $_ -like 'ToolTip|*' } | ForEach-Object { ($_ -replace '^ToolTip\|', '') -replace '\|[^|]*$', '' } | Select-Object -Unique) -join "`n"
     }
     # drag and drop with the left button held, real input in the session (WPF's drag starts after a few pixels)
     $dragCode = @'
@@ -414,7 +489,7 @@ Add-Type -AssemblyName System.Windows.Forms
         $target = Move-LabVmBehindJump -Name $device.Name
         $null = Ui 'Anchor' -Value realclick
         New-LabClientConnection -Name $VmName -Display 'Behind' -TargetHost $target -User $device.AdminAccount -Password $password
-        $null = Ui 'Behind' -Value 'menu:Move under>JumpHost'
+        $null = Menu 'Move under>JumpHost' -Node 'Behind'
         Start-Sleep -Seconds 2
         Save 'setup' @{ Pair = $R.pair; Target = $target; Jump = $script:jump.Address; Computer = $computer }
     }
@@ -438,7 +513,9 @@ AfterAll {
 
 Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $isClient) {
 
-    Context 'RDP through the jump host: its password asked once, the certificate pin' {
+    # J-18 too: its question ("No password is stored for ...") and "asked once" are recorded here - a rerun filtered
+    # to J-18 skipped this context and J-18 then read $null (the run of 17.10.2026 05:47)
+    Context 'RDP through the jump host: its password asked once, the certificate pin' -Tag 'J-18' {
         BeforeAll {
             $p = $R.rdp = [ordered]@{}
             Step $p first {
@@ -470,9 +547,8 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 Clear-DeviceSessions
                 $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
                     Get-ChildItem 'Cert:\LocalMachine\Remote Desktop' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-                    Restart-Service TermService -Force
-                    Start-Sleep -Seconds 5
                 }
+                Restart-LabRdpService -Name $device.Name
                 $p.thumb2 = RdpThumb
                 $null = Menu 'Connect' -Node 'Behind'
                 $p.changed = Box '*presents a different RDP certificate*' -Button 'Cancel' -TimeoutSec 120
@@ -537,7 +613,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $pr = Probe @('JShare', 'JumpHost')
                 $t.shareDropped = [ordered]@{ row = @((TreeHit $pr 'JShare').row); x = (TreeHit $pr 'JShare').treeItem.x; jumpX = (TreeHit $pr 'JumpHost').treeItem.x }
                 # ... Move under puts it under the jump host
-                $null = Ui 'JShare' -Value 'menu:Move under>JumpHost'
+                $null = Menu 'Move under>JumpHost' -Node 'JShare'
                 Start-Sleep -Seconds 2
                 $t.shareMoved = @((TreeHit (Probe @('JShare')) 'JShare').row)
             }
@@ -562,7 +638,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Step $t moveCredentials {
                 # into the jump host: the credentials it inherits change (the folder's -> none: the jump host's own
                 # account isn't inherited)
-                $null = Ui 'Mover' -Value 'menu:Move under>JumpHost'
+                $null = Menu 'Move under>JumpHost' -Node 'Mover'
                 $t.moveIn = Box '*Move "Mover" to*' -Button 'Move'
                 Start-Sleep -Seconds 2
                 $pr = Probe @('Mover', 'CredFolder')
@@ -581,16 +657,22 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $t.viaLonelyHelp = @(Hits $pr 'via Lonely' | ForEach-Object { $_.help })
                 $null = Menu 'Connect' -Node 'Orphan'
                 $t.orphanConnect = Box '*has no RemoteHub Agent*'
+                # the refused connect leaves Orphan's tab ("Not connected", Connect): closed like every other step's
+                # tabs (the run of 16.10.2026 21:25: it stayed selected for the rest of the file)
+                Close-Tabs
             }
             Step $t rdpDrop {
                 $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
                     Set-Content C:\Users\Public\dropA.rdp "full address:s:dropa.lab.test`r`nusername:s:labuser`r`n" -Encoding ascii
                     Set-Content C:\Users\Public\dropB.rdp "full address:s:dropb.lab.test`r`nusername:s:labuser`r`n" -Encoding ascii
                 }
-                # onto the jump host: imported under it
+                # onto the jump host: imported under it. Each target row scrolled into view first: the probe's rectangle
+                # of a row above the tree's top is on the search box (the run of 16.10.2026 21:25: dropA refused, None)
+                $t.revealJump = Reveal 'JumpHost'
                 $pr = Probe @('JumpHost', $script:jump.Address)
                 $t.dropAEffect = (DragFile 'C:\Users\Public\dropA.rdp' (Mid $pr 'JumpHost' $script:jump.Address)).effect
                 # onto a connection below it: imported next to that connection (under the same jump host)
+                $t.revealBehind = Reveal 'Behind'
                 $pr = Probe @('Behind', $target)
                 $t.dropBEffect = (DragFile 'C:\Users\Public\dropB.rdp' (Mid $pr 'Behind' $target)).effect
                 $pr = Probe @('dropA', 'dropB')
@@ -604,13 +686,18 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $t.copy = [bool](TreeHit $pr 'JumpHost (copy)')
                 $t.copyItems = @(Hits $pr 'via JumpHost (copy)').Count
                 # its agent cleared: the menu offers the install, not the update
-                $m = Ui 'JumpHost (copy)' -Value 'menu:RemoteHub Agent>Update RemoteHub Agent*' -Optional
+                $m = MenuTry 'RemoteHub Agent>Update RemoteHub Agent*' -Node 'JumpHost (copy)'
                 $t.copyAgent = [ordered]@{ error = "$($m.error)"; entries = @($m.entries) }
                 Key 1B; Key 1B
                 # a copy of the connection reached through it: its RDP certificate pin is cleared (asked as the first time)
                 $null = Menu 'Duplicate' -Node 'Behind'
                 Start-Sleep -Seconds 2
                 $null = Menu 'Connect' -Node 'Behind (copy)'
+                # the jump host's password is asked first when the RDP context didn't run before (a rerun filtered to
+                # J-20 in the run of 17.10.2026 05:47: the box below never came, the password dialog stayed): entered,
+                # so the certificate question still comes
+                $t.copyJumpAsk = (Ui 'No password is stored for*' -Title 'Jump host' -Value exists -Optional -TimeoutSec 15).found
+                if ($t.copyJumpAsk) { $null = Ui 'type:Edit' -Title 'Jump host' -Value "set:$password"; $null = Ui 'Connect' -Title 'Jump host' }
                 $t.copyRdp = Box '*Behind (copy) is reached through*' -Button 'Cancel' -TimeoutSec 120
                 Close-Tabs
             }
@@ -686,7 +773,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $null = Menu 'Tools>Add network share*' -Node 'Behind'
                 Set-ShareEditor 'Add network share to Behind' @{ Name = 'FtpBehind'; Type = 'FTP*' }
                 $null = Ui 'Add' -Title 'Add network share to Behind'
-                $m = Ui 'FtpBehind' -Value 'menu:Open' -Optional
+                $m = MenuTry 'Open' -Node 'FtpBehind'
                 $s.ftpMenu = "$($m.error)"
                 $s.ftpHelp = "$($m.help)"
                 Key 1B

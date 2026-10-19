@@ -36,12 +36,6 @@ BeforeAll {
         try { for ($y = 0; $y -lt $b.Height; $y += 8) { for ($x = 0; $x -lt $b.Width; $x += 8) { $c = $b.GetPixel($x, $y); $sum += 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B; $n++ } } } finally { $b.Dispose() }
         $sum / $n
     }
-    # the console's resolution as Hyper-V's video head has it (what the device's monitor shows, whatever session asks)
-    function Resolution {
-        $heads = @(Get-CimAssociatedInstance -InputObject (Get-LabCimVm $VmName) -ResultClassName Msvm_VideoHead)
-        $head = @($heads | Where-Object EnabledState -eq 2) + $heads | Select-Object -First 1
-        "$(@($head.CurrentHorizontalResolution)[0])x$(@($head.CurrentVerticalResolution)[0])"
-    }
     # the foreground window in normaluser's session: title, process and window class
     function Foreground {
         $code = @'
@@ -72,7 +66,7 @@ $name = (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName
     $pin = $init.Pin
     # the console's resolution at the start: the context 'monitors' changes it through Fit, the agent puts it back when
     # the connection ends - AfterAll checks that
-    $startResolution = Resolution
+    $startResolution = Get-LabResolution -Name $VmName
     $old = $vm.Version -eq '1809'
     $markerTitle = 'RemoteHub lab marker'
 }
@@ -87,7 +81,7 @@ AfterAll {
     $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process SnippingTool, ScreenClippingHost, ScreenSketch, notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
     $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
     Set-LabAgentPolicy -Name $VmName -Clear
-    if ((Resolution) -ne $startResolution) { Set-LabVmDirty -Name $VmName }
+    if ((Get-LabResolution -Name $VmName) -ne $startResolution) { Set-LabVmDirty -Name $VmName }
 }
 
 Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
@@ -298,7 +292,7 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
         BeforeAll {
             $m = [ordered]@{}
             if (-not $old) {
-                $m.before = Resolution
+                $m.before = Get-LabResolution -Name $VmName
                 $size = if ($m.before -eq '1280x720') { @(1024, 768) } else { @(1280, 720) }
                 $since = Get-LabGuestTime -Name $VmName
                 $o = Out 'monitors'
@@ -310,7 +304,7 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 $m.lumaBefore = Console-Luma (Join-Path $o 'console-before.png')
                 Release $o 'shot'
                 Reached $o 'changed'
-                $m.during = Resolution
+                $m.during = Get-LabResolution -Name $VmName
                 $m.lumaAfter = Console-Luma (Join-Path $o 'console-after.png')
                 Release $o 'end'
                 $m.r = Receive-LabDesktop $job

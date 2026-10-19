@@ -3,6 +3,20 @@
 # monitors, and the virtual monitor (auto / always / off, reference-counted, resized). The console account connects to
 # its own session (no question). Stats arrive every 2 s; the device side is read over PowerShell Direct.
 # See docs/test-lab-cases.md section 9.8.
+# Frames come only when the picture changes: the pointer goes as its own message, so mouse moves alone change nothing.
+# The rate cases put a window in the console session that changes on every timer tick (Start-Change; -Noise for the
+# slow link: random pixels the encoder can't shrink, so 2 Mbit/s is really too little) and record how often it changed.
+# The console's resolution is read from Hyper-V's video head (Get-LabResolution): a PowerShell Direct session sees its
+# own (1024x768) screen, not the console's. With the virtual monitor on, the primary monitor comes from the agent's
+# Layout (the head shows only the Hyper-V display).
+# Known product bugs:
+# - D-VD-05 - after a restart of the device the switched-off virtual display can't be switched on again: pnputil
+#   /enable-device answers 1167 "not connected" (VirtualDisplay.cs:170, 205-209). The virtual display context powers
+#   the VM off and on (Set-VMVideo needs it off), so D-VD-01, D-VD-03 and D-VD-04 fail until it's fixed; the
+#   -Because shows the agent's "virtual monitor ..." log line.
+# - D-VID-05 (suspected, code review) - the quality steps down only when "blocked > loops" in 2 s
+#   (DesktopHelper.cs:966), but on a saturated link every wait for an ack is followed by exactly one capture, so
+#   blocked == loops and the quality stays where it is. Fails until fixed if the link is really saturated.
 # LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
@@ -19,7 +33,19 @@ BeforeAll {
         Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out $Name) -Steps (@(@{ do = 'connect' }, $s, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }) + $Steps + @(@{ do = 'close' }))
     }
     function LastStats($r) { @($r.stats)[-1].stats }
-    function Resolution { Invoke-LabGuest -Name $VmName -ScriptBlock { Add-Type -AssemblyName System.Windows.Forms; $b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; "$($b.Width)x$($b.Height)" } }
+    # the primary monitor in the agent's last Layout before the harness wrote the mark file $Mark
+    function PrimaryAt($r, [string]$Mark) {
+        $at = @($r.steps | Where-Object { $_.do -eq 'markFile' -and "$($_.detail.path)" -like "*\$Mark" })[0].atMs
+        $l = @($r.layouts | Where-Object { $_.ms -le $at })
+        if ($l.Count -eq 0) { return $null }
+        $p = @($l[-1].layout.monitors | Where-Object { $_.primary })[0]
+        if ($p) { "$($p.width)x$($p.height)" }
+    }
+    # a window in the console session that keeps changing (the module's Start-LabChangingWindow; -Noise random pixels)
+    function Start-Change([switch]$Noise) { Start-LabChangingWindow -Name $VmName -Noise:$Noise }
+    # ends the window; returns how often it changed: ticks, ms and changes per second
+    function Stop-Change($c) { Stop-LabChangingWindow -Change $c }
+    function Fps($r) { @($r.stats | ForEach-Object { $_.stats.framesPerSecond }) }
     function Get-Vdd { Invoke-LabGuest -Name $VmName -ScriptBlock { $d = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1; if ($d) { [string]$d.Status } } }
     function Set-AgentJsonValue([string]$Key, $Value) {
         Invoke-LabGuest -Name $VmName -ArgumentList $Key, $Value -ScriptBlock {
@@ -48,9 +74,17 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
     Context 'frame rate, quality, changes, key frames, capture' {
         BeforeAll {
             $v = [ordered]@{}
-            foreach ($fps in 15, 30, 60) { $v["fps$fps"] = Session "fps$fps" @(@{ do = 'moves'; count = 400; x0 = 100; y0 = 100; dx = 2; dy = 1; delayMs = 25 }, @{ do = 'sleep'; seconds = 3 }) @{ fps = $fps } }
+            # 12 s with the picture changing all the time (6 stats): what the agent sends is limited by the asked rate
+            # and the encoder, not by how often something happened to change
+            foreach ($fps in 15, 30, 60) {
+                $c = Start-Change
+                try { $v["fps$fps"] = Session "fps$fps" @(@{ do = 'sleep'; seconds = 12 }) @{ fps = $fps } }
+                finally { $v["change$fps"] = Stop-Change $c }
+            }
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ MaxFramesPerSecond = 10; MaxQuality = 40 }
-            $v.limited = Session 'limited' @(@{ do = 'settings'; fps = 60; quality = 100 }, @{ do = 'moves'; count = 300; x0 = 100; y0 = 100; dx = 2; dy = 1; delayMs = 25 }, @{ do = 'sleep'; seconds = 3 }) @{ fps = 60; quality = 100 }
+            $c = Start-Change
+            try { $v.limited = Session 'limited' @(@{ do = 'settings'; fps = 60; quality = 100 }, @{ do = 'sleep'; seconds = 10 }) @{ fps = 60; quality = 100 } }
+            finally { $v.changeLimited = Stop-Change $c }
             Set-LabAgentPolicy -Name $VmName -Clear
             # still: only the first frames and the refinement; then a key frame on request; then typing changes the picture
             $v.still = Session 'still' @(@{ do = 'sleep'; seconds = 15 }, @{ do = 'keyframe' }, @{ do = 'sleep'; seconds = 2 })
@@ -77,7 +111,10 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         It 'D-VID-03 a still screen sends (almost) no frames after the first ones; moving sends frames' -Tag 'D-VID-03' {
             $still = @($v.still.stats | Select-Object -Skip 3 | ForEach-Object { $_.stats.framesPerSecond })
             ($still | Measure-Object -Average).Average | Should -BeLessThan 3
-            @($v.fps30.stats | ForEach-Object { $_.stats.framesPerSecond } | Measure-Object -Maximum).Maximum | Should -BeGreaterThan 5
+            # the stimulus first: a guest too starved to change its window 10 times a second says nothing about the agent
+            $v.change30.perSecond | Should -BeGreaterThan 10 -Because "the window in the console session must change faster than the frames asked for (it changed $($v.change30.perSecond) times a second)"
+            $s = Fps $v.fps30
+            ($s | Measure-Object -Maximum).Maximum | Should -BeGreaterThan 5 -Because "the picture changed $($v.change30.perSecond) times a second at 30 fps asked (stats fps: $($s -join ', '); $($v.fps30.frames.count) frames)"
         }
 
         It 'D-VID-04 a key frame request is answered with a key frame' -Tag 'D-VID-04' {
@@ -92,7 +129,9 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         It 'D-VID-07 60 fps on a VM without a GPU encoder: software encoding, no error' -Tag 'D-VID-07' {
             @($v.fps60.statuses | Where-Object state -in 'Failed', 'Ended') | Should -BeNullOrEmpty
             (LastStats $v.fps60).capture | Should -Not -Match 'GPU encoder'
-            $v.fps60.frames.count | Should -BeGreaterThan 20
+            $v.change60.perSecond | Should -BeGreaterThan 10 -Because "the window in the console session must keep changing (it changed $($v.change60.perSecond) times a second)"
+            # 12 s of change: more than 20 frames is under 2 a second - only a stalled software encoder misses it
+            $v.fps60.frames.count | Should -BeGreaterThan 20 -Because "the picture changed $($v.change60.perSecond) times a second for 12 s at 60 fps asked (stats fps: $((Fps $v.fps60) -join ', '))"
         }
 
         It 'D-VID-08 "Smooth" on a GPU-P VM uses the GPU encoder' -Tag 'D-VID-08' {
@@ -106,15 +145,24 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
 
     Context 'slow link' {
         BeforeAll {
-            Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 2000000
-            try { $slow = Session 'slow' @(@{ do = 'moves'; count = 1200; x0 = 50; y0 = 50; dx = 1; dy = 1; delayMs = 25 }, @{ do = 'sleep'; seconds = 4 }) @{ fps = 30; quality = 80 } }
-            finally { Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 0 }
+            # random pixels changing all the time: at quality 80 far more than 2 Mbit/s (a frame of noise is ~100 KB or
+            # more), so the acks really lag; 30 s = 15 adaptation steps of 2 s
+            $c = Start-Change -Noise
+            try {
+                Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 2000000
+                try { $slow = Session 'slow' @(@{ do = 'sleep'; seconds = 30 }) @{ fps = 30; quality = 80 } }
+                finally { Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 0 }
+            }
+            finally { $slowChange = Stop-Change $c }
             Save 'slow' $slow
+            Save 'slow-change' $slowChange
         }
 
         It 'D-VID-05 on a 2 Mbit/s link the quality steps down and pictures still come' -Tag 'D-VID-05' {
             $q = @($slow.stats | ForEach-Object { $_.stats.quality })
-            ($q | Measure-Object -Minimum).Minimum | Should -BeLessThan 80
+            $kbits = [math]::Round($slow.frames.bytes * 8 / 1000 / 30)
+            $slowChange.perSecond | Should -BeGreaterThan 10 -Because "the noise window must keep changing (it changed $($slowChange.perSecond) times a second)"
+            ($q | Measure-Object -Minimum).Minimum | Should -BeLessThan 80 -Because "the link was loaded (~$kbits kbit/s of video arrived, $($slow.frames.count) frames; stats fps: $((Fps $slow) -join ', '); quality: $($q -join ', ')) - see 'Known product bugs' in the header"
             $slow.frames.count | Should -BeGreaterThan 20
         }
     }
@@ -139,18 +187,17 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
     Context 'fit to the window' {
         BeforeAll {
             $f = [ordered]@{}
-            $f.before = Resolution
+            $f.before = Get-LabResolution -Name $VmName
             $o = Out 'fit'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; state = 'Connected'; timeout = 60 }
                 @{ do = 'settings'; fitWidth = 1600; fitHeight = 900 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'markFile'; path = (Join-Path $o 'fitted.txt') }
                 @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 60 }, @{ do = 'settings'; fitWidth = 1234; fitHeight = 777 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'close' })
             Wait-LabHostFile (Join-Path $o 'fitted.txt')
-            $f.during = Resolution
+            $f.during = Get-LabResolution -Name $VmName
             Set-Content (Join-Path $o 'go.txt') 'go'
             $f.r = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
-            $f.after = Resolution
+            $f.after = Wait-LabResolution -Name $VmName -Is $f.before -TimeoutSec 15 -NoThrow
             # the helper killed while fitted: restored all the same
             $o = Out 'fit-kill'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out $o -Steps @(
@@ -158,20 +205,21 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
                 @{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'markFile'; path = (Join-Path $o 'fitted.txt') }
                 @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 60 }, @{ do = 'close' })
             Wait-LabHostFile (Join-Path $o 'fitted.txt')
-            $f.killFitted = Resolution
+            $f.killFitted = Get-LabResolution -Name $VmName
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
-            # the service starts the helper again and sends it the Fit again: fitted again while connected
-            Start-Sleep -Seconds 15
-            $f.afterKill = Resolution
+            # Windows undoes the temporary mode with the helper; the service starts the helper again and sends it the
+            # Fit again: fitted again while connected (run 20261016-212514: back to the old size and fitted again within
+            # half a second, ~3 s after the kill - the poll may miss the moment in between, so it's only recorded)
+            $f.reverted = Wait-LabResolution -Name $VmName -Not $f.killFitted -TimeoutSec 10 -NoThrow
+            $f.afterKill = Wait-LabResolution -Name $VmName -Is $f.killFitted -TimeoutSec 30 -NoThrow
             Set-Content (Join-Path $o 'go.txt') 'go'
-            $null = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
-            $f.afterKillClose = Resolution
+            $f.rKill = Receive-LabDesktop $job
+            $f.afterKillClose = Wait-LabResolution -Name $VmName -Is $f.before -TimeoutSec 15 -NoThrow
             Save 'fit' $f
         }
 
         It 'D-FIT-01 fit 1600x900: the guest runs 1600x900 (or the nearest mode); restored after the disconnect' -Tag 'D-FIT-01' {
-            $f.during | Should -Not -Be $f.before
+            $f.during | Should -Not -Be $f.before -Because "the agent said: $(@($f.r.stats | ForEach-Object { $_.stats.fit } | Where-Object { $_ } | Select-Object -First 1))"
             $f.during | Should -Match '^1[56]\d\dx\d{3}$'
             $f.after | Should -Be $f.before
         }
@@ -181,7 +229,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         }
 
         It 'D-FIT-03 the helper killed while fitted: fitted again while connected, restored when the session ends' -Tag 'D-FIT-03' {
-            $f.killFitted | Should -Not -Be $f.before
+            $f.killFitted | Should -Not -Be $f.before -Because "the agent said: $(@($f.rKill.stats | ForEach-Object { $_.stats.fit } | Where-Object { $_ } | Select-Object -First 1))"
             $f.afterKill | Should -Be $f.killFitted
             $f.afterKillClose | Should -Be $f.before
         }
@@ -233,8 +281,10 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
     Context 'virtual display' {
         BeforeAll {
             $d = [ordered]@{}
-            # a guest whose display offers less than the window (Hyper-V video set before the start)
-            Stop-VM -Name $vm.Name -TurnOff -Force
+            # a guest whose display offers less than the window (Hyper-V video set before the start). Shut down, not
+            # turned off: agent.json was written just before, and a power cut right after left it zero-filled - the agent
+            # then didn't start at all (run 20261017-160133, product finding A-CFG-JSON)
+            Stop-VM -Name $vm.Name -Force
             # "auto" asks for the virtual monitor when the display offers nothing as large as the window (capped at
             # 1280x720): a Hyper-V display limited to 1024x768
             Set-VMVideo -VMName $vm.Name -ResolutionType Maximum -HorizontalResolution 1024 -VerticalResolution 768
@@ -250,28 +300,64 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
                     @{ do = 'waitFile'; path = (Join-Path $o 'resize.txt'); timeout = 180 }, @{ do = 'settings'; fitWidth = 1280; fitHeight = 720 }, @{ do = 'sleep'; seconds = 6 }
                     @{ do = 'markFile'; path = (Join-Path $o 'resized.txt') }, @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 180 }, @{ do = 'close' })
             }
+            # (the power cycle above is a restart after the install: see D-VD-05 in the header)
+            $since = Get-LabGuestTime -Name $VmName
             $a = & $two 'vd-a'
             Wait-LabHostFile (Join-Path (Out 'vd-a') 'on.txt')
             $d.onA = Get-Vdd
-            $d.resA = Resolution
+            # the agent's own word on switching it on ("virtual monitor on at ..." or "... not switched on: <why>")
+            $d.vdLog = @(Get-LabAgentLog -Name $VmName -Since $since | ForEach-Object { "$_" } | Where-Object { $_ -match 'virtual monitor' })
+            $d.device = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $dev = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1
+                [ordered]@{
+                    status  = if ($dev) { [string]$dev.Status } else { $null }
+                    problem = if ($dev) { (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_ProblemCode -ErrorAction SilentlyContinue).Data } else { $null }
+                }
+            }
             Set-Content (Join-Path (Out 'vd-a') 'resize.txt') 'go'
             Wait-LabHostFile (Join-Path (Out 'vd-a') 'resized.txt')
-            $d.resized = Resolution
             $b = & $two 'vd-b'
             Wait-LabHostFile (Join-Path (Out 'vd-b') 'on.txt')
+            # A connection's end is done with the virtual display once the agent logs what it did ("stays on for N other
+            # connection(s)", "Virtual display off ...", "... not switched off ...", "... left on ..."); switching the
+            # device off can take a while (pnputil, tries again), so the state is read then, not after a fixed wait.
+            # Returns the lines and the seconds it took; none within the limit means the agent never said.
+            $vdEnd = {
+                param([datetime]$From, [string]$Pattern = 'Virtual display (stays on|off|not switched off|left on)', [int]$TimeoutSec = 120)
+                $until = (Get-Date).AddSeconds($TimeoutSec)
+                $watch = [Diagnostics.Stopwatch]::StartNew()
+                $seen = @()
+                do {
+                    $seen = @(Get-LabAgentLog -Name $VmName -Since $From | ForEach-Object { "$_" } |
+                            Where-Object { $_ -match $Pattern })
+                    if ($seen) { break }
+                    Start-Sleep -Seconds 2
+                } while ((Get-Date) -lt $until)
+                [pscustomobject]@{ Lines = $seen; Seconds = [int]$watch.Elapsed.TotalSeconds }
+            }
+            $endA = Get-LabGuestTime -Name $VmName
             Set-Content (Join-Path (Out 'vd-a') 'go.txt') 'go'
             $d.a = Receive-LabDesktop $a
-            Start-Sleep -Seconds 5
+            # the primary monitor as the agent's Layout had it when the harness marked "on" and "resized" (with the
+            # virtual monitor on, the Hyper-V display isn't the primary one any more)
+            $d.resA = PrimaryAt $d.a 'on.txt'
+            $d.resized = PrimaryAt $d.a 'resized.txt'
+            $d.endFirst = & $vdEnd $endA
             $d.afterFirst = Get-Vdd
-            Set-Content (Join-Path (Out 'vd-b') 'resize.txt') 'go'; Set-Content (Join-Path (Out 'vd-b') 'go.txt') 'go'
+            Set-Content (Join-Path (Out 'vd-b') 'resize.txt') 'go'
+            $endB = Get-LabGuestTime -Name $VmName
+            Set-Content (Join-Path (Out 'vd-b') 'go.txt') 'go'
             $d.b = Receive-LabDesktop $b
-            Start-Sleep -Seconds 5
+            # only a switch-off result: the first connection's "stays on" line can fall inside the window (-Since allows 1 s)
+            $d.endLast = & $vdEnd $endB 'Virtual display (off|not switched off|left on)'
             $d.afterLast = Get-Vdd
             # off: never switched on
             Set-AgentJsonValue 'virtualDisplay' 'off'
             $null = Session 'vd-off' @(@{ do = 'settings'; fitWidth = 1600; fitHeight = 900 }, @{ do = 'sleep'; seconds = 8 })
             $d.off = Get-Vdd
             Save 'vd' $d
+            # the logs before Reset-LabVm takes them away (AfterAll only finds the checkpoint's)
+            Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'd-vid-vd-agent-logs')
             # back to the checkpoint's video settings (the next file reverts anyway)
             Stop-VM -Name $vm.Name -TurnOff -Force
             Set-VMVideo -VMName $vm.Name -ResolutionType Maximum -HorizontalResolution 1920 -VerticalResolution 1080
@@ -279,9 +365,11 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         }
 
         It 'D-VD-01 "auto" on a guest whose display offers less than the window: the virtual monitor switched on; off after the disconnect' -Tag 'D-VD-01' {
-            $d.onA | Should -Be 'OK'
+            $d.onA | Should -Be 'OK' -Because "the virtual monitor should be on while connected (agent log: $(@($d.vdLog) -join ' / '); known bug D-VD-05 after the power cycle)"
+            $d.resA | Should -Not -BeNullOrEmpty
             $d.resA | Should -Not -Be '1024x768'
-            $d.afterLast | Should -Not -Be 'OK'
+            @($d.endLast.Lines) | Should -Not -BeNullOrEmpty -Because "the agent should say what it did with the virtual display within 120 s of the last connection's end"
+            $d.afterLast | Should -Not -Be 'OK' -Because "the virtual display should be off after the last connection (agent, after $($d.endLast.Seconds) s: $(@($d.endLast.Lines) -join ' / '))"
         }
 
         It 'D-VD-02 "off": never switched on' -Tag 'D-VD-02' {
@@ -289,11 +377,13 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
         }
 
         It 'D-VD-03 two connections: the virtual monitor stays until the last one ends' -Tag 'D-VD-03' {
-            $d.afterFirst | Should -Be 'OK'
-            $d.afterLast | Should -Not -Be 'OK'
+            $d.onA | Should -Be 'OK' -Because "the virtual monitor must be on to begin with (agent log: $(@($d.vdLog) -join ' / '); known bug D-VD-05 after the power cycle)"
+            $d.afterFirst | Should -Be 'OK' -Because "the second connection still needs it (agent: $(@($d.endFirst.Lines) -join ' / '))"
+            $d.afterLast | Should -Not -Be 'OK' -Because "the virtual display should be off after the last connection (agent, after $($d.endLast.Seconds) s: $(@($d.endLast.Lines) -join ' / '))"
         }
 
         It 'D-VD-04 another window size: the driver takes the new size within 5 s' -Tag 'D-VD-04' {
+            $d.onA | Should -Be 'OK' -Because "the new size goes to the virtual monitor, which must be on (agent log: $(@($d.vdLog) -join ' / '); known bug D-VD-05 after the power cycle)"
             $d.resized | Should -Be '1280x720'
         }
     }

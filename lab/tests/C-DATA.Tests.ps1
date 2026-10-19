@@ -7,7 +7,7 @@
 # The database is read in the account's own session with RemoteHub's own sqlite3mc.dll and the same settings RemoteHub
 # uses (cipher chacha20, kdf_iter 1, the raw key from db.key - DPAPI, plus the startup lock when it is on): see $rhdbCs /
 # $rhdbPs below, written to C:\ProgramData\RemoteHubLab. Client VMs only. See docs/test-lab-cases.md section 10.2.
-# TimeLimitMin: 200   (nine client starts a simulated day apart, the 5.5 min auto-lock wait, the SMB share, a second account: about 2.5 h)
+# TimeLimitMin: 200   (nine client starts a simulated day apart, the 1.5 min auto-lock wait, the SMB share, a second account: about 2.5 h)
 # LabRole: console
 # LabNeeds: lane
 param(
@@ -54,6 +54,28 @@ BeforeAll {
             }
         } while ((Get-Date) -lt $deadline)
         ''
+    }
+    # The title of a message box that is still open, from the window itself (GetWindowText): RemoteHub's WPF-UI message
+    # boxes (Dialogs.Info / Ask / Confirm) are named by their text in UI Automation, and their title bar text is not in
+    # the element list, so Box answers the text only (run 20261016-212514, C-BAK-02 and C-SHARE-02). -Box: Box's answer.
+    function Box-Title([string]$Box, [string]$Account = 'Console') {
+        $name = "$Box" -split "`n" | Select-Object -First 1
+        if (-not $name) { return '' }
+        $code = @'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+if (-not ('RhLabWinText' -as [type])) {
+    Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class RhLabWinText { [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n); public static string Get(int h) { var b = new StringBuilder(1024); GetWindowTextW(new IntPtr(h), b, 1024); return b.ToString(); } }'
+}
+$ae = [Windows.Automation.AutomationElement]
+$isWin = New-Object Windows.Automation.PropertyCondition ($ae::ControlTypeProperty), ([Windows.Automation.ControlType]::Window)
+$tops = @($ae::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition))
+$owned = @($tops | Where-Object { $_.Current.Name -like 'RemoteHub*' -or $_.Current.Name -like '* RemoteHub' } | ForEach-Object { @($_.FindAll([Windows.Automation.TreeScope]::Descendants, $isWin)) })
+$w = @(@($owned) + @($tops) | Where-Object { $_.Current.Name -like $A.name -and $_.Current.NativeWindowHandle }) | Select-Object -First 1
+if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
+'@
+        # the window is found by the name's first line (the text may run over several lines)
+        $pattern = [WildcardPattern]::Escape($name.TrimEnd("`r")) + '*'
+        try { "$(InSession $code @{ name = $pattern } -Account $Account)" } catch { "error: $_" }
     }
     # each part on its own: a failing step is written down (error, screenshot, open dialogs) and the next one still runs
     function Step($Into, [string]$Name, [scriptblock]$Do) {
@@ -104,7 +126,7 @@ BeforeAll {
         }
     }
     # Windows' Save As / Open dialog: no usable UIA patterns, so the path is typed at the console keyboard into the file
-    # name box (focused when the dialog opens) and Enter pressed
+    # name box (focused when the dialog opens) and Enter pressed.
     function FileDialog([string]$Path, [string]$Title = 'Save As', [string]$Account = 'Console') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20 -Account $Account
         Start-Sleep -Seconds 2
@@ -164,10 +186,31 @@ BeforeAll {
         $sync = @(Get-VMIntegrationService -VMName $vm.Name | Where-Object { $_.Name -match 'Time Synchronization|Zeitsynchronisierung' })
         if ($Days -ne 0) { $sync | Disable-VMIntegrationService }
         # the guest's own time services too (run 20261016-024318: with only the host side off, every other day the clock
-        # was back to the real time when RemoteHub started); set until it holds for a few seconds
+        # was back to the real time when RemoteHub started). Stopping them was not enough either (run 20261016-212514:
+        # rounds 1, 3, 6, 8 and 9 found the real time again a few minutes later): w32time is trigger-started (domain,
+        # system state changes) and sets the clock back as soon as it runs. So both are Disabled while the clock is
+        # moved, their start types noted in the guest and put back with -Days 0. Set until it holds for a few seconds.
         Invoke-LabGuest -Name $VmName -ArgumentList ([DateTime]::UtcNow.AddDays($Days).Ticks), ($Days -ne 0) -ScriptBlock {
             param($t, $off)
-            if ($off) { Stop-Service w32time, vmictimesync -Force -ErrorAction SilentlyContinue }
+            $keep = 'C:\ProgramData\RemoteHubLab\c-data-clock-services.json'
+            $svc = 'w32time', 'vmictimesync'
+            if ($off) {
+                if (-not (Test-Path -LiteralPath $keep)) {
+                    $start = @{}
+                    foreach ($s in $svc) {
+                        $p = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$s" -ErrorAction SilentlyContinue
+                        $start[$s] = if (-not $p) { 'demand' } elseif ($p.Start -eq 2 -and $p.PSObject.Properties['DelayedAutostart'] -and $p.DelayedAutostart -eq 1) { 'delayed-auto' } elseif ($p.Start -eq 2) { 'auto' } elseif ($p.Start -eq 4) { 'disabled' } else { 'demand' }
+                    }
+                    $null = New-Item -ItemType Directory -Path (Split-Path $keep) -Force
+                    Set-Content -LiteralPath $keep -Encoding UTF8 -Value (ConvertTo-Json -InputObject $start)
+                }
+                foreach ($s in $svc) { $null = sc.exe config $s start= disabled; Stop-Service $s -Force -ErrorAction SilentlyContinue }
+            }
+            elseif (Test-Path -LiteralPath $keep) {
+                $start = Get-Content -LiteralPath $keep -Raw | ConvertFrom-Json
+                foreach ($s in $svc) { $mode = "$($start.$s)"; if (-not $mode) { $mode = 'demand' }; $null = sc.exe config $s start= $mode }
+                Remove-Item -LiteralPath $keep -Force
+            }
             $want = [DateTime]::new([long]$t, [DateTimeKind]::Utc)
             foreach ($try in 1..5) {
                 $null = Set-Date -Date $want.ToLocalTime()
@@ -178,6 +221,8 @@ BeforeAll {
         }
         if ($Days -eq 0) { $sync | Enable-VMIntegrationService }
     }
+    # the guest's clock (UTC, ISO 8601) - recorded with each daily-backup round
+    function Get-GuestUtc { (Get-LabGuestTime -Name $VmName).ToUniversalTime().ToString('o') }
     # a 0.13 settings.dat: "RDPM" 0x01 + DPAPI (entropy RdpManager.Settings.v1) over the AppData JSON - a folder with a
     # saved credential, a connection in it and one with its own password
     function New-Legacy([string]$Tag) {
@@ -212,6 +257,16 @@ BeforeAll {
         $up
     }
     function Get-SharedHash { Invoke-LabGuest -Name $device.Name -ScriptBlock { $f = 'C:\rhsettings\RemoteHub.settings'; if (Test-Path $f) { (Get-FileHash $f -Algorithm SHA256).Hash } } }
+    # the shared file's hash once it differs from -From (a save on the device written), or as it is after -TimeoutSec
+    function Wait-SharedChange([string]$From, [int]$TimeoutSec = 30) {
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            $h = Get-SharedHash
+            if ("$h" -ne $From) { return $h }
+            Start-Sleep -Seconds 2
+        } while ((Get-Date) -lt $deadline)
+        $h
+    }
     function Import-Backup([string]$File, [string]$Pw, [string]$Account = 'User') {
         Settings-Page 'Security & storage' -Account $Account
         # closes the settings window first, then Windows' Open dialog
@@ -650,21 +705,47 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
 
             # C-DB-04: backup\ emptied, then one start a day (clock moved forward, time sync off)
             Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock { param($l) Remove-Item "$l\backup\*" -Force -ErrorAction SilentlyContinue }
-            Start-Client; Start-Sleep -Seconds 30; $null = Close-Rh
+            # the backup runs in the background after the start: waited for (a new file, at most 7, its size settled)
+            # before RemoteHub is closed, so it isn't cut short by the exit
+            function Wait-NewBackup([string[]]$Before, [int]$TimeoutSec = 90) {
+                $deadline = (Get-Date).AddSeconds($TimeoutSec)
+                $size = -1
+                do {
+                    $now = Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock {
+                        param($l) @(Get-ChildItem "$l\backup" -Filter 'remotehub-*.db' -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object { "$($_.Name)|$($_.Length)" })
+                    }
+                    $new = @(@($now) | Where-Object { @($Before) -notcontains ($_ -split '\|')[0] })
+                    if ($new.Count -and @($now).Count -le 7) {
+                        $s = [long](($new[-1] -split '\|')[1])
+                        if ($s -gt 0 -and $s -eq $size) { return $true }
+                        $size = $s
+                    }
+                    Start-Sleep -Seconds 3
+                } while ((Get-Date) -lt $deadline)
+                $false
+            }
+            Start-Client; $d.bk1Made = Wait-NewBackup @(); $null = Close-Rh
             $d.bk1 = Backups
+            # the same day: no new backup - there is no condition to wait for, so RemoteHub gets the time a backup takes
             Start-Client; Start-Sleep -Seconds 30; $null = Close-Rh
             $d.bk2 = Backups
             $d.rounds = @()
             try {
                 foreach ($i in 1..9) {
+                    $before = @(Backups)
                     Set-GuestClock -Days $i
-                    Start-Client; Start-Sleep -Seconds 30; $null = Close-Rh
-                    # the guest's clock with the files (a day without a backup: was the clock moved, did the client run?)
-                    $d.rounds += , [pscustomobject]@{ day = $i; files = @(Backups); guestUtc = (Get-LabGuestTime -Name $VmName).ToUniversalTime().ToString('o') }
+                    $atStart = Get-GuestUtc
+                    Start-Client
+                    $made = Wait-NewBackup $before
+                    $atBackup = Get-GuestUtc
+                    $null = Close-Rh
+                    # the guest's clock at the start, after the backup and with the files (a day without a backup: was the
+                    # clock moved, did it stay there, did the client run?)
+                    $d.rounds += , [pscustomobject]@{ day = $i; files = @(Backups); made = $made; startUtc = $atStart; backupUtc = $atBackup; guestUtc = (Get-GuestUtc) }
                 }
             }
             finally { Set-GuestClock -Days 0 }
-            Save 'db04' @{ bk1 = $d.bk1; bk2 = $d.bk2; rounds = $d.rounds }
+            Save 'db04' @{ bk1 = $d.bk1; bk1Made = $d.bk1Made; bk2 = $d.bk2; rounds = $d.rounds }
 
             # C-DB-05: a connection added after the newest backup, then one byte of the database flipped (in its first
             # page: RemoteHub reads it when opening - a byte in a page it never reads at the start wouldn't be noticed)
@@ -738,7 +819,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             @($d.rounds).Count | Should -Be 9
             foreach ($r in $d.rounds) {
                 $new = @(@($r.files) | Where-Object { $all -notcontains $_ })
-                $new.Count | Should -Be 1 -Because "day +$($r.day) makes one new backup"
+                $new.Count | Should -Be 1 -Because "day +$($r.day) makes one new backup (guest clock at the start $($r.startUtc), after waiting for the backup $($r.backupUtc))"
                 $all.Add($new[0])
                 (@($r.files) -join ',') | Should -Be (@($all | Sort-Object | Select-Object -Last 7) -join ',') -Because "day +$($r.day): the newest 7, the oldest removed first"
             }
@@ -771,8 +852,8 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 # the device didn't ask and nothing was copied)
                 Invoke-LabGuest -Name $device.Name -ScriptBlock {
                     $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'; if (-not (Test-Path $k)) { $null = New-Item $k -Force }; Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
-                    Restart-Service TermService -Force; Start-Sleep -Seconds 5
                 }
+                Restart-LabRdpService -Name $device.Name
                 $null = Ui 'Device' -Value doubleclick
                 $null = Ui 'Yes' -Title '*Remote Desktop*' -Optional -TimeoutSec 20
                 $a.credDialog = Ui '*' -Title 'Credential Dialog Xaml Host' -Value exists -Optional -TimeoutSec 60
@@ -781,7 +862,8 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 foreach ($i in 1..2) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Seconds 1 }
                 $null = Ui 'Close this tab' -Optional -TimeoutSec 10
             }
-            Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue; Restart-Service TermService -Force; Start-Sleep -Seconds 5 }
+            Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
+            Restart-LabRdpService -Name $device.Name
             # connect, record 8 s, disconnect
             Step $a 'rdp' {
                 $a.connected = Connect-Device
@@ -999,7 +1081,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey = InSession 'try { $k = Get-RhKeys "C:\lab\db.key.old"; Test-RhSql (Join-Path $env:LOCALAPPDATA "RemoteHub\remotehub.db") $k.Db "SELECT count(*) FROM nodes" } catch { [pscustomobject]@{ ok = $false; code = -2; error = "$_" } }'
             Save 'lock01' @{ l = $l; audit = $l.dump1.audit }
 
-            # C-LOCK-02: lock after 5 minutes, an RDP tab connected, no input for 5 min 30 s
+            # C-LOCK-02: lock after 1 minute (5 on builds without that option), an RDP tab connected, no input until due
             Start-Rh
             $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw" -TimeoutSec 90
             $null = Ui 'Unlock' -Title 'RemoteHub*locked'
@@ -1008,12 +1090,18 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 Settings-Page 'Security & storage'
                 $null = Ui 'Startup protection?' -Title 'Settings'
                 $null = Ui 'type:Edit#1' -Title 'Startup protection' -Value "set:$lockPw"
-                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 5 minutes'
+                # the shortest time the build offers: 1 minute (since the option was added), else 5 minutes
+                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 1 minute' -Optional
+                if (-not $l.choose -or $l.choose.value -ne 'After 1 minute') {
+                    $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 5 minutes'
+                }
+                $l.lockMinutes = $(if ($l.choose.value -eq 'After 1 minute') { 1 } else { 5 })
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
                 $l.sessionBefore = Connect-Device
-                # nothing that is input on this PC from here on (UI Automation reads aren't input)
-                Start-Sleep -Seconds 330
+                # nothing that is input on this PC from here on (UI Automation reads aren't input); RemoteHub checks
+                # every 15 s, so the lock is due within the time + 15 s
+                Start-Sleep -Seconds ($l.lockMinutes * 60 + 30)
                 $l.lockedText2 = (Ui '*' -Title 'RemoteHub*locked' -Value list -Optional -TimeoutSec 30).items -join "`n"
                 $l.mainHidden = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 3
                 $l.sessionLocked = Get-DeviceSession
@@ -1127,9 +1215,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey.code | Should -BeIn 11, 26 -Because "the old key itself is readable and the database refuses it ($($l.oldKey.error))"
         }
 
-        It 'C-LOCK-02 auto-lock after 5 min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
+        It 'C-LOCK-02 auto-lock after 1 (or 5) min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
             $l['autolock-error'] | Should -BeNullOrEmpty
-            $l.choose.value | Should -Be 'After 5 minutes'
+            $l.choose.value | Should -BeIn 'After 1 minute', 'After 5 minutes'
             $l.sessionBefore | Should -BeTrue
             $l.lockedText2 | Should -Match 'Locked after a while without input . your sessions keep running\.'
             $l.lockedText2 | Should -Match 'Exit RemoteHub'
@@ -1138,7 +1226,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.mainBack | Should -BeTrue
             $l.tabBack.found | Should -BeTrue
             $l.sessionAfter | Should -BeTrue
-            @($l.dump2.audit | Where-Object event -eq 'app.locked' | ForEach-Object detail) | Should -Contain 'After 5 min without input'
+            @($l.dump2.audit | Where-Object event -eq 'app.locked' | ForEach-Object detail) | Should -Contain "After $($l.lockMinutes) min without input"
         }
 
         It 'C-LOCK-03 Windows Hello PIN unlocks RemoteHub (vTPM)' -Tag 'C-LOCK-03' {
@@ -1226,8 +1314,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnB-other' -On $device.Name
                 $s.k1Start = Get-SharedHash   # before B's save (B's save must change it)
                 $s.k1BSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
-                Start-Sleep -Seconds 8
-                $s.k1Before = Get-SharedHash
+                $s.k1Before = Wait-SharedChange $s.k1Start
                 # recorded only: a prompt A may show by itself when it sees the file change
                 # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
                 $s.k1Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
@@ -1235,6 +1322,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 Start-Sleep -Seconds 5
                 $s.k1Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
                 $s.k1BeforeChoice = Get-SharedHash
+                $s.k1Title = Box-Title $s.k1Dialog
                 Shot 'share02-keep'
                 $null = Ui 'Keep mine' -Title '?*' -Optional -TimeoutSec 10
                 Start-Sleep -Seconds 6
@@ -1254,14 +1342,14 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $null = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:ConnB-other2' -On $device.Name
                 $s.r2Start = Get-SharedHash   # before B's save (B's save must change it)
                 $s.r2BSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
-                Start-Sleep -Seconds 8
-                $s.r2Before = Get-SharedHash
+                $s.r2Before = Wait-SharedChange $s.r2Start
                 # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
                 $s.r2Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
                 $null = Ui 'Save' -Title 'Edit connection'
                 Start-Sleep -Seconds 5
                 $s.r2Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
                 $s.r2BeforeChoice = Get-SharedHash
+                $s.r2Title = Box-Title $s.r2Dialog
                 Shot 'share02-reload'
                 $null = Ui 'Reload' -Title '?*' -Optional -TimeoutSec 10
                 Start-Sleep -Seconds 6
@@ -1305,8 +1393,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $s['second-error'] | Should -BeNullOrEmpty
             $s.bLoaded.found | Should -BeTrue
             # Keep mine
+            # B's save is the first edit after it opened the shared file: see the findings table (C-SHARE-02)
             "$($s.k1Before)" | Should -Not -Be "$($s.k1Start)" -Because 'B''s save changed the shared file (precondition)'
-            $s.k1Dialog | Should -Match 'Settings changed on another device'
+            $s.k1Title | Should -Be 'Settings changed on another device'
             $s.k1Dialog | Should -Match 'The settings file was changed on another PC \(or by another admin\) after RemoteHub loaded it\.'
             $s.k1Dialog | Should -Match 'Keep mine'
             $s.k1BeforeChoice | Should -Be $s.k1Before -Because 'the file is not written before the choice'
@@ -1314,7 +1403,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $s.k1BA.found | Should -BeTrue -Because 'the file holds A''s version'
             $s.k1BB.found | Should -BeFalse -Because 'B''s change is gone after Keep mine'
             # Reload
-            $s.r2Dialog | Should -Match 'Settings changed on another device'
+            "$($s.r2Before)" | Should -Not -Be "$($s.r2Start)" -Because 'B''s save changed the shared file (precondition)'
+            $s.r2Title | Should -Be 'Settings changed on another device'
+            $s.r2Dialog | Should -Match 'The settings file was changed on another PC \(or by another admin\) after RemoteHub loaded it\.'
             $s.r2BeforeChoice | Should -Be $s.r2Before
             $s.r2After | Should -Be $s.r2Before -Because 'Reload doesn''t write the file'
             $s.r2BOther.found | Should -BeTrue -Because 'B''s change is shown'
@@ -1377,7 +1468,11 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             # C-BAK-02: the wrong password
             Step $b 'wrong' {
                 Import-Backup 'C:\lab\rh.rhbackup' 'Wrong-Backup-Pw-1'
-                $b.wrongMsg = Box -Titles 'Wrong password*', 'Import failed' -Button 'OK' -TimeoutSec 90 -Account User
+                # left open until its title is read (see Box-Title)
+                $b.wrongMsg = Box -Titles 'Wrong password*', 'Import failed' -Button '' -TimeoutSec 90 -Account User
+                $b.wrongTitle = Box-Title $b.wrongMsg -Account User
+                $wrongWin = ("$($b.wrongMsg)" -split "`n" | Select-Object -First 1).TrimEnd("`r")
+                if ($wrongWin) { $null = Ui 'OK' -Title ([WildcardPattern]::Escape($wrongWin) + '*') -Optional -TimeoutSec 10 -Account User }
             }
             Start-Sleep -Seconds 3
             $b.afterWrong = Dump -Account User
@@ -1441,7 +1536,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
 
         It 'C-BAK-02 wrong backup password: "Import failed", nothing imported, no "Backup imported" entry' -Tag 'C-BAK-02' {
             $b['wrong-error'] | Should -BeNullOrEmpty
-            $b.wrongMsg | Should -Match 'Import failed'
+            $b.wrongTitle | Should -Be 'Import failed'
             $b.wrongMsg | Should -Match 'Wrong password or the backup file is damaged\.'
             (@($b.afterWrong.nodes | ForEach-Object id) -join ',') | Should -Be (@($b.before.nodes | ForEach-Object id) -join ',')
             @($b.afterWrong.audit | Where-Object event -eq 'backup.imported') | Should -BeNullOrEmpty

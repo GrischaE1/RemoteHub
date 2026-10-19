@@ -94,10 +94,11 @@ Privacy = 14,
 public sealed record DesktopPrivacyScreen(bool On, string Style /* "Black" | "Message" */, bool BlockLocalInput);
 
 /// <param name="User">"None" | "Black" | "Blur" – what the person at the device hid.</param>
-/// <param name="HiddenApps">How many apps are hidden (never which).</param>
-/// <param name="Regions">Hidden rectangles in picture pixels (after scaling), for the viewer's "Hidden" labels.</param>
+/// <param name="HiddenApps">How many apps the user hides (never which) – not the ones the policy hides.</param>
+/// <param name="PolicyHiddenApps">How many apps the policy `HiddenApps` always hides (never which); 0 from older agents.</param>
+/// <param name="Regions">Hidden rectangles in picture pixels (after scaling), the user's and the policy's apps alike, for the viewer's "Hidden" labels.</param>
 /// <param name="Screen">State of the admin's privacy screen: "Off" | "Black" | "Message"; "" if it couldn't be shown (then <paramref name="Reason"/>).</param>
-public sealed record DesktopPrivacy(string User, int HiddenApps, DesktopRect[] Regions, string Screen, bool LocalInputBlocked, string Reason = "");
+public sealed record DesktopPrivacy(string User, int HiddenApps, DesktopRect[] Regions, string Screen, bool LocalInputBlocked, string Reason = "", int PolicyHiddenApps = 0);
 ```
 
 On the helper side, `HelperMessage.PrivacyScreen = 109` carries the admin's command (service → helper). `DesktopMessage.Privacy` is added to the forward list in `DesktopEndpoint.HelperLoop` (≈ line 610).
@@ -170,7 +171,7 @@ The service refuses the command when the right or policy is missing. In that cas
 ### 5.5 Disconnect always works
 
 - The banner stays above the overlays (§5.2) and does not collapse while the privacy screen is on. A collapsed pill is easy to miss on a black screen.
-- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end".
+- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end". Where that doesn't fit on one line beside the buttons (a narrow screen, a long account name), the banner grows taller and the text wraps – it is never cut.
 - Ctrl+Alt+Del → Lock or Sign out ends the admin's view of the user desktop, as it does today.
 
 ### 5.6 What the privacy screen does not cover
@@ -423,7 +424,7 @@ The list is a new component with no equivalent in the helper today. It is drawn 
 - **PIN dialog:** a button [Hide apps…] Secondary next to Deny. The picker applies the selection while the PIN is still being read out, so it is in place before the first frame.
 - Because the selection is in place before `HelperMessage.Begin`, the first frame the admin receives is already masked.
 
-**While apps are hidden:** the banner heading gets a suffix, " · 2 apps hidden", and the pill shows the same.
+**While apps are hidden:** the banner heading gets a suffix, " · 2 apps hidden", and the pill shows the same. It counts only the apps the user picked: apps the policy hides (§8) are masked as well, but the user didn't hide them, so they aren't in the suffix, in `DesktopPrivacy.HiddenApps` or in the `DesktopUserHid` audit (§9). They are counted apart in `DesktopPrivacy.PolicyHiddenApps`.
 
 ### 7.2 What an "app" is
 
@@ -434,6 +435,8 @@ The selection holds **app identities**, not windows, so new windows of the same 
 | Desktop app | Full image path, case-insensitive | `GetWindowThreadProcessId` → `QueryFullProcessImageNameW` (the helper is LocalSystem, so elevated apps work as well) |
 | Packaged / UWP app | AppUserModelID | `ApplicationFrameWindow` → child `Windows.UI.Core.CoreWindow` → its PID → `GetApplicationUserModelId` |
 | Explorer | Only File Explorer windows (`CabinetWClass`), never the shell | class + image path `explorer.exe` |
+
+A window is hidden when its identity **or** its image path is in the list – an admin typically copies a Store app's path from Task Manager or `Get-Process` (D-HIDE-01). Paths are compared normalised (lower case, no quotes, `/` as `\`, `..` resolved). For an image path in a package folder (`…\WindowsApps\Name_Version_Arch_Resource_Publisher\…`) the comparison uses the package family (`Name_Publisher`) and the path inside the package, as the folder name changes with every update. A Store frame whose app can't be found out is covered while any Store app is listed, by AUMID or by such a path.
 
 **Name and icon:** the name comes from `FileDescription` in the version resource (fallback: file name), or the package display name. The icon comes from `WM_GETICON` / `GCLP_HICON`, with `SHGetFileInfo` as a fallback.
 
@@ -493,8 +496,8 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 
 ### 7.8 Admin view
 
-- Hidden regions arrive as `DesktopPrivacy.Regions`. The viewer draws each one as a hatched rectangle in `SessionAreaBrush` with the centred label "Hidden by the user" (a `Canvas` layer above `_screen`, scaled like `_cursorLayer`).
-- The header gets `_privacyBadge` with the text "2 apps hidden by the user". There are no app names, and the regions carry no names.
+- Hidden regions arrive as `DesktopPrivacy.Regions`. The viewer draws each one as a hatched rectangle in `SessionAreaBrush` with a centred label (a `Canvas` layer above `_screen`, scaled like `_cursorLayer`). A region doesn't say whose app it covers, so the label is "Hidden by the user" when only the user hides apps, "Hidden by IT policy" when only the policy does, and "Hidden" when both do. An older agent doesn't send `PolicyHiddenApps`; its regions keep "Hidden by the user".
+- The header gets `_privacyBadge` with the text "2 apps hidden by the user", and "1 app hidden by IT policy" for the policy's apps. There are no app names, and the regions carry no names.
 
 ## 8. Rights and policy
 
@@ -503,7 +506,7 @@ Pasting from RemoteHub into a hidden app still works. It's the user's choice, an
 | `AgentRight.PrivacyScreen` | Right (subkey `Rights`) | `config.AllowedGroups` (same as `Desktop`) | May turn on the privacy screen (Phase 1). Also needs `Desktop` (not view-only). |
 | `PrivacyScreen` | DWORD | 2 (see §14, Q2) | 0 – privacy screen off; 1 – allowed, local input stays usable; 2 – allowed, including blocking local input |
 | `PrivacyScreenMessage` | REG_SZ | (built-in text) | Replaces the heading on the Message overlay, e.g. "Contoso IT is working on this PC" |
-| `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. |
+| `HiddenApps` | REG_MULTI_SZ | – | Image paths or AUMIDs that are **always** hidden for every connection, e.g. a password manager. The user can't un-hide them, and they are shown checked and disabled in the picker. A packaged app's window is hidden by its AUMID or by its image path; an image path under `…\WindowsApps\<package full name>\` matches by package family and the path inside the package, so it still matches after the app updates and its versioned folder changes (§7.2). |
 
 The person at the device can always hide the screen and pick apps (§6.3). There is deliberately no policy to turn that off (but see §12, Q5).
 
@@ -516,7 +519,7 @@ These events go through `o.Log.Audit` in the same format as the existing desktop
 | Event | When | Text |
 |---|---|---|
 | `DesktopPrivacyScreen` | Admin turns it on or off | "Desktop: CONTOSO\admin from 10.0.0.5 turned the privacy screen on (black, local input blocked) in session 2" |
-| `DesktopUserHid` | User hides or shows the screen, or changes hidden apps | "Desktop: the user in session 2 hid their screen (blur)" / "… hid 2 apps" – **count only, no app names** |
+| `DesktopUserHid` | User hides or shows the screen, or changes hidden apps | "Desktop: the user in session 2 hid their screen (blur)" / "… hid 2 apps" – **count only, no app names**; apps the policy hides are not counted and don't write this event |
 | `DesktopPrivacyRefused` | Command refused (right, policy, OS build, affinity check) | with reason |
 
 ## 10. Compatibility

@@ -33,7 +33,19 @@ public sealed record AutoSignInRequest(int Session, string Domain, string User, 
 /// <param name="Status">Windows' NTSTATUS from LogonUI (0 = signed in); 0 when it never got that far.</param>
 public sealed record AutoSignInResult(bool Ok, string Code, string Message, int Status = 0, int Substatus = 0)
 {
+    /// <summary>
+    /// The ticket went to the provider but Windows' answer never came back (the pipe ended, broke or timed out), so the
+    /// account may be signed in all the same. The caller looks at the console before calling it a failure (§6.3).
+    /// </summary>
+    public bool Unconfirmed { get; init; }
+
+    /// <summary>NotOffered only: the Win32 error of the service's own check with Windows (0 = accepted); null when it couldn't check.</summary>
+    public int? CheckedError { get; init; }
+
     public static AutoSignInResult Failed(string code, string message) => new(false, code, message);
+
+    /// <summary>A failure after the ticket went out: see <see cref="Unconfirmed"/>.</summary>
+    public static AutoSignInResult Lost(string code, string message) => new(false, code, message) { Unconfirmed = true };
 }
 
 /// <summary>Why an automatic sign-in didn't happen – the reason codes RemoteHub gets with SignInFailed.</summary>
@@ -41,9 +53,85 @@ public static class AutoSignInFailure
 {
     public const string NotAllowed = "notAllowed", Unavailable = "unavailable", SessionState = "sessionState", ExistingSession = "existingSession",
         Busy = "busy", RateLimit = "rateLimit", Timeout = "timeout", NoProvider = "noProvider", SessionChanged = "sessionChanged",
-        Windows = "windows", WrongAccount = "wrongAccount";
+        Windows = "windows", WrongAccount = "wrongAccount", NotOffered = "notOffered";
 }
 
+/// <summary>
+/// The provider's NotOffered: the sign-in screen doesn't list the account and didn't take the ticket (Windows 11 leaves
+/// locked-out, disabled and – for a while – newly created accounts out, lab C-AUTO-20; docs/credential-provider-design.md
+/// §6.4, §8.2). Windows' answer never comes then, so the service asks Windows itself: an interactive LogonUserW with the
+/// ticket's password, whose error is worded like the NTSTATUS LogonUI would have reported.
+/// </summary>
+public static class AutoSignInNotOffered
+{
+    public const string Accepted = "The sign-in screen doesn't offer this account yet, although Windows accepts its sign-in – " +
+        "a new account may only appear there later. Try again in a while, or sign in at the device once.";
+
+    // winerror.h -> the ntstatus.h value LogonUI would have reported, so the texts are AutoSignInStatus's.
+    private static readonly Dictionary<int, uint> Statuses = new()
+    {
+        [1326] = AutoSignInStatus.LogonFailure,              // ERROR_LOGON_FAILURE
+        [1327] = AutoSignInStatus.AccountRestriction,        // ERROR_ACCOUNT_RESTRICTION
+        [1328] = AutoSignInStatus.InvalidLogonHours,         // ERROR_INVALID_LOGON_HOURS
+        [1329] = AutoSignInStatus.InvalidWorkstation,        // ERROR_INVALID_WORKSTATION
+        [1330] = AutoSignInStatus.PasswordExpired,           // ERROR_PASSWORD_EXPIRED
+        [1331] = AutoSignInStatus.AccountDisabled,           // ERROR_ACCOUNT_DISABLED
+        [1317] = AutoSignInStatus.NoSuchUser,                // ERROR_NO_SUCH_USER
+        [1311] = AutoSignInStatus.NoLogonServers,            // ERROR_NO_LOGON_SERVERS
+        [1385] = AutoSignInStatus.LogonTypeNotGranted,       // ERROR_LOGON_TYPE_NOT_GRANTED
+        [1398] = AutoSignInStatus.TimeDifferenceAtDc,        // ERROR_TIME_SKEW
+        [1789] = AutoSignInStatus.TrustedRelationshipFailure, // ERROR_TRUSTED_RELATIONSHIP_FAILURE
+        [1793] = AutoSignInStatus.AccountExpired,            // ERROR_ACCOUNT_EXPIRED
+        [1907] = AutoSignInStatus.PasswordMustChange,        // ERROR_PASSWORD_MUST_CHANGE
+        [1909] = AutoSignInStatus.AccountLockedOut,          // ERROR_ACCOUNT_LOCKED_OUT
+        [1922] = AutoSignInStatus.SmartCardLogonRequired,    // ERROR_SMARTCARD_LOGON_REQUIRED
+    };
+
+    /// <param name="checkLogon">Signs the account in interactively and closes the token at once: 0 when Windows accepts
+    /// it, else the Win32 error. Tests pass their own; the service passes <see cref="CheckLogon"/>.</param>
+    public static AutoSignInResult Result(string domain, string user, ProtectedSecret password, Func<string, string, ProtectedSecret, int> checkLogon)
+    {
+        int error;
+        try { error = checkLogon(domain, user, password); }
+        catch (Exception) { error = -1; }
+        if (error == 0) return new AutoSignInResult(false, AutoSignInFailure.NotOffered, Accepted) { CheckedError = 0 };
+        if (error > 0 && Statuses.TryGetValue(error, out var status))
+            return new AutoSignInResult(false, AutoSignInFailure.NotOffered, AutoSignInStatus.Describe((int)status, 0), (int)status) { CheckedError = error };
+        return new AutoSignInResult(false, AutoSignInFailure.NotOffered, error > 0
+            ? $"The sign-in screen doesn't offer this account, and Windows refused its sign-in (error {error})."
+            : "The sign-in screen doesn't offer this account – it may be disabled or locked.") { CheckedError = error > 0 ? error : null };
+    }
+
+    /// <summary>
+    /// LogonUserW(LOGON32_LOGON_INTERACTIVE) as the service: 0 or the Win32 error. The password is in a pinned buffer for
+    /// the call only and zeroed right after; the token, if any, is closed at once. This is one more interactive sign-in
+    /// attempt for the account (with a wrong password it counts towards the lockout like any attempt).
+    /// </summary>
+    public static int CheckLogon(string domain, string user, ProtectedSecret password)
+    {
+        var error = -1;
+        password.Reveal(utf16 =>
+        {
+            var buffer = GC.AllocateArray<byte>(utf16.Length + 2, pinned: true); // UTF-16LE and its terminator
+            try
+            {
+                utf16.CopyTo(buffer);
+                if (LogonUserW(user, domain, Marshal.UnsafeAddrOfPinnedArrayElement(buffer, 0), 2 /* LOGON32_LOGON_INTERACTIVE */,
+                        0 /* LOGON32_PROVIDER_DEFAULT */, out var token))
+                {
+                    Native.CloseHandle(token);
+                    error = 0;
+                }
+                else error = Marshal.GetLastWin32Error();
+            }
+            finally { ProtectedSecret.CryptographicWipe(buffer); }
+        });
+        return error;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool LogonUserW(string user, string domain, IntPtr password, int logonType, int logonProvider, out IntPtr token);
+}
 /// <summary>
 /// A secret in its own pinned buffer, protected with CryptProtectMemory (same process) while it waits. Never a .NET
 /// string; zeroed on dispose. <see cref="Reveal"/> gives the clear text only for the duration of a callback.
@@ -114,7 +202,7 @@ public static class AutoSignInWire
 {
     public const byte Version = 1;
     public const int MaxMessageBytes = 4096, NonceBytes = 16, MaxNameChars = 256, MaxPasswordChars = 256;
-    public const byte Pending = 1, Claim = 2, Ticket = 3, Result = 4;
+    public const byte Pending = 1, Claim = 2, Ticket = 3, Result = 4, NotOffered = 5;
     private const int HeaderBytes = 4;
 
     public static byte[] WritePending(ReadOnlySpan<byte> nonce, uint session) => NonceSession(Pending, nonce, session);
@@ -151,6 +239,10 @@ public static class AutoSignInWire
         if (!TryPayload(m, Result, NonceBytes + 8, out var p) || !p[..NonceBytes].SequenceEqual(nonce)) return null;
         return (BinaryPrimitives.ReadInt32LittleEndian(p[NonceBytes..]), BinaryPrimitives.ReadInt32LittleEndian(p[(NonceBytes + 4)..]));
     }
+
+    /// <summary>A NotOffered for this nonce: the sign-in screen won't take the ticket (the provider has dropped it).</summary>
+    public static bool IsNotOffered(ReadOnlySpan<byte> m, ReadOnlySpan<byte> nonce) =>
+        TryPayload(m, NotOffered, NonceBytes, out var p) && p.SequenceEqual(nonce);
 
     private static byte[] NonceSession(byte type, ReadOnlySpan<byte> nonce, uint session)
     {
@@ -205,22 +297,49 @@ public sealed class AutoSignInGate(int maxAttempts = 3, TimeSpan? window = null,
     }
 }
 
-/// <summary>What Windows' answer means for the operator (never the input, never more than the reason).</summary>
+/// <summary>
+/// What Windows' answer from LogonUI means for the operator (never the input, never more than the reason). Windows often
+/// reports a refusal as the general STATUS_LOGON_FAILURE or STATUS_ACCOUNT_RESTRICTION with the actual reason in the
+/// substatus – a disabled account, for example, as 0xC000006E / 0xC0000072 – so the substatus is read first.
+/// </summary>
 public static class AutoSignInStatus
 {
-    public static string Describe(int status, int substatus) => (uint)status switch
+    // ntstatus.h
+    public const uint LogonFailure = 0xC000006D, AccountRestriction = 0xC000006E, NoSuchUser = 0xC0000064, WrongPassword = 0xC000006A,
+        InvalidLogonHours = 0xC000006F, InvalidWorkstation = 0xC0000070, PasswordExpired = 0xC0000071, AccountDisabled = 0xC0000072,
+        AccountExpired = 0xC0000193, PasswordMustChange = 0xC0000224, AccountLockedOut = 0xC0000234, LogonTypeNotGranted = 0xC000015B,
+        NoLogonServers = 0xC000005E, TrustedRelationshipFailure = 0xC000018D, TimeDifferenceAtDc = 0xC0000133,
+        SmartCardLogonRequired = 0xC00002FA, AuthenticationFirewallFailed = 0xC0000413;
+
+    public static string Describe(int status, int substatus)
     {
-        0xC000006D when (uint)substatus == 0xC0000064 => "The account doesn't exist on the device.",
-        0xC000006D or 0xC000006A => "The password was wrong (the stored password may be out of date).",
-        0xC0000234 => "The account is locked.",
-        0xC0000071 or 0xC0000224 => "The password has expired and must be changed at the device.",
-        0xC0000072 => "The account is disabled.",
-        0xC0000193 => "The account has expired.",
-        0xC000015B => "The account may not sign in on this device's screen (\"Allow log on locally\").",
-        0xC000006F => "The account may not sign in at this time of day.",
-        0xC0000070 => "The account may not sign in on this device.",
-        0xC000006E => "The account can't sign in this way (it may need a smart card or Windows Hello).",
-        0xC0000413 => "The sign-in was blocked by the domain's authentication firewall.",
-        _ => $"Windows refused the sign-in (0x{status:X8}).",
+        var s = (uint)status;
+        if (s is LogonFailure or AccountRestriction && (uint)substatus != s && Specific((uint)substatus) is { } reason) return reason;
+        return Specific(s) ?? s switch
+        {
+            LogonFailure => "The password was wrong (the stored password may be out of date).",
+            AccountRestriction => "Account restrictions prevent this sign-in (for example a blank password, or the account needs a smart card or Windows Hello).",
+            _ => $"Windows refused the sign-in (0x{status:X8}).",
+        };
+    }
+
+    /// <summary>A status that names the reason itself; null for the general ones and anything unknown.</summary>
+    private static string? Specific(uint status) => status switch
+    {
+        NoSuchUser => "The account doesn't exist on the device.",
+        WrongPassword => "The password was wrong (the stored password may be out of date).",
+        AccountLockedOut => "The account is locked.",
+        PasswordExpired or PasswordMustChange => "The password has expired and must be changed at the device.",
+        AccountDisabled => "The account is disabled.",
+        AccountExpired => "The account has expired.",
+        LogonTypeNotGranted => "The account may not sign in on this device's screen (\"Allow log on locally\").",
+        InvalidLogonHours => "The account may not sign in at this time of day.",
+        InvalidWorkstation => "The account may not sign in on this device.",
+        SmartCardLogonRequired => "The account must sign in with a smart card.",
+        AuthenticationFirewallFailed => "The sign-in was blocked by the domain's authentication firewall.",
+        NoLogonServers => "No domain controller could be reached to check the account.",
+        TrustedRelationshipFailure => "The device's trust relationship with its domain failed.",
+        TimeDifferenceAtDc => "The device's clock differs too much from the domain controller's.",
+        _ => null,
     };
 }

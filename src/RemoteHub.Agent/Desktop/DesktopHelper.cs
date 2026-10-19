@@ -164,7 +164,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _stop.Token);
         var token = linked.Token;
         ui.ClipboardChanged += text => { if (_begun && Level >= DesktopClipboardLevel.Text && !CopiedInHiddenApp()) _ = Send(DesktopWire.Text(DesktopMessage.Clipboard, text)); };
-        ui.ClipboardContent += content => { if (_begun && !CopiedInHiddenApp()) SendClipboard(content); };
+        ui.ClipboardContent += content =>
+        {
+            if (!_begun) return;
+            if (!CopiedInHiddenApp()) SendClipboard(content);
+            else if (content.Files is not null) Note("clipboard: files copied at the device – not sent: copied in an app the user hid");
+        };
         var capture = new Thread(() => CaptureLoop(token)) { IsBackground = true, Name = "Desktop capture" };
         var inject = new Thread(() => InputLoop(token)) { IsBackground = true, Name = "Desktop input" };
         try
@@ -184,7 +189,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         _userHide = DesktopScreenHide.Valid(init.UserHidden);
                         _alwaysHidden = (init.AlwaysHidden ?? []).Select(AppIds.Normalize).ToHashSet();
                         ChooseApps((init.HiddenApps ?? []).Select(AppIds.Normalize).ToHashSet(), report: false);
-                        _privacy = _privacy with { User = _userHide, HiddenApps = _hiddenApps.Count };
+                        _privacy = _privacy with { User = _userHide }; // the counts ChooseApps just set
                         // Before the question: the user can pick apps to hide before anything is sent.
                         ui.OfferHideApps(_chosenApps, _alwaysHidden, chosen => ChooseApps(chosen, report: _begun));
                         // Nothing from the admin while the user has hidden their screen – also not on the secure desktop.
@@ -329,22 +334,31 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         _hiddenApps = all;
         _privacyChanged = true;
         _keyFrameRequested = true;
+        var (byUser, byPolicy) = HiddenCounts(chosen, _alwaysHidden);
         if (!report)
         {
             // Before the session began (picked in the question): it goes out with the first report.
-            lock (_privacyLock) _privacy = _privacy with { HiddenApps = all.Count };
+            lock (_privacyLock) _privacy = _privacy with { HiddenApps = byUser, PolicyHiddenApps = byPolicy };
             return;
         }
         _ = Send(DesktopWire.Json((DesktopMessage)HelperMessage.HiddenApps, new HelperHiddenApps([.. chosen]), HelperJson.Default.HelperHiddenApps));
-        Report(p => p with { HiddenApps = all.Count, Regions = all.Count == 0 ? null : p.Regions, Reason = "" });
+        Report(p => p with { HiddenApps = byUser, PolicyHiddenApps = byPolicy, Regions = all.Count == 0 ? null : p.Regions, Reason = "" });
     }
+
+    /// <summary>
+    /// How many apps the user hides and how many the policy does. Both are masked alike, but only the user's choice is
+    /// reported as theirs – on the banner, to RemoteHub and in the audit (DesktopUserHid) – so an app the policy hides
+    /// doesn't read as one the user hid. An app in both lists counts as the policy's: the user can't show it anyway.
+    /// </summary>
+    internal static (int ByUser, int ByPolicy) HiddenCounts(IReadOnlySet<string> chosen, IReadOnlySet<string> always) =>
+        (chosen.Count(a => !always.Contains(a)), always.Count);
 
     /// <summary>What was just copied comes from a hidden app: it isn't sent to RemoteHub.</summary>
     private bool CopiedInHiddenApp()
     {
         var hidden = _hiddenApps;
         if (hidden.Count == 0) return false;
-        try { return hidden.Contains(apps.ClipboardOwnerApp()); }
+        try { return AppIds.IsHidden(hidden, apps.ClipboardOwnerApp()); }
         catch { return true; } // unknown: not sent
     }
 
@@ -493,7 +507,13 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private void SendClipboard(HelperClipboard content)
     {
         var need = content.Files is not null ? DesktopClipboardLevel.Files : DesktopClipboardLevel.Images;
-        if (Level < need) return;
+        if (Level < need)
+        {
+            if (content.Files is not null) Note($"clipboard: files copied at the device – not sent: the clipboard level is {Level}");
+            return;
+        }
+        // Before the files are looked at (as the user): a copy that never gets further still leaves this line.
+        if (content.Files is not null) Note($"clipboard: {content.Files.Count} path(s) copied at the device – reading them as the signed-in user");
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         var id = Interlocked.Increment(ref _transferIds);
@@ -506,12 +526,26 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 // Files are read as the signed-in user: only what they may read themselves.
                 if (content.Image is { } image) o = ClipboardTransfer.Image(id, image, content.Png);
                 else SessionUser.Run(() => o = ClipboardTransfer.Files(id, content.Files!, out error));
-                if (o is null) { TransferFailed(id, error ?? "Nothing to copy."); return; }
+                if (o is null)
+                {
+                    if (content.Files is not null) Note($"clipboard: {content.Files.Count} path(s) copied at the device – not sent: {error ?? "nothing to copy"}");
+                    TransferFailed(id, error ?? "Nothing to copy.");
+                    return;
+                }
+                if (content.Files is not null)
+                    Note($"clipboard: files copied at the device ({o.Transfer.Items.Length} item(s), {o.Transfer.Total} bytes) – {(_init?.OfferToViewer == true ? "offered to RemoteHub" : "sent to RemoteHub")}");
                 if (_init?.OfferToViewer == true)
                 {
                     // Names and sizes only: RemoteHub's clipboard offers them; the data goes when someone pastes there.
-                    _offered = new OfferedOut(o, content.Files is not null);
-                    SendSync(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                    // One copy often brings two clipboard changes (announced, then rendered), so two of these threads
+                    // race: only the newest copy is offered, and it is the last offer RemoteHub sees – else RemoteHub
+                    // asks for an id that is no longer the one kept here.
+                    lock (_offerGate)
+                    {
+                        if (cancel.IsCancellationRequested) return; // a newer copy came meanwhile
+                        _offered = new OfferedOut(o, content.Files is not null);
+                        SendSync(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
+                    }
                     return;
                 }
                 SendOutgoing(o, content.Files is not null, cancel);
@@ -520,18 +554,30 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             {
                 TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
             }
+            catch (Exception ex)
+            {
+                // Impersonating the user can fail in ways the file APIs don't (SecurityException): refused, not a helper crash.
+                Note($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+                TransferFailed(id, "The copied files can't be read on the device.");
+            }
         }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
     }
 
     /// <summary>What was copied here and offered to RemoteHub, until it's pasted there (or something else is copied).</summary>
     private volatile OfferedOut? _offered;
+    private readonly object _offerGate = new();
 
     private sealed record OfferedOut(ClipboardTransfer.Outgoing Outgoing, bool Files);
 
     /// <summary>Pasted in RemoteHub: what was offered goes now (in the background, like a direct copy).</summary>
     private void SendOffered(int id)
     {
-        if (_offered is not { } offered || offered.Outgoing.Transfer.Id != id) return;
+        if (_offered is not { } offered || offered.Outgoing.Transfer.Id != id)
+        {
+            // An older offer (a newer copy replaced it): answered, so RemoteHub's paste doesn't wait for nothing.
+            TransferFailed(id, "A newer copy replaced it.");
+            return;
+        }
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         new Thread(() =>
@@ -540,6 +586,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
             {
                 TransferFailed(id, "The copied files can't be read on the device: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                Note($"clipboard: a copy at the device could not be read ({ex.GetType().Name})");
+                TransferFailed(id, "The copied files can't be read on the device.");
             }
         }) { IsBackground = true, Name = "Clipboard transfer" }.Start();
     }
@@ -670,7 +721,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     {
         var hidden = _hiddenApps;
         if (hidden.Count == 0) return false;
-        try { return hidden.Contains(apps.ForegroundApp()); }
+        try { return AppIds.IsHidden(hidden, apps.ForegroundApp()); }
         catch { return true; }
     }
 

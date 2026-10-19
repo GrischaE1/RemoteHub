@@ -9,6 +9,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- A test that hangs ends the run after 10 minutes, with a mini dump in TestResults, instead of blocking it (and CI)
+         until someone notices; no test needs more than a few seconds. Same as dotnet test's blame hang timeout option. -->
+    <VSTestBlameHang>true</VSTestBlameHang>
+    <VSTestBlameHangTimeout>10min</VSTestBlameHangTimeout>
+    <VSTestBlameHangDumpType>mini</VSTestBlameHangDumpType>
   </PropertyGroup>
 
   <ItemGroup>

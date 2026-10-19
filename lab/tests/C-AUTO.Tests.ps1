@@ -3,8 +3,9 @@
 # and sends the password when the agent says SignInReady. The agent MSI under test must be built with the provider and
 # signed (build-installer.ps1 -LabSigning -CredentialProvider).
 #
-#  1. Installed with AUTOSIGNIN=1 (the install dialog's "Allow automatic sign-in"): the agent wrote the policy values;
-#     IT setting NoUserBehavior = SignInScreen turns it off again (the right isn't offered, a request is refused).
+#  1. Installed with AUTOSIGNIN=1 (the install dialog's "Allow automatic sign-in"): agent.json allows it, the policy key
+#     stays empty (since 0.18.12); IT setting NoUserBehavior = SignInScreen turns it off again (the right isn't
+#     offered, a request is refused); the value deleted again ("Not configured"), the install's choice applies.
 #  2. Refused in view-only; refused when RemoteHub never sends the password (30 s).
 #  3. A wrong password: Windows refuses it, the reason reaches RemoteHub, the console stays at the sign-in screen.
 #  4. The right password: signed in, the console account's desktop, audit 1106.
@@ -38,21 +39,26 @@ BeforeAll {
         try { Invoke-LabAutoSignIn -Name $VmName -Pin $install.pin @Options } catch { [pscustomobject]@{ error = "$_"; statuses = @() } }
     }
 
-    # ---- 1. Installed with the option: the policy values are the agent's; IT can still turn it off
-    # -Clean: the policy values must be the ones the install itself just wrote
+    # ---- 1. Installed with the option: agent.json allows it (since 0.18.12, docs/admx-design.md 11.3); IT can still
+    # turn it off by policy, and setting the policy back to "Not configured" gives the install's choice back
+    # -Clean: what the install itself just wrote, no policy values from an earlier file
     $init = Initialize-LabVm -Name $VmName -Agent -AutoSignIn $true -Clean
     $install = $init.Install
     $policyAfterInstall = Invoke-LabGuest -Name $VmName -ScriptBlock {
+        $json = Get-Content 'C:\ProgramData\RemoteHub\Agent\agent.json' -Raw | ConvertFrom-Json
         [pscustomobject]@{
+            ConfigBehavior = $json.noUserBehavior
+            ConfigGroups   = @($json.autoSignInGroups | Where-Object { $_ })
             Behavior = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue).NoUserBehavior
-            Right    = @((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue).AutoSignIn)
+            Right    = @((Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent\Rights' -ErrorAction SilentlyContinue).AutoSignIn | Where-Object { $_ })
             Marker   = Test-Path 'C:\ProgramData\RemoteHub\Agent\autosignin.policy'
         }
     }
     Disconnect-LabConsole -Name $VmName
     Set-LabAgentPolicy -Name $VmName -Values @{ NoUserBehavior = 'SignInScreen' }   # IT says no
     $noPolicy = Run
-    Set-LabAgentPolicy -Name $VmName -Values @{ NoUserBehavior = 'AutoSignIn' }
+    # IT sets the policy back to "Not configured" (Group Policy deletes the value): the install's choice applies again
+    Invoke-LabGuest -Name $VmName -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -Name NoUserBehavior -ErrorAction SilentlyContinue }
     $policyAfterReset = Invoke-LabGuest -Name $VmName -ScriptBlock {
         [pscustomobject]@{
             Behavior = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -ErrorAction SilentlyContinue).NoUserBehavior
@@ -74,8 +80,18 @@ BeforeAll {
     Send-LabKey -Name $VmName -Key Enter
     Start-Sleep -Seconds 3
     $right = Run
+    # signed in = the console account's explorer runs. Not "an unlocked desktop": the probe's connection has ended by
+    # now, and the agent locks the session then (AutoSignInEndAction, default lock - see event 1106's text)
     $desktopError = $null
-    try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 120 } catch { $desktopError = "$_" }
+    $deadline = (Get-Date).AddSeconds(120)
+    do {
+        $owners = @(Invoke-LabGuest -Name $VmName -ScriptBlock {
+                Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User }
+            })
+        if ($owners -contains $vm.ConsoleAccount) { break }
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $deadline)
+    if ($owners -notcontains $vm.ConsoleAccount) { $desktopError = "no explorer for $($vm.ConsoleAccount) after 120 s (explorer owners: $($owners -join ', '))" }
     $afterRight = Get-Console
     Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-auto-signed-in.png') | Out-Null
     $events = Get-AutoSignInEvents
@@ -103,10 +119,12 @@ AfterAll {
 
 Describe 'C-AUTO <VmName>' -Tag Agent, 'C-AUTO' {
 
-    It 'C-AUTO-01 the install option allows it by policy; IT turning NoUserBehavior off stops it' -Tag 'C-AUTO-01' {
-        $policyAfterInstall.Behavior | Should -Be 'AutoSignIn'
-        $policyAfterInstall.Right | Should -Be @('S-1-5-32-544')
-        $policyAfterInstall.Marker | Should -Be $true
+    It 'C-AUTO-01 the install option allows it in agent.json (policy key untouched); IT turning NoUserBehavior off stops it' -Tag 'C-AUTO-01' {
+        $policyAfterInstall.ConfigBehavior | Should -Be 'AutoSignIn'
+        $policyAfterInstall.ConfigGroups | Should -Be @('S-1-5-32-544')
+        $policyAfterInstall.Behavior | Should -BeNullOrEmpty -Because 'since 0.18.12 the install no longer writes the policy key'
+        @($policyAfterInstall.Right) | Should -BeNullOrEmpty
+        $policyAfterInstall.Marker | Should -Be $false
         $noPolicy.rights.AutoSignIn | Should -Be $false
         ($noPolicy.statuses -join "`n") | Should -Match 'SignInFailed: Automatic sign-in is turned off on this device'
     }
@@ -132,7 +150,8 @@ Describe 'C-AUTO <VmName>' -Tag Agent, 'C-AUTO' {
         ($right.statuses -join "`n") | Should -Match 'SignInReady'
         ($right.statuses -join "`n") | Should -Match 'SignedIn: Signed in as'
         $desktopError | Should -BeNullOrEmpty
-        $afterRight.User | Should -Match "\\$([regex]::Escape($vm.ConsoleAccount))$"
+        # Win32_ComputerSystem.UserName is empty while the session is locked - the explorer's owner is what counts
+        $owners | Should -Contain $vm.ConsoleAccount
         ($events -join "`n") | Should -Match '1106: Automatic sign-in'
         ($events -join "`n") | Should -Not -Match '3101|3102'
     }

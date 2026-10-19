@@ -127,12 +127,7 @@ public static class AgentHost
                 {
                     if (auth.Outcome != AuthOutcome.Error) gate.Failed(source);
                     o.Log.Audit(AuditEvent.SignInRefused, $"Refused {user} from {source}: {auth.Reason}");
-                    ctx.Response.StatusCode = auth.Outcome switch
-                    {
-                        AuthOutcome.BadCredentials => StatusCodes.Status401Unauthorized,
-                        AuthOutcome.NotAllowed => StatusCodes.Status403Forbidden,
-                        _ => StatusCodes.Status500InternalServerError,
-                    };
+                    ctx.Response.StatusCode = SignInRefusal.HttpStatus(auth.Outcome);
                     return null;
                 }
                 gate.Succeeded(source);
@@ -331,8 +326,12 @@ internal static class Tunnel
         var toShell = Task.Run(() => ToShellAsync(ws, shell.Input, cts.Token));
         var fromShell = Task.Run(() => FromShellAsync(ws, shell.Output, cts.Token));
         var first = await Task.WhenAny(toShell, fromShell);
-        var reason = first == toShell ? "closed by RemoteHub" : "PowerShell ended";
-        if (first.IsFaulted) reason = "connection lost: " + first.Exception!.GetBaseException().Message;
+        // Nothing cancels either side on purpose before this point: a cancelled side means the connection dropped – the
+        // keep-alive timeout ends the WebSocket's receive with an OperationCanceledException, and an aborted request
+        // cancels both sides – whichever side noticed it first.
+        var reason = first.IsFaulted ? "connection lost: " + first.Exception!.GetBaseException().Message
+            : first.IsCanceled ? "connection lost"
+            : first == toShell ? "closed by RemoteHub" : "PowerShell ended";
         cts.Cancel();
         try
         {

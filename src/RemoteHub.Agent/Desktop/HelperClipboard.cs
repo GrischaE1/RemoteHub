@@ -155,28 +155,196 @@ internal sealed unsafe partial class Win32HelperUi
         if (SetClipboardData(format, memory) == IntPtr.Zero) GlobalFree(memory);
     }
 
-    /// <summary>The clipboard holds no text: an image or files? (clipboard is open)</summary>
-    private HelperClipboard? ReadOther()
+    /// <summary>The clipboard holds no text and no files: an image? (clipboard is open)</summary>
+    private HelperClipboard? ReadImage()
     {
         if (IsClipboardFormatAvailable(PngFormat) && Read(PngFormat) is { } png) return new HelperClipboard(png, Png: true);
         if (IsClipboardFormatAvailable(CF_DIB) && Read(CF_DIB) is { } dib && DibToBmp(dib) is { } bmp) return new HelperClipboard(bmp);
-        if (IsClipboardFormatAvailable(CF_HDROP))
-        {
-            var h = GetClipboardData(CF_HDROP);
-            if (h == IntPtr.Zero) return null;
-            var files = new List<string>();
-            var count = DragQueryFileW(h, 0xFFFFFFFF, null, 0);
-            for (uint i = 0; i < count && i < DesktopProtocol.MaxTransferItems; i++)
-            {
-                var length = DragQueryFileW(h, i, null, 0);
-                var buffer = new char[length + 1];
-                fixed (char* b = buffer) DragQueryFileW(h, i, b, length + 1);
-                files.Add(new string(buffer, 0, (int)length));
-            }
-            return files.Count > 0 ? new HelperClipboard(Files: files) : null;
-        }
         return null;
     }
+
+    /// <summary>
+    /// Files copied at the device (CF_HDROP), at most <see cref="DesktopProtocol.MaxTransferItems"/>; null when the list
+    /// can't be read (not rendered yet, malformed). The clipboard is open. The list comes from the user's programs, so
+    /// it is parsed here within the bytes Windows hands over – not with DragQueryFile, which trusts the header's offset.
+    /// </summary>
+    private static IReadOnlyList<string>? ReadFiles(out string why)
+    {
+        why = "";
+        if (Read(CF_HDROP) is not { } drop)
+        {
+            why = $"no data, error {Marshal.GetLastPInvokeError()}";
+            return null;
+        }
+        if (DropFileList(drop, DesktopProtocol.MaxTransferItems) is { } files) return files;
+        why = $"no usable path in {drop.Length} bytes";
+        return null;
+    }
+
+    /// <summary>The formats on the clipboard as numbers (the clipboard is open) – for the log, never their contents.</summary>
+    private static string Formats(out bool dataObject)
+    {
+        var list = new List<uint>();
+        uint f;
+        for (f = EnumClipboardFormats(0); f != 0 && list.Count < 32; f = EnumClipboardFormats(f)) list.Add(f);
+        var error = f == 0 ? Marshal.GetLastPInvokeError() : 0; // 0: the end of the list
+        dataObject = list.Contains(DataObjectFormat);
+        return list.Count == 0 ? "none" : string.Join(", ", list) + (error != 0 ? $", then error {error}" : "");
+    }
+
+    /// <summary>"DataObject": an OLE copy (Explorer, Windows Forms, PowerShell) – its program hands out the data itself.</summary>
+    private static readonly uint DataObjectFormat = RegisterClipboardFormatW("DataObject");
+
+    // ---- files read by the signed-in user
+
+    /// <summary>
+    /// Gets the copied file list from a reader running as the session's user (<see cref="ClipboardFilesReader"/>):
+    /// the paths, or null with why. Replaceable for tests. Blocks for at most the reader's time limit.
+    /// </summary>
+    internal Func<ClipboardFilesReader.Result> UserFileReader { get; set; } = () => ClipboardFilesReader.ReadAsUser(ClipboardFilesReader.TimeLimit);
+
+    /// <summary>A read by the user's reader runs (one at a time; UI thread only).</summary>
+    private bool _userReading;
+
+    /// <summary>A copy that came while a reader ran: read next (UI thread only).</summary>
+    private (int Change, string Seen)? _userPending;
+
+    /// <summary>
+    /// An OLE copy whose file list the helper isn't shown (lab, Windows 11 26H2: LocalSystem sees "DataObject" alone,
+    /// while the user's own programs read FileDrop): the list is read in the user's session, as the user, by a short
+    /// reader process, on a thread of its own – the helper's windows and the clipboard never wait for it. What the
+    /// reader writes is untrusted: only paths that pass the same checks as a list read here are used, and the files are
+    /// read as the user afterwards anyway. The result counts only if nothing newer was copied meanwhile.
+    /// </summary>
+    private void ReadFilesAsUser(int change, string seen)
+    {
+        // One reader at a time. A copy made while one runs is read next: in lab run 20261018-152145 two copies came
+        // 300 ms apart, the answer for the first arrived after the second and was dropped as out of date, and the
+        // second was never asked for – neither arrived. Only the newest waiting copy is kept.
+        if (_userReading)
+        {
+            _userPending = (change, seen);
+            return;
+        }
+        _userReading = true;
+        var reader = UserFileReader;
+        var t = new Thread(() =>
+        {
+            ClipboardFilesReader.Result result;
+            try { result = reader(); }
+            catch (Exception ex) { result = new(null, ex.GetType().Name); }
+            Post(() =>
+            {
+                _userReading = false;
+                if (_userPending is { } next)
+                {
+                    _userPending = null;
+                    if (next.Change == _changes) ReadFilesAsUser(next.Change, next.Seen); // still the newest copy
+                }
+                if (_changes != change) return; // something newer was copied meanwhile
+                if (result.Files is { Count: > 0 } files)
+                {
+                    _lastClipboard = "";
+                    ClipboardContent?.Invoke(new HelperClipboard(Files: files));
+                }
+                else Noted?.Invoke($"clipboard: a copy at the device with nothing to send ({seen}; read as the user: {result.Why})");
+            });
+        }) { IsBackground = true, Name = "Clipboard read as the user" };
+        t.Start();
+    }
+
+    /// <summary>
+    /// CF_HDROP from the OLE clipboard (call on an STA thread): OleGetClipboard, IDataObject::GetData, the bytes copied
+    /// out and parsed like a raw list. Null with why (an HRESULT, never a path) when there is none.
+    /// </summary>
+    internal static IReadOnlyList<string>? OleClipboardFiles(out string why)
+    {
+        var initialized = OleInitialize(IntPtr.Zero);
+        try
+        {
+            var hr = OleGetClipboard(out var data);
+            if (hr != 0 || data == 0) { why = $"OleGetClipboard 0x{hr:X8}"; return null; }
+            try
+            {
+                var format = new OleFormat { cfFormat = (ushort)CF_HDROP, dwAspect = 1 /* DVASPECT_CONTENT */, lindex = -1, tymed = 1 /* TYMED_HGLOBAL */ };
+                OleMedium medium;
+                // IDataObject::GetData: the fourth entry of the vtable (after IUnknown's three).
+                var getData = (delegate* unmanaged[Stdcall]<nint, OleFormat*, OleMedium*, int>)(*(*(nint**)data + 3));
+                hr = getData(data, &format, &medium);
+                if (hr != 0) { why = $"GetData 0x{hr:X8}"; return null; }
+                try
+                {
+                    if (medium.tymed != 1 || medium.unionmember == 0) { why = $"medium {medium.tymed}"; return null; }
+                    var size = (long)GlobalSize(medium.unionmember);
+                    if (size <= 0 || size > DesktopProtocol.MaxTransferBytes) { why = $"{size} bytes"; return null; }
+                    var p = GlobalLock(medium.unionmember);
+                    if (p == null) { why = "not readable"; return null; }
+                    var bytes = new byte[size];
+                    try { Marshal.Copy((IntPtr)p, bytes, 0, (int)size); }
+                    finally { GlobalUnlock(medium.unionmember); }
+                    var files = DropFileList(bytes, DesktopProtocol.MaxTransferItems);
+                    why = files is null ? $"no usable path in {size} bytes" : "";
+                    return files;
+                }
+                finally { ReleaseStgMedium(&medium); }
+            }
+            finally { Marshal.Release(data); }
+        }
+        finally { if (initialized >= 0) OleUninitialize(); }
+    }
+
+    [StructLayout(LayoutKind.Sequential)] private struct OleFormat { public ushort cfFormat; public nint ptd; public uint dwAspect; public int lindex; public uint tymed; }
+    [StructLayout(LayoutKind.Sequential)] private struct OleMedium { public uint tymed; public nint unionmember; public nint pUnkForRelease; }
+    [DllImport("ole32.dll")] private static extern int OleInitialize(IntPtr reserved);
+    [DllImport("ole32.dll")] private static extern void OleUninitialize();
+    [DllImport("ole32.dll")] private static extern int OleGetClipboard(out nint dataObject);
+    [DllImport("ole32.dll")] private static extern void ReleaseStgMedium(OleMedium* medium);
+
+    /// <summary>
+    /// The paths in a DROPFILES block: the header (offset of the list, wide or ANSI), then the paths, each ending in \0,
+    /// the list in another \0. Only fully qualified local or UNC paths are kept – no device paths (<c>\\.\</c>,
+    /// <c>\\?\</c>) and nothing relative to the helper's own folder. Null if the block is malformed or holds no usable path;
+    /// stops after <paramref name="max"/> paths.
+    /// </summary>
+    internal static List<string>? DropFileList(byte[] drop, int max)
+    {
+        if (drop.Length < 20) return null;
+        var offset = BitConverter.ToUInt32(drop, 0);
+        var wide = BitConverter.ToInt32(drop, 16) != 0;
+        if (offset < 20 || offset >= drop.Length) return null;
+        var files = new List<string>();
+        var at = (int)offset;
+        while (files.Count < max)
+        {
+            // Each path must end inside the block: an unterminated list is refused, not read past its end.
+            int end;
+            string path;
+            if (wide)
+            {
+                end = at;
+                while (end + 1 < drop.Length && (drop[end] | drop[end + 1]) != 0) end += 2;
+                if (end + 1 >= drop.Length) return null;
+                path = System.Text.Encoding.Unicode.GetString(drop, at, end - at);
+                end += 2;
+            }
+            else
+            {
+                end = Array.IndexOf(drop, (byte)0, at);
+                if (end < 0) return null;
+                fixed (byte* p = drop) path = Marshal.PtrToStringAnsi((IntPtr)(p + at), end - at);
+                end += 1;
+            }
+            if (path.Length == 0) break; // the empty string that ends the list
+            if (UsablePath(path)) files.Add(path);
+            at = end;
+        }
+        return files.Count > 0 ? files : null;
+    }
+
+    internal static bool UsablePath(string path) =>
+        path.Length < 32_767 && path.IndexOf('\0') < 0 && Path.IsPathFullyQualified(path) &&
+        !path.StartsWith(@"\\.\", StringComparison.Ordinal) && !path.StartsWith(@"\\?\", StringComparison.Ordinal) &&
+        !path.StartsWith("//", StringComparison.Ordinal);
 
     private static byte[]? Read(uint format)
     {
@@ -264,7 +432,7 @@ internal sealed unsafe partial class Win32HelperUi
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern uint RegisterClipboardFormatW(string name);
     [DllImport("user32.dll")] private static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll")] private static extern IntPtr GetClipboardOwner();
-    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern uint DragQueryFileW(IntPtr drop, uint index, char* file, uint length);
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint EnumClipboardFormats(uint format);
     [DllImport("ole32.dll")] private static extern int CreateStreamOnHGlobal(IntPtr memory, bool deleteOnRelease, out IntPtr stream);
     [DllImport("gdiplus.dll")] private static extern int GdipCreateBitmapFromStream(IntPtr stream, out nint bitmap);
     [DllImport("gdiplus.dll")] private static extern int GdipGetImageWidth(nint image, out uint width);

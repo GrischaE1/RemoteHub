@@ -46,8 +46,8 @@ internal sealed class KeepRdpDrawing : IDisposable
             if (!File.Exists(record))
             {
                 if (current is 2) return null; // the user's own choice: left alone
-                Directory.CreateDirectory(_folder);
-                File.WriteAllText(record, current is int v ? v.ToString() : "absent");
+                // On the disk before the value changes: an empty record after a power loss would delete the user's own value.
+                DurableFile.WriteAllText(record, current is int v ? v.ToString() : "absent");
             }
             key.SetValue(ValueName, 2, RegistryValueKind.DWord);
             _sid = sid;

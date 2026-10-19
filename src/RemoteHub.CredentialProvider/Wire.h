@@ -7,6 +7,8 @@
 //   Claim    provider -> service   nonce[16] session:u32
 //   Ticket   service -> provider   nonce[16] domain user sid password   (each: u16 length in UTF-16 units, then the units)
 //   Result   provider -> service   nonce[16] status:i32 substatus:i32
+//   NotOffered provider -> service nonce[16]   the sign-in screen doesn't list the ticket's account, so it would never
+//                                              take the tile; the ticket is dropped unused (lab C-AUTO-20, §8.2)
 // Nothing else exists. Anything that doesn't parse exactly – a wrong version or type, a length that doesn't match, a
 // string over its limit, bytes left over – is refused, and the caller closes the connection.
 //
@@ -30,6 +32,7 @@ namespace rhcp
         Claim = 2,
         Ticket = 3,
         Result = 4,
+        NotOffered = 5,
     };
 
     // A UTF-16 string of at most N units, not null-terminated on the wire; Chars[Length] is always 0 here.
@@ -64,6 +67,11 @@ namespace rhcp
         int32_t Substatus = 0;
     };
 
+    struct NotOfferedMessage
+    {
+        uint8_t Nonce[NonceBytes] = {};
+    };
+
     // The type of a well-formed header, or false. The payload length must match the bytes that follow exactly.
     bool ReadHeader(const uint8_t* data, size_t size, MessageType& type);
 
@@ -72,12 +80,14 @@ namespace rhcp
     bool ParseClaim(const uint8_t* data, size_t size, ClaimMessage& out);
     bool ParseTicket(const uint8_t* data, size_t size, TicketMessage& out);
     bool ParseResult(const uint8_t* data, size_t size, ResultMessage& out);
+    bool ParseNotOffered(const uint8_t* data, size_t size, NotOfferedMessage& out);
 
     // Each writer returns the number of bytes written, or 0 if the buffer is too small or a string is too long.
     size_t WritePending(const PendingMessage& message, uint8_t* buffer, size_t capacity);
     size_t WriteClaim(const ClaimMessage& message, uint8_t* buffer, size_t capacity);
     size_t WriteTicket(const TicketMessage& message, uint8_t* buffer, size_t capacity);
     size_t WriteResult(const ResultMessage& message, uint8_t* buffer, size_t capacity);
+    size_t WriteNotOffered(const NotOfferedMessage& message, uint8_t* buffer, size_t capacity);
 
     // Zeroes memory in a way the compiler can't remove (the password, buffers that held it).
     void Wipe(void* data, size_t size);

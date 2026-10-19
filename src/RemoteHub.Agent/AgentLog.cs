@@ -65,7 +65,8 @@ public sealed class AgentLog
         _cleaned = DateOnly.FromDateTime(now);
         int days;
         try { days = RetentionDays is { } read ? Math.Max(1, read()) : _retentionDays; } catch { days = _retentionDays; }
-        foreach (var file in Directory.GetFiles(_folder, "agent-*.log"))
+        // provider-*.log: the credential provider's trace (LogonUI writes it here, credential-provider-design.md §8.6).
+        foreach (var file in Directory.GetFiles(_folder, "agent-*.log").Concat(Directory.GetFiles(_folder, "provider-*.log")))
             if (File.GetLastWriteTime(file) < now.AddDays(-days))
                 try { File.Delete(file); } catch { /* in use */ }
     }
@@ -107,11 +108,15 @@ public enum AuditEvent
     AutoSignInFailed = 2105,
     /// <summary>A connection through this jump host was refused by its policy.</summary>
     TunnelRefused = 2200,
+    /// <summary>agent.json couldn't be read at service start; the service started with its last good copy (docs/agent-spec.md §7.2).</summary>
+    ConfigRestored = 2300,
     DesktopError = 3100,
     /// <summary>Automatic sign-in: another account than the one asked for ended up on the console – it was signed out.</summary>
     AutoSignInMismatch = 3101,
     /// <summary>Automatic sign-in can't work on this device (pipe, registration or signature check failed).</summary>
     AutoSignInUnavailable = 3102,
+    /// <summary>Neither agent.json nor its backup could be read; the service started with a fresh install's defaults (§7.2).</summary>
+    ConfigDefaults = 3300,
 }
 
 /// <summary>

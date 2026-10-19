@@ -1,6 +1,9 @@
 // Unit tests for the credential provider's pipe messages and logon packing (no test framework: plain checks, exit
 // code = number of failures). With "--corpus <dir>" it also writes well-formed messages there as seeds for the fuzzer.
+#include "../../src/RemoteHub.CredentialProvider/Channel.h"
 #include "../../src/RemoteHub.CredentialProvider/Logon.h"
+#include "../../src/RemoteHub.CredentialProvider/Trace.h"
+#include "../../src/RemoteHub.CredentialProvider/UserList.h"
 #include "../../src/RemoteHub.CredentialProvider/Wire.h"
 
 #include <ntsecapi.h>
@@ -199,6 +202,160 @@ namespace
         CHECK(PackInteractiveLogon(domain, 7, user, 5, password, 6, nullptr, &bytes) == E_POINTER);
     }
 
+    // C-END-10: LogonUI reports the result and releases the provider (the stop) right after it; the pipe thread must
+    // still see the result first, or the service never learns that the account was signed in.
+    void ResultWinsOverStop()
+    {
+        g_test = "ResultWinsOverStop";
+        const HANDLE result = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        const HANDLE stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        const HANDLE message = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        CHECK(result != nullptr && stop != nullptr && message != nullptr);
+        if (result != nullptr && stop != nullptr && message != nullptr)
+        {
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Timeout); // nothing signalled: the time limit
+            SetEvent(message);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Message);
+            SetEvent(stop);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Stop);   // a stop still wins over the next message ...
+            SetEvent(result);
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Result); // ... but not over a result to send
+            CHECK(WaitServe(result, stop, message, 0) == Wake::Stop);   // the result event resets once taken
+        }
+        if (result != nullptr) CloseHandle(result);
+        if (stop != nullptr) CloseHandle(stop);
+        if (message != nullptr) CloseHandle(message);
+    }
+
+    std::string ReadTraceFile(const std::wstring& folder)
+    {
+        WIN32_FIND_DATAW found;
+        const HANDLE find = FindFirstFileW((folder + L"provider-*.log").c_str(), &found);
+        if (find == INVALID_HANDLE_VALUE) return {};
+        FindClose(find);
+        std::string text;
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, (folder + found.cFileName).c_str(), L"rb") == 0 && f)
+        {
+            char chunk[4096];
+            size_t n;
+            while ((n = fread(chunk, 1, sizeof(chunk), f)) > 0) text.append(chunk, n);
+            fclose(f);
+        }
+        return text;
+    }
+
+    void DeleteTraceFiles(const std::wstring& folder)
+    {
+        WIN32_FIND_DATAW found;
+        const HANDLE find = FindFirstFileW((folder + L"provider-*.log").c_str(), &found);
+        if (find == INVALID_HANDLE_VALUE) return;
+        do DeleteFileW((folder + found.cFileName).c_str());
+        while (FindNextFileW(find, &found));
+        FindClose(find);
+    }
+
+    // The trace (Trace.h) for lab C-AUTO-20: lines reach provider-yyyyMMdd.log in the order they were queued, one per
+    // line; a full queue drops lines with a note instead of growing, and an overlong line is cut, not overrun.
+    void TraceWritesQueuedLines()
+    {
+        g_test = "TraceWritesQueuedLines";
+        wchar_t temp[MAX_PATH];
+        const DWORD n = GetTempPathW(MAX_PATH, temp);
+        CHECK(n != 0 && n < MAX_PATH);
+        if (n == 0 || n >= MAX_PATH) return;
+        const std::wstring folder = std::wstring(temp) + L"rhcp-trace-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+            std::to_wstring(GetTickCount64()) + L"\\";
+        CHECK(CreateDirectoryW(folder.c_str(), nullptr));
+        SetTraceFolderForTests(folder.c_str());
+
+        Trace("provider %ld: ReportResult 0x%08lX / 0x%08lX - %s", 7L, 0xC0000234UL, 0UL, "queued for the agent");
+        Trace("provider %ld: released", 7L);
+        CHECK(ReadTraceFile(folder).empty()); // nothing on disk until the writer runs
+        FlushTrace();
+        std::string text = ReadTraceFile(folder);
+        const size_t first = text.find("] provider 7: ReportResult 0xC0000234 / 0x00000000 - queued for the agent\r\n");
+        const size_t second = text.find("] provider 7: released\r\n");
+        CHECK(first != std::string::npos && second != std::string::npos && first < second);
+        CHECK(text.find("[" + std::to_string(GetCurrentProcessId()) + "/") != std::string::npos); // process / thread
+
+        // Overflow: the first MaxQueuedTraceLines lines are kept, the rest counted.
+        DeleteTraceFiles(folder);
+        for (size_t i = 0; i < MaxQueuedTraceLines + 10; i++) Trace("line %zu", i);
+        FlushTrace();
+        text = ReadTraceFile(folder);
+        CHECK(text.find("] line 0\r\n") != std::string::npos);
+        CHECK(text.find("] line " + std::to_string(MaxQueuedTraceLines - 1) + "\r\n") != std::string::npos);
+        CHECK(text.find("] line " + std::to_string(MaxQueuedTraceLines) + "\r\n") == std::string::npos);
+        CHECK(text.find("(10 trace lines dropped") != std::string::npos);
+
+        // An overlong line is cut to the limit and still ends the line.
+        DeleteTraceFiles(folder);
+        const std::string longText(1000, 'x');
+        Trace("%s", longText.c_str());
+        FlushTrace();
+        text = ReadTraceFile(folder);
+        CHECK(!text.empty() && text.size() <= MaxTraceLineChars + 2 && text.ends_with("x\r\n"));
+
+        // Without the folder the lines are dropped, not written somewhere else.
+        DeleteTraceFiles(folder);
+        RemoveDirectoryW(folder.c_str());
+        Trace("into nowhere");
+        FlushTrace();
+        CHECK(GetFileAttributesW(folder.c_str()) == INVALID_FILE_ATTRIBUTES);
+        SetTraceFolderForTests(nullptr);
+    }
+
+    // C-AUTO-20: Windows 11 leaves locked-out and disabled accounts out of LogonUI's user list and never takes a ticket
+    // for them. The ticket is dropped (NotOffered) only when a list is there and lacks the account.
+    void TicketDroppedOnlyWhenUnlisted()
+    {
+        g_test = "TicketDroppedOnlyWhenUnlisted";
+        const std::wstring ticket = L"S-1-5-21-1-2-3-1001";
+        const std::vector<std::wstring> listed = { L"S-1-5-21-1-2-3-500", L"s-1-5-21-1-2-3-1001" }; // case doesn't matter
+        const std::vector<std::wstring> without = { L"S-1-5-21-1-2-3-500", L"S-1-5-21-1-2-3-10010" };
+        const std::vector<std::wstring> empty;
+
+        CHECK(FindUser(ticket, &listed) == UserListed::Yes);
+        CHECK(SignInScreenTakesTicket(FindUser(ticket, &listed)));
+        CHECK(FindUser(ticket, &without) == UserListed::No);        // a longer SID with the same start isn't it
+        CHECK(!SignInScreenTakesTicket(FindUser(ticket, &without))); // -> NotOffered
+        CHECK(FindUser(ticket, &empty) == UserListed::No);
+        CHECK(FindUser(ticket, nullptr) == UserListed::NoList);     // no SetUserArray: offered, as before
+        CHECK(SignInScreenTakesTicket(FindUser(ticket, nullptr)));
+        CHECK(FindUser(L"", &listed) == UserListed::NoList);        // a ticket without SID can't be looked up: offered
+        CHECK(SignInScreenTakesTicket(FindUser(L"", &empty)));
+        CHECK(std::string(ToText(UserListed::No)).find("S-1-") == std::string::npos); // the trace text has no SID
+    }
+
+    // NotOffered (provider -> service): the nonce only; anything else is refused.
+    void NotOfferedRoundTrip()
+    {
+        g_test = "NotOfferedRoundTrip";
+        NotOfferedMessage m;
+        for (size_t i = 0; i < NonceBytes; i++) m.Nonce[i] = static_cast<uint8_t>(0x30 + i);
+        uint8_t buffer[64];
+        const size_t n = WriteNotOffered(m, buffer, sizeof(buffer));
+        CHECK(n == 4 + NonceBytes);
+        CHECK(buffer[0] == WireVersion && buffer[1] == 5 && buffer[2] == NonceBytes && buffer[3] == 0);
+        NotOfferedMessage got;
+        CHECK(ParseNotOffered(buffer, n, got) && memcmp(got.Nonce, m.Nonce, NonceBytes) == 0);
+        MessageType type;
+        CHECK(ReadHeader(buffer, n, type) && type == MessageType::NotOffered);
+        ResultMessage r;
+        CHECK(!ParseResult(buffer, n, r)); // not a Result
+        for (size_t size = 0; size < n; size++) CHECK(!ParseNotOffered(buffer, size, got));
+        uint8_t longer[64];
+        memcpy(longer, buffer, n);
+        longer[n] = 0;
+        longer[2] = static_cast<uint8_t>(NonceBytes + 1);
+        CHECK(!ParseNotOffered(longer, n + 1, got)); // a byte too many, even with a matching length
+        CHECK(got.Nonce[0] == 0);                    // nothing left behind
+        CHECK(WriteNotOffered(m, buffer, 10) == 0);
+        buffer[1] = 6; // past the last type
+        CHECK(!ReadHeader(buffer, n, type));
+    }
+
     void FindsNegotiate()
     {
         g_test = "FindsNegotiate";
@@ -223,6 +380,8 @@ namespace
         save("claim", buffer, WriteClaim(p, buffer, sizeof(buffer)));
         ResultMessage r;
         save("result", buffer, WriteResult(r, buffer, sizeof(buffer)));
+        NotOfferedMessage o;
+        save("notoffered", buffer, WriteNotOffered(o, buffer, sizeof(buffer)));
     }
 }
 
@@ -240,6 +399,10 @@ int main(int argc, char** argv)
     WriterLimits();
     PacksInteractiveLogon();
     FindsNegotiate();
+    ResultWinsOverStop();
+    TraceWritesQueuedLines();
+    TicketDroppedOnlyWhenUnlisted();
+    NotOfferedRoundTrip();
     std::printf(g_failures == 0 ? "All credential provider tests passed.\n" : "%d check(s) failed.\n", g_failures);
     return g_failures;
 }

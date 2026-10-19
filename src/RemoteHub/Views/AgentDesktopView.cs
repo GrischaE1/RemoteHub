@@ -400,7 +400,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
             {
                 var label = new StackPanel { Orientation = Orientation.Horizontal };
                 label.Children.Add(new SymbolIcon(SymbolRegular.EyeOff24) { FontSize = 16, Foreground = Brushes.White, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
-                label.Children.Add(new TextBlock { Text = "Hidden by the user", Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center });
+                label.Children.Add(new TextBlock { Text = RegionLabel(_session.Privacy), Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center });
                 // The same dark card as the tab's other notices over the picture.
                 area.Child = new Border
                 {
@@ -413,6 +413,24 @@ public sealed class AgentDesktopView : Border, IRecordableView
             Canvas.SetTop(area, r.Y);
             _regionLayer.Children.Add(area);
         }
+    }
+
+    /// <summary>
+    /// The label on a hidden area. The device doesn't say whose app an area belongs to, so it names the user or the
+    /// policy only when all hidden apps are theirs – an app the policy hides must not read as one the user hid.
+    /// </summary>
+    internal static string RegionLabel(DesktopPrivacy privacy) => (privacy.HiddenApps, privacy.PolicyHiddenApps) switch
+    {
+        (> 0, > 0) => "Hidden",
+        (_, > 0) => "Hidden by IT policy",
+        _ => "Hidden by the user", // also from an agent that doesn't count the policy's apps apart
+    };
+
+    /// <summary>The header's note on hidden apps: the user's and the policy's counted separately, never which.</summary>
+    internal static string HiddenAppsText(DesktopPrivacy privacy)
+    {
+        static string Count(int n, string by) => n switch { <= 0 => "", 1 => $"1 app hidden by {by}", _ => $"{n} apps hidden by {by}" };
+        return string.Join(" · ", new[] { Count(privacy.HiddenApps, "the user"), Count(privacy.PolicyHiddenApps, "IT policy") }.Where(t => t.Length > 0));
     }
 
     private void UpdatePausedPanel()
@@ -749,7 +767,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
             ? $"The device's screen is blacked out{(withMessage ? " with a message" : "")} – the person at the device can't see what you do. Click to change or turn it off."
             : "Black out the device's screen – the person at the device can't see what you do";
         System.Windows.Automation.AutomationProperties.SetName(_privacy, "Privacy screen");
-        var apps = _session.Privacy.HiddenApps switch { 0 => "", 1 => "1 app hidden by the user", var n => $"{n} apps hidden by the user" };
+        var apps = HiddenAppsText(_session.Privacy);
         var screenText = screenOn ? $"Privacy screen on ({(withMessage ? "message" : "black")}){(_session.Privacy.LocalInputBlocked ? " · mouse and keyboard blocked" : "")}" : "";
         _privacyBadge.Text = hidden ? (_session.Privacy.User == DesktopScreenHide.Blur ? "Blurred by the user" : "Hidden by the user")
             : string.Join(" · ", new[] { screenText, apps }.Where(t => t.Length > 0));

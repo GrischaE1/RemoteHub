@@ -533,6 +533,9 @@ public static class SettingsStore
         UsingLocalFallback = false;
         data.Ui = keepUi;
         SaveLocalConfig(keepUi);
+        // the tracker compares with the file as loaded: otherwise the first save resets it to the edited data, finds
+        // nothing changed and the edit is never written
+        SetBaseline(data);
         StartWatching(SharedFilePathFor(folder));
         return data;
     }

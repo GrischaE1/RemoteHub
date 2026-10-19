@@ -21,7 +21,7 @@ namespace RemoteHub.Tests;
 /// Remote desktop through the agent, end to end on this PC: the agent's endpoint with its real relay and the real
 /// desktop helper logic (in-process, with a generated screen and recorded input) against RemoteHub's client.
 /// </summary>
-public class AgentDesktopFlowTests
+public partial class AgentDesktopFlowTests
 {
     private const string Admins = "S-1-5-32-544", Users = "S-1-5-32-545";
 
@@ -163,8 +163,8 @@ public class AgentDesktopFlowTests
         public void Dispose() { }
     }
 
-    /// <summary>A 320 × 240 monitor whose picture changes on every capture for the first frames.</summary>
-    private sealed class Screen(bool secure = false, int failAfter = int.MaxValue) : A.IScreenSource
+    /// <summary>A 320 × 240 monitor whose picture changes on every capture for the first frames (<c>changing</c>).</summary>
+    private sealed class Screen(bool secure = false, int failAfter = int.MaxValue, int changing = 20) : A.IScreenSource
     {
         private int _n;
         public readonly ConcurrentQueue<(int, int)> Fits = new();
@@ -180,7 +180,7 @@ public class AgentDesktopFlowTests
         public A.CaptureResult Capture(A.DesktopMonitor monitor, int timeoutMs, A.FrameBuffer target)
         {
             if (_n >= failAfter) throw new InvalidOperationException("desktop gone (sign-in)");
-            if (_n++ > 20) { Thread.Sleep(10); return A.CaptureResult.Unchanged; }
+            if (_n++ > changing) { Thread.Sleep(10); return A.CaptureResult.Unchanged; }
             target.Ensure(monitor.Width, monitor.Height);
             for (var i = 0; i < target.Pixels.Length; i += 4) { target.Pixels[i] = (byte)(i + _n); target.Pixels[i + 1] = (byte)_n; target.Pixels[i + 3] = 255; }
             return A.CaptureResult.Changed;
@@ -202,8 +202,8 @@ public class AgentDesktopFlowTests
         public volatile string Foreground = "", ClipboardOwner = "";
         public IReadOnlyList<A.AppWindow> Visible() => Windows;
         public IReadOnlyList<A.RunningApp> Running() => Windows.Where(w => w.App.Length > 0).GroupBy(w => w.App).Select(g => new A.RunningApp(g.Key, g.Key, g.Count(), IntPtr.Zero)).ToList();
-        public string ForegroundApp() => Foreground;
-        public string ClipboardOwnerApp() => ClipboardOwner;
+        public A.AppIdentity ForegroundApp() => new(Foreground);
+        public A.AppIdentity ClipboardOwnerApp() => new(ClipboardOwner);
     }
 
     private sealed class Input : A.IInputSink
@@ -336,6 +336,10 @@ public class AgentDesktopFlowTests
 
         public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
             Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
+
+        /// <summary>Closes like RemoteHub ending the session on purpose, and waits until the agent has read the close: disposing
+        /// right away can reset the connection first, which the agent rightly takes for a drop.</summary>
+        public async Task CloseOnPurpose() => Assert.True(await Client.CloseAsync(TimeSpan.FromSeconds(10)), "the agent didn't answer the close");
 
         public void Dispose() => Client.Dispose();
     }
@@ -719,15 +723,45 @@ public class AgentDesktopFlowTests
         // The helper's window gets the apps to offer from its own thread – it may be a moment after "Connected".
         var ui = OfferedOn(d, 0);
         Assert.Equal([@"c:\apps\vault.exe"], ui.OfferedAlways!);
-        WaitFor(() => LastPrivacy(first)?.HiddenApps == 1, "the policy's app counted");
+        // The policy's app isn't the user's: counted apart, not on the banner and not audited as the user hiding it.
+        WaitFor(() => !first.Privacy.IsEmpty, "the first privacy report");
+        Assert.Equal((0, 1), (first.Privacy.First().HiddenApps, first.Privacy.First().PolicyHiddenApps));
+        Assert.Equal(0, ui.Shown?.HiddenApps ?? 0);
+        Assert.DoesNotContain(A.AuditEvent.DesktopUserHid, d.Audits);
         ui.Chosen!(Set(Secret));
-        WaitFor(() => LastPrivacy(first)?.HiddenApps == 2, "the user's app counted too");
+        WaitFor(() => LastPrivacy(first) is { HiddenApps: 1, PolicyHiddenApps: 1 }, "the user's app counted as theirs");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopUserHid), "audit entry for the user's app");
+        Assert.Equal(1, ui.Shown!.HiddenApps);
 
         using var second = await Connect(d);
         second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
         second.Next(DesktopStatusState.Connected);
         Assert.Equal([Secret], OfferedOn(d, 1).OfferedHidden!);
-        WaitFor(() => LastPrivacy(second)?.HiddenApps == 2, "both still hidden in the new connection");
+        WaitFor(() => LastPrivacy(second) is { HiddenApps: 1, PolicyHiddenApps: 1 }, "both still hidden in the new connection, still apart");
+    }
+
+    [Fact]
+    public async Task Apps_only_the_policy_hides_are_masked_but_never_reported_or_audited_as_the_users()
+    {
+        var policy = PrivacyPolicy();
+        policy = new A.AgentPolicy { PrivacyScreen = policy.PrivacyScreen, Rights = policy.Rights, HiddenApps = [Secret] };
+        await using var d = await StartDevice(policy: policy);
+        d.Apps.Windows = [Win(1, Secret, 10, 10, 110, 110), Win(2, Notes, 150, 10, 300, 200)];
+        using var v = await Connect(d);
+        v.Start(ActiveUser.Id, DesktopConsent.Ask);
+        v.Next(DesktopStatusState.Connected);
+
+        // Still covered in the picture, and clicks into it are dropped.
+        WaitFor(() => LastPrivacy(v) is { Regions.Length: > 0 }, "the policy's app covered");
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 50, 50, 0)));
+        v.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Down, RemoteMouseButton.Left, 200, 50, 0)));
+        WaitFor(() => d.Input.Mouse.Count == 1, "the click outside");
+        Assert.Equal(200, d.Input.Mouse.Single().X);
+
+        // But none of it is the user's: every report says so, the banner has no "app hidden" and there is no 1105.
+        Assert.All(v.Privacy, p => Assert.Equal((0, 1), (p.HiddenApps, p.PolicyHiddenApps)));
+        Assert.Equal(0, d.Helpers.Uis.Single().Shown?.HiddenApps ?? 0);
+        Assert.DoesNotContain(A.AuditEvent.DesktopUserHid, d.Audits);
     }
 
     /// <summary>The helper window number <paramref name="index"/>, once it has been offered the apps to hide.</summary>
@@ -1075,6 +1109,86 @@ public class AgentDesktopFlowTests
     }
 
     [Fact]
+    public async Task A_token_presented_right_after_the_user_disconnected_asks_again()
+    {
+        await using var d = await StartDevice();
+        using var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        WaitFor(() => d.Helpers.Uis.Count == 1 && d.Helpers.Uis[0].Disconnect is not null, "banner");
+        d.Helpers.Uis[0].Disconnect!();
+        first.Next(DesktopStatusState.Ended);
+
+        // At once, while the first connection is still in its close handshake (D-BAN-05): the user's end stands.
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        Assert.Equal(DesktopStatusState.WaitingForUser, second.Next(DesktopStatusState.WaitingForUser).State);
+        second.Next(DesktopStatusState.Connected);
+        Assert.Equal(1, d.Helpers.Uis[1].Asked);
+        Assert.DoesNotContain(A.AuditEvent.DesktopResumed, d.Audits);
+    }
+
+    [Fact]
+    public async Task A_token_presented_right_after_an_idle_end_asks_again()
+    {
+        var policy = new A.AgentPolicy
+        {
+            IdleTimeout = TimeSpan.FromSeconds(2),
+            Rights = new Dictionary<A.AgentRight, IReadOnlyList<string>> { [A.AgentRight.Desktop] = [Admins] },
+        };
+        await using var d = await StartDevice(policy: policy);
+        using var first = await Connect(d);
+        first.Start(ActiveUser.Id, DesktopConsent.Ask);
+        var token = first.Next(DesktopStatusState.Connected).Resume!;
+        first.Next(DesktopStatusState.Ended);
+
+        using var second = await Connect(d);
+        second.Start(ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        second.Next(DesktopStatusState.WaitingForUser);
+        Assert.Equal(1, WaitForAsked(d, 1));
+        Assert.DoesNotContain(A.AuditEvent.DesktopResumed, d.Audits);
+    }
+
+    private static int WaitForAsked(Device d, int ui)
+    {
+        WaitFor(() => d.Helpers.Uis.Count > ui && d.Helpers.Uis[ui].Asked > 0, "the user being asked");
+        return d.Helpers.Uis[ui].Asked;
+    }
+
+    [Fact]
+    public async Task A_revoked_token_cannot_be_taken()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        entry.Revoke();
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.False(owner.IsCancellationRequested); // the ended connection isn't touched
+    }
+
+    [Fact]
+    public async Task An_end_on_purpose_during_a_takeover_wins_over_the_token()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        // The old connection is ending on purpose just as the takeover cancels it: it revokes instead of releasing.
+        owner.Token.Register(entry.Revoke);
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.True(entry.Revoked);
+        Assert.False(entry.TakenOver); // the old connection writes its end entry and runs the end action
+    }
+
+    [Fact]
+    public async Task A_dropped_connection_keeps_its_token_for_the_window()
+    {
+        using var owner = new CancellationTokenSource();
+        var entry = A.DesktopResume.Issue(@"TEST\admin", @"PC\alice", owner);
+        entry.Release();
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin2"));
+        Assert.Same(entry, await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin"));
+        Assert.Null(await A.DesktopResume.TakeAsync(entry.Token, @"TEST\admin")); // single use
+    }
+
+    [Fact]
     public async Task Images_and_files_are_copied_both_ways()
     {
         await using var d = await StartDevice();
@@ -1197,6 +1311,32 @@ public class AgentDesktopFlowTests
             WaitFor(() => { lock (v.TransferBytes) return v.TransferBytes.Length == "from the device".Length; }, "file data");
         }
         finally { File.Delete(source); }
+    }
+
+    [Fact]
+    public async Task One_copy_seen_twice_at_the_device_is_sent_for_the_last_offer_RemoteHub_got()
+    {
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        var offers = new System.Collections.Concurrent.ConcurrentQueue<DesktopTransfer>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferOffer) offers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); };
+        v.Start(ActiveUser.Id, DesktopConsent.None, features: [DesktopFeatures.TransferOnPaste]);
+        v.Next(DesktopStatusState.Connected);
+        // Windows Forms' SetImage brings two clipboard changes (announced, then rendered): two offers race. Whichever
+        // RemoteHub sees last is the one its paste asks for, and it must be sent – in run 20261017-160133 the older id
+        // arrived last and its request was ignored.
+        for (var round = 0; round < 20; round++)
+        {
+            var before = offers.Count;
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
+            d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
+            WaitFor(() => offers.Count > before, "offer from the device");
+            await Task.Delay(100); // a second offer, if any, is in
+            var last = offers.Last();
+            v.Client.Send(DesktopWire.Text(DesktopMessage.TransferRequest, last.Id.ToString()));
+            WaitFor(() => v.Transfers.Any(t => t.Id == last.Id) || v.TransferEnds.Any(e => e.Id == last.Id && !e.Ok), "answer to the request");
+            Assert.Contains(v.Transfers, t => t.Id == last.Id);
+        }
     }
 
     [Fact]
@@ -1594,6 +1734,135 @@ public class AgentDesktopFlowTests
         Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
     }
 
+    [Fact]
+    public async Task An_account_the_sign_in_screen_does_not_offer_fails_at_once_with_the_accounts_reason()
+    {
+        // Lab C-AUTO-20 on Windows 11: a locked account isn't on the sign-in screen's list, the provider says so at once.
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn
+        {
+            Answer = r => A.AutoSignInNotOffered.Result(r.Domain, r.User, r.Password, (_, _, _) => 1909), // ERROR_ACCOUNT_LOCKED_OUT
+        };
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn]);
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.Equal("The account is locked.", v.Next(DesktopStatusState.SignInFailed).Message);
+        Assert.Contains(A.AuditEvent.AutoSignInFailed, d.Audits);   // 2105, like Windows' own refusals
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInRefused, d.Audits);
+        Assert.Equal(1, d.Helpers.Started);
+    }
+
+    private const string LostAnswer = "The sign-in screen didn't take the sign-in. If it shows a message (for example after a failed attempt), click OK and try again.";
+
+    [Fact]
+    public async Task A_lost_answer_after_Windows_signed_the_account_in_still_covers_the_session_and_applies_the_end_action()
+    {
+        // Lab C-END-10: LogonUI signs the account in and releases the provider before its result reaches the service.
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), null), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var signsIn = SignsIn(d.Sessions, SidOf("admin"));
+        broker.Answer = r => { signsIn(r); return A.AutoSignInResult.Lost(A.AutoSignInFailure.Timeout, LostAnswer); };
+        var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+        Assert.Equal(A.AutoSignInEndActions.Lock, v.Next(DesktopStatusState.SignedIn).EndAction);
+        Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInRefused, d.Audits);
+        WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
+        var helperInNewSession = d.Helpers.SessionIds.IndexOf(3);
+        WaitFor(() => d.Helpers.Uis.Count > helperInNewSession, "the new session's helper UI");
+        Assert.NotNull(d.Helpers.Uis[helperInNewSession].SignedInRemotely); // no ordinary banner
+        if (A.DesktopEndpoint.PrivacyScreenSupported)
+            WaitFor(() => !d.Helpers.Uis[helperInNewSession].Screens.IsEmpty, "the privacy screen in the new session");
+
+        await v.CloseOnPurpose(); // RemoteHub closes the tab: the session gets its end action
+        WaitFor(() => d.Sessions.Disconnects.Contains(3), "lock");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    [Fact]
+    public async Task A_lost_answer_without_the_account_on_the_console_is_a_failure_and_signs_nobody_out()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var polls = A.DesktopEndpoint.ConsoleUserPolls;
+        A.DesktopEndpoint.ConsoleUserPolls = 2; // nobody signs in here: don't wait the full 30 s for it
+        try
+        {
+            var broker = new FakeAutoSignIn();
+            await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+            broker.Answer = _ => A.AutoSignInResult.Lost(A.AutoSignInFailure.NoProvider, "The connection to the credential provider broke: Pipe is broken.");
+            using var v = await Connect(d);
+            v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+            v.Next(DesktopStatusState.SignInReady);
+            v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+            Assert.Contains("Pipe is broken", v.Next(DesktopStatusState.SignInFailed).Message);
+            Assert.Contains(A.AuditEvent.AutoSignInRefused, d.Audits);
+            Assert.DoesNotContain(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+            Assert.Empty(d.Sessions.LogOffs);
+            Assert.Equal(1, d.Helpers.Started); // still on the sign-in screen, same helper
+        }
+        finally { A.DesktopEndpoint.ConsoleUserPolls = polls; }
+    }
+
+    [Fact]
+    public async Task A_lost_answer_with_someone_else_on_the_console_is_a_failure_and_leaves_their_session_alone()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var someoneElse = SignsIn(d.Sessions, "S-1-5-21-9-9-9-500", @"TEST\someone");
+        broker.Answer = r => { someoneElse(r); return A.AutoSignInResult.Lost(A.AutoSignInFailure.Timeout, LostAnswer); };
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+
+        Assert.Equal(LostAnswer, v.Next(DesktopStatusState.SignInFailed).Message);
+        Assert.DoesNotContain(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.Empty(d.Sessions.LogOffs); // not this sign-in's session: only a confirmed sign-in signs another account out
+    }
+
+    [Theory]
+    [InlineData(false)] // Windows' answer arrives after the connection has gone
+    [InlineData(true)]  // ... or is lost, and the console shows the account
+    public async Task A_sign_in_that_completes_after_the_connection_ended_still_gets_the_end_action(bool answerLost)
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), null), autoSignIn: broker, sessionList: [ConsoleSignIn], secureScreen: true);
+        var signsIn = SignsIn(d.Sessions, SidOf("admin"));
+        using var ticketOut = new ManualResetEventSlim();
+        using var connectionGone = new ManualResetEventSlim();
+        broker.Answer = r =>
+        {
+            ticketOut.Set();         // the ticket is with the provider ...
+            connectionGone.Wait(30000); // ... while RemoteHub closes the connection
+            var answer = signsIn(r);
+            return answerLost ? A.AutoSignInResult.Lost(A.AutoSignInFailure.NoProvider, "The connection to the credential provider broke: Pipe is broken.") : answer;
+        };
+        var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        v.Next(DesktopStatusState.SignInReady);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        Assert.True(ticketOut.Wait(15000), "the sign-in should reach the broker");
+
+        await v.CloseOnPurpose(); // RemoteHub closes the tab before Windows has answered
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopEnded), "the connection's end");
+        connectionGone.Set();
+
+        WaitFor(() => d.Sessions.Disconnects.Contains(3), "the end action (lock) on the new session");
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
+        Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
     // ---- phase 4: after the sign-in (design §9)
 
     private static A.AgentPolicy WithEndAction(A.AgentPolicy p, string? endAction) => new()
@@ -1666,7 +1935,7 @@ public class AgentDesktopFlowTests
         await using var _d = d;
         v.Next(DesktopStatusState.SignedIn);
         WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
-        v.Dispose(); // RemoteHub closes the tab
+        await v.CloseOnPurpose(); // RemoteHub closes the tab
         WaitFor(() => (signsOut ? d.Sessions.LogOffs : d.Sessions.Disconnects).Contains(3), signsOut ? "sign-out" : "lock");
         Assert.Empty(signsOut ? d.Sessions.Disconnects : d.Sessions.LogOffs);
         WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
@@ -1896,6 +2165,68 @@ public class AgentDesktopFlowTests
         var result = new byte[] { 1, A.AutoSignInWire.Result, 24, 0 }.Concat(nonce).Concat(new byte[] { 0x6D, 0, 0, 0xC0, 0x6A, 0, 0, 0xC0 }).ToArray();
         Assert.Equal((unchecked((int)0xC000006D), unchecked((int)0xC000006A)), A.AutoSignInWire.ReadResult(result, nonce));
         Assert.Null(A.AutoSignInWire.ReadResult(result, new byte[16]));
+
+        // NotOffered (type 5): the nonce only.
+        var notOffered = new byte[] { 1, A.AutoSignInWire.NotOffered, 16, 0 }.Concat(nonce).ToArray();
+        Assert.True(A.AutoSignInWire.IsNotOffered(notOffered, nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered(notOffered, new byte[16]));          // another ticket's
+        Assert.False(A.AutoSignInWire.IsNotOffered(notOffered[..^1], nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered([.. notOffered, 0], nonce));
+        Assert.False(A.AutoSignInWire.IsNotOffered(result, nonce));                     // a Result isn't one
+        Assert.Null(A.AutoSignInWire.ReadResult(notOffered, nonce));                     // nor the other way round
+    }
+
+    [Theory]
+    [InlineData(1385, "The account may not sign in on this device's screen (\"Allow log on locally\").", 0xC000015B)]
+    [InlineData(1331, "The account is disabled.", 0xC0000072)]
+    [InlineData(1909, "The account is locked.", 0xC0000234)]
+    [InlineData(1793, "The account has expired.", 0xC0000193)]
+    [InlineData(1907, "The password has expired and must be changed at the device.", 0xC0000224)]
+    [InlineData(1330, "The password has expired and must be changed at the device.", 0xC0000071)]
+    [InlineData(1326, "The password was wrong (the stored password may be out of date).", 0xC000006D)]
+    [InlineData(1328, "The account may not sign in at this time of day.", 0xC000006F)]
+    [InlineData(1329, "The account may not sign in on this device.", 0xC0000070)]
+    public void An_account_the_sign_in_screen_does_not_offer_is_checked_with_Windows_and_gets_its_reason(int error, string text, uint status)
+    {
+        // Lab C-AUTO-20: the provider's NotOffered; the service asks Windows itself (LogonUserW) with the ticket's password.
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("pw"));
+        var asked = new List<string>();
+        var r = A.AutoSignInNotOffered.Result("DEVICE", "rhaslock", password, (d, u, p) =>
+        {
+            p.Reveal(pw => asked.Add($@"{d}\{u}:{System.Text.Encoding.Unicode.GetString(pw)}"));
+            return error;
+        });
+        Assert.False(r.Ok);
+        Assert.False(r.Unconfirmed); // the ticket was never used: no console check, no wait
+        Assert.Equal(A.AutoSignInFailure.NotOffered, r.Code);
+        Assert.Equal(text, r.Message);
+        Assert.Equal(unchecked((int)status), r.Status);
+        Assert.Equal(error, r.CheckedError);
+        Assert.Equal([@"DEVICE\rhaslock:pw"], asked); // the ticket's account and password, once
+    }
+
+    [Fact]
+    public void An_account_Windows_accepts_but_the_sign_in_screen_does_not_offer_is_said_so()
+    {
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("pw"));
+        var ok = A.AutoSignInNotOffered.Result("DEVICE", "new", password, (_, _, _) => 0);
+        Assert.Equal((false, A.AutoSignInFailure.NotOffered, 0, (int?)0), (ok.Ok, ok.Code, ok.Status, ok.CheckedError));
+        Assert.Contains("doesn't offer this account yet, although Windows accepts its sign-in", ok.Message);
+
+        // an error without a known reason, and a check that couldn't run
+        var other = A.AutoSignInNotOffered.Result("DEVICE", "u", password, (_, _, _) => 5);
+        Assert.Equal(("The sign-in screen doesn't offer this account, and Windows refused its sign-in (error 5).", 0, (int?)5), (other.Message, other.Status, other.CheckedError));
+        var failed = A.AutoSignInNotOffered.Result("DEVICE", "u", password, (_, _, _) => throw new InvalidOperationException());
+        Assert.Equal(("The sign-in screen doesn't offer this account – it may be disabled or locked.", (int?)null), (failed.Message, failed.CheckedError));
+    }
+
+    [Fact]
+    public void The_logon_check_reports_an_unknown_account_as_an_error_and_leaves_the_password_usable()
+    {
+        using var password = new A.ProtectedSecret(System.Text.Encoding.Unicode.GetBytes("not-the-password"));
+        var error = A.AutoSignInNotOffered.CheckLogon(".", "rh-no-such-user-" + Guid.NewGuid().ToString("N")[..8], password);
+        Assert.NotEqual(0, error); // typically 1326: an unknown account is a failed logon
+        password.Reveal(pw => Assert.Equal("not-the-password", System.Text.Encoding.Unicode.GetString(pw))); // protected again, not consumed
     }
 
     [Fact]

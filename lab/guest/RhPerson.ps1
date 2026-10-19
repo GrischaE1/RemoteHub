@@ -35,11 +35,42 @@ $rhNativeSource = @'
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
 public static class RhNative
 {
+    // -Do serve: the answer file of the request being run. An exception no one catches (on a thread of UI Automation or
+    // the like) ends the process; the handler first writes it there as a serveError, so the lab host reads why.
+    public static string CrashOut;
+    private static bool _watching;
+    public static void WatchCrash()
+    {
+        if (_watching) return;
+        _watching = true;
+        AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+        {
+            var o = CrashOut;
+            if (string.IsNullOrEmpty(o)) return;
+            try
+            {
+                var m = "the person server crashed: " + Convert.ToString(e.ExceptionObject);
+                var j = new StringBuilder("{\"serveError\":\"");
+                foreach (var ch in m)
+                {
+                    if (ch == '"' || ch == '\\') j.Append('\\').Append(ch);
+                    else if (ch < ' ' || ch > '~') j.Append("\\u").Append(((int)ch).ToString("x4"));
+                    else j.Append(ch);
+                }
+                j.Append("\"}");
+                File.WriteAllText(o + ".part", j.ToString());
+                File.Move(o + ".part", o);
+            }
+            catch { }
+        };
+    }
+
     public delegate bool EnumProc(IntPtr h, IntPtr p);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc f, IntPtr p);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
@@ -52,6 +83,46 @@ public static class RhNative
     [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr h, out uint affinity);
+
+    // The agent keeps the banner and the privacy screen out of screen captures (WDA_EXCLUDEFROMCAPTURE): a capture
+    // here shows what is below them, only the console picture shows them.
+    public static bool Excluded(long h)
+    {
+        uint a;
+        return GetWindowDisplayAffinity(new IntPtr(h), out a) && a != 0;
+    }
+
+    // -Do marker: a process started by a task may not take the foreground (SetForegroundWindow's rules), so the
+    // marker can be shown without the keyboard. Joining the foreground window's input queue for the call lets it.
+    public static bool TakeForeground(IntPtr h)
+    {
+        var fg = GetForegroundWindow();
+        if (fg == h) return true;
+        uint pid;
+        var other = fg == IntPtr.Zero ? 0 : GetWindowThreadProcessId(fg, out pid);
+        var me = GetCurrentThreadId();
+        var joined = other != 0 && other != me && AttachThreadInput(me, other, true);
+        try { SetForegroundWindow(h); }
+        finally { if (joined) AttachThreadInput(me, other, false); }
+        return GetForegroundWindow() == h;
+    }
+
+    // The foreground window as "title [class] pid N" - who has the keyboard when the marker doesn't.
+    public static string ForegroundName()
+    {
+        var h = GetForegroundWindow();
+        if (h == IntPtr.Zero) return "(none)";
+        var t = new StringBuilder(256); GetWindowTextW(h, t, t.Capacity);
+        var c = new StringBuilder(256); GetClassNameW(h, c, c.Capacity);
+        uint pid; GetWindowThreadProcessId(h, out pid);
+        return t + " [" + c + "] pid " + pid;
+    }
 
     public static List<object[]> Windows(string cls)
     {
@@ -155,17 +226,70 @@ function Read-AgentWindow {
     $null
 }
 
+# The PIN dialog's code when OCR read only some of its digits as words. The agent draws six boxes of 52 px, 8 px apart,
+# 18 px between the third and the fourth, each digit centred in its box (HelperWindows.cs, Paint; times the DPI scale).
+# The digits found give the scale and where the boxes are; the middle of each box (inside its border) is cut out and
+# the six put side by side on the box colour, which OCR reads as one number. Answers six digits or $null.
+function Read-PinStrip($Window, $Found) {
+    $off = @(0..5 | ForEach-Object { 26 + 60 * $_ + $(if ($_ -ge 3) { 10 } else { 0 }) })
+    $centres = @($Found | ForEach-Object { $_.X + $_.W / 2 })
+    $best = $null
+    foreach ($s in 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3) {
+        foreach ($c in $centres) {
+            foreach ($o in $off) {
+                $x0 = $c - $o * $s
+                $err = 0
+                foreach ($x in $centres) { $err += (@($off | ForEach-Object { [math]::Abs($x0 + $_ * $s - $x) }) | Measure-Object -Minimum).Minimum }
+                if (-not $best -or $err -lt $best.Err) { $best = @{ S = $s; X0 = $x0; Err = $err } }
+            }
+        }
+    }
+    # every digit found within a few pixels of a box's middle, else the layout isn't the one above
+    if ($best.Err / $centres.Count -gt 4 * $best.S) { return $null }
+    $s = $best.S
+    $top = [int](($Found | Measure-Object Y -Minimum).Minimum - 4 * $s)
+    $bottom = [int](($Found | ForEach-Object { $_.Y + $_.H } | Measure-Object -Maximum).Maximum + 4 * $s)
+    $half = [int](14 * $s); $m = [int](12 * $s)
+    $bmp = [RhNative]::Capture($Window.X, $Window.Y, $Window.Width, $Window.Height)
+    try {
+        $h = $bottom - $top
+        if ($top -lt 0 -or $bottom -gt $bmp.Height) { return $null }
+        $strip = New-Object Drawing.Bitmap (6 * 2 * $half + 2 * $m), ($h + 2 * $m)
+        try {
+            $g = [Drawing.Graphics]::FromImage($strip)
+            try {
+                # the box colour: just inside the first box, left of its digit
+                $g.Clear($bmp.GetPixel([int]($best.X0 + $off[0] * $s - 20 * $s), [int]($top + $h / 2)))
+                for ($k = 0; $k -lt 6; $k++) {
+                    $cx = [int]($best.X0 + $off[$k] * $s)
+                    if ($cx - $half -lt 0 -or $cx + $half -gt $bmp.Width) { return $null }
+                    $g.DrawImage($bmp, (New-Object Drawing.Rectangle ($m + $k * 2 * $half), $m, (2 * $half), $h), (New-Object Drawing.Rectangle ($cx - $half), $top, (2 * $half), $h), [Drawing.GraphicsUnit]::Pixel)
+                }
+            }
+            finally { $g.Dispose() }
+            $ocr = Get-Ocr $strip
+        }
+        finally { $strip.Dispose() }
+    }
+    finally { $bmp.Dispose() }
+    $t = (@($ocr.Words | ForEach-Object Text) -join '')
+    $t = $t -creplace '[OoQD]', '0' -creplace '[Il|]', '1' -replace '[^0-9]', ''
+    if ($t -match '^\d{6}$') { $t } else { $null }
+}
+
 switch ($Do) {
     'serve' {
         # Stays in the session and runs the actions asked for in -Value (a folder): <id>.req.json { do, title, text,
         # value, timeout, out } - each one in this process, so a step costs no new process, task or compile (the lab
         # host's Invoke-LabPerson writes the request and waits for the answer file). alive.txt shows it runs. Ends
-        # after 30 minutes without a request, on stop.txt, or when this script file is replaced (the next request
-        # starts the new one).
+        # after 30 minutes without a request, on stop.txt, when this script file is replaced (the next request
+        # starts the new one), or after an action that didn't finish (see below).
         $q = $Value
+        $worker = $null
         $null = New-Item -ItemType Directory -Path $q -Force
         $self = $PSCommandPath
         $stamp = (Get-Item $self).LastWriteTimeUtc
+        [RhNative]::WatchCrash()
         $idleUntil = (Get-Date).AddMinutes(30)
         while ((Get-Date) -lt $idleUntil) {
             Set-Content -Path (Join-Path $q 'alive.txt') -Value "$PID $((Get-Date).ToUniversalTime().ToString('o'))"
@@ -178,8 +302,63 @@ switch ($Do) {
             $a = @{ Do = $req.do; Title = $(if ($req.title) { $req.title } else { '*' }); TimeoutSec = [int]$req.timeout; Out = $req.out }
             if ($req.text) { $a.Text = $req.text }
             if ($req.PSObject.Properties['value'] -and $null -ne $req.value) { $a.Value = [string]$req.value }
-            try { & $self @a }
-            catch { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = "$_" } -Compress)) }
+            # The action runs in a second runspace of this process (STA, as the clipboard and UI Automation need) with a
+            # deadline: a call that never returns - UI Automation of a window whose program doesn't respond blocks with
+            # no timeout of its own - is answered as such before the host gives up, and the server then ends, since the
+            # stuck call can't be stopped (the host's next request starts a new server). The deadline is
+            # max(5, timeout) + 50 s; the host (Invoke-LabPersonServer) waits 30 s longer, for the window list below
+            # and the write. A crash on the way is written to the answer file too (RhNative.WatchCrash).
+            if (-not $worker) {
+                $worker = [runspacefactory]::CreateRunspace()
+                $worker.ApartmentState = 'STA'
+                $worker.ThreadOptions = 'ReuseThread'
+                $worker.Open()
+            }
+            $ps = [powershell]::Create()
+            $ps.Runspace = $worker
+            $null = $ps.AddCommand($self)
+            foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
+            $limit = [Math]::Max(5, $a.TimeoutSec) + 50
+            [RhNative]::CrashOut = $req.out
+            $h = $ps.BeginInvoke()
+            if ($h.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($limit))) {
+                [RhNative]::CrashOut = $null
+                try {
+                    $null = $ps.EndInvoke($h)
+                    if (-not (Test-Path -LiteralPath $req.out)) {
+                        $why = @($ps.Streams.Error | ForEach-Object { "$_" }) -join '; '
+                        [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = "no answer written. $why" } -Compress))
+                    }
+                }
+                catch {
+                    # the script's own error, not EndInvoke's wrapper around it
+                    $ex = $_.Exception; if ($ex -is [Management.Automation.MethodInvocationException] -and $ex.InnerException) { $ex = $ex.InnerException }
+                    [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $ex.Message } -Compress))
+                }
+                $ps.Dispose()
+            }
+            else {
+                [RhNative]::CrashOut = $null
+                # which windows of this session don't respond (Process.Responding: SendMessageTimeout, 5 s at most each),
+                # checked for 15 s at most so the answer is written well before the host gives up (deadline + 30 s)
+                $mySession = (Get-Process -Id $PID).SessionId
+                $wins = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $mySession -and $_.MainWindowHandle -ne [IntPtr]::Zero })
+                $checkUntil = (Get-Date).AddSeconds(15)
+                $hung = @(foreach ($p in $wins) {
+                        if ((Get-Date) -ge $checkUntil) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle) - not checked"; continue }
+                        if (-not $p.Responding) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle)" }
+                    })
+                $why = "the action didn't finish within $limit s (a call that doesn't return$(if ($hung) { ' - not responding: ' + ($hung -join ', ') }))"
+                $late = if ($a.Do -eq 'uia') {
+                    # as a search that found nothing, with the reason: -Optional steps go on, the others fail with it
+                    @{ found = $false; title = $a.Title; text = $a.Text; error = $why; notResponding = $hung; windows = @($wins | ForEach-Object { $_.MainWindowTitle } | Where-Object { $_ }) }
+                }
+                else { @{ serveError = $why } }
+                Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
+                [IO.File]::WriteAllText("$($req.out).part", (ConvertTo-Json -InputObject $late -Depth 4 -Compress))
+                Move-Item -LiteralPath "$($req.out).part" -Destination $req.out -Force
+                [Diagnostics.Process]::GetCurrentProcess().Kill()
+            }
             $idleUntil = (Get-Date).AddMinutes(30)
         }
         Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
@@ -188,7 +367,7 @@ switch ($Do) {
     'read' {
         $r = Read-AgentWindow
         if (-not $r) { Out-Json @{ found = $false }; break }
-        Out-Json @{ found = $true; title = $r.Window.Title; text = $r.Ocr.Text; lines = $r.Ocr.Lines; window = $r.Window }
+        Out-Json @{ found = $true; title = $r.Window.Title; text = $r.Ocr.Text; lines = $r.Ocr.Lines; window = $r.Window; excluded = [RhNative]::Excluded($r.Window.Handle) }
     }
     'click' {
         $until = (Get-Date).AddSeconds($TimeoutSec)
@@ -219,20 +398,33 @@ switch ($Do) {
             $r = Read-AgentWindow
             if ($r) {
                 # the code is drawn as large, spaced digits: OCR returns them as single words, not always in reading
-                # order - the tallest digit words on one row, left to right
-                $digits = @($r.Ocr.Words | Where-Object { $_.Text -match '^\d+$' })
+                # order - the tallest digit words on one row, left to right. A lone big digit can come back as a
+                # look-alike letter ("O" or "o" for 0, "I", "l" or "|" for 1): such one-character words count as digits
+                # (the height check below keeps the dialog's text out)
+                $digits = @($r.Ocr.Words | ForEach-Object {
+                        $t = $_.Text
+                        if ($t -cmatch '^[OoQD]$') { $t = '0' } elseif ($t -cmatch '^[Il|]$') { $t = '1' }
+                        if ($t -match '^\d+$') { [pscustomobject]@{ Text = $t; X = $_.X; Y = $_.Y; W = $_.W; H = $_.H } }
+                    })
                 if ($digits) {
                     $big = ($digits | Measure-Object H -Maximum).Maximum
                     $row = @($digits | Where-Object { $_.H -ge $big * 0.7 })
                     $mid = @($row | Sort-Object Y)[[int][math]::Floor($row.Count / 2)].Y
-                    $text = -join @($row | Where-Object { [math]::Abs($_.Y - $mid) -le $big } | Sort-Object X | ForEach-Object Text)
+                    $row = @($row | Where-Object { [math]::Abs($_.Y - $mid) -le $big } | Sort-Object X)
+                    $text = -join @($row | ForEach-Object Text)
                     if ($text -match '^\d{6}$') { $pin = $text }
+                    # OCR can drop a digit of the row altogether (a thin "1": five digits in the run of 17.10.2026
+                    # 05:47): the six boxes read again as one strip (Read-PinStrip)
+                    elseif ($row.Count -ge 2 -and $row.Count -lt 6 -and -not @($row | Where-Object { $_.Text.Length -ne 1 }).Count) {
+                        $strip = Read-PinStrip $r.Window $row
+                        if ($strip) { $pin = $strip }
+                    }
                 }
                 if (-not $pin -and ($r.Ocr.Text -replace '[^0-9 ]', '' -replace '\s+', ' ') -match '(\d{3}\s?\d{3})') { $pin = $Matches[1] -replace '\s', '' }
             }
             if (-not $pin) { Start-Sleep -Milliseconds 500 }
         } while (-not $pin -and (Get-Date) -lt $until)
-        Out-Json @{ pin = $pin; lines = $(if ($r) { $r.Ocr.Lines } else { @() }) }
+        Out-Json @{ pin = $pin; lines = $(if ($r) { $r.Ocr.Lines } else { @() }); words = $(if ($pin -or -not $r) { @() } else { @($r.Ocr.Words | ForEach-Object { @{ text = $_.Text; x = $_.X; y = $_.Y; h = $_.H } }) }) }
     }
     'screen-read' {
         Add-Type -AssemblyName System.Windows.Forms
@@ -283,7 +475,8 @@ switch ($Do) {
     'uia' {
         # UI Automation of a normal window (RemoteHub, an installer dialog, Settings): -Title the window (wildcards),
         # -Text the element's name (wildcards), -Value what to do: click (Invoke / Toggle / Select / Expand, else a
-        # real click), toggle-on, toggle-off, set:<text>, read (the element's value or name), exists. Waits up to
+        # real click), toggle-on, toggle-off, set:<text>, read (the element's value or name), exists, row:<button> (that
+        # button in the element's own row - see there). Waits up to
         # -TimeoutSec for the element.
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
         $A = [Windows.Automation.AutomationElement]
@@ -358,6 +551,20 @@ switch ($Do) {
         $pat = { param($p) $o = $null; if ($found.TryGetCurrentPattern($p, [ref]$o)) { $o } else { $null } }
         $result = @{ found = $true; name = $found.Current.Name; type = $found.Current.ControlType.ProgrammaticName; window = $win.Current.Name; enabled = $found.Current.IsEnabled }
         $center = { $r = $found.Current.BoundingRectangle; @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+        # SelectionItemPattern.Select (a RadioButton, a ListItem) can fail with a COM error ("Unrecognized error") while
+        # the element is there: a real click on it instead. A switched-off element isn't clicked - the step says so
+        # (answers $false then).
+        $selectOrClick = {
+            param($el, $sp)
+            if (-not $el.Current.IsEnabled) { $result.error = "'$($el.Current.Name)' is disabled"; $result.enabled = $false; return $false }
+            try { $sp.Select() }
+            catch {
+                $result.selectError = "$($_.Exception.Message)"
+                $r = $el.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+                Start-Sleep -Milliseconds 300
+            }
+            $true
+        }
         switch -Wildcard ($action) {
             'exists' { }
             'fit' {
@@ -412,6 +619,32 @@ switch ($Do) {
                     $result.help = $item.Current.HelpText
                 }
             }
+            'row:*' {
+                # row:<button>: the button of that name (wildcards) in the found element's own row - a list whose rows
+                # each have one (Settings > Apps: every app's "More options"). The element's ancestors are searched from
+                # the nearest up; one that holds more than one such button is the list, not the row, and is not used.
+                # Every visible match of -Text is tried (a search box's suggestion has the same name, but no row).
+                $want = $action.Substring(4)
+                $isButton = New-Object Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([Windows.Automation.ControlType]::Button)
+                $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+                $btn = $null; $row = $null
+                foreach ($cand in @($hit)) {
+                    $e = $cand
+                    while ($e -and -not [Windows.Automation.Automation]::Compare($e, $win)) {
+                        $btns = @($e.FindAll([Windows.Automation.TreeScope]::Descendants, $isButton) | Where-Object { $_.Current.Name -like $want -or ($_.Current.HelpText -and $_.Current.HelpText -like $want) })
+                        if ($btns.Count -eq 1) { $btn = $btns[0]; $row = $e; break }
+                        if ($btns.Count -gt 1) { break }
+                        $e = $walker.GetParent($e)
+                    }
+                    if ($btn) { break }
+                }
+                if (-not $btn) { $result.error = "no button '$want' in the row of '$Text'"; break }
+                $result.row = $row.Current.Name
+                $result.value = $btn.Current.Name
+                $ip = $null
+                if ($btn.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$ip)) { $ip.Invoke() }
+                else { $r = $btn.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+            }
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }
             'realclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]) }
             'keys:*' { $found.SetFocus(); Start-Sleep -Milliseconds 200; [Windows.Forms.SendKeys]::SendWait($action.Substring(5)) }
@@ -449,7 +682,7 @@ switch ($Do) {
                     if (-not $li) { $li = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::ListItem))) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1 }
                     if (-not $li) { $result.error = "no item '$item'"; if ($ec) { $ec.Collapse() }; break }
                     $sp = $null
-                    if ($li.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sp)) { $sp.Select() } else { $r = $li.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+                    if ($li.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sp)) { $null = & $selectOrClick $li $sp } else { $r = $li.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
                     if ($ec) { try { $ec.Collapse() } catch { } }
                     $result.value = $li.Current.Name
                 }
@@ -457,12 +690,12 @@ switch ($Do) {
             { $_ -in 'check', 'uncheck' } {
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
                 $sel = & $pat ([Windows.Automation.SelectionItemPattern]::Pattern)
-                if (-not $t -and $sel) { if ($action -eq 'check') { $sel.Select() }; $result.value = [string]$sel.Current.IsSelected; break }
+                if (-not $t -and $sel) { if ($action -eq 'check' -and -not (& $selectOrClick $found $sel)) { break }; $result.value = [string]$sel.Current.IsSelected; break }
                 if (-not $t) {
                     # the label text inside a CheckBox / RadioButton: its parent has the pattern
                     $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
                     $o = $null; if ($p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o }
-                    elseif ($p.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$o)) { $o.Select(); $result.value = 'selected'; break }
+                    elseif ($p.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$o)) { if (& $selectOrClick $p $o) { $result.value = 'selected' }; break }
                 }
                 $want = if ($action -eq 'check') { 'On' } else { 'Off' }
                 if ($t -and [string]$t.Current.ToggleState -ne $want) { $t.Toggle() }
@@ -509,7 +742,7 @@ switch ($Do) {
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
                 # a button that opens a modal dialog (Dialogs.Confirm): Invoke may come back with an error while the dialog
                 # is open - the click happened
-                if ($i) { try { $i.Invoke() } catch { $result.invokeError = $_.Exception.InnerException.Message } } elseif ($t) { $t.Toggle() } elseif ($s) { $s.Select() } elseif ($e) { $e.Expand() }
+                if ($i) { try { $i.Invoke() } catch { $result.invokeError = $_.Exception.InnerException.Message } } elseif ($t) { $t.Toggle() } elseif ($s) { $null = & $selectOrClick $found $s } elseif ($e) { $e.Expand() }
                 else { $r = $found.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
             }
         }
@@ -539,6 +772,20 @@ switch ($Do) {
         $f.Add_MouseMove({ W @{ e = 'move'; x = $_.X; y = $_.Y } })
         $f.Add_MouseWheel({ W @{ e = 'wheel'; d = $_.Delta; x = $_.X; y = $_.Y } })
         $f.Add_Shown({ W @{ e = 'shown'; w = $f.Width; h = $f.Height; sx = $f.Left; sy = $f.Top }; $f.Activate() })
+        # 'active' when the marker has the keyboard, 'inactive' (with who took it) when it loses it - a count of keys
+        # that arrived only means something while it is active (Start-LabMarker waits for 'active')
+        $f.Add_Activated({ W @{ e = 'active' } })
+        $f.Add_Deactivate({ W @{ e = 'inactive'; to = [RhNative]::ForegroundName() } })
+        # take the foreground until it has it (Activate alone may be refused), for 30 s at most
+        $ft = New-Object Windows.Forms.Timer; $ft.Interval = 250
+        $fsw = [Diagnostics.Stopwatch]::StartNew()
+        $ft.Add_Tick({
+                if ([RhNative]::TakeForeground($f.Handle) -or $fsw.Elapsed.TotalSeconds -gt 30) {
+                    if ([RhNative]::GetForegroundWindow() -ne $f.Handle) { W @{ e = 'nofocus'; fg = [RhNative]::ForegroundName() } }
+                    $ft.Stop()
+                }
+            })
+        $f.Add_Shown({ $ft.Start() })
         # horizontal wheel (WM_MOUSEHWHEEL) and clipboard changes come as window messages
         $t = New-Object Windows.Forms.Timer; $t.Interval = 500
         $last = ''

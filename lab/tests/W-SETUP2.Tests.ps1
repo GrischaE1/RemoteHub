@@ -54,11 +54,19 @@ Describe 'W2 <VmName>' -Tag WinRM, 'W' {
         BeforeAll {
             Reset-LabVm -Name $VmName
             $null = New-LabGuestUser -Name $VmName -User 'lapsadmin' -Admin
+            # the case needs a device without LocalAccountTokenFilterPolicy (as W-SETUP's "set up before" context): the
+            # checkpoint may have it on (seen as 1 in run 20261016-212514 on W11 lane 1) - recorded, then switched off
+            $latfpBefore = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $k = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+                $v = (Get-ItemProperty $k -ErrorAction SilentlyContinue).LocalAccountTokenFilterPolicy
+                Set-ItemProperty -Path $k -Name LocalAccountTokenFilterPolicy -Type DWord -Value 0
+                $v
+            }
             # the script without "local administrators" leaves LocalAccountTokenFilterPolicy alone
             $setup = Invoke-LabSetupScript -Name $VmName -LocalAdmins $false
             $state = Get-LabWinRmState -Name $VmName
             $answer = try { Invoke-LabTool -Name $VmName -Op ps -Via WinRM -UserName 'lapsadmin' -Params @{ cert = $state.Certificate.Thumbprint; script = 'whoami /groups' } } catch { [pscustomobject]@{ failed = "$_" } }
-            Save 'nonadmin' @{ Setup = $setup; State = $state; Answer = $answer }
+            Save 'nonadmin' @{ LatfpBeforeTest = $latfpBefore; Setup = $setup; State = $state; Answer = $answer }
         }
 
         It 'W-NONADMIN-01 over WinRM a non-RID-500 admin without LocalAccountTokenFilterPolicy gets no full token (refused or filtered) - unlike the agent' -Tag 'W-NONADMIN-01' {

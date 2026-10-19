@@ -99,14 +99,51 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
         }
     }
 
-    It 'SMOKE-10 records the keyboard layout; console typing round-trips a-z A-Z 0-9 and !@#$%' -Tag 'SMOKE-10' {
+    It 'SMOKE-10 every account and the sign-in screen have only the image''s keyboard; console typing round-trips a-z A-Z 0-9 and !@#$%' -Tag 'SMOKE-10' {
         $text = 'abcxyzABCXYZ0189 !@#$%'
         $file = 'C:\ProgramData\RemoteHubLab\session\smoke-typed.txt'
+        # Send-LabText sends shifted symbols as US key positions, and the tests type paths and the password at the
+        # console in any account and at the sign-in screen: one German layout anywhere breaks them (docs/test-lab-spec.md 5.1)
+        $want = if ($vm.Id -like '*de-DE*') { '00000407' } else { '00000409' }
+        # each profile's layouts: the language list's input methods (lang:layout) and Preload with its Substitutes;
+        # profiles not signed in are loaded from their NTUSER.DAT for the read
+        $layouts = @(Invoke-LabGuest -Name $VmName -ScriptBlock {
+            function Read-Layouts([string]$Root, [string]$Who) {
+                $ids = @()
+                $up = "Registry::$Root\Control Panel\International\User Profile"
+                foreach ($k in @(Get-ChildItem $up -ErrorAction SilentlyContinue)) {
+                    $ids += @($k.Property | Where-Object { $_ -match '^[0-9A-Fa-f]{4}:([0-9A-Fa-f]{8})$' } | ForEach-Object { $_.Split(':')[1] })
+                }
+                $pre = Get-ItemProperty "Registry::$Root\Keyboard Layout\Preload" -ErrorAction SilentlyContinue
+                $sub = Get-ItemProperty "Registry::$Root\Keyboard Layout\Substitutes" -ErrorAction SilentlyContinue
+                if ($pre) {
+                    foreach ($p in @($pre.PSObject.Properties | Where-Object Name -match '^\d+$')) {
+                        $id = [string]$p.Value
+                        if ($sub -and $sub.PSObject.Properties[$id]) { $id = [string]$sub.$id }
+                        $ids += $id
+                    }
+                }
+                [pscustomobject]@{ Account = $Who; Layouts = @($ids | ForEach-Object { $_.ToUpper() } | Sort-Object -Unique) }
+            }
+            Read-Layouts 'HKEY_USERS\.DEFAULT' '(sign-in screen)'
+            foreach ($p in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' | Where-Object PSChildName -like 'S-1-5-21-*')) {
+                $sid = $p.PSChildName
+                $who = try { (New-Object Security.Principal.SecurityIdentifier $sid).Translate([Security.Principal.NTAccount]).Value } catch { $null }
+                # the profile of an account deleted since: nobody signs in with it
+                if (-not $who) { continue }
+                if (Test-Path "Registry::HKEY_USERS\$sid") { Read-Layouts "HKEY_USERS\$sid" $who; continue }
+                $hive = Join-Path $p.GetValue('ProfileImagePath') 'NTUSER.DAT'
+                if (-not (Test-Path $hive)) { continue }
+                $null = & reg.exe load 'HKU\RhLabLayout' $hive 2>&1
+                if ($LASTEXITCODE -ne 0) { [pscustomobject]@{ Account = $who; Layouts = @('unreadable') }; continue }
+                try { Read-Layouts 'HKEY_USERS\RhLabLayout' $who }
+                finally { [gc]::Collect(); [gc]::WaitForPendingFinalizers(); $null = & reg.exe unload 'HKU\RhLabLayout' 2>&1 }
+            }
+        })
+        $layouts | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $EvidenceDir 'smoke-layout.json') -Encoding UTF8
+        # a profile without any layout (never signed in) gets the default one, so it isn't counted
+        $other = @($layouts | Where-Object { @($_.Layouts | Where-Object { $_ -ne $want }).Count -gt 0 })
         Set-LabAutoLogon -Name $VmName -Account User
-        $layout = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
-            param($u) (Get-ItemProperty "Registry::HKEY_USERS\$((New-Object Security.Principal.NTAccount $u).Translate([Security.Principal.SecurityIdentifier]).Value)\Keyboard Layout\Preload" -ErrorAction SilentlyContinue).'1'
-        }
-        Set-Content (Join-Path $EvidenceDir 'smoke-layout.txt') "keyboard layout: $layout"
         # Notepad in the user's session, typed at the console, saved with Ctrl+S to a known file
         $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("New-Item -ItemType File -Path '$file' -Force | Out-Null; notepad.exe '$file'"))
         # the console's keys go to the foreground window: Notepad's must exist and be in front first
@@ -130,7 +167,7 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
         }
         Stop-LabInSession -Name $VmName -Task $task
         Clear-LabAutoLogon -Name $VmName
-        $layout | Should -Not -BeNullOrEmpty
         "$typed".Trim() | Should -Be $text
+        @($other | ForEach-Object { "$($_.Account): $($_.Layouts -join ', ')" }) | Should -BeNullOrEmpty -Because "every account and the sign-in screen should have only $want"
     }
 }

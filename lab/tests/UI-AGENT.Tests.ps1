@@ -35,6 +35,100 @@ BeforeAll {
         ($m.items -join "`n")
     }
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-agent-$name.png") }
+    # Esc on the console keyboard (a menu left open after a missed entry: RhPerson closes only the submenu)
+    function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 500 }
+
+    # RemoteHub's setup of PowerShell remoting, from its answer that WinRM isn't available (open when this is called):
+    # Set up on the target, Copy script (Windows' Save As dialog has no usable UIA patterns here); the admin pastes it
+    # into an elevated PowerShell on the device - here over PowerShell Direct, as an admin there; Test again, RemoteHub's
+    # question about the certificate, then Windows' question about the root certificate. Answers what each step showed.
+    function SetUpRemoting {
+        $s = [ordered]@{}
+        $s.test1 = @((Ui '*' -Title 'PowerShell remoting' -Value list -TimeoutSec 90).items) -join "`n"
+        $null = Ui 'Set up on the target*' -Title 'PowerShell remoting'
+        $null = Ui 'Copy script' -Title 'Set up PowerShell remoting' -TimeoutSec 60
+        $script = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { Get-Clipboard -Raw }
+        $null = New-Item -ItemType Directory -Path (Join-Path $EvidenceDir 'ui-agent-script') -Force
+        $scriptFile = Join-Path $EvidenceDir 'ui-agent-script\remotehub-setup.ps1'
+        [IO.File]::WriteAllText($scriptFile, "$script", (New-Object Text.UTF8Encoding $true))
+        Copy-LabFile -Name $device.Name -Path $scriptFile -Destination 'C:\LabSetup'
+        $s.run = Invoke-LabGuest -Name $device.Name -ScriptBlock { Set-ExecutionPolicy -Scope Process Bypass -Force; & 'C:\LabSetup\remotehub-setup.ps1' *>&1 | ForEach-Object { "$_" } | Select-Object -Last 15 }
+        $null = Ui 'Test again' -Title 'Set up PowerShell remoting'
+        $s.trust = Ui 'Same*trust it' -Title '*' -TimeoutSec 60
+        $s.windows = Ui 'Yes' -Title 'Security Warning' -TimeoutSec 30
+        $s.result = Message -TimeoutSec 90
+        $null = Ui 'Close' -Title 'Set up PowerShell remoting' -Optional
+        $s.trusted = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { @(Get-ChildItem Cert:\CurrentUser\Root | Where-Object FriendlyName -like 'RemoteHub*WinRM*' | ForEach-Object FriendlyName) -join ';' }
+        $s
+    }
+
+    # Tools lists the tools (PowerShell, File transfer, Registry, Services, Processes) only once the connection's test
+    # has passed the way it connects now (WinRM or the agent); until then it has one entry "Test PowerShell remoting" /
+    # "Test RemoteHub Agent" (" again" after a failure; "Testing ..." switched off while it runs). This runs that test
+    # from the menu, waits for its answer and reopens the menu until the tools are there. Answers the test's dialog text
+    # ('' when the tools were offered already). -SetUp: when the answer is that WinRM isn't available, RemoteHub's setup
+    # runs once (the device starts from its checkpoint without WinRM HTTPS; the setup context may not have run, as in a
+    # rerun of single cases).
+    function ToolsReady([switch]$SetUp, [int]$TimeoutSec = 300) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        $answer = ''; $last = ''; $setUpDone = $false
+        do {
+            $m = Ui 'Device' -Value 'menu:Tools>Test*' -Optional -TimeoutSec 15
+            $err = if ($m.PSObject.Properties['error']) { "$($m.error)" } else { '' }
+            if ($m.found -and -not $err) {
+                # the test started: its answer in RemoteHub's own dialog, "... works (...)" with OK, else a question
+                $title = if ("$($m.value)" -like '*RemoteHub Agent*') { 'RemoteHub Agent' } else { 'PowerShell remoting' }
+                $box = Ui '*' -Title $title -Value list -TimeoutSec 180 -Optional
+                if (-not $box.found) { throw "Tools: '$($m.value)' gave no answer within 180 s (no '$title' dialog)." }
+                $answer = @($box.items) -join "`n"
+                if ($answer -match 'works \(') { $null = Ui 'OK' -Title $title -Optional -TimeoutSec 10 }
+                elseif ($SetUp -and -not $setUpDone -and $answer -match 'Set up on the target') { $setUpDone = $true; $null = SetUpRemoting }
+                else {
+                    $null = Ui 'Cancel' -Title $title -Optional -TimeoutSec 10
+                    throw "Tools: '$($m.value)' from the menu didn't pass$(if ($setUpDone) { ' (after the setup)' }) - $answer"
+                }
+                $last = "after '$($m.value)'"
+            }
+            elseif ($m.found -and $err -like 'no menu entry*' -and @(@($m.entries) | Where-Object { $_ -eq 'PowerShell' }).Count) {
+                Esc
+                return $answer
+            }
+            else {
+                # "Testing ..." (switched off while the test runs), or the menu not there yet: looked at again
+                $last = if ($m.found) { "$err - entries: $(@($m.entries) -join ', ')" } else { "'Device' not found" }
+                if ($m.found) { Esc }
+                Start-Sleep -Seconds 3
+            }
+        } while ((Get-Date) -lt $until)
+        throw "Tools: the connection's tools weren't offered within $TimeoutSec s ($last)."
+    }
+    # a tool tab from the menu (Tools>Entry), after the connection's test when Tools doesn't offer the tools (yet / again)
+    function Tool([string]$Entry) {
+        $m = Ui 'Device' -Value "menu:Tools>$Entry" -Optional
+        if ($m.found -and -not ($m.PSObject.Properties['error'] -and $m.error)) { return }
+        if ($m.found) { Esc }
+        $null = ToolsReady -SetUp
+        Menu "Tools>$Entry"
+    }
+
+    # Install RemoteHub Agent from the menu, silently over PowerShell remoting (offered only while WinRM is known to work:
+    # tested first); "Use the agent for this connection afterwards" on. Answers what the steps showed.
+    function InstallFromMenu {
+        $a = [ordered]@{}
+        $a.remoting = ToolsReady -SetUp
+        Menu 'RemoteHub Agent>Install RemoteHub Agent*'
+        $a.dialog = Ui 'Install silently over PowerShell remoting*' -Title 'Install RemoteHub Agent' -Value check -TimeoutSec 60
+        $a.useAfter = Ui 'Use the agent for this connection afterwards' -Title 'Install RemoteHub Agent' -Value check -Optional
+        $null = Ui 'Install' -Title 'Install RemoteHub Agent'
+        $a.done = Ui 'Done' -Title 'Install RemoteHub Agent' -TimeoutSec 600
+        $a.state = Get-LabAgentState -Name $device.Name
+        $a
+    }
+    # the agent running on the device; installed from the menu when it isn't (the install context may not have run)
+    function AgentReady {
+        if ("$((Get-LabAgentState -Name $device.Name).Service.State)" -ne 'Running') { $null = InstallFromMenu }
+        "$((Get-LabAgentState -Name $device.Name).Service.State)"
+    }
 
     $device = Get-LabDevice -For $VmName
     if ($isClient) {
@@ -65,26 +159,9 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
 
     Context 'PowerShell remoting set up from RemoteHub' {
         BeforeAll {
-            $s = [ordered]@{}
             # the test fails (no HTTPS yet) and offers the setup
             Menu 'Tools>Test PowerShell remoting*'
-            $s.test1 = Message -Button 'Set up on the target*' -TimeoutSec 90
-            # Copy script (Windows' Save As dialog has no usable UIA patterns here); the admin pastes it into an
-            # elevated PowerShell on the device - here over PowerShell Direct, as an admin there
-            $null = Ui 'Copy script' -Title 'Set up PowerShell remoting' -TimeoutSec 60
-            $script = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { Get-Clipboard -Raw }
-            $null = New-Item -ItemType Directory -Path (Join-Path $EvidenceDir 'ui-agent-script') -Force
-            $scriptFile = Join-Path $EvidenceDir 'ui-agent-script\remotehub-setup.ps1'
-            [IO.File]::WriteAllText($scriptFile, "$script", (New-Object Text.UTF8Encoding $true))
-            Copy-LabFile -Name $device.Name -Path $scriptFile -Destination 'C:\LabSetup'
-            $s.run = Invoke-LabGuest -Name $device.Name -ScriptBlock { Set-ExecutionPolicy -Scope Process Bypass -Force; & 'C:\LabSetup\remotehub-setup.ps1' *>&1 | ForEach-Object { "$_" } | Select-Object -Last 15 }
-            $null = Ui 'Test again' -Title 'Set up PowerShell remoting'
-            # RemoteHub's own question, then Windows' question about the root certificate
-            $s.trust = Ui 'Same*trust it' -Title '*' -TimeoutSec 60
-            $s.windows = Ui 'Yes' -Title 'Security Warning' -TimeoutSec 30
-            $s.result = Message -TimeoutSec 90
-            $null = Ui 'Close' -Title 'Set up PowerShell remoting' -Optional
-            $s.trusted = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { @(Get-ChildItem Cert:\CurrentUser\Root | Where-Object FriendlyName -like 'RemoteHub*WinRM*' | ForEach-Object FriendlyName) -join ';' }
+            $s = SetUpRemoting
             Shot 'remoting'
             Save 'remoting' $s
         }
@@ -105,7 +182,10 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
     Context 'tools over WinRM' {
         BeforeAll {
             $t = [ordered]@{}
-            Menu 'PowerShell'
+            # Tools offers PowerShell once the remoting test has passed: run from the menu first (the setup context
+            # left it passed; on its own the setup runs here)
+            $t.test = ToolsReady -SetUp
+            Menu 'Tools>PowerShell'
             # the tab: its icon buttons are found by their tooltip, the input line and the output by type (no names)
             $null = Ui 'Stop the running command (Ctrl+C)' -Value exists -TimeoutSec 60
             $null = Ui 'type:Document' -Value exists -TimeoutSec 60
@@ -134,18 +214,12 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
 
     Context 'the agent installed from the menu' {
         BeforeAll {
-            $a = [ordered]@{}
-            Menu 'Install RemoteHub Agent*'
-            $a.dialog = Ui 'Install silently over PowerShell remoting*' -Title 'Install RemoteHub Agent' -Value check -TimeoutSec 60
-            $a.useAfter = Ui 'Use the agent for this connection afterwards' -Title 'Install RemoteHub Agent' -Value check -Optional
-            $null = Ui 'Install' -Title 'Install RemoteHub Agent'
-            $a.done = Ui 'Done' -Title 'Install RemoteHub Agent' -TimeoutSec 600
-            $a.state = Get-LabAgentState -Name $device.Name
+            $a = InstallFromMenu
             Shot 'installed'
             # Test RemoteHub Agent: only in the menu while the connection isn't known to work - after the install from
             # the menu it already is, and the menu offers the tools instead (documented)
-            $m = Ui 'Device' -Value 'menu:Test RemoteHub Agent*' -Optional
-            if ($m.PSObject.Properties['error']) { $a.entries = @($m.entries) } else { $a.test = Message -TimeoutSec 60 }
+            $m = Ui 'Device' -Value 'menu:Tools>Test RemoteHub Agent*' -Optional
+            if ($m.PSObject.Properties['error']) { $a.entries = @($m.entries); Esc } else { $a.test = Message -Title 'RemoteHub Agent' -TimeoutSec 60 }
             Save 'install' $a
         }
 
@@ -164,6 +238,8 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
     Context 'tools through the agent' {
         BeforeAll {
             $r = [ordered]@{}
+            # the agent from the install context (installed here when that context didn't run)
+            $r.agent = AgentReady
             # each tool on its own: a failing step is written down (error, screenshot, open dialogs) and the next tool
             # still runs; dot-sourced, so the variables stay
             function Step([string]$Tool, [scriptblock]$Do) {
@@ -179,7 +255,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $d = 'C:\Users\Public\UpFolder'; $null = New-Item -ItemType Directory -Path $d -Force; 1..5 | ForEach-Object { Set-Content "$d\f$_.txt" "ui file $_" } }
             $local = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Public\UpFolder' -File | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
             Step files {
-            Menu 'File transfer'
+            Tool 'File transfer'
             # the address boxes have no names: this PC's (left) is the first, the device's the second
             $null = Ui 'type:Edit#1' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
             $null = Ui 'type:Edit#2' -Value 'keys:^aC:\{ENTER}'
@@ -195,7 +271,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # when a path is typed), then opened by its path in the address box: set directly, Enter opens it
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { $null = New-Item HKLM:\SOFTWARE\RemoteHubLab -Force }
             Step registry {
-            Menu 'Tools>Registry'
+            Tool 'Registry'
             $null = Ui 'type:Edit' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
             $null = Ui 'type:Edit' -Value 'keys:{ENTER}'
             Start-Sleep -Seconds 3
@@ -212,7 +288,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             }
             # services
             Step services {
-            Menu 'Tools>Services'
+            Tool 'Services'
             # the filter box has no name; the tool buttons are named by their tooltips; Dialogs.Confirm asks first
             $null = Ui 'type:Edit' -Value 'set:Spooler' -TimeoutSec 60
             $null = Ui 'Print Spooler' -Value realclick
@@ -228,7 +304,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # processes
             Step processes {
             $notepad = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Start-Process notepad.exe -PassThru).Id }
-            Menu 'Tools>Processes'
+            Tool 'Processes'
             $null = Ui 'type:Edit' -Value 'set:notepad' -TimeoutSec 60
             $null = Ui 'notepad*' -Value realclick
             $null = Ui 'End process (Del)'
@@ -248,6 +324,8 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             Step desktop {
             # with the agent in use, Connect opens the agent desktop ("Remote desktop via RDP" is the other way)
             Menu 'Connect'
+            # the tab signs in first and then asks what to show ("Signed in as ... Choose what to show."): its Connect
+            $null = Ui 'Connect' -Optional -TimeoutSec 15
             # Admin is signed in at the device and is asked: the person there allows it (console mouse on the agent's dialog)
             $r.allow = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60
             $r.desktop = Ui 'Send Ctrl+Alt+Del' -Value exists -TimeoutSec 60
@@ -276,7 +354,8 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
         }
 
         It 'R-AGENT-01 the full agent flow from the UI: install, then PowerShell, files, registry, services, processes and the agent desktop work' -Tag 'R-AGENT-01' {
-            $a.done.found | Should -BeTrue
+            # (this context's own record: another context's variables aren't visible here)
+            $r.agent | Should -Be 'Running'
             @($r.uploaded).Count | Should -Be 5
             $r.desktop.found | Should -BeTrue
         }
@@ -285,11 +364,15 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
     Context 'refusals as RemoteHub shows them' {
         BeforeAll {
             $f = [ordered]@{}
+            # the agent in use and known to work, so Tools offers PowerShell (installed here when the earlier contexts
+            # didn't run)
+            $f.agent = AgentReady
+            $f.test = ToolsReady
             # the agent stopped: the tab says so, no hang; started again: works on retry
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { Stop-Service RemoteHubAgent -Force }
             # the tab's own text (the output) and whatever dialog shows
             function TabText { "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 20).value)`n$((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 5).items -join "`n")" }
-            Menu 'PowerShell'
+            Menu 'Tools>PowerShell'
             Start-Sleep -Seconds 40
             $f.stoppedMessage = TabText
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { Start-Service RemoteHubAgent }
@@ -307,9 +390,15 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $re = Install-LabAgent -Name $device.Name -Scope $clientIp
             $f.reportedPin = $re.pin
             $f.newPin = (Get-LabAgentState -Name $device.Name).Certificate.Sha256
-            Menu 'PowerShell'
-            Start-Sleep -Seconds 15
-            $f.pinMessage = TabText
+            # the tab while Tools offers PowerShell; when it doesn't (the reconnect above failed, so the connection's last
+            # result is a failure) the test from the menu, whose answer names the certificate as well - closed with Cancel
+            $m = Ui 'Device' -Value 'menu:Tools>PowerShell' -Optional
+            if ($m.found -and -not ($m.PSObject.Properties['error'] -and $m.error)) { Start-Sleep -Seconds 15; $f.pinMessage = TabText }
+            else {
+                if ($m.found) { Esc }
+                $null = Ui 'Device' -Value 'menu:Tools>Test RemoteHub Agent*' -TimeoutSec 15
+                $f.pinMessage = Message -Title 'RemoteHub Agent' -Button 'Cancel' -TimeoutSec 90
+            }
             Shot 'pin'
             $f.pinFailedLogons = @(Get-LabFailedLogon -Name $device.Name -Since $since)
             $f.pinLog = @(Get-LabAgentLog -Name $device.Name -Since $since | Where-Object { $_ -match 'Refused|Session started' })

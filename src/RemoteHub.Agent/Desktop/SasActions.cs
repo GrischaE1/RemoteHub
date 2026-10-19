@@ -177,8 +177,8 @@ internal sealed class SasActions
                 else if (now is int v) lines.Add($"{path}|{name}|{v}");
                 // anything else isn't ours to change
             }
-            Directory.CreateDirectory(_folder);
-            File.WriteAllLines(record, lines);
+            // On the disk before the values change: a torn record would leave them hidden for good after a power loss.
+            DurableFile.WriteAllLines(record, lines);
         }
         // the values hidden now (a record from an earlier version may list more – those are only put back)
         var recorded = File.ReadAllLines(record).Select(l => l.Split('|')).Where(p => p.Length == 3).Select(p => (p[0], p[1])).ToHashSet();

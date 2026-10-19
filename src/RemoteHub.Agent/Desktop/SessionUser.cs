@@ -55,6 +55,9 @@ internal static class SessionUser
         return identity.User?.Value;
     }
 
+    /// <summary>The signed-in user's token (as LocalSystem; the caller disposes it), or null when nobody is signed in or not LocalSystem.</summary>
+    internal static SafeAccessTokenHandle? UserToken() => Token();
+
     private static SafeAccessTokenHandle? Token()
     {
         if (!ProcessIdToSessionId((uint)Environment.ProcessId, out var session)) return null;

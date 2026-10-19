@@ -14,7 +14,8 @@ namespace rhcp
     class Credential final : public ICredentialProviderCredential2
     {
     public:
-        explicit Credential(std::shared_ptr<Channel> channel);
+        // The id is the provider's number in the trace (Trace.h).
+        Credential(std::shared_ptr<Channel> channel, long id);
 
         // IUnknown
         IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv) override;
@@ -49,6 +50,7 @@ namespace rhcp
 
         volatile long _refs = 1;
         std::shared_ptr<Channel> _channel;
+        const long _id;
         bool _failed = false;
     };
 

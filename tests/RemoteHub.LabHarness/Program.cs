@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RemoteHub.Agent;
+using RemoteHub.Models;
 using RemoteHub.Remoting;
 
 // Lab harness: runs RemoteHub's own client code against a lab VM so the lab tests the real thing.
@@ -328,13 +329,26 @@ static async Task<object> CopyFiles(Dictionary<string, string> o)
     return new { bytes = transfer.Transfer.Total, requestedAfter, sentSeconds = Math.Round(sent, 2), messages };
 }
 
+// Opens a PowerShell session through the agent. A refused open fails with the text RemoteHub shows (PsRemoting.Explain):
+// PowerShell's own exception only says "An error has occurred which PowerShell cannot handle", the agent's reason is
+// inside it.
+static Runspace OpenAgentSession(string host, AgentEndpoint endpoint, PSCredential credential)
+{
+    var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, endpoint, credential));
+    try { rs.Open(); }
+    catch (Exception ex)
+    {
+        rs.Dispose();
+        throw new InvalidOperationException(PsRemoting.Explain(ex, new PsTarget(host, true, new CredentialSet(), endpoint)), ex);
+    }
+    return rs;
+}
+
 static object RunOverAgent(Dictionary<string, string> o)
 {
     var secure = new SecureString();
     foreach (var c in o["password"]) secure.AppendChar(c);
-    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
-        new PSCredential(o["user"], secure)));
-    rs.Open();
+    using var rs = OpenAgentSession(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]), new PSCredential(o["user"], secure));
     using var ps = PowerShell.Create();
     ps.Runspace = rs;
     var output = ps.AddScript(o["script"]).Invoke().Select(x => x?.ToString()).ToList();
@@ -347,9 +361,7 @@ static object CredentialProvider(Dictionary<string, string> o)
 {
     var secure = new SecureString();
     foreach (var c in o["password"]) secure.AppendChar(c);
-    using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]),
-        new PSCredential(o["user"], secure)));
-    rs.Open();
+    using var rs = OpenAgentSession(o["host"], LabJump.Endpoint(o, int.Parse(o["port"]), o["pin"]), new PSCredential(o["user"], secure));
     var progress = new List<string>();
     try
     {
@@ -396,8 +408,7 @@ static async Task<object> Update(Dictionary<string, string> o)
         var before = await AgentInstaller.HealthAsync(host, LabJump.Endpoint(o, port, pin), CancellationToken.None);
         if (o.GetValueOrDefault("hold-session") == "1")
         {
-            held = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, LabJump.Endpoint(o, port, pin), credential));
-            held.Open();
+            held = OpenAgentSession(host, LabJump.Endpoint(o, port, pin), credential);
             using var ps = PowerShell.Create();
             ps.Runspace = held;
             heldPid = Convert.ToInt32(ps.AddScript("$PID").Invoke().Single().BaseObject);
@@ -407,11 +418,10 @@ static async Task<object> Update(Dictionary<string, string> o)
         string? startError = null;
         try
         {
-            using var rs = RunspaceFactory.CreateRunspace(new AgentConnectionInfo(host, LabJump.Endpoint(o, port, pin), credential));
-            rs.Open();
+            using var rs = OpenAgentSession(host, LabJump.Endpoint(o, port, pin), credential);
             AgentInstaller.StartUpdateThroughAgent(rs, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
         }
-        catch (Exception ex) { startError = ex.Message; }
+        catch (Exception ex) { startError = ex.Message; } // a refused open: already RemoteHub's text (OpenAgentSession)
 
         string verdict, message;
         AgentHealth? health = null;

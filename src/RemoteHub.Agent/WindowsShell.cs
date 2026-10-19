@@ -23,13 +23,7 @@ public sealed class WindowsAuthenticator(IReadOnlyList<string> allowedGroups) : 
         if (user.Length == 0) return AuthResult.Fail(AuthOutcome.BadCredentials, "no user name");
 
         if (!Native.LogonUser(user, domain, password, Native.LOGON32_LOGON_NETWORK, Native.LOGON32_PROVIDER_DEFAULT, out var logon))
-        {
-            var error = Marshal.GetLastWin32Error();
-            return error is Native.ERROR_LOGON_FAILURE or Native.ERROR_ACCOUNT_RESTRICTION or Native.ERROR_ACCOUNT_DISABLED
-                or Native.ERROR_PASSWORD_EXPIRED or Native.ERROR_ACCOUNT_LOCKED_OUT or Native.ERROR_LOGON_TYPE_NOT_GRANTED
-                ? AuthResult.Fail(error == Native.ERROR_LOGON_TYPE_NOT_GRANTED ? AuthOutcome.NotAllowed : AuthOutcome.BadCredentials, new Win32Exception(error).Message)
-                : AuthResult.Fail(AuthOutcome.Error, new Win32Exception(error).Message);
-        }
+            return SignInRefusal.FromWin32(Marshal.GetLastWin32Error());
 
         IntPtr full = IntPtr.Zero;
         try
@@ -248,8 +242,6 @@ internal static class ChildProcess
 internal static class Native
 {
     public const int LOGON32_LOGON_NETWORK = 3, LOGON32_PROVIDER_DEFAULT = 0;
-    public const int ERROR_LOGON_FAILURE = 1326, ERROR_ACCOUNT_RESTRICTION = 1327, ERROR_ACCOUNT_DISABLED = 1331,
-        ERROR_PASSWORD_EXPIRED = 1330, ERROR_ACCOUNT_LOCKED_OUT = 1909, ERROR_LOGON_TYPE_NOT_GRANTED = 1385;
     public const uint MAXIMUM_ALLOWED = 0x02000000;
     public const int SecurityImpersonation = 2, TokenPrimary = 1;
     public const int TokenElevationType = 18, TokenLinkedToken = 19, TokenElevationTypeLimited = 3;
