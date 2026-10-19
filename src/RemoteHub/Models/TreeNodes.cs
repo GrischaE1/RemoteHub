@@ -365,6 +365,8 @@ public sealed class UiState
     public bool UpdateCheckEnabled { get; set; } = true;
     /// <summary>"stable" or "beta"; null = the default for the running version (see <see cref="Services.UpdateService.DefaultChannel"/>).</summary>
     public string? UpdateChannel { get; set; }
+    /// <summary>The last version that started here: the welcome tour and What's new are shown once (see <see cref="Services.FirstStart"/>).</summary>
+    public string? LastSeenVersion { get; set; }
     /// <summary>Folder for session recordings; null = Videos\RemoteHub (see <see cref="Services.Recordings.Folder"/>).</summary>
     public string? RecordingFolder { get; set; }
     /// <summary>Frames per second of recordings (5, 10, 15, 30, 60).</summary>

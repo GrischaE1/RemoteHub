@@ -2125,6 +2125,7 @@ public partial class MainWindow : FluentWindow
     private void OpenSettings(string? page)
     {
         var e = new RoutedEventArgs();
+        Window ActiveOwner() => Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this;
         var host = new AppSettingsHost(
             ApplyTheme: ApplyTheme,
             ApplySwitchKeys: SetSwitchKeys,
@@ -2139,12 +2140,30 @@ public partial class MainWindow : FluentWindow
             DefaultApp: () => DefaultApp_Click(this, e),
             CheckForUpdates: channel => ShowUpdateWindow(null, channel),
             SettingsOverview: () => SettingsOverview_Click(this, e),
-            About: () => new AboutWindow { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.ShowDialog());
+            About: () => new AboutWindow { Owner = ActiveOwner() }.ShowDialog(),
+            WhatsNew: () => new WhatsNewWindow(FirstStart.Since(null, UpdateService.Current)) { Owner = ActiveOwner() }.ShowDialog(),
+            Welcome: () => new WelcomeWindow { Owner = ActiveOwner() }.ShowDialog());
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
         UpdateRailVersion();
     }
 
     private UpdateCheckResult? _availableUpdate;
+
+    /// <summary>The welcome tour after a new install, What's new after an upgrade – once each, then the version is remembered.</summary>
+    private void ShowFirstStart(UiState ui)
+    {
+        var current = UpdateService.Current;
+        var last = AppVersion.Parse(ui.LastSeenVersion);
+        var kind = FirstStart.Decide(ui.LastSeenVersion, _vm.ConnectionCount > 0, current);
+        if (ui.LastSeenVersion != current.ToString())
+        {
+            ui.LastSeenVersion = current.ToString();
+            _vm.RequestSave();
+        }
+        DiagLog.Write($"First start: {kind}");
+        if (kind == FirstStartKind.Welcome) new WelcomeWindow { Owner = this }.ShowDialog();
+        else if (kind == FirstStartKind.WhatsNew) new WhatsNewWindow(FirstStart.Since(last, current), last) { Owner = this }.ShowDialog();
+    }
 
     /// <summary>After the window is shown: the anonymous usage data (if on) and the update check (if on). Neither delays the start.</summary>
     private async void StartupChecks()
@@ -2164,6 +2183,8 @@ public partial class MainWindow : FluentWindow
         if (SettingsStore.IgnoredSharedFolder is { } ignored)
             await Dialogs.Info(this, "Settings location", $"Your organisation keeps RemoteHub's settings on this PC only, so the shared settings in {ignored} " +
                                                           "aren't used. The shared file isn't changed.");
+        // Not awaited: the update check below starts while the tour or What's new is open.
+        _ = Dispatcher.BeginInvoke(() => ShowFirstStart(ui));
         // Everything below runs on a background thread (policy lookup, network, parsing); only the result comes back here.
         var check = await Task.Run(async () =>
         {

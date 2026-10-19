@@ -25,7 +25,9 @@ public sealed record AppSettingsHost(
     Action DefaultApp,
     Action<string> CheckForUpdates,
     Action SettingsOverview,
-    Action About);
+    Action About,
+    Action WhatsNew,
+    Action Welcome);
 
 /// <summary>
 /// Edits a connection or folder – or, without a node, the global settings: RemoteHub's own settings on this PC
@@ -346,6 +348,9 @@ public partial class EditorWindow : FluentWindow
         HelpVersionText.Text = $"RemoteHub {Services.AppVersion.Current}";
         AboutButton.Click += (_, _) => _host?.About();
         OverviewButton.Click += (_, _) => _host?.SettingsOverview();
+        WhatsNewButton.Click += (_, _) => _host?.WhatsNew();
+        WhatsNewButton.Visibility = Services.FirstStart.Since(null, Services.UpdateService.Current).Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        WelcomeButton.Click += (_, _) => _host?.Welcome();
         HelpLogButton.Click += (_, _) => _host?.OpenLog();
 
         // Policies

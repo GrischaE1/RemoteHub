@@ -407,6 +407,12 @@
                         <ui:Button x:Name="OverviewButton" Content="Settings overview…" Icon="{ui:SymbolIcon TextBulletListSquare24}"
                                    ToolTip="Every setting in one place, with Copy as text for support" />
                     </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,4">
+                        <ui:Button x:Name="WhatsNewButton" Content="What's new…" Icon="{ui:SymbolIcon Sparkle24}" Margin="0,0,8,0"
+                                   ToolTip="The highlights of this version" />
+                        <ui:Button x:Name="WelcomeButton" Content="Welcome tour…" Icon="{ui:SymbolIcon Map24}"
+                                   ToolTip="The short introduction shown on the first start" />
+                    </StackPanel>
 
                     <TextBlock Text="License" Style="{StaticResource SectionHeader}" Margin="0,18,0,6" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10"
