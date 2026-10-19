@@ -1,15 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                           revision="1.4" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                           revision="1.5" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <displayName>RemoteHub</displayName>
   <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
   <resources>
     <stringTable>
       <string id="SUPPORTED_RemoteHub_0_18_11">RemoteHub 0.18.11 or later</string>
       <string id="SUPPORTED_RemoteHub_0_18_12">RemoteHub 0.18.12 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_19_0">RemoteHub 0.19.0 or later</string>
       <string id="SUPPORTED_RemoteHub_0_20_2">RemoteHub 0.20.2 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
+      <string id="SUPPORTED_Agent_0_19_0">RemoteHub Agent 0.19.0 or later</string>
 
       <!-- Categories -->
       <string id="Cat_RemoteHub">RemoteHub</string>
@@ -69,7 +71,7 @@ Registry: SettingsFolder (REG_EXPAND_SZ). The older key Software\Policies\RdpMan
       <string id="Console_DisableUpdateCheck">Turn off the update check</string>
       <string id="Console_DisableUpdateCheck_Help">Enabled: RemoteHub never contacts the update server, for example when updates come through software deployment. The setting is greyed out in RemoteHub.
 
-Disabled: RemoteHub checks for updates, and users can't turn it off (since 0.18.12; before, Disabled meant Not configured).
+Disabled: RemoteHub checks for updates, and users can't turn it off (since 0.19.0; before, Disabled meant Not configured).
 
 Not configured: the user decides in Settings → Updates &amp; privacy.
 
@@ -87,7 +89,7 @@ Registry: UpdateChannel (REG_SZ) = stable or beta.</string>
       <string id="Console_DisableTelemetry">Turn off usage data and crash reports</string>
       <string id="Console_DisableTelemetry_Help">Enabled: RemoteHub sends no anonymous usage data and no crash reports. The setting is greyed out in RemoteHub.
 
-Disabled: RemoteHub sends usage data and crash reports, and users can't turn it off (since 0.18.12; before, Disabled meant Not configured). The privacy statement describes what is sent.
+Disabled: RemoteHub sends usage data and crash reports, and users can't turn it off (since 0.19.0; before, Disabled meant Not configured). The privacy statement describes what is sent.
 
 Not configured: the user decides in Settings → Updates &amp; privacy (on by default).
 

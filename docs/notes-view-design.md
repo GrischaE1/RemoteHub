@@ -604,7 +604,7 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 
 - `1` = allowed (the same as not set – there is no user switch to lock).
 - It goes into `PolicyCatalog`, the ADMX/ADML and *Settings → Policies*, the same way as the other `Allow*` values.
-- In the template under *RemoteHub Console → Features → Notes* (admx-design.md §5.7), since 0.18.12.
+- In the template under *RemoteHub Console → Features → Notes* (admx-design.md §5.7), since 0.19.0.
 
 ## 9. Security and privacy
 
