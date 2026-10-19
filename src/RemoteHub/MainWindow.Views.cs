@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Services;
 using RemoteHub.Views;
@@ -15,11 +16,13 @@ public partial class MainWindow
     public const string NotesViewId = "Notes";
 
     private FrameworkElement? _notesView;
+    private bool _notesAllowed;
 
     private string CurrentView => Rail.Selected ?? RemoteViewId;
 
     private void InitViews()
     {
+        _notesAllowed = Features.IsAllowed(Feature.Notes);
         Rail.SetViews(RailViews());
         Rail.ViewSelected += id => ShowView(id);
         Rail.SettingsClicked += () => OpenSettings(null);
@@ -29,14 +32,40 @@ public partial class MainWindow
             else new AboutWindow { Owner = this }.ShowDialog();
         };
         Rail.FocusViewRequested += FocusCurrentView;
+        // Policies are read when asked: after a gpupdate, Notes come or go the next time the window is activated.
+        Activated += (_, _) => ApplyNotesPolicy();
         UpdateRailVersion();
         ShowView(_vm.Data.Ui.LastView, save: false);
     }
 
-    private static IEnumerable<RailView> RailViews()
+    internal static IEnumerable<RailView> RailViews(IPolicySource? source = null)
     {
         yield return new RailView(RemoteViewId, SymbolRegular.Desktop24, "Remote Control", "Ctrl+1");
-        yield return new RailView(NotesViewId, SymbolRegular.Notebook24, "Notes", "Ctrl+2");
+        if (Features.IsAllowed(Feature.Notes, source)) yield return new RailView(NotesViewId, SymbolRegular.Notebook24, "Notes", "Ctrl+2");
+    }
+
+    /// <summary>
+    /// The view a request for <paramref name="id"/> shows: Remote Control for an unknown value (from a newer version), and
+    /// for Notes while AllowNotes = 0 (notes-view-design.md §8). A saved LastView of Notes is kept for when it comes back.
+    /// </summary>
+    internal static string ViewFor(string? id, IPolicySource? source = null) =>
+        id == NotesViewId && Features.IsAllowed(Feature.Notes, source) ? NotesViewId : RemoteViewId;
+
+    /// <summary>AllowNotes changed since the rail was built: rebuild the rail, and leave Notes when they are blocked now.</summary>
+    private void ApplyNotesPolicy()
+    {
+        var allowed = Features.IsAllowed(Feature.Notes);
+        if (allowed == _notesAllowed) return;
+        _notesAllowed = allowed;
+        DiagLog.Write(allowed ? "Notes: allowed by policy again" : "Notes: blocked by policy");
+        var current = CurrentView;
+        Rail.SetViews(RailViews());
+        if (current == NotesViewId && !allowed)
+        {
+            _ = Notes?.Save(sync: true); // the open page, before the view goes
+            ShowView(RemoteViewId, save: false);
+        }
+        UpdateNotesMenu(_vm.SelectedNode);
     }
 
     /// <summary>
@@ -45,7 +74,7 @@ public partial class MainWindow
     /// </summary>
     private void ShowView(string? id, bool save = true)
     {
-        if (id != NotesViewId) id = RemoteViewId; // also an unknown value from a newer version
+        id = ViewFor(id);
         var notes = id == NotesViewId;
         if (notes) EnsureNotesView();
         RemoteView.Visibility = notes ? Visibility.Hidden : Visibility.Visible;
@@ -93,10 +122,11 @@ public partial class MainWindow
 
     private void UpdateNotesMenu(NodeBase? n)
     {
+        var offered = n is Folder or Connection && Features.IsAllowed(Feature.Notes);
         var count = 0;
-        if (n is Folder or Connection && Data.LocalDb.IsOpen)
-            try { count = Data.NoteStore.LinkCounts().GetValueOrDefault(n.Id.ToString()); } catch (Exception ex) { DiagLog.Write("Notes: counting links failed: " + ex.GetType().Name); }
-        CmNotes.Visibility = n is Folder or Connection ? Visibility.Visible : Visibility.Collapsed;
+        if (offered && Data.LocalDb.IsOpen)
+            try { count = Data.NoteStore.LinkCounts().GetValueOrDefault(n!.Id.ToString()); } catch (Exception ex) { DiagLog.Write("Notes: counting links failed: " + ex.GetType().Name); }
+        CmNotes.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
         CmNotes.Header = count > 0 ? $"Notes ({count})" : "Notes";
     }
 
@@ -108,6 +138,7 @@ public partial class MainWindow
     /// <summary>The tree's "Notes" command: the pages linked to the selected folder or connection.</summary>
     private void ShowNotesFor(NodeBase node)
     {
+        if (ViewFor(NotesViewId) != NotesViewId) return;
         ShowView(NotesViewId);
         Notes?.ShowLinkedTo([node.Id.ToString()], $"Linked to {node.Name}");
     }
@@ -135,7 +166,8 @@ public partial class MainWindow
     {
         if (!ctrl || Keyboard.Modifiers.HasFlag(ModifierKeys.Alt)) return false;
         if (e.Key is Key.D1 or Key.NumPad1) { ShowView(RemoteViewId); FocusCurrentView(); e.Handled = true; return true; }
-        if (e.Key is Key.D2 or Key.NumPad2) { ShowView(NotesViewId); FocusCurrentView(); e.Handled = true; return true; }
+        // With Notes blocked, Ctrl+2 isn't taken and goes on to the session, as before there was a Notes view.
+        if (e.Key is Key.D2 or Key.NumPad2 && ViewFor(NotesViewId) == NotesViewId) { ShowView(NotesViewId); FocusCurrentView(); e.Handled = true; return true; }
         if (CurrentView != NotesViewId) return false;
         // In Notes, Ctrl+B is bold, Ctrl+F searches the notes and Ctrl+N adds a page: the view and its editor handle them.
         return e.Key is Key.B or Key.F or Key.N;

@@ -1,6 +1,6 @@
 # RemoteHub – Notes and the view rail
 
-Status: v5 (2026-10-19) – phases 1–4 are built on the branch `notes-view` except the `AllowNotes` policy; §13 lists what
+Status: v5 (2026-10-19) – phases 1–4 are built on the branch `notes-view`; §13 lists what
 differs from the plan. v2 took in the
 answers to the open questions of v1 (§12): several notebooks, Settings and the version in the rail, a faster rail, no
 secret format, no OneNote import. v3 replaces v2's Markdown editor with a **WYSIWYG editor with tables, images and
@@ -604,8 +604,7 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 
 - `1` = allowed (the same as not set – there is no user switch to lock).
 - It goes into `PolicyCatalog`, the ADMX/ADML and *Settings → Policies*, the same way as the other `Allow*` values.
-- **Coordination:** the policy work is in progress on the `admx-phase3` branch. `AllowNotes` should be added there or
-  after it is merged, not in parallel on this branch.
+- In the template under *RemoteHub Console → Features → Notes* (admx-design.md §5.7), since 0.18.12.
 
 ## 9. Security and privacy
 
@@ -644,7 +643,7 @@ settings folder." This lasts until device sync (local-db-design.md §8) is built
 
 - **local-db-design.md:** §6 – replace the `notes` table with §5.1 of this document (sections and links instead of
   `connection_id`/`folder_id`); §12 – phase 3 points here; §16 – the migration steps are built with schema version 2.
-- **admx-design.md:** §5 – add `AllowNotes` (§8).
+- **admx-design.md:** §5.7 – `AllowNotes` (§8).
 - **README:** the feature list gets Notes; screenshots show the rail.
 
 ## 10. Phases
@@ -730,7 +729,7 @@ Built on the branch `notes-view` (2026-10-19). Code: `Views/ViewRail.cs`, `MainW
 
 | Plan | Built | Why |
 |---|---|---|
-| `AllowNotes` policy (§8) | **Not on this branch** | The console's `Allow*` feature switches are being built on `admx-phase3`; `AllowNotes` goes in with them or after that branch is merged, so the two don't conflict. |
+| `AllowNotes` policy (§8) | As planned, through `Features` like the other `Allow*` values. With Notes blocked, Ctrl+2 isn't taken (it goes on to the session); a saved `LastView` of Notes opens Remote Control but is kept for when the policy is removed. A change while RemoteHub runs applies when the window is next activated; an open page is saved first | Policies are read when asked (admx-design.md §5), and the rail is only rebuilt when the value changed. |
 | `NotesViewModel` (§5.2) | The logic lives in `NotesView` | Like the other views built in code (`RegistryView`, `FileBrowserView`). |
 | FTS triggers on `notes` (§5.1) | `NoteStore` writes the index in the same transaction; `notes` has an `rid` column for the index | With `trusted_schema = OFF`, triggers can't write to an FTS5 table; `rid` can't be renumbered by `VACUUM`. |
 | Narrow window: panes collapse into drop-downs (§4.1) | Not built | The panes have minimum widths; the window's minimum width still fits them. |

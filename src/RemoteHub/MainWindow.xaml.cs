@@ -799,7 +799,7 @@ public partial class MainWindow : FluentWindow
         var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
         var toolsShown = CmTools.Visibility == Visibility.Visible || CmManage.Visibility == Visibility.Visible;
         CmPsSep.Visibility = V(connectShown && toolsShown);
-        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown));
+        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown || CmNotes.Visibility == Visibility.Visible));
     }
 
     private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);

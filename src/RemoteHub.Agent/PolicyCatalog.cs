@@ -227,6 +227,8 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowBackupExport = Feature("AllowBackupExport", "Import and export", "Allow exporting a backup");
     public static readonly PolicyEntry AllowBackupImport = Feature("AllowBackupImport", "Import and export", "Allow importing a backup");
     public static readonly PolicyEntry AllowSharedSettings = Feature("AllowSharedSettings", "Settings storage", "Allow a shared settings folder");
+    // notes-view-design.md §8: hides the view only; stored notes are kept and still go into backups.
+    public static readonly PolicyEntry AllowNotes = Feature("AllowNotes", "Notes", "Allow Notes");
 
     private const string Phase3 = "0.18.12";
 
@@ -329,6 +331,7 @@ public static class PolicyCatalog
         AllowQuickConnect,
         AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
+        AllowNotes,
     ];
 
     public static readonly IReadOnlyList<PolicyEntry> ConsoleEntries =

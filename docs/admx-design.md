@@ -209,6 +209,12 @@ both main switches off, there are no remote tools at all, only RDP and network s
 | `AllowBackupImport` | *Import backup…* |
 | `AllowSharedSettings` | Choosing a shared settings folder. A `SettingsFolder` policy still applies. |
 
+#### 5.7 Notes
+
+| Value | Blocks |
+|---|---|
+| `AllowNotes` | The Notes view (notes-view-design.md §8): the view rail has no Notes item, Ctrl+2 and `remotehub://note/` links do nothing, the tree's *Notes* is hidden, and a saved last view of Notes opens Remote Control. Stored notes are kept and still go into backups. |
+
 The four values that already exist keep their name and polarity: `DisableTelemetry`, `DisableUpdateCheck`,
 `DisableAgentAutoSignIn` and `DisableRecording` (§12.3). In the template they read the same way as the others (*Allow
 usage data*, …), and the template writes the inverted value.
@@ -853,12 +859,14 @@ What was built, and where it differs from §5, §4.2 and §11.2:
   refused shortcut (the dialog says it), and no *Copy password* action yet (the prompt copy is phase 5's
   `AllowPasswordCopy`). The Policies page lists a value below a main switch that is off with *Off because "…" is off*;
   conflicts with §7's connection values come with phase 4.
-- **Template:** revision 1.2, 68 policies, a category *Features* under *RemoteHub Console* with *RDP*, *RemoteHub Agent*
+- **Template:** revision 1.2, 69 policies, a category *Features* under *RemoteHub Console* with *RDP*, *RemoteHub Agent*
   (the old *RemoteHub Agent features*, moved under it), *PowerShell remoting*, *Connections*, *Jump hosts and network
-  shares* and *Import and export*; supported on *RemoteHub 0.18.12 or later*.
-- **Tests:** `ConsoleFeatureTests` (12): catalogue ↔ switches, nothing set, own value, the `Disable…` values, both main
+  shares*, *Import and export* and *Notes*; supported on *RemoteHub 0.18.12 or later*.
+- **`AllowNotes`** (§5.7) came with the Notes view: `Feature.Notes`; `MainWindow.RailViews` and `ViewFor` leave Notes
+  out, and the rail is rebuilt when the window is activated after the value changed (a page being edited is saved first).
+- **Tests:** `ConsoleFeatureTests` (13): catalogue ↔ switches, nothing set, own value, the `Disable…` values, both main
   switches, a tool over the other transport, shares, the Policies page note, `UsesAgent`, a tool tab refusing in the tab,
-  and `ShareConnector`. They set `AppPolicy.Source` and run in a collection of their own without parallel tests.
+  `ShareConnector`, and Notes leaving the rail. They set `AppPolicy.Source` and run in a collection of their own without parallel tests.
 - **Not run yet:** POL-14 (the console features in the lab) – not automated yet.
 
 ## 19. Implementation notes (Phase 4)
