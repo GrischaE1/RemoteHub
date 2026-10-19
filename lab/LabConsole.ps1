@@ -36,39 +36,8 @@ $script:ResultsRoot = Join-Path $script:Artifacts 'lab'
 # What there is to run
 # ---------------------------------------------------------------------------------------------------------------
 
-# One object per test file: Name, About (its first comment line), Role, Groups (bare Describe tags), Cases (Id, Title).
-function Get-LabCatalog {
-    foreach ($f in @(Get-ChildItem (Join-Path $script:LabDir 'tests') -Filter '*.Tests.ps1' | Sort-Object Name)) {
-        $lines = [IO.File]::ReadAllLines($f.FullName)
-        $about = if ($lines.Count -and $lines[0] -match '^#\s*(.+)$') { $Matches[1] } else { '' }
-        $role = ''
-        $groups = New-Object System.Collections.Generic.List[string]
-        $cases = New-Object System.Collections.Generic.List[object]
-        foreach ($l in $lines) {
-            if ($l -match '^#\s*LabRole:\s*(\S+)') { $role = $Matches[1]; continue }
-            if ($l -match "^\s*Describe\s+(['""]).*?\1\s+-Tag\s+([^{]+)") {
-                foreach ($t in ($Matches[2] -split ',')) {
-                    $t = $t.Trim()
-                    if ($t -match '^[A-Za-z]+$' -and -not $groups.Contains($t)) { $groups.Add($t) }
-                }
-                continue
-            }
-            $id = if ($l -match "-Tag\s+'([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{2,})'") { $Matches[1] } else { $null }
-            if (-not $id) { continue }
-            if ($l -match "^\s*It\s+'((?:[^']|'')*)'") { $title = $Matches[1] -replace "''", "'" }
-            elseif ($l -match '^\s*It\s+"([^"]*)"') { $title = $Matches[1] }
-            else { continue }
-            $cases.Add([pscustomobject]@{ Id = $id; Title = $title })
-        }
-        # arrays, not the lists: Windows PowerShell 5.1 fails on a List[string] indexed inside the literal below
-        $groupList = [string[]]$groups.ToArray()
-        $main = if ($groupList.Count) { $groupList[0] } else { 'Other' }
-        [pscustomobject]@{
-            Name = $f.Name -replace '\.Tests\.ps1$', ''; About = $about; Role = $role
-            Groups = $groupList; Group = $main; Cases = [object[]]$cases.ToArray()
-        }
-    }
-}
+# The test files and their cases (Get-LabCatalog.ps1, read from lab\tests\ each time).
+function Get-LabCatalog { & (Join-Path $script:LabDir 'Get-LabCatalog.ps1') }
 
 # The VM kinds (Os-Version-Language) with their lanes, from Hyper-V; empty when this account can't list the VMs.
 function Get-LabKinds {
@@ -125,6 +94,13 @@ function Read-Shared([string]$Path) {
         <Button x:Name="FailedButton" DockPanel.Dock="Right" Content="Failed in last run" Padding="10,3" Margin="6,0,0,0"/>
         <Button x:Name="NoneButton" DockPanel.Dock="Right" Content="None" Padding="10,3" Margin="6,0,0,0"/>
         <Button x:Name="AllButton" DockPanel.Dock="Right" Content="All" Padding="10,3" Margin="6,0,0,0"/>
+        <ComboBox x:Name="ShowBox" DockPanel.Dock="Right" Width="105" Margin="6,0,0,0" SelectedIndex="0"
+                  ToolTip="Show cases by their latest lab result">
+          <ComboBoxItem Content="All"/>
+          <ComboBoxItem Content="Failed"/>
+          <ComboBoxItem Content="Not passed"/>
+          <ComboBoxItem Content="Never run"/>
+        </ComboBox>
         <TextBox x:Name="SearchBox" VerticalContentAlignment="Center" ToolTip="Filter by case ID, file or words of the test name"/>
       </DockPanel>
       <TextBlock x:Name="SelectionText" DockPanel.Dock="Bottom" TextWrapping="Wrap" Margin="0,6,0,0" Foreground="#555"/>
@@ -172,7 +148,7 @@ function Read-Shared([string]$Path) {
 '@
 $window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
 $ui = @{}
-foreach ($n in 'FailedButton', 'NoneButton', 'AllButton', 'SearchBox', 'SelectionText', 'TestTree', 'VmPanel', 'MsiText',
+foreach ($n in 'FailedButton', 'NoneButton', 'AllButton', 'ShowBox', 'SearchBox', 'SelectionText', 'TestTree', 'VmPanel', 'MsiText',
     'BuildMsi', 'BuildVersion', 'BuildHarness', 'StartButton', 'StopButton', 'ResultsButton', 'StatusText', 'Tabs',
     'FailuresBox', 'ProgressBox', 'OutputBox') { $ui[$n] = $window.FindName($n) }
 
@@ -184,9 +160,24 @@ $script:Catalog = @(Get-LabCatalog)
 $script:CaseItems = New-Object System.Collections.Generic.List[object]   # every case's TreeViewItem
 $script:GroupItems = New-Object System.Collections.Generic.List[object]
 
+$script:NeverRun = [Windows.Media.Brushes]::LightGray
 function New-Node([string]$Text, [object]$Data, [string]$Tip) {
+    # a status dot (Set-LabStatus colours it) and the text; AutomationProperties.Name keeps the box's accessible name
+    $dot = New-Object Windows.Shapes.Ellipse
+    $dot.Width = 9; $dot.Height = 9; $dot.Margin = '0,0,6,0'; $dot.VerticalAlignment = 'Center'; $dot.Fill = $script:NeverRun
+    $label = New-Object Windows.Controls.TextBlock
+    $label.Text = $Text
+    $panel = New-Object Windows.Controls.StackPanel
+    $panel.Orientation = 'Horizontal'
+    $panel.Children.Add($dot) | Out-Null
+    $panel.Children.Add($label) | Out-Null
+    $Data | Add-Member -NotePropertyName Dot -NotePropertyValue $dot
+    $Data | Add-Member -NotePropertyName Label -NotePropertyValue $label
+    $Data | Add-Member -NotePropertyName Base -NotePropertyValue $Text
+    $Data | Add-Member -NotePropertyName Status -NotePropertyValue $null
     $cb = New-Object Windows.Controls.CheckBox
-    $cb.Content = $Text
+    $cb.Content = $panel
+    [Windows.Automation.AutomationProperties]::SetName($cb, $Text)
     $cb.IsChecked = $false
     if ($Tip) { $cb.ToolTip = $Tip }
     $item = New-Object Windows.Controls.TreeViewItem
@@ -238,6 +229,51 @@ foreach ($g in @($script:Catalog | Group-Object Group | Sort-Object { if ($_.Nam
     }
     $ui.TestTree.Items.Add($gi) | Out-Null
     $script:GroupItems.Add($gi)
+}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Each case's latest lab result (Get-LabCaseStatus.ps1): a dot on the case, the worst of them on its file and group
+# ---------------------------------------------------------------------------------------------------------------
+
+$script:Brush = @{
+    Passed = [Windows.Media.Brushes]::SeaGreen; Failed = [Windows.Media.Brushes]::Firebrick
+    Skipped = [Windows.Media.Brushes]::Goldenrod; Mixed = [Windows.Media.Brushes]::Goldenrod
+}
+
+function Set-LabStatus($Statuses) {
+    $map = @{}
+    foreach ($s in @($Statuses)) { $map[$s.Id] = $s }
+    foreach ($ci in $script:CaseItems) {
+        $s = if ($map.ContainsKey($ci.Tag.Id)) { $map[$ci.Tag.Id] } else { $null }
+        $ci.Tag.Status = if ($s) { $s.Result } else { 'Never' }
+        $ci.Tag.Dot.Fill = if ($s) { $script:Brush[$s.Result] } else { $script:NeverRun }
+        $when = if ($s) { ([datetime]$s.Date).ToString('d MMM HH:mm') } else { '' }
+        $ci.Header.ToolTip = "$($ci.Tag.Text)`n`n" + $(if (-not $s) { 'Not run in the lab yet.' }
+            elseif ($s.Result -eq 'Failed') { "FAILED in run $($s.Run) ($when) on $($s.FailedOn)." }
+            else { "$($s.Result) in run $($s.Run) ($when)." })
+    }
+    # files and groups: red if any case failed, green if all passed, amber for a mix, grey if none ran
+    foreach ($gi in $script:GroupItems) {
+        foreach ($node in @(@($gi.Items) + @($gi))) {
+            $cases = if ($node.Tag.Kind -eq 'Group') { @($node.Items | ForEach-Object { @($_.Items) }) } else { @($node.Items) }
+            $st = @($cases | ForEach-Object { $_.Tag.Status })
+            $failed = @($st | Where-Object { $_ -eq 'Failed' }).Count
+            $passed = @($st | Where-Object { $_ -eq 'Passed' }).Count
+            $node.Tag.Dot.Fill = if ($failed) { $script:Brush.Failed } elseif ($st.Count -and $passed -eq $st.Count) { $script:Brush.Passed }
+            elseif (@($st | Where-Object { $_ -ne 'Never' }).Count) { $script:Brush.Mixed } else { $script:NeverRun }
+            $node.Tag.Label.Text = if ($failed) { $node.Tag.Base -replace '\((\d+)\)', "(`$1, $failed failed)" } else { $node.Tag.Base }
+        }
+    }
+    Update-Filter
+}
+
+# read in a background job: the first read of all runs takes about half a minute, later ones a fraction of a second
+$script:StatusJob = $null
+function Start-StatusRead {
+    if ($script:StatusJob -and $script:StatusJob.State -eq 'Running') { return }
+    $script:StatusJob = Start-Job -ArgumentList (Join-Path $script:LabDir 'Get-LabCaseStatus.ps1') -ScriptBlock {
+        param($s) & $s | Select-Object Id, Result, Run, @{ n = 'Date'; e = { $_.Date.ToString('o') } }, FailedOn
+    }
 }
 
 # The -Tag list for what is ticked: nothing (all) for a full run; a group's own tag where the group is ticked whole
@@ -311,27 +347,34 @@ $ui.FailedButton.Add_Click({
         Update-Selection
     })
 
-# filter: cases whose ID, file or title contains every word typed; groups and files with a match open up
-$ui.SearchBox.Add_TextChanged({
-        $words = @($ui.SearchBox.Text -split '\s+' | Where-Object { $_ })
-        foreach ($gi in $script:GroupItems) {
-            $gAny = $false
-            foreach ($fi in $gi.Items) {
-                $fAny = $false
-                foreach ($ci in $fi.Items) {
-                    $hay = "$($ci.Tag.Id) $($ci.Tag.File) $($ci.Tag.Text)"
-                    $hit = -not @($words | Where-Object { $hay -notlike "*$_*" }).Count
-                    $ci.Visibility = if ($hit) { 'Visible' } else { 'Collapsed' }
-                    if ($hit) { $fAny = $true }
-                }
-                $fi.Visibility = if ($fAny) { 'Visible' } else { 'Collapsed' }
-                $fi.IsExpanded = $fAny -and $words.Count -gt 0
-                if ($fAny) { $gAny = $true }
+# filter: cases whose ID, file or title contains every word typed and whose latest result matches "Show"; groups
+# and files with a match open up while a filter is set
+function Update-Filter {
+    $words = @($ui.SearchBox.Text -split '\s+' | Where-Object { $_ })
+    $show = $ui.ShowBox.SelectedIndex   # 0 all, 1 failed, 2 not passed, 3 never run
+    $open = $words.Count -gt 0 -or $show -gt 0
+    foreach ($gi in $script:GroupItems) {
+        $gAny = $false
+        foreach ($fi in $gi.Items) {
+            $fAny = $false
+            foreach ($ci in $fi.Items) {
+                $hay = "$($ci.Tag.Id) $($ci.Tag.File) $($ci.Tag.Text)"
+                $st = $ci.Tag.Status
+                $hit = (-not @($words | Where-Object { $hay -notlike "*$_*" }).Count) -and
+                    ($show -eq 0 -or ($show -eq 1 -and $st -eq 'Failed') -or ($show -eq 2 -and $st -ne 'Passed') -or ($show -eq 3 -and ($st -eq 'Never' -or -not $st)))
+                $ci.Visibility = if ($hit) { 'Visible' } else { 'Collapsed' }
+                if ($hit) { $fAny = $true }
             }
-            $gi.Visibility = if ($gAny) { 'Visible' } else { 'Collapsed' }
-            $gi.IsExpanded = $gAny -and $words.Count -gt 0
+            $fi.Visibility = if ($fAny) { 'Visible' } else { 'Collapsed' }
+            $fi.IsExpanded = $fAny -and $open
+            if ($fAny) { $gAny = $true }
         }
-    })
+        $gi.Visibility = if ($gAny) { 'Visible' } else { 'Collapsed' }
+        $gi.IsExpanded = $gAny -and $open
+    }
+}
+$ui.SearchBox.Add_TextChanged({ Update-Filter })
+$ui.ShowBox.Add_SelectionChanged({ Update-Filter })
 
 # ---------------------------------------------------------------------------------------------------------------
 # VMs and build
@@ -461,6 +504,13 @@ $ui.ResultsButton.Add_Click({
 $timer = New-Object Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({
+        if ($script:StatusJob -and $script:StatusJob.State -ne 'Running') {
+            $job = $script:StatusJob
+            $script:StatusJob = $null
+            try { Set-LabStatus @(Receive-Job $job -ErrorAction Stop) }
+            catch { $ui.SelectionText.Text = "No lab results to show the status from: $($_.Exception.Message)" }
+            Remove-Job $job -Force
+        }
         if (-not $script:Running) { return }
         $out = Read-Shared $script:OutFile
         if ($out -ne $script:LastOut) {
@@ -488,7 +538,7 @@ $timer.Add_Tick({
             $code = $script:Proc.ExitCode
             Set-Running $false
             $ui.StatusText.Text = if ($script:RunId) { "Run $script:RunId finished after $elapsed - $(if ($code -eq 0) { 'all passed' } else { "exit code $code" })." } else { "Ended after $elapsed before a run started (exit code $code) - see Output." }
-            if ($script:RunId) { Show-Failures $script:RunId; $ui.Tabs.SelectedIndex = 0 } else { $ui.Tabs.SelectedIndex = 2 }
+            if ($script:RunId) { Show-Failures $script:RunId; $ui.Tabs.SelectedIndex = 0; Start-StatusRead } else { $ui.Tabs.SelectedIndex = 2 }
         }
     })
 $timer.Start()
@@ -503,6 +553,7 @@ $window.Add_Closing({
 
 Update-Selection
 Show-Failures $null
+Start-StatusRead
 $ui.StatusText.Text = if ($script:Missing) {
     "Can't start: $script:Missing missing in $script:LabDir (git-ignored - copy them from the checkout the lab ran from before)."
 } else { "$($script:CaseItems.Count) cases in $($script:Catalog.Count) files. The newest run's failures are shown below." }
