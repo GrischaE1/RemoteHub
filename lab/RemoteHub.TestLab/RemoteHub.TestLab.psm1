@@ -1124,28 +1124,21 @@ function Get-LabKeyboard {
     $kb[0]
 }
 
-# Types ASCII text on the console, like a person at the keyboard - through Hyper-V's TypeText, which follows the
-# guest's keyboard layout (paths like "C:\lab\..." and the lab password type correctly with it on the German-layout
-# VMs, run 20261016-212514).
-# Known gap: SMOKE-10's "!@#$%" came out as "%%%%%" on the Windows 11 VMs (Server types it right). Two alternatives
-# were tried and are worse: PressKey(Shift) + TypeKey doesn't hold Shift ("1234"), and raw scan codes are key
-# positions, so on the German layout Shift + 0x27 types an O umlaut instead of ':' (run 20261017-054704, C-BAK-02/04:
-# "C<O-umlaut>\lab\..." - "Path does not exist"). -Scancodes (or RHLAB_SCANCODES=1) still sends shifted symbols as
-# US-position scan codes, for a US-layout session only.
+# Types ASCII text on the console, like a person at the keyboard. Letters, digits and unshifted symbols go through
+# Hyper-V's TypeText; shifted symbols are Shift and the key's virtual-key code pressed and released one by one
+# (PressKey / ReleaseKey). TypeText typed SMOKE-10's "!@#$%" as "%%%%%" on the Windows 11 VMs, PressKey(Shift) + TypeKey
+# as "1234", and Shift sent as scan codes in one TypeScancodes call as "12345" on the 26H2 VMs (lab run
+# 20261019-115442). Hyper-V maps virtual keys through its US table, so this needs the US keyboard the lab's VMs have
+# (docs/test-lab-spec.md 5.1; SMOKE-10 checks it).
 $script:LabShifted = @{
-    '!' = 0x02; '@' = 0x03; '#' = 0x04; '$' = 0x05; '%' = 0x06; '^' = 0x07; '&' = 0x08; '*' = 0x09; '(' = 0x0A; ')' = 0x0B
-    '_' = 0x0C; '+' = 0x0D; '{' = 0x1A; '}' = 0x1B; '|' = 0x2B; ':' = 0x27; '"' = 0x28; '<' = 0x33; '>' = 0x34; '?' = 0x35
-    '~' = 0x29
+    '!' = 0x31; '@' = 0x32; '#' = 0x33; '$' = 0x34; '%' = 0x35; '^' = 0x36; '&' = 0x37; '*' = 0x38; '(' = 0x39; ')' = 0x30
+    '_' = 0xBD; '+' = 0xBB; '{' = 0xDB; '}' = 0xDD; '|' = 0xDC; ':' = 0xBA; '"' = 0xDE; '<' = 0xBC; '>' = 0xBE; '?' = 0xBF
+    '~' = 0xC0
 }
 function Send-LabText {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Text, [switch]$TypeText, [switch]$Scancodes)
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Text)
     $kb = Get-LabKeyboard $Name
-    # -TypeText is the default now; kept so callers that ask for it explicitly still work
-    if (-not ($Scancodes -or $env:RHLAB_SCANCODES -eq '1')) {
-        Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName TypeText -Arguments @{ asciiText = $Text }) "${Name}: TypeText"
-        return
-    }
     $run = New-Object Text.StringBuilder
     $flush = {
         if ($run.Length) {
@@ -1153,21 +1146,28 @@ function Send-LabText {
             $null = $run.Clear()
         }
     }
-    $codes = New-Object System.Collections.Generic.List[byte]
-    $send = {
-        if ($codes.Count) {
-            Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName TypeScancodes -Arguments @{ Scancodes = [byte[]]$codes.ToArray() }) "${Name}: TypeScancodes"
-            $codes.Clear()
-        }
-    }
     foreach ($c in $Text.ToCharArray()) {
-        $sc = $script:LabShifted[[string]$c]
-        if ($null -eq $sc) { & $send; $null = $run.Append($c); continue }
-        & $flush
-        # left Shift down (0x2A), the key down and up, left Shift up (0xAA)
-        foreach ($b in 0x2A, $sc, ($sc -bor 0x80), 0xAA) { $codes.Add([byte]$b) }
+        $vk = $script:LabShifted[[string]$c]
+        if ($null -eq $vk) { $null = $run.Append($c); continue }
+        if ($run.Length) {
+            # TypeText returns before the guest has taken its keys: Shift pressed at once was lost on the 26H2 VMs
+            # for the first symbol after text ("1@#$%" after 17 characters, lab runs 20261019-121308 and, with a
+            # fixed 300 ms, -125300). The wait grows with the text typed.
+            $wait = 500 + 40 * $run.Length
+            & $flush
+            Start-Sleep -Milliseconds $wait
+        }
+        Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = 0x10 }) "${Name}: press Shift"
+        try {
+            Start-Sleep -Milliseconds 50
+            Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = $vk }) "${Name}: press $vk"
+            Start-Sleep -Milliseconds 50
+            Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName ReleaseKey -Arguments @{ keyCode = $vk }) "${Name}: release $vk"
+        }
+        # Shift left down would change every later key on the console
+        finally { $null = Invoke-CimMethod -InputObject $kb -MethodName ReleaseKey -Arguments @{ keyCode = 0x10 } }
+        Start-Sleep -Milliseconds 50
     }
-    & $send
     & $flush
 }
 
@@ -1648,8 +1648,10 @@ function Invoke-LabPerson {
     if (-not $json) { throw "RhPerson -Do $Do gave no answer: $raw" }
     $r = $json | ConvertFrom-Json
     # The banner and the privacy screen are kept out of screen captures (display affinity): the session's OCR sees what
-    # is below them. The console picture shows them - read the window there when the session read nothing.
-    if ($Do -eq 'read' -and $r.found -and -not "$($r.text)".Trim()) {
+    # is below them - nothing, or a desktop icon's label once the banner is taller (lab run 20261019-121308, "cle Bin").
+    # The console picture shows them - read the window there when it is excluded, or the session read nothing.
+    $excluded = $r.PSObject.Properties['excluded'] -and $r.excluded
+    if ($Do -eq 'read' -and $r.found -and ($excluded -or -not "$($r.text)".Trim())) {
         $c = Read-LabConsoleWindow -Name $Name -Window $r.window
         $r.text = $c.text; $r.lines = $c.lines
         $r | Add-Member -NotePropertyName source -NotePropertyValue 'console' -Force

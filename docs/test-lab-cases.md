@@ -93,7 +93,7 @@ account is `PSAdmin`.
 | SMOKE-07 | Lock / unlock | LogonUI appears in the user's session, gone after typing the password | S C | 1 | ✅ |
 | SMOKE-08 | Clock | guest time within 2 min of the host (certificate validity, log times) | PS | 2 | ✅ |
 | SMOKE-09 | No pending reboot / update | no `RebootPending`, TiWorker idle within 5 min; warning in the report otherwise | PS | 3 | ✅ |
-| SMOKE-10 | Keyboard layout known | the report records the layout; `Send-LabText` round-trips `a-zA-Z0-9 !@#$%` into Notepad | S C | 2 | ✅ |
+| SMOKE-10 | Keyboard layout known | every account and the sign-in screen have only the US keyboard (German on a de-DE image), listed in `smoke-layout.json`; `Send-LabText` round-trips `a-zA-Z0-9 !@#$%` into Notepad | S C | 2 | ✅ |
 
 ## 5. Agent – install, update, uninstall (A)
 
@@ -773,16 +773,16 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 | C-UPD-01 | Update offered | mock announces a higher version → bar shown; lower / equal → nothing | U M | 2 | ✅ | |
 | C-UPD-02 | Checksum mismatch | download deleted, not installed | U M | 1 | ✅ | |
 | C-UPD-03 | Untrusted host | download URL outside GitHub / remotehub.dev → refused | U M | 1 | ✅ | |
-| C-UPD-04 | Install | UAC approved on the secure desktop with the console keyboard (Alt+Y; Alt+Z where the image's German layout moves Y) → MSI installs, RemoteHub restarts with the new version | U C M | 2 | ✅ | |
+| C-UPD-04 | Install | UAC approved on the secure desktop with the console keyboard (Alt+Y) → MSI installs, RemoteHub restarts with the new version | U C M | 2 | ✅ | |
 | C-UPD-05 | Mandatory / skip | skipped version hidden; mandatory (or below `minSupportedVersion`) can't be skipped and is offered even when that version was skipped before | U M | 3 | ✅ | |
 | C-UPD-06 | No valid checksum | `download.sha256` missing, not 64 characters or not hex → "The update has no valid SHA-256 checksum, so it can't be verified."; nothing requested from the download URL | U M | 1 | ◐ | |
 | C-UPD-07 | Size mismatch | more than `download.size` → "The download is larger than announced."; less → "The download is incomplete (x of y bytes)."; neither `.partial` nor `.msi` kept | U M | 3 | ◐ | |
 | C-UPD-08 | Untrusted redirect | an allowed URL redirecting to a host other than github.com / githubusercontent.com / remotehub.dev (and subdomains) → "The download was redirected to an address that isn't trusted." | U M | 2 | ◐ | |
 | C-UPD-09 | Update server errors | *Check for updates now*: 404 on stable → "No release in this channel yet" / "There is no GA (stable) release yet. Switch to the Beta channel…", on beta → "The update server has no release for this channel."; 500 → "Couldn't check for updates"; bad JSON → "…an answer RemoteHub doesn't understand."; no answer in 15 s → "The update server didn't answer in time."; a lower version → "RemoteHub is up to date" (only updates to a higher version) | U M | 3 | ◐ | |
-| C-UPD-10 | Install declined at the open-sessions question | "Install cancelled. The verified download is kept until the next update."; no msiexec; *Download and install* enabled again | U M | 3 | ◐ | |
+| C-UPD-10 | Install declined at the open-sessions question | "Install cancelled. The verified download is kept until the next update."; no install started (no msiexec other than the Windows Installer service, no `install-update.cmd`); *Download and install* enabled again | U M | 3 | ◐ | |
 | C-TEL-01 | Telemetry content | `app_start`: exactly `event, version, channel, os` (Windows 10 / 11 correct per VM), `arch`, `installId` and the counts `connections, agents, shares, folders` (match the tree); `app_session` after a second start: the six base keys and `runSeconds` (only when the previous session ran > 0 s; its `version` is the previous session's); `channel` is the effective one (`beta` for 0.x); nothing else | U M | 1 | ✅ | |
 | C-TEL-02 | Off deletes install ID | `install-id` file gone | U PS | 2 | ✅ | |
-| C-TEL-03 | Off discards local records | telemetry off (setting or policy) → at the next start pending `crash\crash-*.json` deleted and never sent, `run-time.json` removed and `install-id` deleted – with the policy as with the setting (telemetry fully off; today the policy keeps `install-id`: product bug) | PS U M | 2 | ◐ | |
+| C-TEL-03 | Off discards local records | telemetry off (setting or policy) → at the next start pending `crash\crash-*.json` deleted and never sent, `run-time.json` removed and `install-id` deleted – with the policy as with the setting (telemetry fully off) | PS U M | 2 | ◐ | |
 | C-CRASH-01 | .NET crash | forced crash → file in `crash\`, sent at next start as `app_crash`, redacted (no user, host, path, IP) | U M | 2 | ✅ | |
 | C-CRASH-02 | Unexpected exit | killed in Task Manager → `UnexpectedExit` next start | U M | 3 | ✅ | |
 | C-CRASH-03 | Native crash | unclean exit with an Application Error 1000 for RemoteHub.exe → `app_crash` with `errorType` `NativeCrash`, message "Exception 0x… in <module> <ver>", stack "<module>+0x<offset>", `version` of the crashed session | U E M | 3 | ◐ | |

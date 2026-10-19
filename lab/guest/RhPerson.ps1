@@ -88,6 +88,15 @@ public static class RhNative
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr h, out uint affinity);
+
+    // The agent keeps the banner and the privacy screen out of screen captures (WDA_EXCLUDEFROMCAPTURE): a capture
+    // here shows what is below them, only the console picture shows them.
+    public static bool Excluded(long h)
+    {
+        uint a;
+        return GetWindowDisplayAffinity(new IntPtr(h), out a) && a != 0;
+    }
 
     // -Do marker: a process started by a task may not take the foreground (SetForegroundWindow's rules), so the
     // marker can be shown without the keyboard. Joining the foreground window's input queue for the call lets it.
@@ -358,7 +367,7 @@ switch ($Do) {
     'read' {
         $r = Read-AgentWindow
         if (-not $r) { Out-Json @{ found = $false }; break }
-        Out-Json @{ found = $true; title = $r.Window.Title; text = $r.Ocr.Text; lines = $r.Ocr.Lines; window = $r.Window }
+        Out-Json @{ found = $true; title = $r.Window.Title; text = $r.Ocr.Text; lines = $r.Ocr.Lines; window = $r.Window; excluded = [RhNative]::Excluded($r.Window.Handle) }
     }
     'click' {
         $until = (Get-Date).AddSeconds($TimeoutSec)

@@ -145,7 +145,11 @@ function Test-KindRuns($needs, [string]$Kind) {
 $queue = [Collections.Generic.List[object]]::new()
 foreach ($file in $testFiles) {
     # with -Tag only the files that have one of the tags (Pester would find nothing to run in the others)
-    if ($Tag) { $text = [IO.File]::ReadAllText($file); if (-not @($Tag | Where-Object { $text.Contains("'$_'") }).Count) { continue } }
+    # a tag is quoted or bare (-Tag Smoke) and, as in Pester, matched without regard to case
+    if ($Tag) {
+        $text = [IO.File]::ReadAllText($file)
+        if (-not @($Tag | Where-Object { $text -match "(?im)-Tag\b[^\r\n]*?[\s,']$([regex]::Escape($_))(?=['\s,]|$)" }).Count) { continue }
+    }
     $needs = Get-FileNeeds $file
     foreach ($k in $kinds) {
         if (Test-KindRuns $needs $k) { $queue.Add([pscustomobject]@{ File = $file; Kind = $k; Needs = $needs }) }

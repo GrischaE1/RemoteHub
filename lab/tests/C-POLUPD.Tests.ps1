@@ -84,18 +84,20 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             Start-Sleep -Seconds 15
             $p.stable = Requests '/latest'
-            # recording off, and the HKCU / HKLM order
-            Policy @{ DisableRecording = 1 }
+            # recording off, and the HKCU / HKLM order. The update check is off again: its bar appears about 3 s after the
+            # start and moves the list down, so a double-click on 'Local' could land beside it and open no tab.
+            Policy @{ DisableRecording = 1; DisableUpdateCheck = 1 }
             New-LabClientConnection -Name $VmName -Display 'Local' -TargetHost '127.0.0.1'
             Restart-Client
             $null = Ui 'Local' -Value doubleclick
-            Start-Sleep -Seconds 5
+            # the tab is open once the main window is named after it ('Local - Remote desktop - RemoteHub')
+            $p.tabHidden = Ui '*' -Title 'Local*' -Value list -Optional -TimeoutSec 20
             $p.recordHidden = Ui 'Record this tab to a video file' -Optional -TimeoutSec 5
             Policy @{ DisableRecording = 0 }
             Policy @{ DisableRecording = 1 } -Hive HKCU
             Restart-Client
             $null = Ui 'Local' -Value doubleclick
-            Start-Sleep -Seconds 5
+            $p.tabHklmWins = Ui '*' -Title 'Local*' -Value list -Optional -TimeoutSec 20
             $p.recordHklmWins = Ui 'Record this tab to a video file' -Optional -TimeoutSec 10
             Policy @{ DisableRecording = $null } -Hive HKCU
             # recording folder with %USERPROFILE%
@@ -173,6 +175,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-POL-05 DisableRecording: the Record button is gone' -Tag 'C-POL-05' {
+            $p.tabHidden.found | Should -BeTrue -Because 'the Local tab must be open for a missing Record button to mean anything'
             $p.recordHidden.found | Should -BeFalse
         }
 
@@ -182,6 +185,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         }
 
         It 'C-POL-07 HKLM before HKCU; SettingsFolder also from the legacy RdpManager key' -Tag 'C-POL-07' {
+            $p.tabHklmWins.found | Should -BeTrue -Because 'the Local tab must be open for the Record button to be checked'
             $p.recordHklmWins.found | Should -BeTrue -Because 'HKLM DisableRecording=0 wins over HKCU 1'
             "$($p.folderWarning.value)$($p.folderWarning.name)" | Should -Match 'LabSettings' -Because 'SettingsFolder was read from the legacy RdpManager key'
         }
@@ -240,6 +244,12 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Restart-Client
             $null = Ui 'Details?' -TimeoutSec 40
             $null = Ui 'Skip this version' -Title 'RemoteHub updates'
+            # RemoteHub saves a change 600 ms later (MainViewModel's save timer) and on exit; Restart-Client kills it at
+            # once, which could lose the skip. Closed the way a user closes it, so the skip is saved on exit.
+            $null = Invoke-LabInSession -Name $VmName -Account Console -TimeoutSec 60 -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $null = $_.CloseMainWindow() } }
+            $null = Ui 'Exit' -Title '?*' -Optional -TimeoutSec 5
+            $left = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue; @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }
+            if ($left) { throw "RemoteHub didn't exit within 20 s of closing its window after 'Skip this version'" }
             Restart-Client
             Start-Sleep -Seconds 12
             $u.skipped = Ui 'Details?' -Optional -TimeoutSec 5
@@ -257,14 +267,11 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $u.uacShown = (Get-Date) -lt $until
             Start-Sleep -Seconds 2
             try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-polupd-uac.png') } catch { }
-            # Yes is Alt+Y. The console keyboard sends US key positions and the image's layout is German
-            # (docs/test-lab-spec.md 5.1), where that position is Z: Alt+Y first, then Alt+Z if the prompt is still there.
+            # Yes is Alt+Y
             $u.uacKeys = @()
-            foreach ($code in 0x59, 0x5A) {
-                if (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) })) { break }
-                Send-LabKeyCombo -Name $VmName -Codes 0x12, $code
-                $u.uacKeys += ('Alt+{0}' -f [char]$code)
-                Start-Sleep -Seconds 3
+            if (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) {
+                Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59
+                $u.uacKeys += 'Alt+Y'
             }
             $until = (Get-Date).AddMinutes(5)
             do { Start-Sleep -Seconds 5; $v = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion } } while ($v -notlike "$currentVersion*" -and (Get-Date) -lt $until)

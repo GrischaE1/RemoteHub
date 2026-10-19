@@ -789,8 +789,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Start-Sleep -Seconds 4
                 Shot 'save-as'
                 # Windows' Save As dialog has no usable UIA patterns here: its file name box has the focus with the
-                # proposed name selected - typed over at the console keyboard (-TypeText: see Send-LabText, the ':')
-                Send-LabText -Name $VmName -Text 'C:\lab\device.rdp' -TypeText
+                # proposed name selected - typed over at the console keyboard
+                Send-LabText -Name $VmName -Text 'C:\lab\device.rdp'
                 Send-LabKey -Name $VmName -Key Enter
                 $e.question = Message -Title 'Include saved passwords*' -Button 'Include passwords' -TimeoutSec 30
                 Start-Sleep -Seconds 3

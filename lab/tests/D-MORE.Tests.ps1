@@ -5,8 +5,6 @@
 #        the person at the device (RhPerson.ps1: OCR + console mouse) and the marker app. D-BAN-10 needs the agent MSI
 #        built with the credential provider and signed (build-installer.ps1 -LabSigning -CredentialProvider), as
 #        C-AUTO2 / C-END do. normaluser is signed in on the console and allows PSAdmin unless a context says otherwise.
-# Known product bugs: D-BAN-08 in 'the banner: ...' - on a 1024 px wide screen the banner cuts its heading before
-#         " . mouse and keyboard blocked" and drops 'Click "Disconnect" to end' (findings table of the test document).
 # LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,

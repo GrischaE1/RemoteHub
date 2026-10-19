@@ -126,14 +126,13 @@ if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
         }
     }
     # Windows' Save As / Open dialog: no usable UIA patterns, so the path is typed at the console keyboard into the file
-    # name box (focused when the dialog opens) and Enter pressed. -TypeText: the ':' as a raw US scan code is an O umlaut
-    # on the Console VM's German layout (run 20261017-054704: "Path does not exist", nothing exported or imported).
+    # name box (focused when the dialog opens) and Enter pressed.
     function FileDialog([string]$Path, [string]$Title = 'Save As', [string]$Account = 'Console') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20 -Account $Account
         Start-Sleep -Seconds 2
         $null = Ui 'File name:' -Title $Title -Value realclick -Optional -TimeoutSec 5 -Account $Account
         Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x41
-        Send-LabText -Name $VmName -Text $Path -TypeText
+        Send-LabText -Name $VmName -Text $Path
         Start-Sleep -Milliseconds 500
         Send-LabKey -Name $VmName -Key Enter
         Start-Sleep -Seconds 2

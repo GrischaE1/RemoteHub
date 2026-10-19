@@ -110,8 +110,11 @@ Unactivated is fine (KMS client key). The "Activate Windows" watermark is part o
 for the consent dialog only looks at the dialog's area.
 
 Known on the current W11 image: `normaluser` has a disconnected session in the checkpoint (the lab looks for LogonUI
-per session because of it), and the keyboard layout is German – `TypeText` of `y`, `z` and symbols other than `$` may
-come out wrong until typing is layout-aware or the image uses a US layout.
+per session because of it).
+
+On the en-US images, every account that signs in (PSAdmin, Admin, normaluser), the sign-in screen and new accounts have
+only the US keyboard (00000409): the lab types at the console by US key positions (shifted symbols, Alt+Y in the UAC
+prompt). SMOKE-10 lists every account's layouts and fails on any other one.
 
 ### 5.2 Naming and OS matrix
 

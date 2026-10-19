@@ -8,7 +8,7 @@
 #   C-UPD-08  untrusted redirect (a 302 to dl.untrusted.test - the mock under a second name, TLS-valid, not allowed)
 #   C-UPD-09  update-server errors (404 stable / 404 beta / 500 / bad JSON / lower version / no answer within 15 s)
 #   C-UPD-10  install declined at the open-sessions question (needs an active session: the device VM, 2VM)
-#   C-TEL-03  telemetry off discards local records (install-id deleted under the policy too - a known bug, fails today)
+#   C-TEL-03  telemetry off discards local records (install-id deleted under the policy too)
 #   C-CRASH-03 native crash -> app_crash NativeCrash (a synthetic Application Error 1000 event; there is no crash switch)
 #   C-CRASH-04 crash-queue limits (newest 5 sent, older than 30 days deleted; refusal-persistence and the 3-per-session
 #             handled errors need hooks the lab doesn't have - see the It)
@@ -337,7 +337,17 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Cancel' -Title 'Settings' -Optional
-            $i.msiexec = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process msiexec -ErrorAction SilentlyContinue).Count }
+            # "msiexec.exe /V" is the Windows Installer service: Install-LabClient above leaves it running for about
+            # 10 minutes. Only an install the update started counts - a client msiexec, or the helper script RemoteHub
+            # writes next to the download before it exits (UpdateService.StartInstall).
+            $i.msiexec = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $procs = @(Get-CimInstance Win32_Process -Filter "Name='msiexec.exe'" | Where-Object { $_.CommandLine -notmatch '\s/V\s*$' })
+                [pscustomobject]@{
+                    installs     = $procs.Count
+                    commandLines = @($procs | ForEach-Object CommandLine)
+                    helper       = Test-Path 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates\install-update.cmd'
+                }
+            }
             Start-Sleep -Seconds 5
             $i.versionAfter = InstalledVersion
             Close-Rh
@@ -350,7 +360,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $i.status | Should -Match 'Install cancelled\. The verified download is kept until the next update\.'
             $i.installEnabled.found | Should -BeTrue
             $i.installEnabled.enabled | Should -BeTrue
-            $i.msiexec | Should -Be 0 -Because 'the install was declined'
+            $i.msiexec.installs | Should -Be 0 -Because "the install was declined (msiexec: $($i.msiexec.commandLines -join '; '))"
+            $i.msiexec.helper | Should -BeFalse -Because 'the install helper is written only when the install goes ahead'
             $i.versionAfter | Should -Be $i.versionBefore
         }
     }
@@ -463,9 +474,6 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
         }
 
         It 'C-TEL-03 telemetry off (policy) discards local records: crash files and run-time.json gone, nothing sent, install-id deleted too' -Tag 'C-TEL-03' {
-            # Known product bug (decided 2026-10-15): under the DisableTelemetry POLICY the install-id is kept today
-            # (Telemetry.cs discards crashes and run time but ForgetInstallId runs only from the Settings switch,
-            # EditorWindow.xaml.cs:401). Telemetry must be fully off, so this is strict - it fails until the product is fixed.
             $t.idBefore | Should -BeTrue
             $t.runtimeBefore | Should -BeTrue
             @($t.offRequests) | Should -BeNullOrEmpty -Because 'nothing is sent while telemetry is off'
