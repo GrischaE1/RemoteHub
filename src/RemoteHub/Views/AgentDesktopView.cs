@@ -103,7 +103,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         foreach (var b in new[] { _cad, _winKey }) ToolTipService.SetShowOnDisabled(b, true);
         session.Resolution = resolution();
         _resizeDebounce.Tick += (_, _) => { _resizeDebounce.Stop(); ReportSize(); };
-        _content.SizeChanged += (_, _) => { _resizeDebounce.Stop(); _resizeDebounce.Start(); };
+        _content.SizeChanged += (_, _) => { UpdatePictureScale(); _resizeDebounce.Stop(); _resizeDebounce.Start(); };
 
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -802,6 +802,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         if (layout is null) return;
         _picture.Width = Math.Max(1, layout.Width);
         _picture.Height = Math.Max(1, layout.Height);
+        UpdatePictureScale();
         _updatingMonitors = true;
         try
         {
@@ -837,6 +838,22 @@ public sealed class AgentDesktopView : Border, IRecordableView
         if (_content.ActualWidth < 1 || PresentationSource.FromVisual(_content) is not { CompositionTarget: { } target }) return;
         var m = target.TransformToDevice;
         _session.WindowSizeChanged((int)Math.Round(_content.ActualWidth * m.M11), (int)Math.Round(_content.ActualHeight * m.M22));
+    }
+
+    /// <summary>
+    /// A picture that fits the area with at most <see cref="PictureFit.Slack"/> device pixels to spare is shown 1:1,
+    /// centred on whole pixels. A fitted resolution is rounded down to even sizes, so an area an odd number of pixels
+    /// wide (e.g. once the transfers pane opens) got a picture one pixel smaller, which the Viewbox stretched by 0.1 % –
+    /// blurring all of it.
+    /// </summary>
+    private void UpdatePictureScale()
+    {
+        if (_session.Layout is not { } layout || PresentationSource.FromVisual(_content) is not { CompositionTarget: { } target }) return;
+        var m = target.TransformToDevice;
+        var native = PictureFit.ShowsNative(layout.Width, layout.Height, _content.ActualWidth * m.M11, _content.ActualHeight * m.M22);
+        _viewbox.StretchDirection = native ? StretchDirection.DownOnly : StretchDirection.Both;
+        _viewbox.UseLayoutRounding = native;
+        _picture.LayoutTransform = native ? new ScaleTransform(1 / m.M11, 1 / m.M22) : Transform.Identity;
     }
 
     private void UpdateFitButton()
@@ -1048,4 +1065,21 @@ public sealed class AgentDesktopView : Border, IRecordableView
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern uint MapVirtualKey(uint code, uint mapType);
+}
+
+/// <summary>When the agent desktop's picture is shown 1:1 instead of scaled to the tab.</summary>
+internal static class PictureFit
+{
+    /// <summary>Device pixels the area may be larger than the picture and it is still shown 1:1 (a fitted size is rounded down to even).</summary>
+    public const double Slack = 2;
+
+    /// <summary>The picture (device's pixels) fits the area (this PC's device pixels) with at most <see cref="Slack"/> to spare each way.</summary>
+    public static bool ShowsNative(int pictureWidth, int pictureHeight, double areaWidth, double areaHeight)
+    {
+        if (pictureWidth < 1 || pictureHeight < 1) return false;
+        var spareX = areaWidth - pictureWidth;
+        var spareY = areaHeight - pictureHeight;
+        // Half a pixel short is rounding of the area's size, not a picture larger than the tab.
+        return spareX >= -0.5 && spareY >= -0.5 && spareX <= Slack && spareY <= Slack;
+    }
 }
