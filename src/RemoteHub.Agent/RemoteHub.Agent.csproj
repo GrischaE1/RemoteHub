@@ -14,7 +14,7 @@
     <Authors>Grischa Ernst</Authors>
     <Company>Grischa Ernst</Company>
     <Copyright>© 2026 Grischa Ernst</Copyright>
-    <Version>0.20.1</Version>
+    <Version>0.20.2</Version>
     <PlatformTarget>x64</PlatformTarget>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- Publish: one self-contained file, no runtime needed on the device (build-installer.ps1 publishes with
