@@ -9,10 +9,13 @@
 #
 # Signing (Authenticode, SHA-256; Sign-Files.ps1): RemoteHubAgent.exe, RemoteHub.exe and both MSIs, each before it is
 # packed into the next step.
-# -SigningCertificate  Thumbprint of the code-signing certificate (release: CI imports the PFX first).
+# -SigningCertificate  Thumbprint of the code-signing certificate: in the certificate store, or with -ESigner the one
+#                      every signature is checked against.
+# -ESigner             Signs through SSL.com eSigner (release.yml; Sign-Files.ps1 has the environment it needs). Each
+#                      signed file counts against the yearly signings: 4 per release, 5 with -CredentialProvider.
 # -LabSigning          The lab certificate instead (lab\New-LabSigningCertificate.ps1); only the lab VMs trust it.
-# -TimestampServer     Defaults to DigiCert's for -SigningCertificate; the lab signs without a timestamp.
-# Without either, nothing is signed.
+# -TimestampServer     Defaults to DigiCert's for -SigningCertificate; the lab signs without a timestamp, eSigner with its own.
+# Without -SigningCertificate or -LabSigning, nothing is signed.
 #
 # -CredentialProvider  Builds the credential provider (build-credential-provider.ps1, needs the Visual Studio C++ tools)
 #                      and adds it to the agent MSI behind AUTOSIGNIN (credential-provider-design.md §8.4). Only with a
@@ -25,6 +28,7 @@ param(
     # with -LabSigning)
     [switch]$SkipStartTime,
     [string]$SigningCertificate,
+    [switch]$ESigner,
     [switch]$LabSigning,
     [string]$TimestampServer,
     [switch]$CredentialProvider
@@ -32,6 +36,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
+if ($ESigner -and -not $SigningCertificate) { throw "-ESigner needs -SigningCertificate: the thumbprint every signature is checked against." }
 if ($LabSigning) {
     if ($SigningCertificate) { throw "Use either -SigningCertificate or -LabSigning, not both." }
     $SigningCertificate = Get-ChildItem Cert:\CurrentUser\My |
@@ -39,10 +44,10 @@ if ($LabSigning) {
         Sort-Object NotAfter -Descending | Select-Object -First 1 -ExpandProperty Thumbprint
     if (-not $SigningCertificate) { throw "No lab signing certificate in CurrentUser\My - run lab\New-LabSigningCertificate.ps1 first." }
 }
-elseif ($SigningCertificate -and -not $PSBoundParameters.ContainsKey('TimestampServer')) { $TimestampServer = 'http://timestamp.digicert.com' }
+elseif ($SigningCertificate -and -not $ESigner -and -not $PSBoundParameters.ContainsKey('TimestampServer')) { $TimestampServer = 'http://timestamp.digicert.com' }
 function Sign([string[]]$Files) {
     if (-not $SigningCertificate) { return }
-    & "$PSScriptRoot\Sign-Files.ps1" -Path $Files -Certificate $SigningCertificate -TimestampServer $TimestampServer
+    & "$PSScriptRoot\Sign-Files.ps1" -Path $Files -Certificate $SigningCertificate -TimestampServer $TimestampServer -ESigner:$ESigner
 }
 if (-not $SigningCertificate) {
     if ($CredentialProvider) { throw "The credential provider is never built unsigned - pass -SigningCertificate or -LabSigning." }

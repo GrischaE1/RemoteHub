@@ -17,6 +17,9 @@ jobs:
   build-and-release:
     runs-on: windows-latest
     timeout-minutes: 45
+    # Releases wait for an approval in release-signing before anything runs, because they use eSigner signings (see
+    # "Prepare signing"). Test releases (a suffix) use release-test, which has no reviewers and no secrets.
+    environment: ${{ contains(github.ref_name, '-') && 'release-test' || 'release-signing' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -58,31 +61,50 @@ jobs:
           path: '**/test-results.trx'
           if-no-files-found: ignore
 
-      # Code signing: the repository secrets SIGNING_CERTIFICATE_PFX (the PFX, base64) and SIGNING_CERTIFICATE_PASSWORD.
-      # Without them the release is built unsigned, with a warning. The credential provider is never built unsigned
-      # (credential-provider-design.md §8.4) - build-installer.ps1 refuses that on its own.
-      - name: Import signing certificate
+      # Code signing through SSL.com eSigner (CodeSignTool), in the environment release-signing: its secrets ES_USERNAME,
+      # ES_PASSWORD, ES_CREDENTIAL_ID and ES_TOTP_SECRET, and the variable SIGNING_CERTIFICATE_THUMBPRINT that every
+      # signature is checked against. The account has 240 signings a year and a release takes 4 (5 with the credential
+      # provider), so only releases sign: CI and the lab never do, and test releases (a suffix: v0.19.1-test.1) are built
+      # unsigned. Without the secrets the release is built unsigned, with a warning. The credential provider is never
+      # built unsigned (credential-provider-design.md §8.4) - build-installer.ps1 refuses that on its own.
+      - name: Prepare signing
         id: signing
         shell: pwsh
         env:
-          PFX: ${{ secrets.SIGNING_CERTIFICATE_PFX }}
-          PFX_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          THUMBPRINT: ${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}
         run: |
-          if (-not $env:PFX) { "::warning::No signing certificate (secret SIGNING_CERTIFICATE_PFX) - this release is not signed."; exit 0 }
-          $file = Join-Path $env:RUNNER_TEMP 'signing.pfx'
-          [IO.File]::WriteAllBytes($file, [Convert]::FromBase64String($env:PFX))
-          try {
-            $cert = Import-PfxCertificate -FilePath $file -CertStoreLocation Cert:\CurrentUser\My `
-              -Password (ConvertTo-SecureString $env:PFX_PASSWORD -AsPlainText -Force)
+          if ('${{ github.ref_name }}'.Contains('-')) { "::notice::Test release ${{ github.ref_name }} - not signed, no signings used."; exit 0 }
+          if (-not $env:ES_USERNAME -or -not $env:THUMBPRINT) {
+            "::warning::No eSigner account (environment release-signing: secrets ES_*, variable SIGNING_CERTIFICATE_THUMBPRINT) - this release is not signed."
+            exit 0
           }
-          finally { Remove-Item $file -Force }
-          "thumbprint=$($cert.Thumbprint)" >> $env:GITHUB_OUTPUT
+          # CodeSignTool from SSL.com's own repository, pinned by hash like the actions above.
+          $zip = Join-Path $env:RUNNER_TEMP 'CodeSignTool.zip'
+          Invoke-WebRequest 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip' -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne 'f14b1e1ef14bfa1fd00279c363aab0debbf5dcfba0e4bcdce5d22bb771de0e3a') { throw "CodeSignTool-v1.3.2.zip has the hash $hash, not the pinned one." }
+          $tool = Join-Path $env:RUNNER_TEMP 'CodeSignTool'
+          Expand-Archive $zip -DestinationPath $tool -Force
+          # CodeSignTool 1.3 needs Java 11 or later; the runner's default JAVA_HOME may be Java 8.
+          $java = @($env:JAVA_HOME_21_X64, $env:JAVA_HOME_17_X64, $env:JAVA_HOME_11_X64 | Where-Object { $_ })[0]
+          if (-not $java) { throw "No Java 11 or later on the runner for CodeSignTool." }
+          "tool=$tool" >> $env:GITHUB_OUTPUT
+          "java=$java" >> $env:GITHUB_OUTPUT
+          "enabled=true" >> $env:GITHUB_OUTPUT
 
       # WiX comes from NuGet (WixToolset.Sdk, pinned in the .wixproj), so no tool install is needed.
       - name: Build installer
         shell: pwsh
+        env:
+          CODE_SIGN_TOOL_PATH: ${{ steps.signing.outputs.tool }}
+          JAVA_HOME: ${{ steps.signing.outputs.java || env.JAVA_HOME }}
+          ES_USERNAME: ${{ steps.signing.outputs.enabled == 'true' && secrets.ES_USERNAME || '' }}
+          ES_PASSWORD: ${{ steps.signing.outputs.enabled == 'true' && secrets.ES_PASSWORD || '' }}
+          ES_CREDENTIAL_ID: ${{ steps.signing.outputs.enabled == 'true' && secrets.ES_CREDENTIAL_ID || '' }}
+          ES_TOTP_SECRET: ${{ steps.signing.outputs.enabled == 'true' && secrets.ES_TOTP_SECRET || '' }}
         run: |
-          $sign = if ('${{ steps.signing.outputs.thumbprint }}') { @{ SigningCertificate = '${{ steps.signing.outputs.thumbprint }}' } } else { @{} }
+          $sign = if ('${{ steps.signing.outputs.enabled }}' -eq 'true') { @{ SigningCertificate = '${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}'; ESigner = $true } } else { @{} }
           ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts @sign
 
       - name: Locate MSIs
