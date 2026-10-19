@@ -79,18 +79,8 @@ jobs:
             "::warning::No eSigner account (environment release-signing: secrets ES_*, variable SIGNING_CERTIFICATE_THUMBPRINT) - this release is not signed."
             exit 0
           }
-          # CodeSignTool from SSL.com's own repository, pinned by hash like the actions above.
-          $zip = Join-Path $env:RUNNER_TEMP 'CodeSignTool.zip'
-          Invoke-WebRequest 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip' -OutFile $zip
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne 'f14b1e1ef14bfa1fd00279c363aab0debbf5dcfba0e4bcdce5d22bb771de0e3a') { throw "CodeSignTool-v1.3.2.zip has the hash $hash, not the pinned one." }
-          $tool = Join-Path $env:RUNNER_TEMP 'CodeSignTool'
-          Expand-Archive $zip -DestinationPath $tool -Force
-          # CodeSignTool 1.3 needs Java 11 or later; the runner's default JAVA_HOME may be Java 8.
-          $java = @($env:JAVA_HOME_21_X64, $env:JAVA_HOME_17_X64, $env:JAVA_HOME_11_X64 | Where-Object { $_ })[0]
-          if (-not $java) { throw "No Java 11 or later on the runner for CodeSignTool." }
-          "tool=$tool" >> $env:GITHUB_OUTPUT
-          "java=$java" >> $env:GITHUB_OUTPUT
+          # CodeSignTool pinned by hash (outputs tool and java).
+          ./build/Get-CodeSignTool.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'CodeSignTool') | Out-Null
           "enabled=true" >> $env:GITHUB_OUTPUT
 
       # WiX comes from NuGet (WixToolset.Sdk, pinned in the .wixproj), so no tool install is needed.

@@ -1,0 +1,60 @@
+name: Check signing
+
+# Started by hand (Actions -> Check signing -> Run workflow): checks the eSigner account in the environment release-signing
+# before a release needs it. By default nothing is signed and no signing is used: CodeSignTool signs in, finds
+# ES_CREDENTIAL_ID among the account's credentials and compares its certificate with SIGNING_CERTIFICATE_THUMBPRINT.
+# "Sign a test file" also checks ES_TOTP_SECRET - it signs one small script and uses 1 of the 240 signings a year.
+on:
+  workflow_dispatch:
+    inputs:
+      sign-test-file:
+        description: 'Also sign one test file (checks ES_TOTP_SECRET, uses 1 signing)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    # The same environment as release.yml: its secrets, and the same approval before anything runs.
+    environment: release-signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Get CodeSignTool
+        id: tool
+        shell: pwsh
+        run: ./build/Get-CodeSignTool.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'CodeSignTool') | Out-Null
+
+      - name: Check the account (no signing)
+        shell: pwsh
+        env:
+          CODE_SIGN_TOOL_PATH: ${{ steps.tool.outputs.tool }}
+          JAVA_HOME: ${{ steps.tool.outputs.java }}
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+          THUMBPRINT: ${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}
+        run: |
+          if (-not $env:THUMBPRINT) { throw "The variable SIGNING_CERTIFICATE_THUMBPRINT isn't set in release-signing." }
+          ./build/Test-ESignerAccount.ps1 -Thumbprint $env:THUMBPRINT
+
+      - name: Sign a test file (1 signing)
+        if: inputs.sign-test-file
+        shell: pwsh
+        env:
+          CODE_SIGN_TOOL_PATH: ${{ steps.tool.outputs.tool }}
+          JAVA_HOME: ${{ steps.tool.outputs.java }}
+          ES_USERNAME: ${{ secrets.ES_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ES_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ES_CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ES_TOTP_SECRET }}
+        run: |
+          $file = Join-Path $env:RUNNER_TEMP 'check-signing.ps1'
+          Set-Content $file "'RemoteHub signing check ${{ github.run_id }}'" -Encoding utf8
+          ./build/Sign-Files.ps1 -Path $file -Certificate '${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}' -ESigner
+          $signature = Get-AuthenticodeSignature $file
+          "Signed by $($signature.SignerCertificate.Subject), timestamped by $($signature.TimeStamperCertificate.Subject), status $($signature.Status)."
