@@ -107,6 +107,8 @@ public partial class App : Application
                 Remoting.AgentDesktopSession.CleanReceived(TimeSpan.FromDays(1));
                 LocalDb.BackupIfDue();
                 AuditLog.ApplyRetention(AuditLog.RetentionDays);
+                if (LocalDb.IsOpen && NoteStore.PurgeDeleted() is > 0 and var purged)
+                    DiagLog.Write($"Notes: removed {purged} pages deleted more than {NoteStore.KeepDeletedDays} days ago");
             }
             catch (Exception ex) { DiagLog.Write("Database maintenance failed: " + ex.Message); }
         });
