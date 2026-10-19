@@ -157,6 +157,22 @@ public class NotesTests : IDisposable
     }
 
     [Fact]
+    public void A_page_deleted_just_before_its_section_survives_deleting_the_section_now()
+    {
+        var (book, _) = Default();
+        // Back to back, most of these fall within one millisecond – the case that shared a stamp.
+        for (var i = 0; i < 50; i++)
+        {
+            var section = NoteStore.CreateSection(book, $"S{i}", null);
+            var page = NoteStore.CreatePage(section, "Kept");
+            NoteStore.Delete(NoteStore.PageKind, page);
+            NoteStore.Delete(NoteStore.SectionKind, section);
+            NoteStore.DeleteNow(NoteStore.SectionKind, section);
+            Assert.NotNull(NoteStore.Page(page));
+        }
+    }
+
+    [Fact]
     public void A_restored_page_whose_section_is_gone_goes_to_a_live_section()
     {
         var (book, section) = Default();

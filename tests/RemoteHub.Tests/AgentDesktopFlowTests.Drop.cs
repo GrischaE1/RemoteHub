@@ -88,7 +88,7 @@ public partial class AgentDesktopFlowTests
         SendStart(second, ActiveUser.Id, DesktopConsent.Ask, resume: token);
         Assert.Equal(DesktopStatusState.Connected, NextStatus(second, DesktopStatusState.Connected).State);
         Assert.Equal(0, d.Helpers.Uis[1].Asked); // no new question (no WaitingForUser)
-        Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.DesktopResumed);
+        WaitFor(() => d.Audits.Any(a => a.Id == A.AuditEvent.DesktopResumed), "the resumed audit entry"); // written after the Connected status
         second.Close();
     }
 
@@ -113,7 +113,7 @@ public partial class AgentDesktopFlowTests
         SendStart(second, ActiveUser.Id, DesktopConsent.Ask, resume: token);
         var next = NextStatus(second, DesktopStatusState.Connected).Resume!;
         Assert.Equal(0, d.Helpers.Uis[1].Asked);
-        Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.DesktopResumed);
+        WaitFor(() => d.Audits.Any(a => a.Id == A.AuditEvent.DesktopResumed), "the resumed audit entry"); // written after the Connected status
 
         // Ended on purpose this time: the new token goes with it.
         second.Close();
@@ -235,7 +235,7 @@ public partial class AgentDesktopFlowTests
             NextStatus(second, DesktopStatusState.Connected);
             Assert.Equal(3, d.Helpers.SessionIds.Last());
             Assert.Equal(0, d.Helpers.Uis.Last().Asked);
-            Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.DesktopResumed);
+            WaitFor(() => d.Audits.Any(a => a.Id == A.AuditEvent.DesktopResumed), "the resumed audit entry"); // written after the Connected status
             WaitFor(() => !d.Helpers.Uis.Last().Screens.IsEmpty, "the privacy screen in the continued connection");
             var remaining = droppedAt + hold + TimeSpan.FromSeconds(1) - DateTime.UtcNow;
             if (remaining > TimeSpan.Zero) Thread.Sleep(remaining); // past the first hold: the resume stopped it

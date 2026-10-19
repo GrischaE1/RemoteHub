@@ -1776,7 +1776,7 @@ public partial class AgentDesktopFlowTests
         WaitFor(() => d.Helpers.SessionIds.Contains(3), "a helper in the new session");
         var helperInNewSession = d.Helpers.SessionIds.IndexOf(3);
         WaitFor(() => d.Helpers.Uis.Count > helperInNewSession, "the new session's helper UI");
-        Assert.NotNull(d.Helpers.Uis[helperInNewSession].SignedInRemotely); // no ordinary banner
+        WaitFor(() => d.Helpers.Uis[helperInNewSession].SignedInRemotely is not null, "the signed-in-remotely notice"); // no ordinary banner; shown on Begin, after the UI exists
         if (A.DesktopEndpoint.PrivacyScreenSupported)
             WaitFor(() => !d.Helpers.Uis[helperInNewSession].Screens.IsEmpty, "the privacy screen in the new session");
 
@@ -1901,7 +1901,7 @@ public partial class AgentDesktopFlowTests
         Assert.True(d.Helpers.Uis.Take(helperInNewSession).All(u => u.Screens.IsEmpty)); // the sign-in screen itself isn't covered
         // The admin's own session: no banner ("Hide screen", "Disconnect") for whoever stands at the device.
         var ui = d.Helpers.Uis[helperInNewSession];
-        Assert.NotNull(ui.SignedInRemotely);
+        WaitFor(() => ui.SignedInRemotely is not null, "the signed-in-remotely notice"); // shown on Begin, which can come after the privacy screen
         Assert.False(ui.Banner);
     }
 
