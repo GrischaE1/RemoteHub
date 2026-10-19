@@ -173,7 +173,8 @@ Above Settings, the rail shows the running version:
 - **Expanded:** "RemoteHub 0.19.2", and under it the channel when it isn't Stable ("Beta channel").
 - **Update available:** when the start-up update check finds a newer version (the same result that shows
   `UpdateBanner`), a small accent dot appears on the version, and the expanded line says "Update available: 0.19.3".
-- **Click:** opens `AboutWindow` (as `About_Click`), or `UpdateWindow` when an update is available. The tooltip and
+- **Click:** opens `AboutWindow` (as `About_Click`), also when an update is available – the update is offered by
+  `UpdateBanner` and in *Settings → Updates & privacy*. The tooltip and
   `AutomationProperties.Name` read "RemoteHub 0.19.2 – about this version".
 - Pre-release builds show their suffix in the expanded line only ("0.19.2-beta.1"). The collapsed line stays short.
 

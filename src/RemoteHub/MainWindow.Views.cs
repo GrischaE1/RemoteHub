@@ -26,11 +26,8 @@ public partial class MainWindow
         Rail.SetViews(RailViews());
         Rail.ViewSelected += id => ShowView(id);
         Rail.SettingsClicked += () => OpenSettings(null);
-        Rail.VersionClicked += () =>
-        {
-            if (_availableUpdate is not null) ShowUpdateWindow(_availableUpdate, null);
-            else new AboutWindow { Owner = this }.ShowDialog();
-        };
+        // The version always opens About; an update is offered by the bar at the top and in Settings → Updates & privacy.
+        Rail.VersionClicked += () => new AboutWindow { Owner = this }.ShowDialog();
         Rail.FocusViewRequested += FocusCurrentView;
         // Policies are read when asked: after a gpupdate, Notes come or go the next time the window is activated.
         Activated += (_, _) => ApplyNotesPolicy();
