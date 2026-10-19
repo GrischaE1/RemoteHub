@@ -336,6 +336,8 @@ public sealed class UiState
     public double Height { get; set; } = 860;
     public double SidebarWidth { get; set; } = 360;
     public bool SidebarCollapsed { get; set; }
+    /// <summary>The view shown last ("Remote" or "Notes"); anything else opens Remote Control.</summary>
+    public string? LastView { get; set; }
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }

@@ -47,6 +47,7 @@ public partial class MainWindow : FluentWindow
         Height = ui.Height;
         SidebarColumn.Width = new GridLength(ui.SidebarWidth);
         ApplySidebarState();
+        InitViews();
         if (ui.Maximized) WindowState = WindowState.Maximized;
         SwitchHotkeys.Current = SwitchHotkeys.Get(AppPolicy.SwitchKeys ?? ui.SwitchKeys);
         _promptWatcher.PromptShown += OnCredentialPrompt;
@@ -225,7 +226,13 @@ public partial class MainWindow : FluentWindow
 
     private void Vm_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) { UpdateSessionVisibility(); UpdateRecordButton(); UpdateSendFilesButton(); }
+        if (e.PropertyName == nameof(MainViewModel.SelectedSession))
+        {
+            UpdateSessionVisibility();
+            UpdateRecordButton();
+            UpdateSendFilesButton();
+            if (_vm.SelectedSession is not null) ShowView(RemoteViewId); // a session opened or picked from anywhere
+        }
         if (e.PropertyName == nameof(MainViewModel.Items)) HookItems();
         if (e.PropertyName is nameof(MainViewModel.HasTransfers) or nameof(MainViewModel.ShowTransfers)) ApplyTransfersPane();
     }
@@ -549,10 +556,12 @@ public partial class MainWindow : FluentWindow
         var altGr = Keyboard.IsKeyDown(Key.RightAlt) && !Keyboard.IsKeyDown(Key.LeftAlt);
         if (ctrl && alt && !altGr && (key == sw.Prev || key == sw.Next))
         {
+            ShowView(RemoteViewId);
             _vm.SelectNextSession(sw.ShiftReverses ? (shift ? -1 : 1) : key == sw.Prev ? -1 : 1);
             e.Handled = true;
             return;
         }
+        if (HandleViewKeys(e, ctrl)) return;
         if (ctrl && e.Key == Key.N) { if (shift) NewFolder_Click(this, e); else NewConnection_Click(this, e); e.Handled = true; }
         else if (ctrl && e.Key == Key.F)
         {
@@ -2107,6 +2116,7 @@ public partial class MainWindow : FluentWindow
             SettingsOverview: () => SettingsOverview_Click(this, e),
             About: () => new AboutWindow { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.ShowDialog());
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
+        UpdateRailVersion();
     }
 
     private UpdateCheckResult? _availableUpdate;
@@ -2130,6 +2140,7 @@ public partial class MainWindow : FluentWindow
         if (result.Required) { ShowUpdateWindow(result, channel); return; }
         if (result.Info!.Version == ui.SkippedUpdateVersion) return;
         _availableUpdate = result;
+        UpdateRailVersion();
         UpdateBannerText.Text = $"RemoteHub {result.Info.Version} is available – you have {UpdateService.Current}.";
         UpdateBanner.Visibility = Visibility.Visible;
     }
