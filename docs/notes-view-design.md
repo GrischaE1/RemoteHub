@@ -1,9 +1,10 @@
 # RemoteHub – Notes and the view rail
 
-Status: Draft v3 (2026-10-19), checked against the code on `main` (127cbf3). Nothing is built yet. v2 took in the
+Status: Draft v4 (2026-10-19), checked against the code on `main` (127cbf3). Nothing is built yet. v2 took in the
 answers to the open questions of v1 (§12): several notebooks, Settings and the version in the rail, a faster rail, no
 secret format, no OneNote import. v3 replaces v2's Markdown editor with a **WYSIWYG editor with tables, images and
-script blocks** (§4.5); pages are still stored as Markdown.
+script blocks** (§4.5); pages are still stored as Markdown. v4: notes are documentation only (no running or sending
+scripts) and script blocks cover all relevant languages (§4.5.5a).
 Owner: Grischa Ernst
 
 This covers two things that belong together:
@@ -37,8 +38,9 @@ there (§6 schema, notes per connection or folder), this document wins, and §9.
 
 - **Free placement of text boxes on a canvas** (OneNote's page model). Pages are a single flowing document.
 - **Ink, audio and attached files** (other than images). Images are in v1 (§4.5.4).
-- **Running scripts from a note.** A script block can be copied, saved or sent to a PowerShell tab without running
-  (§4.5.5). Running belongs to the Scripts view (§3.8).
+- **Running or sending scripts from a note.** Notes are documentation only. A script block can be copied and saved as
+  a file, but never run, and it isn't sent to a session either (§4.5.5). Running scripts belongs to the Scripts view
+  (§3.8).
 - **Fonts, font sizes and text colours.** Pages use the theme's styles, so they look the same everywhere and stay
   plain Markdown.
 - **Sharing notes with other users.** This waits for a server, as connections do.
@@ -310,8 +312,9 @@ scripts. It goes into `THIRD-PARTY-NOTICES.md`.
 
 #### 4.5.5 Script blocks
 
-Script blocks are the most important element: commands, scripts, SQL and configuration that the user keeps and
-copies to a session.
+Script blocks are the most important element: commands, scripts, source code, queries and configuration that the user
+documents and copies from. Notes are **documentation only** – a script block is text with colouring, and nothing in
+the Notes view runs it or sends it anywhere.
 
 ```
 ┌─ PowerShell ▾ ─────────────────────────────────────── [⧉ Copy] [⋯] ┐
@@ -325,9 +328,9 @@ copies to a session.
   for a language. Pasting text that looks like code (several lines that start with spaces or tabs, or start with a
   common command or keyword such as `Get-`, `$`, `SELECT`, `UPDATE`, `INSERT`, `{`, `<`) into an empty paragraph offers
   *Paste as script block* (on by default; Ctrl+Z turns it back into text).
-- **Language:** the drop-down in the header: PowerShell, Command Prompt, Bash, SQL, JSON, XML, YAML, Registry (`.reg`),
-  Plain text. The choice is stored as the fence's info string (```` ```powershell ````). A new block guesses from the
-  pasted text and can be changed.
+- **Language:** the drop-down in the header, with a search box, the five most recently used languages at the top and
+  the groups in §4.5.5a below. The choice is stored as the fence's info string (```` ```powershell ````). A new block
+  guesses from the pasted text (§4.5.5a) and can be changed.
 - **Editing:** monospace (`Cascadia Mono`, then `Consolas`), syntax colouring, line numbers, no wrapping (horizontal
   scrolling inside the block), Tab indents. The block grows with its content up to 30 lines, then scrolls inside
   itself; dragging the bottom edge makes it taller.
@@ -339,12 +342,67 @@ copies to a session.
   theme only – it gets a light variant.
 - **Copy:** the *Copy* button copies the block's text exactly (no line numbers, line ends as stored) and shows "Copied"
   for two seconds.
-- **⋯ menu:** *Copy*, *Language ›*, *Wrap long lines* (display only), *Save as file…* (`.ps1`, `.sql` … from the
-  language), *Delete block*.
-- **Send to a session** (phase 3, see §12): for PowerShell blocks, *Send to PowerShell ›* lists the open PowerShell
-  tabs. It **pastes the script into that tab's input line without running it** – the user presses Enter in the tab.
-  Running a script straight from a note, or on several devices at once, is a matter for the Scripts view (§3.8) with
-  its own design, audit and policy.
+- **⋯ menu:** *Copy*, *Language ›*, *Wrap long lines* (display only), *Save as file…* (the extension from the
+  language, §4.5.5a), *Delete block*. There is no *Run* and no *Send to session*: Notes are documentation only.
+
+#### 4.5.5a Languages
+
+| Group | Language | Fence id (aliases accepted on paste and import) | *Save as* |
+|---|---|---|---|
+| **Shells and scripting** | PowerShell | `powershell` (`ps1`, `pwsh`, `ps`) | `.ps1` |
+| | Command Prompt / batch | `batch` (`bat`, `cmd`) | `.cmd` |
+| | Bash / shell | `bash` (`sh`, `shell`, `zsh`) | `.sh` |
+| | Python | `python` (`py`) | `.py` |
+| | VBScript | `vbscript` (`vbs`) | `.vbs` |
+| **Programming** | C | `c` (`h`) | `.c` |
+| | C++ | `cpp` (`c++`, `cc`, `hpp`) | `.cpp` |
+| | C# | `csharp` (`cs`, `c#`) | `.cs` |
+| | Visual Basic .NET | `vbnet` (`vb`) | `.vb` |
+| | Java | `java` | `.java` |
+| | JavaScript | `javascript` (`js`) | `.js` |
+| | TypeScript | `typescript` (`ts`) | `.ts` |
+| | Go | `go` | `.go` |
+| | Rust | `rust` (`rs`) | `.rs` |
+| | PHP | `php` | `.php` |
+| **Queries** | SQL (standard) | `sql` | `.sql` |
+| | T-SQL (SQL Server, Azure SQL) | `tsql` (`mssql`) | `.sql` |
+| | PostgreSQL | `pgsql` (`postgres`, `postgresql`) | `.sql` |
+| | MySQL / MariaDB | `mysql` (`mariadb`) | `.sql` |
+| | Oracle PL/SQL | `plsql` (`oracle`) | `.sql` |
+| | SQLite | `sqlite` | `.sql` |
+| | KQL (Log Analytics, Defender, Intune, Azure Resource Graph) | `kql` (`kusto`) | `.kql` |
+| | WQL (WMI, ConfigMgr) | `wql` | `.wql` |
+| | LDAP filter | `ldap` | `.txt` |
+| **Configuration and data** | JSON | `json` (`jsonc`) | `.json` |
+| | XML | `xml` (`xaml`, `xsd`, `admx`, `adml`, `wxs`, `csproj`) | `.xml` |
+| | YAML | `yaml` (`yml`) | `.yaml` |
+| | INI / .conf | `ini` (`conf`, `cfg`, `inf`) | `.ini` |
+| | TOML | `toml` | `.toml` |
+| | Registry | `reg` | `.reg` |
+| | CSV | `csv` | `.csv` |
+| | HTML | `html` (`htm`) | `.html` |
+| | CSS | `css` | `.css` |
+| | Markdown | `markdown` (`md`) | `.md` |
+| **Infrastructure** | Bicep | `bicep` | `.bicep` |
+| | Terraform / HCL | `hcl` (`terraform`, `tf`) | `.tf` |
+| | Dockerfile | `dockerfile` (`docker`) | `Dockerfile` |
+| | Nginx / Apache config | `nginx` (`apache`) | `.conf` |
+| **Other** | Diff / patch | `diff` (`patch`) | `.diff` |
+| | Log output | `log` | `.log` |
+| | Plain text | `text` (`txt`, `plaintext`, none) | `.txt` |
+
+- **Colouring:** AvalonEdit's own definition where it ships one for the language; otherwise our own `.xshd` file in
+  `src/RemoteHub/Assets/Highlighting/` (our code, AGPL, nothing third-party to declare). Each definition has a dark and
+  a light palette. A language whose definition isn't ready yet still works – it is coloured as plain text and keeps its
+  name in the header and in the Markdown.
+- **Unknown fence ids** (from an import or a paste) are kept as they are, shown in the header (e.g. `fsharp`) and
+  coloured as plain text. Nothing is lost on export.
+- **Guessing on paste:** from clear signs only, otherwise *Plain text*. Examples: `Get-`/`Set-` cmdlets, `$var =` and
+  `| Where-Object` → PowerShell; `#include` → C/C++; `using System;`, `namespace` with `{` → C#; `SELECT … FROM`,
+  `UPDATE … SET`, `INSERT INTO` → SQL, and T-SQL when `[dbo]`, `GO` or `@@` appear; a table name followed by `|` and
+  `where`/`summarize`/`project` → KQL; `{`/`[` that parses as JSON → JSON; `<?xml` or a single root element → XML;
+  `Windows Registry Editor Version 5.00` → Registry; `#!/bin/bash` → Bash. The user's last choice for similar pastes
+  isn't learned – it stays predictable.
 
 #### 4.5.6 Storage
 
@@ -553,7 +611,7 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 | Note text in the audit log | Audit events (`note.added`, `note.changed`, `note.deleted`, `note.restored`) record the page id and the section id only. **No title**: a title like "Password for SRV-UEM01" is content. |
 | Note text in telemetry or crash reports | Telemetry counts views only (`view.notes.opened`), no counts of pages. `CrashReporter` already sends no window content. A test checks that a crash report taken with a page open contains none of its text. |
 | Malicious content (from a backup, an import or later sync) | Stored as Markdown, never loaded as XAML (§4.5.6). Links: only `http`, `https`, `mailto` and `remotehub://note/` are clickable, and opening an `http(s)` link asks first. Raw HTML stays text (Markdig's HTML extension is off). Images are only ever loaded from `note_files`, never from a path or URL. |
-| Script blocks | Never run by the Notes view. *Send to PowerShell* only pastes into a tab's input line; the user runs it there (§4.5.5). |
+| Script blocks | Text only: never run, never sent to a session, no *Run* command anywhere in Notes (§4.5.5). *Save as file* writes the text with the language's extension and nothing else. |
 | Malicious images (pasted, dropped or imported) | Decoded by WPF's built-in decoders (WIC) with `BitmapCreateOptions.IgnoreColorProfile` and a size check on the header before the full decode (more than 16,384 px or 25 MB is refused before pixels are read), then re-encoded, so only plain pixels are stored (§4.5.4). |
 | Search queries as SQL | Parameters only; the FTS query is escaped (§7). |
 | Temp files | None. Paste, images and the editor work in memory. Export writes only the files the user asked for, and says they aren't encrypted (§4.7). |
@@ -591,7 +649,7 @@ settings folder." This lasts until device sync (local-db-design.md §8) is built
 | 1 | **View rail** with Remote Control, Notes (empty view saying "Notes are coming"), version and Settings; Settings removed from the sidebar; hover/keyboard expand; `LastView`; Ctrl+1/2 | Switching views never resizes or disconnects a session (checked with RDP and agent desktop sessions open) |
 | 2 | **Notes core:** schema v2 and migration step, `NoteStore`, notebooks, sections and pages, the WYSIWYG editor with text formats (§4.5.2) and **script blocks** (§4.5.5), paste and copy, autosave, delete with undo and *Recently deleted*, search | The tests in §11 pass; 10,000 pages load and search within the local-db-design.md §7 targets |
 | 3 | **Tables and images** (§4.5.3, §4.5.4), Markdown export and import (§4.7) | Round trip of every element; export opens correctly in VS Code |
-| 4 | **Integration:** backup export/import, links to connections, `remotehub://note/` links, *Send to PowerShell*, `AllowNotes` policy, audit events | Backup round trip with notes and images; the policy hides the view |
+| 4 | **Integration:** backup export/import, links to connections, `remotehub://note/` links, `AllowNotes` policy, audit events | Backup round trip with notes and images; the policy hides the view |
 | 5 | Print / PDF, text highlighting colours | – |
 | Later | Scripts and Logs as views (§3.8), each with its own design | – |
 | Later | Sync with device sync (local-db-design.md phase 4) | – |
@@ -609,7 +667,9 @@ same `[Collection]` as `LocalDbTests`, because both use a database in a temp fol
 - `Opening_a_page_without_editing_writes_nothing` and `Unsupported_markdown_is_kept_as_text`.
 - `Script_block_text_is_stored_exactly` – tabs, trailing spaces, backticks and ```` ``` ```` inside the script (the
   fence gets longer), CRLF; the language survives.
-- `Pasted_code_is_offered_as_a_script_block` – PowerShell, SQL and JSON samples are detected; prose is not.
+- `Pasted_code_is_offered_as_a_script_block` – each guessing rule in §4.5.5a picks its language; prose and unclear
+  code stay plain text.
+- `Fence_aliases_map_to_one_language_and_unknown_ids_are_kept` (`ps1` → `powershell`, `c#` → `csharp`; `fsharp` stays).
 - `Table_cells_keep_inline_formats_and_pipes_are_escaped`.
 - `Images_are_re_encoded_without_metadata` – a JPEG with EXIF GPS comes back without it; an image that claims
   100,000 px in its header is refused before decoding; a file that isn't an image is refused.
@@ -649,11 +709,9 @@ The questions of Draft v1, answered on 2026-10-19:
 | 5 | Secret format in notes | **Not needed** (§2). |
 | 6 | Import from OneNote | **Not needed** (§2). Markdown files can be imported (§4.7). |
 | 7 | More views | **Yes:** Scripts and Logs later (§3.8). The version is shown above Settings (§3.9). |
+| 8 | Run or send script blocks? | **No.** Notes are documentation only – no running, no sending to a session (§2, §4.5.5). |
+| 9 | Script languages | **All relevant ones**, including C, C++, C# and the SQL dialects (§4.5.5a). |
 
 Still open:
 
 - The downgrade check in §5.3 (does 0.18.x accept `schema_version = 2`?) – to be answered when phase 2 starts.
-- **Script blocks and sessions:** is *Send to PowerShell* (paste into a tab's input line, without running) wanted in
-  phase 4, or should script blocks only be copied until the Scripts view exists?
-- **Script languages:** PowerShell, Command Prompt, Bash, SQL, JSON, XML, YAML, Registry and plain text (§4.5.5) –
-  anything missing (e.g. KQL for Intune/Defender queries, Python)?
