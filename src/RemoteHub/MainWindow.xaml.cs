@@ -746,6 +746,11 @@ public partial class MainWindow : FluentWindow
             tvi.IsSelected = true;
             tvi.Focus();
         }
+        else if (Tree.SelectedItem is FavoriteLink link)
+        {
+            link.IsSelected = false; // the link, not its connection, is what the tree has selected
+            _vm.SelectedNode = null;
+        }
         else if (_vm.SelectedNode is { } n)
         {
             n.IsSelected = false;
@@ -1384,20 +1389,31 @@ public partial class MainWindow : FluentWindow
                 progress.Report($"Connecting to {t.Target.Display}…");
                 try
                 {
-                    var started = await Task.Run(() =>
+                    // Once the script is sent, a dropped connection may be the uninstall stopping the agent that carries it:
+                    // that counts as "maybe started", and the wait below decides.
+                    var sent = false;
+                    await Task.Run(() =>
                     {
-                        using var rs = PsRemoting.Open(t.Target);
-                        return AgentInstaller.StartUninstall(rs, progress.Report);
+                        var rs = PsRemoting.Open(t.Target);
+                        try
+                        {
+                            sent = true;
+                            AgentInstaller.StartUninstall(rs, progress.Report);
+                        }
+                        catch (Exception ex) when (ex is not RemoteCommandException) { /* maybe started – see the wait */ }
+                        finally
+                        {
+                            try { rs.Dispose(); } catch { /* the agent may already be gone */ }
+                        }
                     });
                     var endpoint = EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint);
-                    if (started && !await AgentInstaller.WaitForStopAsync(c.Host, endpoint, TimeSpan.FromMinutes(3), progress.Report, System.Threading.CancellationToken.None))
-                        failure = $"The agent still answers after 3 minutes. On the device, see {AgentInstaller.UninstallLog}.";
-                    else
+                    if (sent && await AgentInstaller.WaitForStopAsync(c.Host, endpoint, TimeSpan.FromMinutes(3), TimeSpan.FromSeconds(20), progress.Report, System.Threading.CancellationToken.None))
                     {
-                        ForgetAgent(c, started ? "Uninstalled" : "Not installed on the device – removed here");
-                        progress.Report(started ? $"Uninstalled – {c.Name} no longer runs the RemoteHub Agent." : "The device has no RemoteHub Agent installed; it was removed here.");
+                        ForgetAgent(c, "Uninstalled");
+                        progress.Report($"Uninstalled – {c.Name} no longer runs the RemoteHub Agent.");
                         ok = true;
                     }
+                    else failure = $"The agent still answers after 3 minutes. On the device, see {AgentInstaller.UninstallLog}.";
                 }
                 catch (Exception ex)
                 {

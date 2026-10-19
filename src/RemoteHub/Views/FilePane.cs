@@ -264,7 +264,7 @@ public sealed class FilePane : DockPanel, IFilterableView
         var sel = _listView.SelectedItems.Count;
         var files = Entries.Count(e => e.Kind == EntryKind.File);
         var shown = _view is not null && _filter.Text.Trim().Length > 0 ? _view.Count : -1;
-        _status.Text = $"{Entries.Count - files} folders, {files} files" + (shown >= 0 ? $"  ·  {shown} match the filter" : "") +
+        _status.Text = $"{Entries.Count - files} folders, {files} files" + (shown >= 0 ? $"  ·  {shown} shown" : "") +
                        (sel > 0 ? $"  ·  {sel} selected ({TransferItem.Size(SelectedEntries.Sum(e => e.Kind == EntryKind.File ? e.Size : 0))})" : "");
     }
 

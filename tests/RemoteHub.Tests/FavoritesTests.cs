@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using RemoteHub.Models;
 
 namespace RemoteHub.Tests;
@@ -12,32 +13,51 @@ public class FavoritesTests
         var a = new Connection { Name = "A" };
         var b = new Connection { Name = "B" };
         var c = new Connection { Name = "C" };
-        var ids = new List<Guid> { c.Id, a.Id };
-        var (pinned, changed) = Favorites.Resolve([a, b, c], ids);
-        Assert.Equal(["C", "A"], pinned.Select(x => x.Name));
-        Assert.False(changed);
+        Assert.Equal(["C", "A"], Favorites.Resolve([a, b, c], [c.Id, a.Id, c.Id]).Select(x => x.Name));
     }
 
     [Fact]
-    public void A_deleted_connection_loses_its_link_and_duplicates_are_dropped()
+    public void Ids_of_another_settings_database_are_kept_for_when_it_is_opened_again()
     {
         var a = new Connection { Name = "A" };
-        var gone = Guid.NewGuid();
-        var ids = new List<Guid> { gone, a.Id, a.Id };
-        var (pinned, changed) = Favorites.Resolve([a], ids);
-        Assert.Equal(["A"], pinned.Select(x => x.Name));
-        Assert.Equal([a.Id], ids);
-        Assert.True(changed);
+        var elsewhere = Guid.NewGuid();
+        var ids = new List<Guid> { elsewhere, a.Id };
+        Assert.Equal(["A"], Favorites.Resolve([a], ids).Select(x => x.Name));
+        Assert.Equal([elsewhere, a.Id], ids);
     }
 
     [Fact]
-    public void A_link_says_where_the_connection_lives()
+    public void Deleting_a_connection_or_its_folder_unpins_it()
     {
-        var prod = new Folder { Name = "Production" };
-        var web = new Folder { Name = "Web", Parent = prod };
-        var c = new Connection { Name = "WEB01", Parent = web };
-        Assert.Equal("Production › Web", new FavoriteLink(c).Location);
-        Assert.Equal("Top level", new FavoriteLink(new Connection { Name = "X" }).Location);
+        var folder = new Folder { Name = "Lab" };
+        var inside = new Connection { Name = "DC01", Parent = folder };
+        folder.Children.Add(inside);
+        var other = new Connection { Name = "WEB01" };
+        var ids = new List<Guid> { inside.Id, other.Id };
+        Assert.True(Favorites.Forget(ids, folder.Descendants().Prepend(folder).OfType<Connection>()));
+        Assert.Equal([other.Id], ids);
+        Assert.False(Favorites.Forget(ids, [inside]));
+    }
+
+    [Fact]
+    public void The_group_is_updated_in_place_so_links_keep_their_selection()
+    {
+        var a = new Connection { Name = "A" };
+        var b = new Connection { Name = "B" };
+        var c = new Connection { Name = "C" };
+        var links = new ObservableCollection<FavoriteLink>();
+        Favorites.Sync(links, [a, b]);
+        var keptB = links[1];
+        keptB.IsSelected = true;
+
+        Favorites.Sync(links, [c, b]);
+        Assert.Equal(["C", "B"], links.Select(l => l.Target.Name));
+        Assert.Same(keptB, links[1]);
+        Assert.True(links[1].IsSelected);
+
+        Favorites.Sync(links, [b, c]);
+        Assert.Equal(["B", "C"], links.Select(l => l.Target.Name));
+        Assert.Same(keptB, links[0]);
     }
 
     [Fact]

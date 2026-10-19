@@ -70,6 +70,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
     private readonly Dictionary<GridViewColumn, (string Header, RegSortColumn Sort)> _columns = [];
     private List<RegValue> _valueList = [];
     private ListCollectionView? _valueView;
+    private string _keyStatus = "";
     private RegSortColumn _sortBy = RegSortColumn.Name;
     private bool _descending;
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(4, 6, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
@@ -330,8 +331,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         if (keep is { Count: > 0 }) foreach (var v in l.Values.Where(v => keep.Contains(v.Name))) _values.SelectedItems.Add(v);
         ShowPath();
         ResetStatusColour();
-        _status.Text = $"{l.Keys.Count} keys, {l.Values.Count(v => v.IsSet)} values" +
+        _keyStatus = $"{l.Keys.Count} keys, {l.Values.Count(v => v.IsSet)} values" +
                        (node.Path.StartsWith("HKEY_CURRENT_USER", StringComparison.Ordinal) ? "  ·  HKEY_CURRENT_USER is the profile of the account used for remoting" : "");
+        ShowStatus();
         Navigated?.Invoke(node.Path);
         return true;
     }
@@ -554,6 +556,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
 
     private bool Shown(RegValue v) => _filter.Text.Trim().Length == 0 || RegValue.Matches(v, _filter.Text);
 
+    /// <summary>The key's counts, and how many values the filter shows.</summary>
+    private void ShowStatus() => _status.Text = _keyStatus + (_valueView is not null && _filter.Text.Trim().Length > 0 ? $"  ·  {_valueView.Count} shown" : "");
+
     /// <summary>Narrows the values to the filter and selects the first match.</summary>
     private void ApplyFilter()
     {
@@ -564,6 +569,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
             _values.SelectedItems.Clear();
             if (_valueView.Cast<RegValue>().FirstOrDefault() is { } first) { _values.SelectedItem = first; _values.ScrollIntoView(first); }
         }
+        ShowStatus();
     }
 
     /// <summary>The sorted column's header carries an arrow for its direction.</summary>

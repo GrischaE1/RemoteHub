@@ -19,8 +19,6 @@ public sealed partial class FavoritesGroup : ObservableObject
 public sealed partial class FavoriteLink(Connection target) : ObservableObject
 {
     public Connection Target { get; } = target;
-    /// <summary>Where the connection lives, for the tooltip ("Production › Web").</summary>
-    public string Location => string.Join(" › ", Target.Ancestors().Reverse().Select(a => a.Name)) is { Length: > 0 } path ? path : "Top level";
     [ObservableProperty] private bool _isSelected;
     public bool IsExpanded { get; set; }
 }
@@ -28,18 +26,40 @@ public sealed partial class FavoriteLink(Connection target) : ObservableObject
 public static class Favorites
 {
     /// <summary>
-    /// The pinned connections in pin order. Ids of connections that no longer exist are dropped from
-    /// <paramref name="ids"/>; true when that changed the list.
+    /// The pinned connections that exist in this tree, in pin order. Ids it doesn't have are kept, not dropped: the
+    /// UI settings stay when another settings database is opened (a shared folder, a backup), and switching back
+    /// finds the favourites again. An id goes only when its connection is deleted (<see cref="Forget"/>).
     /// </summary>
-    public static (List<Connection> Pinned, bool Changed) Resolve(IEnumerable<Connection> connections, List<Guid> ids)
+    public static List<Connection> Resolve(IEnumerable<Connection> connections, IEnumerable<Guid> ids)
     {
         var byId = new Dictionary<Guid, Connection>();
         foreach (var c in connections) byId.TryAdd(c.Id, c);
-        var pinned = new List<Connection>();
         var seen = new HashSet<Guid>();
-        var before = ids.Count;
-        ids.RemoveAll(id => !byId.ContainsKey(id) || !seen.Add(id));
-        pinned.AddRange(ids.Select(id => byId[id]));
-        return (pinned, ids.Count != before);
+        return ids.Where(id => seen.Add(id) && byId.ContainsKey(id)).Select(id => byId[id]).ToList();
+    }
+
+    /// <summary>Unpins deleted connections (a deleted folder's too). True when the list changed.</summary>
+    public static bool Forget(List<Guid> ids, IEnumerable<Connection> deleted)
+    {
+        var gone = deleted.Select(c => c.Id).ToHashSet();
+        return ids.RemoveAll(gone.Contains) > 0;
+    }
+
+    /// <summary>
+    /// Brings <paramref name="links"/> in line with <paramref name="pinned"/> in place: links that stay keep their
+    /// selection, new ones are inserted where they belong, unpinned ones are removed.
+    /// </summary>
+    public static void Sync(ObservableCollection<FavoriteLink> links, IReadOnlyList<Connection> pinned)
+    {
+        for (var i = links.Count - 1; i >= 0; i--)
+            if (!pinned.Contains(links[i].Target)) links.RemoveAt(i);
+        for (var i = 0; i < pinned.Count; i++)
+        {
+            var at = -1;
+            for (var j = i; j < links.Count; j++) if (links[j].Target == pinned[i]) { at = j; break; }
+            if (at == i) continue;
+            if (at > i) links.Move(at, i);
+            else links.Insert(i, new FavoriteLink(pinned[i]));
+        }
     }
 }

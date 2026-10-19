@@ -321,16 +321,11 @@ public sealed partial class MainViewModel : ObservableObject
         RequestSave();
     }
 
-    /// <summary>Builds the Favourites group from the pinned ids: after a load and every change (a deleted connection's link goes).</summary>
+    /// <summary>Builds the Favourites group from the pinned ids: after a load and every change.</summary>
     public void RefreshFavorites()
     {
-        var (pinned, changed) = Favorites.Resolve(AllNodes().OfType<Connection>(), Data.Ui.FavoriteConnections);
-        if (changed) { _saveTimer.Stop(); _saveTimer.Start(); }
-        if (!pinned.SequenceEqual(_favorites.Children.Select(l => l.Target)))
-        {
-            _favorites.Children.Clear();
-            foreach (var c in pinned) _favorites.Children.Add(new FavoriteLink(c));
-        }
+        var pinned = Favorites.Resolve(AllNodes().OfType<Connection>(), Data.Ui.FavoriteConnections);
+        Favorites.Sync(_favorites.Children, pinned);
         _favorites.IsExpanded = !Data.Ui.FavoritesCollapsed;
         if (pinned.Count > 0 && FavoriteRoots.Count == 0) FavoriteRoots.Add(_favorites);
         else if (pinned.Count == 0 && FavoriteRoots.Count > 0) FavoriteRoots.Clear();
@@ -374,6 +369,8 @@ public sealed partial class MainViewModel : ObservableObject
     public void Remove(NodeBase node)
     {
         ChildrenOf(node.Parent).Remove(node);
+        // A deleted connection (or a deleted folder's) is unpinned; only deleting does that, see Favorites.Resolve.
+        Favorites.Forget(Data.Ui.FavoriteConnections, node.Descendants().Prepend(node).OfType<Connection>());
         RequestSave();
     }
 

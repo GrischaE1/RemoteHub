@@ -367,7 +367,7 @@
                             </HierarchicalDataTemplate>
                             <DataTemplate DataType="{x:Type m:FavoriteLink}">
                                 <!-- The connection as it shows in its folder, with a link arrow in front -->
-                                <DockPanel ToolTip="{Binding Location}" ToolTipService.InitialShowDelay="600">
+                                <DockPanel>
                                     <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowUpRight16" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center"
                                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
                                     <ContentPresenter Content="{Binding Target}" />

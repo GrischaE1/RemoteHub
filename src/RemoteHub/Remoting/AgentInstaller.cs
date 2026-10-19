@@ -302,30 +302,30 @@ public static class AgentInstaller
     public const string UninstallLog = @"%SystemRoot%\Temp\RemoteHub-Agent-uninstall.log";
 
     /// <summary>
-    /// Starts the uninstall over a runspace with admin rights (the agent's own PowerShell or WinRM). True when msiexec
-    /// started, false when the device has no agent installed. Throws <see cref="RemoteCommandException"/> otherwise.
+    /// Starts the uninstall over a runspace with admin rights (the agent's own PowerShell or WinRM). Throws
+    /// <see cref="RemoteCommandException"/> when the device has no agent installed from the MSI or msiexec couldn't
+    /// start. Any other exception means the connection failed – possibly because the uninstall already stopped the agent.
     /// </summary>
-    public static bool StartUninstall(Runspace rs, Action<string> progress)
+    public static void StartUninstall(Runspace rs, Action<string> progress)
     {
         progress("Starting the uninstall on the device…");
         var answer = RemoteFs.Invoke(rs, DetachedUninstallScript).Select(o => o.ToString()).LastOrDefault() ?? "";
-        return answer switch
-        {
-            "started" => true,
-            "notInstalled" => false,
-            _ => throw new RemoteCommandException($"The uninstall couldn't be started ({answer})."),
-        };
+        if (answer == "started") return;
+        throw new RemoteCommandException(answer == "notInstalled"
+            ? "The device has no RemoteHub Agent installed from its installer, so it can't be uninstalled from here. Uninstall it on the device."
+            : $"The uninstall couldn't be started ({answer}).");
     }
 
     /// <summary>
-    /// Waits until the agent stops answering – two failed health checks in a row, so a single dropped answer doesn't
-    /// count. False if it still answers after <paramref name="timeout"/>.
+    /// Waits until the agent has stopped answering for <paramref name="quiet"/> in a row – a dropped answer or an
+    /// installer that rolls back and starts the service again doesn't count. False if it still answers after
+    /// <paramref name="timeout"/>.
     /// </summary>
-    public static async Task<bool> WaitForStopAsync(string host, AgentEndpoint endpoint, TimeSpan timeout, Action<string> progress, CancellationToken ct)
+    public static async Task<bool> WaitForStopAsync(string host, AgentEndpoint endpoint, TimeSpan timeout, TimeSpan quiet, Action<string> progress, CancellationToken ct)
     {
         progress("Waiting for the agent to stop…");
         var until = DateTime.UtcNow + timeout;
-        var failures = 0;
+        DateTime? silentSince = null;
         while (DateTime.UtcNow < until)
         {
             try
@@ -333,11 +333,12 @@ public static class AgentInstaller
                 using var once = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 once.CancelAfter(TimeSpan.FromSeconds(endpoint.Via is null ? 5 : 20));
                 await HealthAsync(host, endpoint, once.Token);
-                failures = 0;
+                silentSince = null;
             }
             catch (Exception) when (!ct.IsCancellationRequested)
             {
-                if (++failures >= 2) return true;
+                silentSince ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - silentSince >= quiet) return true;
             }
             await Task.Delay(2000, ct);
         }
