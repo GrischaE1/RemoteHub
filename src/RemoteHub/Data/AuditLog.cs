@@ -15,7 +15,7 @@ public static class AuditEvents
     public const string PasswordCopied = "password.copied";
     public const string DataAdded = "data.added", DataChanged = "data.changed", DataDeleted = "data.deleted";
     public const string BackupExported = "backup.exported", BackupImported = "backup.imported";
-    public const string AgentInstalled = "agent.installed", AgentCredentialProvider = "agent.credential_provider",
+    public const string AgentInstalled = "agent.installed", AgentUninstalled = "agent.uninstalled", AgentCredentialProvider = "agent.credential_provider",
         AgentAutoSignIn = "agent.auto_sign_in";
     public const string FilesTransferred = "files.transferred";
     public const string RecordingStarted = "recording.started", RecordingStopped = "recording.stopped";
@@ -42,6 +42,7 @@ public static class AuditEvents
         BackupExported => "Backup exported",
         BackupImported => "Backup imported",
         AgentInstalled => "Agent installed",
+        AgentUninstalled => "Agent uninstalled",
         AgentCredentialProvider => "Credential provider installed or removed",
         AgentAutoSignIn => "Automatic sign-in",
         FilesTransferred => "Files transferred",

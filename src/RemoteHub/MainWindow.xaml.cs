@@ -785,6 +785,7 @@ public partial class MainWindow : FluentWindow
         CmAddShare.Visibility = V(c is not null && editable && Features.IsAllowed(Feature.NetworkShares));
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
         CmCredentialProvider.Visibility = V(c is not null && CredentialProviderOffered(c));
+        CmAgentUninstall.Visibility = V(c?.Agent is { Status: AgentStatus.Installed } && Features.IsAllowed(Feature.AgentInstall));
         if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
 
         // The server's own shares in Tools, as in the tab menus (filled fresh each time).
@@ -820,6 +821,7 @@ public partial class MainWindow : FluentWindow
 
     private void CmAgent_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = InstallAgent(c); }
     private void CmCredentialProvider_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ChangeCredentialProvider(c); }
+    private void CmAgentUninstall_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = UninstallAgent(c); }
 
     private void CmPsSetup_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ShowRemotingSetup(c); }
 
@@ -913,6 +915,9 @@ public partial class MainWindow : FluentWindow
         if (CredentialProviderOffered(c))
             manage.Items.Add(MenuEntry(CredentialProviderHeader(c), SymbolRegular.Key24, () => _ = ChangeCredentialProvider(c),
                 tip: "Lets the RemoteHub Agent sign in automatically on the device's sign-in screen"));
+        if (c.Agent is { Status: AgentStatus.Installed } && Features.IsAllowed(Feature.AgentInstall))
+            manage.Items.Add(MenuEntry("Uninstall RemoteHub Agent…", SymbolRegular.Delete24, () => _ = UninstallAgent(c),
+                tip: "Removes the agent from the device; the connection goes back to RDP and PowerShell remoting"));
         if (manage.Items.Count > 0) cm.Items.Add(manage);
     }
 
@@ -1321,6 +1326,79 @@ public partial class MainWindow : FluentWindow
         }
         catch (Exception ex) { progress.Report("Failed: " + ex.Message); }
         progress.Finish(ok);
+    }
+
+    /// <summary>
+    /// Right-click → Uninstall RemoteHub Agent: msiexec /x on the device through the agent's own PowerShell (detached, as
+    /// an update is), then waits for the agent to stop. The connection forgets the agent and goes back to RDP and
+    /// PowerShell remoting. If the device can't be reached, the agent can be forgotten here only.
+    /// </summary>
+    private async Task UninstallAgent(Connection c)
+    {
+        if (Refused(Feature.AgentInstall)) return;
+        if (c.Agent is not { Status: AgentStatus.Installed } device) return;
+        const string title = "Uninstall RemoteHub Agent";
+        var through = _vm.AllNodes().OfType<Connection>().Count(x => x.JumpHost == c);
+        var text = $"Removes the RemoteHub Agent from {c.Name}, with its credential provider, certificate and firewall rule. Open agent tabs " +
+                   "of this device lose their connection, and the connection goes back to RDP and PowerShell remoting." +
+                   (through > 0 ? $"\n\n{(through == 1 ? "1 connection reaches its device" : $"{through} connections reach their devices")} through " +
+                                  $"{c.Name}'s agent and can't connect that way any more." : "") +
+                   "\n\nUninstall it?";
+        if (!await Dialogs.Confirm(this, title, text, "Uninstall")) return;
+
+        var progress = new AgentInstallProgressWindow(title, $"{c.Name}  ·  {c.Host}", 3) { Owner = this };
+        progress.Show();
+        var ok = false;
+        string? failure = null;
+        try
+        {
+            var previous = KnownTarget(c) is { Agent: not null } known ? known : null;
+            if (BuildTarget(c, previous, viaAgent: true) is not { } t) progress.Report("Cancelled.");
+            else
+            {
+                progress.Report($"Connecting to {t.Target.Display}…");
+                try
+                {
+                    var started = await Task.Run(() =>
+                    {
+                        using var rs = PsRemoting.Open(t.Target);
+                        return AgentInstaller.StartUninstall(rs, progress.Report);
+                    });
+                    var endpoint = EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint);
+                    if (started && !await AgentInstaller.WaitForStopAsync(c.Host, endpoint, TimeSpan.FromMinutes(3), progress.Report, System.Threading.CancellationToken.None))
+                        failure = $"The agent still answers after 3 minutes. On the device, see {AgentInstaller.UninstallLog}.";
+                    else
+                    {
+                        ForgetAgent(c, started ? "Uninstalled" : "Not installed on the device – removed here");
+                        progress.Report(started ? $"Uninstalled – {c.Name} no longer runs the RemoteHub Agent." : "The device has no RemoteHub Agent installed; it was removed here.");
+                        ok = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target);
+                }
+            }
+        }
+        catch (Exception ex) { failure = ex.Message; }
+        if (failure is not null) progress.Report("Failed: " + failure);
+        progress.Finish(ok);
+        if (failure is not null && c.Agent == device &&
+            await Dialogs.Confirm(this, title, $"The agent couldn't be uninstalled from {c.Name}:\n{failure}\n\nRemove it from this connection in RemoteHub " +
+                                               "only? The agent stays on the device; uninstall it there in Settings → Apps.", "Remove here"))
+            ForgetAgent(c, "Removed here only – the device wasn't changed");
+    }
+
+    /// <summary>The connection no longer has an agent and goes back to RDP and WinRM.</summary>
+    private void ForgetAgent(Connection c, string auditDetail)
+    {
+        Data.AuditLog.Write(Data.AuditEvents.AgentUninstalled, c, auditDetail);
+        c.Agent = null;
+        if (c.Options.UseAgent == true) c.Options.UseAgent = null;
+        c.PsRemoting = null;
+        c.RefreshLabels();
+        _vm.RequestSave();
+        DiagLog.Write("RemoteHub Agent removed from a connection");
     }
 
     /// <summary>

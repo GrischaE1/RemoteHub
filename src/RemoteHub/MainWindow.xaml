@@ -503,6 +503,8 @@
                                     <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
                                     <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
                                               ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
+                                    <MenuItem x:Name="CmAgentUninstall" Header="Uninstall RemoteHub Agent…" Click="CmAgentUninstall_Click" Icon="{ui:SymbolIcon Delete24}"
+                                              ToolTip="Removes the agent from the device; the connection goes back to RDP and PowerShell remoting" />
                                 </MenuItem>
                                 <MenuItem x:Name="CmNotes" Header="Notes" Click="CmNotes_Click" Icon="{ui:SymbolIcon Notebook24}" />
                                 <Separator x:Name="CmSep1" />
