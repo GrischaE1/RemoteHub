@@ -286,6 +286,18 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
 - Every test name starts with its case ID from [test-lab-cases.md](test-lab-cases.md) and carries it as a tag
   (`-Tag A-UPD-04` runs one case). After the run `Start-LabRun.ps1` writes the PR report `report.md`
   (`New-LabReport.ps1`).
+- `Get-LabFailures.ps1 [-Run <id>]` sums a finished run up in about 1 KB: one line per VM, one per failed case with
+  the start of its message (a failed setup's error from the file's console log) and the evidence folders. It reads
+  `artifacts\lab\` by default, `-Root D:\RemoteHubLab\results` reads the lab's own copy. `Start-LabRun.ps1` runs it
+  at the end of every run and keeps it as `artifacts\lab\<run>\failures.txt` – what an AI session reads instead of
+  the XMLs and logs (`.github/instructions/lab.instructions.md`).
+- `LabConsole.cmd` (`LabConsole.ps1`, WPF, Windows PowerShell 5.1) is the same in a window: the tests as group >
+  file > case with check boxes and a search box, read from `lab\tests\` each time it opens (a new file or case
+  shows up by itself; the group is the first bare tag of the file's `Describe`), the VM kinds from Hyper-V, the
+  MSI under test and an optional build of new MSIs, *Start run* / *Stop* (`Stop-LabRun.ps1`), the progress from the
+  run's `console.log`, its output, and `failures.txt` when it ends. *Failed in last run* ticks just the cases that
+  failed in the newest run. What is ticked becomes `-Tag`: a group's tag when the whole group is ticked and no other
+  file carries it, else the case IDs; everything ticked is a full run.
 - Requests run one after another, and so do the VMs within a run. Only the VM under test is on (plus the jump host while a jump case runs): a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
 - Reuse between files: a file that needs "agent and/or RemoteHub installed, an account signed in" calls
   `Initialize-LabVm`, which keeps the VM when it is already in that state (`LabRoot\state\<Id>.json` plus a token in

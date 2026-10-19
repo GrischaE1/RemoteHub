@@ -26,3 +26,22 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
   string or break parsing. Use plain hyphens, and `[char]0x....` where a non-ASCII character is needed in output.
 - Build scripts (`build/`) run in CI on `windows-latest`; they should fail loudly (non-zero exit) rather than
   continue after an error.
+
+## Running the lab from an AI session
+
+A lab run takes from minutes to hours and runs by itself (the scheduled task); reading its raw output costs far more
+tokens than it is worth. In a Claude Code or similar session:
+
+- Let the person start runs – `lab\LabConsole.cmd` (choose tests and VMs, build, start, follow, see the failures) or
+  `lab\Start-LabRun.ps1 -Tag …` in their own terminal – and say when one has finished. If the session starts one,
+  run it in the background and wait for it to end – no monitors, no polling, no reading the queue or the logs while
+  it runs.
+- Every run ends with `artifacts\lab\<run>\failures.txt` (`Get-LabFailures.ps1`): one line per VM, one per failed
+  case (a failed setup's error from the console log), and where the evidence is. Read that first – or run
+  `lab\Get-LabFailures.ps1 [-Run <id>] [-Root D:\RemoteHubLab\results]` for an older run. Don't dump pester XMLs,
+  console logs, `report.md` or evidence JSON whole.
+- Open evidence only for the failure being diagnosed, and only the fields that matter (`Select-Object`, a JSON
+  property, `-Tail`), never whole files of tens of KB. Look at a screenshot only when the text can't answer it.
+- Re-run only what failed (`-Tag <case IDs>`), not the whole suite or whole files.
+- Diagnose a few failures in the session itself; a subagent per area only when several unrelated failures need deep
+  code reading (each costs about 100k tokens).

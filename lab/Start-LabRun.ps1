@@ -81,4 +81,13 @@ Write-Host "Results: $back"
 # The PR report (case x VM, gate) - its verdict is printed; the exit code stays the number of failed tests.
 try { & (Join-Path $PSScriptRoot 'New-LabReport.ps1') -Run $runId -ResultsRoot (Join-Path $repo 'artifacts\lab') }
 catch { Write-Warning "No report: $($_.Exception.Message)" }
+# The short summary (one line per VM and per failed case) as failures.txt next to the results: what LabConsole.ps1
+# shows and what an AI session reads instead of the XMLs and logs.
+try {
+    $failures = @(& (Join-Path $PSScriptRoot 'Get-LabFailures.ps1') -Run $runId -Root (Join-Path $repo 'artifacts\lab'))
+    $failures | Set-Content (Join-Path $back 'failures.txt') -Encoding UTF8
+    Write-Host ''
+    $failures | ForEach-Object { Write-Host $_ }
+}
+catch { Write-Warning "No failure summary: $($_.Exception.Message)" }
 exit [int](Get-Content (Join-Path $runDir 'done.json') -Raw | ConvertFrom-Json).ExitCode
