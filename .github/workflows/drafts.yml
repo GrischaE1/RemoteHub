@@ -3,7 +3,7 @@ name: Drafts
 # Pull requests start as drafts, and can only be marked ready for review once every check has passed:
 # - A pull request opened as ready is converted to a draft with a note.
 # - Marking a pull request ready while a check is still running or has failed converts it back, naming those checks.
-# Dependabot's pull requests are left alone. The Claude review is not counted – it runs after the pull request is ready.
+# Dependabot's pull requests are left alone.
 # pull_request_target: runs this file as it is on main – the pull request's own code is never checked out or run.
 on:
   pull_request_target:
@@ -36,11 +36,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          # Every check except this workflow's own and the Claude review's must have passed (or been skipped), and
-          # the build must have run at all – it may not have started yet right after a push. gh pr checks exits non-zero
+          # Every check except this workflow's own must have passed (or been skipped), and the build must have
+          # run at all – it may not have started yet right after a push. gh pr checks exits non-zero
           # while checks are pending or failing, but still prints them.
           checks=$(gh pr checks "$PR" -R "$GITHUB_REPOSITORY" --json name,bucket,workflow \
-            --jq '[.[] | select(.workflow != "Drafts" and .workflow != "Claude review" and .name != "claude-review")]' || true)
+            --jq '[.[] | select(.workflow != "Drafts")]' || true)
           blocking=$(jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"] | join(", ")' <<<"$checks")
           if ! jq -e 'any(.[]; .name == "build-and-test")' <<<"$checks" >/dev/null; then
             blocking="${blocking:+$blocking, }build-and-test (not started yet)"
