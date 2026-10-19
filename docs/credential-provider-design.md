@@ -311,7 +311,7 @@ SignInRequest(pw) ─────────▶ checks 6.2 (7–8); ticket = {S
   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{CLSID}` (default = "RemoteHub Agent");
   - `HKCR\CLSID\{CLSID}\InprocServer32` (default = full path, `ThreadingModel = Apartment`).
   - The CLSID is a fixed GUID that never changes, so IT can exclude it: **`{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}`**.
-- **Its own MSI feature, `CredentialProvider`** ("Automatic sign-in (credential provider)"), present only in MSIs built with `build-installer.ps1 -CredentialProvider`, and installed by default (level 1), like every feature. `AUTOSIGNIN=0` sets its level to 0, which rules it out. The release workflow passes `-CredentialProvider` whenever the signing certificate is there (secret `SIGNING_CERTIFICATE_PFX`); without it the release has no provider, because it is never built unsigned.
+- **Its own MSI feature, `CredentialProvider`** ("Automatic sign-in (credential provider)"), present only in MSIs built with `build-installer.ps1 -CredentialProvider`, and installed by default (level 1), like every feature. `AUTOSIGNIN=0` sets its level to 0, which rules it out. The release workflow passes `-CredentialProvider` whenever its signing step can sign (step output `enabled`); without signing the release has no provider, because it is never built unsigned.
 - **Upgrades** (decided, §15 Q6), the same rule as `VIRTUALDISPLAY`:
   - `AUTOSIGNIN=1` installs or keeps the provider; `AUTOSIGNIN=0` removes it;
   - no value (an ordinary update) **keeps what's installed**. Windows Installer carries the feature's state over to the new version (`MigrateFeatureStates`), so nothing has to be remembered.
