@@ -730,6 +730,7 @@ public partial class MainWindow : FluentWindow
     {
         var n = _vm.SelectedNode;
         Visibility V(bool b) => b ? Visibility.Visible : Visibility.Collapsed;
+        UpdateNotesMenu(n);
         // What this PC's policy blocks isn't offered (docs/admx-design.md §4.2).
         var rdpOn = Features.IsAllowed(Feature.Rdp);
         var agentDesktopOn = Features.IsAllowed(Feature.AgentDesktop);
@@ -2615,6 +2616,7 @@ public partial class MainWindow : FluentWindow
     /// <param name="locked">Exited from the auto-lock: the settings key is gone – they were saved when it locked.</param>
     private void Shutdown(bool locked = false)
     {
+        if (!locked) _ = Notes?.Save(sync: true); // the open page, before the database closes
         if (!locked)
         {
             var ui = _vm.Data.Ui;

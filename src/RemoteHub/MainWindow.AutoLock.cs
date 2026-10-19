@@ -38,6 +38,8 @@ public partial class MainWindow
         try
         {
             _vm.SaveNow();
+            Notes?.Lock(); // saves the open page and takes its text out of the window
+            Rail.Close();
             SecureClipboard.ClearIfOurs();
             var shown = Application.Current.Windows.OfType<Window>().Where(w => w.IsVisible).ToList();
             foreach (var w in shown) w.Hide();
@@ -56,6 +58,7 @@ public partial class MainWindow
                 return;
             }
             foreach (var w in shown) w.Show();
+            Notes?.Unlock();
             Activate();
         }
         finally { _locked = false; }

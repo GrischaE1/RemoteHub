@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using RemoteHub.Models;
 using RemoteHub.Services;
 using RemoteHub.Views;
 using Wpf.Ui.Controls;
@@ -60,10 +61,55 @@ public partial class MainWindow
     private void EnsureNotesView()
     {
         if (_notesView is not null) return;
-        var placeholder = new System.Windows.Controls.TextBlock { Text = "Notes are coming.", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
-        placeholder.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        _notesView = placeholder;
+        try
+        {
+            _notesView = new NotesView(new NotesHost(this, _vm.Data.Ui, _vm.RequestSave, LinkTargets, SettingsStore.IsShared));
+        }
+        catch (Exception ex)
+        {
+            // The database isn't open (e.g. it couldn't be read at start): Notes say so instead of failing.
+            DiagLog.Write("Notes: the view could not open: " + ex.GetType().Name);
+            var text = new System.Windows.Controls.TextBlock { Text = "Notes can't be opened: the local database isn't available.", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            text.SetResourceReference(System.Windows.Controls.TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+            NotesHost.Child = text;
+            return;
+        }
         NotesHost.Child = _notesView;
+    }
+
+    private NotesView? Notes => _notesView as NotesView;
+
+    /// <summary>Folders and connections a page can be linked to, with their path for the picker.</summary>
+    private IReadOnlyList<NoteLinkTarget> LinkTargets() =>
+        [.. _vm.AllNodes().Where(n => n is Folder or Connection).Select(n => new NoteLinkTarget(n.Id.ToString(), n.Name, NodePath(n), n is Folder))
+            .OrderBy(t => t.Path, StringComparer.CurrentCultureIgnoreCase)];
+
+    private static string NodePath(NodeBase n)
+    {
+        var parts = new List<string>();
+        for (var x = n; x is not null; x = x.Parent) parts.Insert(0, x.Name);
+        return string.Join(" › ", parts);
+    }
+
+    private void UpdateNotesMenu(NodeBase? n)
+    {
+        var count = 0;
+        if (n is Folder or Connection && Data.LocalDb.IsOpen)
+            try { count = Data.NoteStore.LinkCounts().GetValueOrDefault(n.Id.ToString()); } catch (Exception ex) { DiagLog.Write("Notes: counting links failed: " + ex.GetType().Name); }
+        CmNotes.Visibility = n is Folder or Connection ? Visibility.Visible : Visibility.Collapsed;
+        CmNotes.Header = count > 0 ? $"Notes ({count})" : "Notes";
+    }
+
+    private void CmNotes_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedNode is { } n) ShowNotesFor(n);
+    }
+
+    /// <summary>The tree's "Notes" command: the pages linked to the selected folder or connection.</summary>
+    private void ShowNotesFor(NodeBase node)
+    {
+        ShowView(NotesViewId);
+        Notes?.ShowLinkedTo([node.Id.ToString()], $"Linked to {node.Name}");
     }
 
     private void FocusCurrentView()
@@ -91,7 +137,7 @@ public partial class MainWindow
         if (e.Key is Key.D1 or Key.NumPad1) { ShowView(RemoteViewId); FocusCurrentView(); e.Handled = true; return true; }
         if (e.Key is Key.D2 or Key.NumPad2) { ShowView(NotesViewId); FocusCurrentView(); e.Handled = true; return true; }
         if (CurrentView != NotesViewId) return false;
-        // In Notes, Ctrl+B is bold, Ctrl+F searches the notes and Ctrl+N adds a page: the view handles them itself.
+        // In Notes, Ctrl+B is bold, Ctrl+F searches the notes and Ctrl+N adds a page: the view and its editor handle them.
         return e.Key is Key.B or Key.F or Key.N;
     }
 }

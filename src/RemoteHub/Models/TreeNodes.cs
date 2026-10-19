@@ -338,6 +338,15 @@ public sealed class UiState
     public bool SidebarCollapsed { get; set; }
     /// <summary>The view shown last ("Remote" or "Notes"); anything else opens Remote Control.</summary>
     public string? LastView { get; set; }
+    // Notes view (docs/notes-view-design.md §4): pane widths, sorting, collapsed notebooks, recent script languages, last page.
+    public double NotesNotebooksWidth { get; set; } = 240;
+    public double NotesPagesWidth { get; set; } = 270;
+    public string NotesSort { get; set; } = "manual";
+    public List<string> NotesCollapsedNotebooks { get; set; } = [];
+    public List<string> NotesRecentLanguages { get; set; } = [];
+    public string? LastNoteSectionId { get; set; }
+    public string? LastNotePageId { get; set; }
+    public bool NotesSharedHintDismissed { get; set; }
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }

@@ -504,6 +504,7 @@
                                     <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
                                               ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
                                 </MenuItem>
+                                <MenuItem x:Name="CmNotes" Header="Notes" Click="CmNotes_Click" Icon="{ui:SymbolIcon Notebook24}" />
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />

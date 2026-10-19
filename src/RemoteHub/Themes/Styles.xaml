@@ -24,6 +24,7 @@
     <SolidColorBrush x:Key="SessionHeaderBrush" Color="#232A3A" />
     <SolidColorBrush x:Key="ChromeStrokeBrush" Color="#2E3850" />
     <SolidColorBrush x:Key="BrandAccentBrush" Color="#0078D4" />
+    <SolidColorBrush x:Key="NoteCodeBackgroundBrush" Color="#121722" />
 
     <!-- Session tab strip item -->
     <Style x:Key="SessionTabStyle" TargetType="ListBoxItem">

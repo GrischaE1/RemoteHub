@@ -306,7 +306,8 @@ public sealed class ViewRail : Grid
 
         public Look(UIElement content, double width, HorizontalAlignment align, Action changed)
         {
-            Back = new Border { CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), Padding = new Thickness(8, 0, 8, 0) };
+            // Collapsed items are centred in 40 px: no side padding there, or the version text gets cut.
+            Back = new Border { CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), Padding = align == HorizontalAlignment.Center ? new Thickness(0) : new Thickness(8, 0, 8, 0) };
             Back.Child = new ContentPresenter { Content = content, HorizontalAlignment = align, VerticalAlignment = VerticalAlignment.Center };
             Marker = new Rectangle { Width = 3, Height = 16, RadiusX = 1.5, RadiusY = 1.5, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0), IsHitTestVisible = false };
             Marker.SetResourceReference(Shape.FillProperty, "BrandAccentBrush");
