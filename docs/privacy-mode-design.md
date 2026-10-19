@@ -171,7 +171,7 @@ The service refuses the command when the right or policy is missing. In that cas
 ### 5.5 Disconnect always works
 
 - The banner stays above the overlays (§5.2) and does not collapse while the privacy screen is on. A collapsed pill is easy to miss on a black screen.
-- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end".
+- With local input blocked, the mouse hook lets local clicks in the banner's rect through. The cursor stays visible on the overlay (§14). While input is blocked, the banner's heading ends in " · mouse and keyboard blocked" and its subtitle reads "Click "Disconnect" to end". Where that doesn't fit on one line beside the buttons (a narrow screen, a long account name), the banner grows taller and the text wraps – it is never cut.
 - Ctrl+Alt+Del → Lock or Sign out ends the admin's view of the user desktop, as it does today.
 
 ### 5.6 What the privacy screen does not cover

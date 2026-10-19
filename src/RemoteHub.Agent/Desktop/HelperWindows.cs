@@ -869,14 +869,30 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
         private bool _collapsed;
         private const int CollapseTimer = 2;
 
-        private (int W, int H) BannerSize()
+        private (int W, int H) BannerSize() => BannerSize(GetSystemMetrics(0));
+
+        /// <summary>
+        /// The banner's size on a screen this wide. Open, it is one line while the heading and subtitle fit beside the
+        /// buttons; otherwise it is taller and they wrap (<see cref="Stacked"/>), so nothing the user must read is cut.
+        /// </summary>
+        internal (int W, int H) BannerSize(int screenWidth)
         {
-            var h = S(_collapsed ? 36 : 46);
-            var sx = GetSystemMetrics(0);
-            var text = _collapsed ? TextWidth(_small, ShortHeading) : TextWidth(_bold, Heading) + S(14) + TextWidth(_small, Subtitle);
+            var text = _collapsed ? TextWidth(_small, ShortHeading) : OneLineWidth();
             var buttons = BannerButtons().Sum(b => ButtonWidth(b) + S(8)) - S(8);
-            return (Math.Min(sx - S(24), S(16 + 12 + 12) + text + S(20) + buttons + S(10)), h);
+            var w = Math.Min(screenWidth - S(24), S(16 + 12 + 12) + text + S(20) + buttons + S(10));
+            if (!Stacked(w)) return (w, S(_collapsed ? 36 : 46));
+            var room = TextRoom(w);
+            return (w, Math.Max(S(46), S(8) + TextHeight(_bold, Heading, room) + S(2) + TextHeight(_small, Subtitle, room) + S(8)));
         }
+
+        /// <summary>The open banner's heading, gap and subtitle side by side, as <see cref="PaintBanner"/> draws them.</summary>
+        private int OneLineWidth() => TextWidth(_bold, Heading) + S(4) + S(10) + TextWidth(_small, Subtitle) + S(4);
+
+        /// <summary>The width left for the banner's text: after the dot, before the buttons.</summary>
+        private int TextRoom(int w) => w - S(7) - BannerButtons().Sum(b => ButtonWidth(b) + S(8)) - S(12) - (S(16) + S(12) + S(12));
+
+        /// <summary>Open, and the heading and subtitle don't fit on one line (a narrow screen, a long account name).</summary>
+        internal bool Stacked(int w) => !_collapsed && OneLineWidth() > TextRoom(w);
 
         /// <summary>The banner's buttons as shown: all of them, or only the last one ("Disconnect") on the pill.</summary>
         private FluentButton[] BannerButtons() => _collapsed && Buttons.Length > 1 ? [Buttons[^1]] : Buttons;
@@ -1228,10 +1244,18 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             Ellipse(g, S(16), (h - dot) / 2, dot, dot, Accent ? Theme.Accent : Theme.Danger);
             var x = S(16) + dot + S(12);
             var shown = BannerButtons();
-            // The text ends before the buttons: on a narrow screen it is cut with "…", the subtitle goes first.
-            var room = w - S(7) - shown.Sum(b => ButtonWidth(b) + S(8)) - S(12) - x;
+            // The text ends before the buttons. Open, it is never cut: where it doesn't fit on one line the banner is taller
+            // (BannerSize) and the heading wraps with the subtitle under it - "mouse and keyboard blocked" must be read.
+            var room = TextRoom(w);
             if (_collapsed)
                 Text(dc, _small, ShortHeading, x, 0, Math.Min(room, TextWidth(_small, ShortHeading) + S(4)), h, theme.Text, vcenter: true);
+            else if (Stacked(w))
+            {
+                var hh = TextHeight(_bold, Heading, room);
+                var y = (h - hh - S(2) - TextHeight(_small, Subtitle, room)) / 2;
+                TextBlock(dc, _bold, Heading, x, y, room, theme.Text);
+                TextBlock(dc, _small, Subtitle, x, y + hh + S(2), room, theme.Secondary);
+            }
             else
             {
                 var tw = Math.Min(room, TextWidth(_bold, Heading) + S(4));
@@ -1241,11 +1265,13 @@ internal sealed unsafe partial class Win32HelperUi : IHelperUi
             }
             _buttonRects.Clear();
             var bx = w - S(7);
+            // the buttons keep their height on a taller banner, centred
+            var bh = S(_collapsed ? 24 : 34);
             for (var i = shown.Length - 1; i >= 0; i--)
             {
                 var bw = ButtonWidth(shown[i]);
                 bx -= bw;
-                DrawButton(dc, g, shown[i], bx, S(6), bw, h - S(12), _collapsed ? _small : _bold);
+                DrawButton(dc, g, shown[i], bx, (h - bh) / 2, bw, bh, _collapsed ? _small : _bold);
                 bx -= S(8);
             }
         }
