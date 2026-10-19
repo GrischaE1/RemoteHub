@@ -570,6 +570,7 @@ public partial class MainWindow : FluentWindow
         }
         if (HandleViewKeys(e, ctrl)) return;
         if (ctrl && e.Key == Key.N) { if (shift) NewFolder_Click(this, e); else NewConnection_Click(this, e); e.Handled = true; }
+        else if (ctrl && e.Key == Key.F && FocusedFilterable() is { } view) { view.FocusFilter(); e.Handled = true; }
         else if (ctrl && e.Key == Key.F)
         {
             if (_vm.Data.Ui.SidebarCollapsed) ToggleSidebar();
@@ -579,6 +580,15 @@ public partial class MainWindow : FluentWindow
         else if (ctrl && e.Key == Key.OemComma) { OpenSettings(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.Tab) { _vm.SelectNextSession(shift ? -1 : 1); e.Handled = true; }
         else if (ctrl && e.Key == Key.W && _vm.SelectedSession is { } s) { CloseTab(s); e.Handled = true; }
+    }
+
+    /// <summary>The file pane, registry or list view the keyboard focus is in, if any: Ctrl+F there goes to its filter.</summary>
+    private static IFilterableView? FocusedFilterable()
+    {
+        for (var d = Keyboard.FocusedElement as DependencyObject; d is not null;
+             d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is IFilterableView v) return v;
+        return null;
     }
 
     private void Tree_KeyDown(object sender, KeyEventArgs e)
