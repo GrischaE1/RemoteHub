@@ -127,8 +127,8 @@ account is `PSAdmin`.
 | A-INST-24 | selftest on the device | `RemoteHubAgent.exe selftest` → "Self-test passed.", exit 0, nothing changed (no log line, no cert) | PS | 2 | ✅ |
 | A-INST-25 | Port in use | another listener on 58732, then install → install fails cleanly or service doesn't start; log says "could not start", no silent port change | PS H | 2 | ✅ |
 | A-INST-26 | Install log for failures | force a failure (corrupt `.rhagent`) → RemoteHub's error shows the `WixQuietExec`/`Error` lines from the msiexec log | H | 2 | ✅ |
-| A-INST-27 | Folder made before the install | normaluser creates `%ProgramData%\RemoteHub\Agent\logs\x.log` (and a subfolder) before the install → afterwards every entry owned by Administrators, only inherited ACEs (SYSTEM, Administrators), normaluser can neither read nor write | PS | 1 | ◐ |
-| A-INST-28 | `AUTOSIGNIN=1` on a package without the provider | install succeeds without DLL and CLSID keys; Hello `autoSignIn` false; automatic sign-in not allowed – neither in `agent.json` (`noUserBehavior`, `autoSignInGroups`) nor in the policy key. Today the install's choice is still recorded (`agent.json` since 0.18.12, the policy key before; "Automatic sign-in allowed on this device for Administrators.") – product gap: `auto-sign-in=[AUTOSIGNIN]` outside the `CredentialProviderDll` condition | PS H | 3 | ◐ |
+| A-INST-27 | Folder made before the install | normaluser creates `%ProgramData%\RemoteHub\Agent\logs\x.log` (and a subfolder) before the install → afterwards every entry owned by Administrators, only inherited ACEs (SYSTEM, Administrators), normaluser can neither read nor write | PS | 1 | ✅ |
+| A-INST-28 | `AUTOSIGNIN=1` on a package without the provider | install succeeds without DLL and CLSID keys; Hello `autoSignIn` false; automatic sign-in not allowed – neither in `agent.json` (`noUserBehavior`, `autoSignInGroups`) nor in the policy key. Today the install's choice is still recorded (`agent.json` since 0.18.12, the policy key before; "Automatic sign-in allowed on this device for Administrators.") – product gap: `auto-sign-in=[AUTOSIGNIN]` outside the `CredentialProviderDll` condition | PS H | 3 | ✅ |
 
 ### 5.2 Other install paths
 
@@ -140,10 +140,10 @@ account is `PSAdmin`.
 | A-HAND-04 | `ENROLLMENT=<path>` property | file in another folder → used; file deleted afterwards | PS | 2 | ✅ | |
 | A-HAND-05 | Enrollment format 2 / bad GUID / port 0 / empty groups / no certificate / bad firewall addresses | each refused with a clear message ("The enrollment has no certificate.", "Firewall addresses '…' are not valid.", …), install rolled back | PS | 2 | ✅ | |
 | A-HAND-06 | Interactive install (not /qn) | the package has no dialogs of its own: Windows Installer's progress window (/qb) in the console session (its title noted by the session that runs msiexec, while it runs), installed and enrolled; VIRTUALDISPLAY is only a property | S | 3 | ✅ | |
-| A-HAND-07 | Provider added or removed on an installed agent | `msiexec /i <msi> ADDLOCAL=CredentialProvider` / `/i {ProductCode} REMOVE=CredentialProvider` → 0/3010, DLL and both keys added / removed; same service PID, agent.json unchanged (its `noUserBehavior` = AutoSignIn and `autoSignInGroups` from the `AUTOSIGNIN=1` install stay – only the enroll step and RemoteHub's `auto-sign-in on/off` set them), no new enroll line; the policy key is not touched (empty: the install doesn't write it since 0.18.12) | PS | 2 | ◐ | |
-| A-CLIP-01 | Clipboard install from RemoteHub | **2VM**: RemoteHub puts MSI + `.rhagent` on the clipboard, pasted into the RDP session, MSI run there → connection marked installed on first health | U | 2 | ◐ | 2VM |
-| A-CLIP-02 | Staging cleanup on the admin's PC | `%TEMP%\RemoteHub-Agent\<id>` gone after RemoteHub exits and after the next start (crash case) | U PS | 1 | ◐ | 2VM |
-| A-CLIP-03 | Ask before sending the key through a desktop tab | agent desktop tab to another device open → RemoteHub asks before the clipboard install (was D-DESKCLIP) | U | 1 | ◐ | 2VM |
+| A-HAND-07 | Provider added or removed on an installed agent | `msiexec /i <msi> ADDLOCAL=CredentialProvider` / `/i {ProductCode} REMOVE=CredentialProvider` → 0/3010, DLL and both keys added / removed; same service PID, agent.json unchanged (its `noUserBehavior` = AutoSignIn and `autoSignInGroups` from the `AUTOSIGNIN=1` install stay – only the enroll step and RemoteHub's `auto-sign-in on/off` set them), no new enroll line; the policy key is not touched (empty: the install doesn't write it since 0.18.12) | PS | 2 | ✅ | |
+| A-CLIP-01 | Clipboard install from RemoteHub | **2VM**: RemoteHub puts MSI + `.rhagent` on the clipboard, pasted into the RDP session, MSI run there → connection marked installed on first health | U | 2 | ✅ | 2VM |
+| A-CLIP-02 | Staging cleanup on the admin's PC | `%TEMP%\RemoteHub-Agent\<id>` gone after RemoteHub exits and after the next start (crash case) | U PS | 1 | ✅ | 2VM |
+| A-CLIP-03 | Ask before sending the key through a desktop tab | agent desktop tab to another device open → RemoteHub asks before the clipboard install (was D-DESKCLIP) | U | 1 | ✅ | 2VM |
 
 ### 5.3 Update, repair, downgrade
 
@@ -187,7 +187,7 @@ account is `PSAdmin`.
 | A-UNINST-13 | Uninstall while a desktop session is open | session ends, helper gone, display restored, no banner left | H S | 2 | ✅ |
 | A-UNINST-14 | Reinstall after uninstall | new enrollment works, no duplicate certs or rules | H | 2 | ✅ |
 | A-UNINST-15 | Uninstall after automatic sign-in | after an `AUTOSIGNIN=1` install (`agent.json` `noUserBehavior` = AutoSignIn, `autoSignInGroups` with Administrators; policy key empty, no `autosignin.policy` – docs/admx-design.md §11.3): provider DLL and both keys gone, `agent.json` and with it the install's choice removed, the policy key still empty | PS | 1 | ✅ |
-| A-UNINST-16 | The install's choice, IT's policy values and an older version's values | after an `AUTOSIGNIN=1` install (its choice in `agent.json`, policy key empty) IT sets `Rights\AutoSignIn` → uninstall removes `agent.json`, IT's value stays; IT sets `NoUserBehavior=SignInScreen` → `AUTOSIGNIN=0` (update through the agent) clears `noUserBehavior` / `autoSignInGroups` in `agent.json`, IT's value stays. Migration (version-independent, planted): the policy key and `autosignin.policy` as a version before 0.18.12 leaves them – `NoUserBehavior` unchanged, `Rights\AutoSignIn` changed by IT – then a service restart → `NoUserBehavior` moved to `agent.json`, `Rights\AutoSignIn` stays in the policy key, the marker deleted, the log says "moved NoUserBehavior" and "Rights\AutoSignIn changed since the install – left in the policy key" | PS | 3 | ◐ |
+| A-UNINST-16 | The install's choice, IT's policy values and an older version's values | after an `AUTOSIGNIN=1` install (its choice in `agent.json`, policy key empty) IT sets `Rights\AutoSignIn` → uninstall removes `agent.json`, IT's value stays; IT sets `NoUserBehavior=SignInScreen` → `AUTOSIGNIN=0` (update through the agent) clears `noUserBehavior` / `autoSignInGroups` in `agent.json`, IT's value stays. Migration (version-independent, planted): the policy key and `autosignin.policy` as a version before 0.18.12 leaves them – `NoUserBehavior` unchanged, `Rights\AutoSignIn` changed by IT – then a service restart → `NoUserBehavior` moved to `agent.json`, `Rights\AutoSignIn` stays in the policy key, the marker deleted, the log says "moved NoUserBehavior" and "Rights\AutoSignIn changed since the install – left in the policy key" | PS | 3 | ✅ |
 
 ### 5.5 Configuration and service behaviour
 
@@ -225,8 +225,8 @@ account is `PSAdmin`.
 | S-THR-03 | Block ends | after 5 min the right password works again | H | 2 | ✅ |
 | S-THR-04 | Success clears | 4 wrong, 1 right, 4 wrong → no 429 | H | 3 | ✅ |
 | S-THR-05 | Restart resets | blocked, restart service → right password works | H PS | 3 | ✅ |
-| S-THR-06 | What counts toward the block | 5 refused sign-ins with the right password from one address (normaluser 403, a deny-network-logon account) block it, the 6th gets 429; unmapped Windows errors (HTTP 500) don't count | H E | 2 | ◐ |
-| S-THR-07 | Shared sign-in slots | at most 8 Windows sign-ins at once across all addresses; no slot within 30 s → 503 (needs ≥ 2 source addresses) | H | 3 | ◐ |
+| S-THR-06 | What counts toward the block | 5 refused sign-ins with the right password from one address (normaluser 403, a deny-network-logon account) block it, the 6th gets 429; unmapped Windows errors (HTTP 500) don't count | H E | 2 | ✅ |
+| S-THR-07 | Shared sign-in slots | at most 8 Windows sign-ins at once across all addresses; no slot within 30 s → 503 (needs ≥ 2 source addresses) | H | 3 | ✅ |
 | S-LIM-01 | Session limit | `maxSessions 2` → 3rd session (PowerShell, desktop or jump connection) 503; log line | H | 2 | ✅ |
 | S-POL-01 | Unreadable policy key | deny SYSTEM read on `HKLM\SOFTWARE\Policies\RemoteHub\Agent` → everything refused, health features empty (an unreadable key allows nothing, so not even `powershell` – since `PowerShellEnabled`), log "can't be read" | PS H | 1 | ✅ |
 | S-POL-02 | Policy read live | change a policy value, next connection uses it without a service restart | PS H | 2 | ✅ |
@@ -248,7 +248,7 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 | P-SES-07 | 20 sessions in parallel | all work; 21st 503 | H | 3 | ✅ |
 | P-SES-08 | Read-Host / Get-Credential prompts | answered through the host UI callbacks | H | 3 | ✅ |
 | P-SES-09 | Tab completion | `TabExpansion2` results for `Get-Ser`, `-Na`, `C:\Win` | H | 3 | ✅ |
-| P-SES-10 | PowerShell can't start | e.g. an IFEO `Debugger` on powershell.exe pointing to a missing file → 500, log "Could not start PowerShell for <acct>: …", no event 1000, the session slot released | H PS E | 3 | ◐ |
+| P-SES-10 | PowerShell can't start | e.g. an IFEO `Debugger` on powershell.exe pointing to a missing file → 500, log "Could not start PowerShell for <acct>: …", no event 1000, the session slot released | H PS E | 3 | ✅ |
 | P-CLM-01 | Constrained Language Mode | on CLM VM: session opens, `$ExecutionContext.SessionState.LanguageMode` ConstrainedLanguage; tools needing FullLanguage report it clearly | H | 2 | ✅ |
 | T-FS-01 | List drives / folders | drives incl. C:, hidden files flagged, `%TEMP%` expands remotely | H | 2 | ✅ |
 | T-FS-02 | Upload small files | 300 files → all arrive, SHA-256 equal, no `.remotehub-part` left | H PS | 1 | ✅ |
@@ -282,29 +282,29 @@ RemoteHub's `ShareConnector` + `ShareTransfer` (harness "share") against shares 
 | S-SMB-02 | Second account, same server | RemoteHub's own SMB client for the second account (Windows allows one account per server), writes there | H | 2 | ✅ | Server |
 | S-SMB-03 | Standard user | normaluser copies both ways on the share it may use | H PS | 2 | ✅ | Server |
 | S-SMB-04 | Wrong password | reported as such | H | 2 | ✅ | Server |
-| S-SMB-05 | No account → Windows account | SMB without credentials connects as the signed-in Windows user; description "SMB · Windows · your Windows account", tab source "your Windows account (no account set)" | H | 3 | ◐ | Server |
-| S-SMB-06 | Windows connection lifetime | no drive letter; two tabs on one share → one connection; closing the last tab removes it (`net use` empty); a connection that existed before is used and stays; RemoteHub exiting removes its own | H PS | 2 | ◐ | Server |
-| S-SMB-07 | Port / name rules | port ≠ 445 → "SMB always uses port 445 – remove the port from the share."; empty share name → "The share has no share name – edit it and enter the name …"; a pasted `\\host\share\folder` fills in host and path in the editor | H U | 3 | ◐ | Server |
-| S-SMB-08 | Access denied for a local admin | a share allowing only Administrators, opened as a local admin → Windows' message plus "… A local administrator signing in over the network gets no administrator rights there (Windows' remote UAC) …" | H PS | 3 | ◐ | Server |
+| S-SMB-05 | No account → Windows account | SMB without credentials connects as the signed-in Windows user; description "SMB · Windows · your Windows account", tab source "your Windows account (no account set)" | H | 3 | ✅ | Server |
+| S-SMB-06 | Windows connection lifetime | no drive letter; two tabs on one share → one connection; closing the last tab removes it (`net use` empty); a connection that existed before is used and stays; RemoteHub exiting removes its own | H PS | 2 | ✅ | Server |
+| S-SMB-07 | Port / name rules | port ≠ 445 → "SMB always uses port 445 – remove the port from the share."; empty share name → "The share has no share name – edit it and enter the name …"; a pasted `\\host\share\folder` fills in host and path in the editor | H U | 3 | ✅ | Server |
+| S-SMB-08 | Access denied for a local admin | a share allowing only Administrators, opened as a local admin → Windows' message plus "… A local administrator signing in over the network gets no administrator rights there (Windows' remote UAC) …" | H PS | 3 | ✅ | Server |
 | S-SFTP-01 | SFTP | asks about the host key once, copies both ways | H PS | 1 | ✅ | Server |
 | S-SFTP-02 | Key accepted | connects without asking again | H | 2 | ✅ | Server |
 | S-SFTP-03 | Key changed | a key that differs from the accepted one is refused when the user says no | H | 1 | ✅ | Server |
-| S-SFTP-04 | SFTP needs an account | no account → "<name> (SFTP) needs an account. Right-click it → Edit… and set one …"; editor "SFTP needs a user name."; password and keyboard-interactive only (no key authentication) | U H | 2 | ◐ | Server |
-| S-SFTP-05 | Wrong password | "The user name or password is incorrect (or the server doesn't allow password sign-in)." | H | 2 | ◐ | Server |
+| S-SFTP-04 | SFTP needs an account | no account → "<name> (SFTP) needs an account. Right-click it → Edit… and set one …"; editor "SFTP needs a user name."; password and keyboard-interactive only (no key authentication) | U H | 2 | ✅ | Server |
+| S-SFTP-05 | Wrong password | "The user name or password is incorrect (or the server doesn't allow password sign-in)." | H | 2 | ✅ | Server |
 | S-FTP-01 | FTP with TLS | asks about the self-signed certificate once, copies both ways over TLS | H PS | 2 | ✅ | Server |
 | S-FTP-02 | Certificate refused | nothing sent | H | 1 | ✅ | Server |
-| S-FTP-03 | FTP without TLS | security None → description "FTP · not encrypted", address `ftp://`, the editor warns "Not encrypted: the password and every file go over the network in plain text …" | H U | 3 | ◐ | Server |
-| S-FTP-04 | Implicit TLS / anonymous | implicit → port 990; no account → user "anonymous", tab source "anonymous sign-in (no account set)"; wrong password → "The user name or password is incorrect." | H | 3 | ◐ | Server |
+| S-FTP-03 | FTP without TLS | security None → description "FTP · not encrypted", address `ftp://`, the editor warns "Not encrypted: the password and every file go over the network in plain text …" | H U | 3 | ✅ | Server |
+| S-FTP-04 | Implicit TLS / anonymous | implicit → port 990; no account → user "anonymous", tab source "anonymous sign-in (no account set)"; wrong password → "The user name or password is incorrect." | H | 3 | ✅ | Server |
 | S-DAV-01 | WebDAV over HTTPS | copies both ways, Windows authentication | H PS | 2 | ✅ | Server |
 | S-DAV-02 | WebDAV over HTTP | copies both ways | H PS | 3 | ✅ | Server |
 | S-DAV-03 | WebDAV wrong password | reported as such | H | 2 | ✅ | Server |
-| S-DAV-04 | No account / redirect / status codes | no account → the Windows credentials; 301/302/307/308 → "The server redirects to <Location> – use that address for the share."; 403/404/409/423/507 → their messages | H | 3 | ◐ | Server |
-| S-SHR-01 | Password not stored | prompt "No password is stored for <user>. Enter it to open <server › share> – it is kept in memory only."; Reconnect reuses it without asking; nothing written to the stored secrets | U | 2 | ◐ | Server |
-| S-SHR-02 | Trust dialog / Forget | first key or certificate → "Trust this server?" (*Trust and connect*); a changed key → "Server key changed"; the accepted value is kept; *Forget* in the editor → asked again next time; answered after 30 s (no time limit on the question) it still connects, or is refused with its message | U | 2 | ◐ | Server |
-| S-SHR-03 | Idle close | after 5 min idle "Idle – the connection to the share was closed and opens again when you use it."; the next listing reconnects without asking | H U | 3 | ◐ | Server |
-| S-SHR-04 | Transfer safety | uploads go to `<name>.remotehub-part`, size checked, then renamed; existing file without overwrite → "Skipped – the file already exists"; same-name folder → "Skipped – a folder has that name"; size mismatch → "… the transfer was incomplete." and the part file removed | H | 2 | ◐ | Server |
-| S-SHR-05 | Browse actions | deleting the share root → "The share itself can't be deleted."; renaming onto an existing name → "\"<n>\" already exists." | H U | 3 | ◐ | Server |
-| S-SHR-06 | Shares on their own | New → Network share: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed | U | 2 | ◐ | Server |
+| S-DAV-04 | No account / redirect / status codes | no account → the Windows credentials; 301/302/307/308 → "The server redirects to <Location> – use that address for the share."; 403/404/409/423/507 → their messages | H | 3 | ✅ | Server |
+| S-SHR-01 | Password not stored | prompt "No password is stored for <user>. Enter it to open <server › share> – it is kept in memory only."; Reconnect reuses it without asking; nothing written to the stored secrets | U | 2 | ✅ | Server |
+| S-SHR-02 | Trust dialog / Forget | first key or certificate → "Trust this server?" (*Trust and connect*); a changed key → "Server key changed"; the accepted value is kept; *Forget* in the editor → asked again next time; answered after 30 s (no time limit on the question) it still connects, or is refused with its message | U | 2 | ✅ | Server |
+| S-SHR-03 | Idle close | after 5 min idle "Idle – the connection to the share was closed and opens again when you use it."; the next listing reconnects without asking | H U | 3 | ✅ | Server |
+| S-SHR-04 | Transfer safety | uploads go to `<name>.remotehub-part`, size checked, then renamed; existing file without overwrite → "Skipped – the file already exists"; same-name folder → "Skipped – a folder has that name"; size mismatch → "… the transfer was incomplete." and the part file removed | H | 2 | ✅ | Server |
+| S-SHR-05 | Browse actions | deleting the share root → "The share itself can't be deleted."; renaming onto an existing name → "\"<n>\" already exists." | H U | 3 | ✅ | Server |
+| S-SHR-06 | Shares on their own | New → Network share: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed | U | 2 | ✅ | Server |
 
 ## 8. WinRM setup script (W)
 
@@ -328,7 +328,7 @@ remoting code connects from the host.
 | W-NONADMIN-01 | Non-RID-500 admin over WinRM without LATFP | filtered token (documents the difference to the agent, S-AUTH-09) | H | 3 | ✅ | |
 | W-HTTP-01 | HTTP + Kerberos by name | session works, 5985 only from given addresses | H PS | 2 | ✅ | Domain |
 | W-TRUST-01 | Trust prompt on the admin's PC | **2VM**: "Test again" puts "RemoteHub – WinRM <host>" in CurrentUser\Root after the Windows prompt (UIA clicks Yes), connection switches to HTTPS | U | 2 | ✅ | 2VM |
-| W-NAME-01 | Setup by computer name | certificate CN=<name>, SAN `DNS=<fqdn>` and `DNS=<short>`; reuse needs the same CN; a name with other characters refused by RemoteHub "… isn't a computer name or IP address." | PS | 3 | ◐ | |
+| W-NAME-01 | Setup by computer name | certificate CN=<name>, SAN `DNS=<fqdn>` and `DNS=<short>`; reuse needs the same CN; a name with other characters refused by RemoteHub "… isn't a computer name or IP address." | PS | 3 | ✅ | |
 
 ## 9. Agent remote desktop (D)
 
@@ -351,7 +351,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-CON-08 | Frames arrive | after Connected: key frame, decodes to the guest resolution, picture matches a console screenshot (≥ 95 % similar) | H C | 1 | ✅ |
 | D-CON-09 | End by RemoteHub | close → event 1101 with duration, helper process gone within 5 s, banner gone | H S E | 1 | ✅ |
 | D-CON-10 | Helper runs as SYSTEM in the session | `RemoteHubAgent.exe desktop` in the chosen session ID (the active console session for the console), as SYSTEM, in a job object | PS | 2 | ✅ |
-| D-CON-11 | Unrequested sign-in request | a SignInRequest (type 31) RemoteHub wasn't asked for closes the connection; during a session it is a protocol error and the resume token is void | H E | 3 | ◐ |
+| D-CON-11 | Unrequested sign-in request | a SignInRequest (type 31) RemoteHub wasn't asked for closes the connection; during a session it is a protocol error and the resume token is void | H E | 3 | ✅ |
 
 ### 9.2 Consent
 
@@ -364,23 +364,23 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-ASK-05 | Timeout policy | `ConsentTimeoutSeconds=5` → countdown 5 s; values 4 and 601 ignored (default 30) | PS H S | 2 | ✅ |
 | D-ASK-06 | No input before consent | mouse/keys sent while WaitingForUser don't reach the session (marker app counts input) | H S | 1 | ✅ |
 | D-ASK-07 | View-only text | view-only Start → dialog says "see" not "control" | H S | 3 | ✅ |
-| D-ASK-08 | RemoteHub closes while asking | 2100 "…: The connection ended before access was granted." | H E | 3 | ◐ |
-| D-ASK-09 | Hide apps from the question | *Allow and hide apps…* opens the app picker; the countdown restarts; the chosen apps hidden from the start | H S | 2 | ◐ |
+| D-ASK-08 | RemoteHub closes while asking | 2100 "…: The connection ended before access was granted." | H E | 3 | ✅ |
+| D-ASK-09 | Hide apps from the question | *Allow and hide apps…* opens the app picker; the countdown restarts; the chosen apps hidden from the start | H S | 2 | ✅ |
 | D-PIN-01 | PIN right | 6-digit code read by UIA, sent → Connected | H S | 1 | ✅ |
 | D-PIN-02 | PIN wrong ×3 | attemptsLeft 2,1, then Denied "entered wrong too often", event 2100 | H S E | 1 | ✅ |
 | D-PIN-03 | PIN with spaces / dash | "123 456" accepted (non-digits stripped) | H S | 3 | ✅ |
 | D-PIN-04 | PIN dialog Deny | Denied "refused" | H S | 2 | ✅ |
 | D-PIN-05 | PIN timeout | no entry for 3 min → Denied | H S | 3 | ✅ |
-| D-PIN-06 | PIN dialog choices | the code window has *Hide apps…* and *Deny*; Deny → Denied | H S | 3 | ◐ |
+| D-PIN-06 | PIN dialog choices | the code window has *Hide apps…* and *Deny*; Deny → Denied | H S | 3 | ✅ |
 | D-NONE-01 | None refused by default | None not in Hello modes; Start with None → refused, 2100 | H E | 1 | ✅ |
 | D-NONE-02 | None with policy only | `AllowedConsentModes` incl. None but no ConsentBypass right → still refused | PS H | 1 | ✅ |
 | D-NONE-03 | None with policy + right | both set → connected without a dialog, banner shown | PS H S | 1 | ✅ |
 | D-NONE-04 | Own session | PSAdmin connects to PSAdmin's own session with None → no question, event 1100 "consent None" (1102 is only written when the own account signs in during a running session) | H S | 2 | ✅ |
-| D-NONE-05 | Own session with Ask / Pin | the own session started with Ask or Pin → the dialog is shown all the same | H S | 3 | ◐ |
+| D-NONE-05 | Own session with Ask / Pin | the own session started with Ask or Pin → the dialog is shown all the same | H S | 3 | ✅ |
 | D-MODES-01 | Policy as REG_SZ list / invalid list | `"Pin;Ask"` works; `"Foo"` → defaults Ask+Pin | PS H | 3 | ✅ |
 | D-MODES-02 | Only Pin allowed | Ask refused; Pin works | PS H | 2 | ✅ |
-| D-MODES-03 | No mode left | `ConsentModes` allowing nothing usable → Hello consentModes [], Failed "No way to connect is allowed on this device (policy).", 2100 | PS H E | 2 | ◐ |
-| D-MODES-04 | Mode on a locked / sign-in session | a mode the policy doesn't allow isn't refused there: it runs as None, the follow-up mode applies when someone unlocks or signs in | PS H | 3 | ◐ |
+| D-MODES-03 | No mode left | `ConsentModes` allowing nothing usable → Hello consentModes [], Failed "No way to connect is allowed on this device (policy).", 2100 | PS H E | 2 | ✅ |
+| D-MODES-04 | Mode on a locked / sign-in session | a mode the policy doesn't allow isn't refused there: it runs as None, the follow-up mode applies when someone unlocks or signs in | PS H | 3 | ✅ |
 
 ### 9.3 Banner and user at the device
 
@@ -393,9 +393,9 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-BAN-05 | Disconnect by the user | UIA clicks Disconnect → Ended "The user at the device ended the session.", resume token void | H S | 1 | ✅ | |
 | D-BAN-06 | Can't be closed otherwise | Alt+F4 / taskkill by the user (no admin) → banner stays | S | 2 | ✅ | |
 | D-BAN-07 | View-only text | "viewed by" without "controlled" | S | 3 | ✅ | |
-| D-BAN-08 | Never collapsed while hiding | something hidden → the banner stays open with " · mouse and keyboard blocked" and 'Click "Disconnect" to end' | S C | 3 | ◐ | |
-| D-BAN-09 | Clicks pass through | the admin's clicks on the banner's area reach the window below (`WS_EX_TRANSPARENT`) | H S | 3 | ◐ | |
-| D-BAN-10 | No banner after automatic sign-in | a session automatic sign-in created shows only the cover, no banner | H C | 1 | ◐ | |
+| D-BAN-08 | Never collapsed while hiding | something hidden → the banner stays open with " · mouse and keyboard blocked" and 'Click "Disconnect" to end' | S C | 3 | ✅ | |
+| D-BAN-09 | Clicks pass through | the admin's clicks on the banner's area reach the window below (`WS_EX_TRANSPARENT`) | H S | 3 | ✅ | |
+| D-BAN-10 | No banner after automatic sign-in | a session automatic sign-in created shows only the cover, no banner | H C | 1 | ✅ | |
 
 ### 9.4 View-only and rights
 
@@ -420,7 +420,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-SIGNIN-02 | Admin signs in through the picture | Ctrl+Alt+Del button + typed password through the desktop session → signed in, no consent for own account | H | 1 | ✅ |
 | D-SIGNIN-03 | Someone else signs in at the console | console keyboard signs in normaluser → helper follows into the new session, normaluser asked, Allow → continues | H C S | 1 | ✅ |
 | D-SIGNIN-04 | Sign out while connected | follows to the sign-in screen | H S | 2 | ✅ |
-| D-SIGNIN-05 | Own account by SID | the account signing in at the device is recognised as the admin's own by its SID (not the name) → continued without asking | H S | 3 | ◐ |
+| D-SIGNIN-05 | Own account by SID | the account signing in at the device is recognised as the admin's own by its SID (not the name) → continued without asking | H S | 3 | ✅ |
 | D-UAC-01 | UAC with SecureDesktop | `Start-Process cmd -Verb RunAs` in normaluser's session → prompt in the picture (GDI), usable: the password of the administrator the prompt offers (Admin) typed through the desktop session elevates | H S | 1 | ✅ |
 | D-UAC-02 | UAC prompt not shown without the SecureDesktop right | as D-RIGHT-02 (the same run): no picture of the prompt, Enter doesn't reach it; view-only with the right does see it | PS H S | 1 | ✅ |
 | D-FUS-01 | Fast user switching | Switch user to Admin while connected → follows the console, Admin asked | H S C | 2 | ✅ |
@@ -443,7 +443,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-SAS-09 | Lock through Ctrl+Alt+Del | choose *Lock* by mouse → session locked, connection stays, lock screen shown | H S | 2 | ✅ |
 | D-SAS-10 | Task Manager through Ctrl+Alt+Del | choose *Task Manager* → Taskmgr opens in the session (process check) | H PS | 3 | ✅ |
 | D-SAS-11 | Repeated presses | 10 × Ctrl+Alt+Del / Esc → every press works, each logged | H E | 3 | ✅ |
-| D-SAS-12 | Screen hidden by the user | Ctrl+Alt+Del while the user hides the screen → "The user at the device has hidden their screen – Ctrl+Alt+Del isn't sent until they show it again." | H S | 3 | ◐ |
+| D-SAS-12 | Screen hidden by the user | Ctrl+Alt+Del while the user hides the screen → "The user at the device has hidden their screen – Ctrl+Alt+Del isn't sent until they show it again." | H S | 3 | ✅ |
 
 ### 9.7 Input
 
@@ -456,8 +456,8 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-IN-05 | No stuck keys | connection dropped while a key/button is down → released (ReleaseAll) | H S N | 2 | ✅ | |
 | D-IN-06 | Input flood | 10,000 mouse moves → no crash, keys never lost | H S | 3 | ✅ | |
 | D-IN-07 | DPI 150 % | coordinates still exact on a scaled desktop | H S | 2 | ✅ | |
-| D-IN-08 | No input into hidden apps | mouse down / wheel over a hidden app and key-down while it has the focus are dropped | H S | 2 | ◐ | |
-| D-IN-09 | Input stops when the user hides | the user hides the screen → held keys released, no input passes | H S | 2 | ◐ | |
+| D-IN-08 | No input into hidden apps | mouse down / wheel over a hidden app and key-down while it has the focus are dropped | H S | 2 | ✅ | |
+| D-IN-09 | Input stops when the user hides | the user hides the screen → held keys released, no input passes | H S | 2 | ✅ | |
 
 ### 9.8 Picture, encoder, resolution, monitors
 
@@ -473,13 +473,13 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-VID-08 | GPU encoder | "Smooth" on a GPU-P VM → "GPU encoder" in Stats; forced failure falls back to software with a key frame | H | 2 | ✅ | GPU-P |
 | D-VID-09 | N edition | no H.264 → clear "Media Feature Pack" error, event 3100, no crash | H E | 2 | ✅ | N |
 | D-VID-10 | Dark display | monitor off (power plan 1 min) → agent wakes it, picture within ~6 s | H PS | 2 | ✅ | |
-| D-VID-11 | RDP windows keep drawing | while connected `RemoteDesktop_SuppressWhenMinimized` = 2, restored afterwards (`rdp-minimized-<sid>.txt`), log line | H PS | 3 | ◐ | |
-| D-VID-12 | GPU picture stands still | Desktop Duplication frozen while the screen changes → GDI for the rest of the connection, log "… using GDI for this connection" | H PS | 3 | ◐ | |
-| D-VID-13 | Display kept on | the display doesn't turn off while connected | H PS | 3 | ◐ | |
+| D-VID-11 | RDP windows keep drawing | while connected `RemoteDesktop_SuppressWhenMinimized` = 2, restored afterwards (`rdp-minimized-<sid>.txt`), log line | H PS | 3 | ✅ | |
+| D-VID-12 | GPU picture stands still | Desktop Duplication frozen while the screen changes → GDI for the rest of the connection, log "… using GDI for this connection" | H PS | 3 | ✅ | |
+| D-VID-13 | Display kept on | the display doesn't turn off while connected | H PS | 3 | ✅ | |
 | D-FIT-01 | Fit to window | Settings Fit 1600×900 → guest resolution 1600×900 (or nearest listed), restored on disconnect | H PS | 2 | ✅ | |
 | D-FIT-02 | Unsupported size | 1234×777 → same shape smaller or nearest mode, Stats.fit says which | H | 3 | ✅ | |
 | D-FIT-03 | Restore after a crash | kill the helper → resolution restored, then fitted again by the restarted helper | H PS | 2 | ✅ | |
-| D-FIT-04 | Fit bounds | below 320×200 ignored, capped at 7680×4320 | H | 3 | ◐ | |
+| D-FIT-04 | Fit bounds | below 320×200 ignored, capped at 7680×4320 | H | 3 | ✅ | |
 | D-MON-01 | Two monitors | virtualDisplay `always` + Hyper-V display → Layout lists 2, primary first; switching monitor changes the picture | H PS | 2 | ✅ | |
 | D-MON-02 | All monitors | monitor −1 → bounding box picture; mouse lands on the right monitor | H S | 2 | ✅ | |
 | D-MON-03 | Monitor added / removed while connected | Layout resent, index clamped, no crash | H PS | 3 | ✅ | |
@@ -487,7 +487,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-VD-02 | Virtual display off | `off` → never switched on | H PS | 3 | ✅ | |
 | D-VD-03 | Two connections | second connection keeps the virtual display until the last one ends (reference count; read after the agent's "stays on for 1 other connection(s)" and, at the last end, its switch-off line) | H PS | 3 | ✅ | |
 | D-VD-04 | Resize | Fit changes → driver reloaded through its pipe, new size within 5 s | H PS | 3 | ✅ | |
-| D-VD-05 | Off after a service restart | the virtual display, on while connected, is switched off when the service starts again | H PS | 3 | ◐ | |
+| D-VD-05 | Off after a service restart | the virtual display, on while connected, is switched off when the service starts again | H PS | 3 | ✅ | |
 
 ### 9.9 Clipboard
 
@@ -511,10 +511,10 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-CLIP-16 | Newer copy cancels | second copy while the first transfers → first cancelled "A newer copy replaced it." | H S | 3 | ✅ |
 | D-CLIP-17 | Abort leaves nothing | connection cut during a file copy → no partial files on either side | H S N | 1 | ✅ |
 | D-CLIP-18 | Old folders purged | clipboard folders older than today removed at next transfer | H PS | 3 | ✅ |
-| D-CLIP-19 | Newer copy cancels the first | a second copy to the device while the first is still offered replaces it silently | H S | 3 | ◐ |
-| D-CLIP-20 | Long text | text over 1,000,000 characters truncated silently | H S | 3 | ◐ |
-| D-CLIP-21 | Too many files | 1001 single files → only 1000 offered, no message | H S | 3 | ◐ |
-| D-CLIP-22 | Bad image | a broken BMP to the device: receipt ok, the device's clipboard unchanged | H S | 3 | ◐ |
+| D-CLIP-19 | Newer copy cancels the first | a second copy to the device while the first is still offered replaces it silently | H S | 3 | ✅ |
+| D-CLIP-20 | Long text | text over 1,000,000 characters truncated silently | H S | 3 | ✅ |
+| D-CLIP-21 | Too many files | 1001 single files → only 1000 offered, no message | H S | 3 | ✅ |
+| D-CLIP-22 | Bad image | a broken BMP to the device: receipt ok, the device's clipboard unchanged | H S | 3 | ✅ |
 
 ### 9.10 Idle, reconnect, robustness
 
@@ -523,7 +523,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-IDLE-01 | Idle timeout | `DesktopIdleTimeoutMinutes=1` → warning at ~30 s, Ended at 60 s, event 2102 | PS H E | 2 | ✅ |
 | D-IDLE-02 | Input resets | a key every 20 s → never ends | PS H | 3 | ✅ |
 | D-IDLE-03 | View-only counts | view-only session also ends | PS H | 3 | ✅ |
-| D-IDLE-04 | Clipboard counts as activity | clipboard and transfers reset the idle time | PS H | 3 | ◐ |
+| D-IDLE-04 | Clipboard counts as activity | clipboard and transfers reset the idle time | PS H | 3 | ✅ |
 | D-RES-01 | Resume after a drop | cut the network 10 s, resume with the token → no new consent, event 1103 | H N S E | 1 | ✅ |
 | D-RES-02 | Token single use | second resume with the same token → normal consent | H | 1 | ✅ |
 | D-RES-03 | Token from another account | presented by `lapsadmin` → ignored, still valid for PSAdmin | H | 1 | ✅ |
@@ -531,17 +531,17 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-RES-05 | Token void after deliberate end | after Ended by RemoteHub / user / idle / refusal → consent again | H S | 1 | ✅ |
 | D-RES-06 | Different user signed in meanwhile | resume → asked again | H S C | 1 | ✅ |
 | D-RES-07 | Old connection still alive | resume while the old connection looks alive → the old one is closed by the agent, the new one gets 1103; the old one gets no Status and no 1101 | H | 3 | ✅ |
-| D-RES-08 | Token void after an invalid message | a protocol error ends the session and its resume token | H | 3 | ◐ |
-| D-RES-09 | No token after a service restart | a resume after a service restart → consent again | H PS | 3 | ◐ |
-| D-RES-10 | The agent notices the drop first | network cut ~75 s (beyond the 30 s keep-alive), resumed within 1 min → 1101 "(connection lost …)", 1103, no new question. Fails today: the end is taken as "closed by RemoteHub" and the token revoked (`DesktopEndpoint.cs:220-230`) | H N PS E | 1 | ◐ |
+| D-RES-08 | Token void after an invalid message | a protocol error ends the session and its resume token | H | 3 | ✅ |
+| D-RES-09 | No token after a service restart | a resume after a service restart → consent again | H PS | 3 | ✅ |
+| D-RES-10 | The agent notices the drop first | network cut ~75 s (beyond the 30 s keep-alive), resumed within 1 min → 1101 "(connection lost …)", 1103, no new question. Fails today: the end is taken as "closed by RemoteHub" and the token revoked (`DesktopEndpoint.cs:220-230`) | H N PS E | 1 | ✅ |
 | D-ROB-01 | Helper killed | `taskkill` the helper → restarted, "screen changed … reconnecting", no new consent for the same user | H PS | 2 | ✅ |
 | D-ROB-02 | Helper keeps failing | 6 kills within a minute → Ended "kept failing" | H PS | 3 | ✅ |
 | D-ROB-03 | Service restart while connected | session ends cleanly, no orphan helper, display restored | H PS | 2 | ✅ |
 | D-ROB-04 | 8 h soak | one session for 8 h with input every minute → no leak (agent working set growth < 50 MB), still connected | H PS | 3 | ✅ |
 | D-ROB-05 | Fuzzed messages | random/invalid type bytes and JSON → session ends, agent healthy, no 3100 crash loop | H | 2 | ✅ |
 | D-ROB-06 | Ping | Ping answered with the same 8 bytes | H | 3 | ✅ |
-| D-ROB-07 | Unrequested sign-in request | "invalid message from RemoteHub: A sign-in request the agent didn't ask for." / "Sign-in request too large." | H E | 3 | ◐ |
-| D-ROB-08 | Message over 16 MiB | 1101 "(invalid message from RemoteHub: Message too large.)" | H E | 3 | ◐ |
+| D-ROB-07 | Unrequested sign-in request | "invalid message from RemoteHub: A sign-in request the agent didn't ask for." / "Sign-in request too large." | H E | 3 | ✅ |
+| D-ROB-08 | Message over 16 MiB | 1101 "(invalid message from RemoteHub: Message too large.)" | H E | 3 | ✅ |
 
 ### 9.11 Audit
 
@@ -558,13 +558,13 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-PRIV-02 | Local input blocked | level 2: the device's own keyboard and mouse don't reach the session (marker app); level 1: they do, and a request with blocking is refused with 2103 "Blocking the mouse and keyboard at the device isn't allowed on this device (policy)." | H S C | 1 | ✅ | |
 | D-PRIV-03 | Not available before 2004 | on W10-1809 no `privacyScreen` feature, a request refused with 2103 | H E | 2 | ✅ | 1809 |
 | D-PRIV-04 | Kept after a resume | privacy screen still on after D-RES-01 | H N | 2 | ✅ | |
-| D-PRIV-05 | Snips and switching blocked | while any privacy screen is up Print Screen, Win+Shift+S, Alt+Tab and Win+Tab are dropped at the device and from the admin; Win+S and Shift+Tab work; switching works again when it is off | H S C | 1 | ◐ | |
-| D-PRIV-06 | Snipping tools closed | SnippingTool / ScreenClippingHost / ScreenSketch closed when they show a window; agent log "… was closed – a snip would show the screen at the device", no event | H S PS | 2 | ◐ | |
-| D-PRIV-07 | View-only has none | a privacy screen request on a view-only connection is ignored | H | 3 | ◐ | |
-| D-PRIV-08 | Monitors change | monitors change while it is on → overlays rebuilt, or 2103 "… turned off because the device's monitors changed" | H PS E | 3 | ◐ | |
+| D-PRIV-05 | Snips and switching blocked | while any privacy screen is up Print Screen, Win+Shift+S, Alt+Tab and Win+Tab are dropped at the device and from the admin; Win+S and Shift+Tab work; switching works again when it is off | H S C | 1 | ✅ | |
+| D-PRIV-06 | Snipping tools closed | SnippingTool / ScreenClippingHost / ScreenSketch closed when they show a window; agent log "… was closed – a snip would show the screen at the device", no event | H S PS | 2 | ✅ | |
+| D-PRIV-07 | View-only has none | a privacy screen request on a view-only connection is ignored | H | 3 | ✅ | |
+| D-PRIV-08 | Monitors change | monitors change while it is on → overlays rebuilt, or 2103 "… turned off because the device's monitors changed" | H PS E | 3 | ✅ | |
 | D-HIDE-01 | Hidden apps by policy | `HiddenApps` (full path and `aumid:`) → those windows never in the frames, whatever the user chooses | PS H S | 1 | ✅ | |
 | D-HIDE-02 | The user hides | the user at the device hides the screen or chosen apps ("Allow and hide apps…") → event 1105 and a Privacy message; kept after a resume without a new question; cleared when another user signs in | H S E | 1 | ✅ | |
-| D-HIDE-03 | Policy apps aren't the user's | today policy `HiddenApps` count as user-hidden: the first Privacy message has hiddenApps=1, the banner "1 app hidden", 1105 "the user … hides 1 app(s)" – product finding | PS H S E | 3 | ◐ | |
+| D-HIDE-03 | Policy apps aren't the user's | today policy `HiddenApps` count as user-hidden: the first Privacy message has hiddenApps=1, the banner "1 app hidden", 1105 "the user … hides 1 app(s)" – product finding | PS H S E | 3 | ✅ | |
 
 ### 9.11b Shell surfaces and the Ctrl+Alt+Del screen over the privacy screen
 
@@ -624,13 +624,13 @@ Phase 4 – after the sign-in (lab/tests/C-END.Tests.ps1):
 | C-END-06 | Network drop without resume | adapter cut for 3 min → signed out after 2 min; event 1107. Fails today when the agent notices the cut first (D-RES-10) | H N PS E | 1 | ✅ |
 | C-END-07 | Agent restart | service killed while connected → at the next start the session gets its end action (signed out when it was dropped). The "dropped" half fails today when the agent takes the drop for a close (D-RES-10) | H PS E | 1 | ✅ |
 | C-END-08 | Cover ends after a drop | a session automatic sign-in created has no banner (since 0.18.10), only the cover; the cover's helper ending during the 2 minutes → signed out at once, event 1107 "… (the screen cover ended after the connection dropped)". Fails today when the agent takes the drop for a close (D-RES-10) | H N C | 2 | ✅ |
-| C-END-09 | Input blocked at level 1 too | `PrivacyScreen`=1 → after SignedIn the console's own keys still don't reach the session | H C PS | 1 | ◐ |
-| C-END-10 | No privacy screen available | `PrivacyScreen`=0 (`AutoSignInRequirePrivacyScreen` 0) → signed in, 1106 ", no privacy screen on this device", the console shows the desktop, no banner | H C E | 2 | ◐ |
-| C-END-11 | Ctrl+Alt+Del at the device during the hold | after a drop Ctrl+Alt+Del at the console → the screen offers only Task Manager and Cancel (no Lock, privacy-mode-design §5.9); not signed out at once; signed out when the 2 min run out | H N C E | 3 | ◐ |
-| C-END-12 | Resume brings the cover back | an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back. Fails today when the agent takes the drop for a close (D-RES-10) | H N C | 2 | ◐ |
-| C-END-13 | Failed sign-in removes the cover | wrong password → the service's privacy screen dropped, a later manual sign-in isn't covered | H C | 3 | ◐ |
-| C-END-14 | Who turned the cover on | 1104 for the service's cover reads "<admin> … turned the privacy screen on …" although the admin didn't – product finding | E | 3 | ◐ |
-| C-END-15 | The agent notices the drop first | cut ≥ 75 s, resumed within 2 min → same session, no lock; fails today (D-RES-10) | H N PS E | 1 | ◐ |
+| C-END-09 | Input blocked at level 1 too | `PrivacyScreen`=1 → after SignedIn the console's own keys still don't reach the session | H C PS | 1 | ✅ |
+| C-END-10 | No privacy screen available | `PrivacyScreen`=0 (`AutoSignInRequirePrivacyScreen` 0) → signed in, 1106 ", no privacy screen on this device", the console shows the desktop, no banner | H C E | 2 | ✅ |
+| C-END-11 | Ctrl+Alt+Del at the device during the hold | after a drop Ctrl+Alt+Del at the console → the screen offers only Task Manager and Cancel (no Lock, privacy-mode-design §5.9); not signed out at once; signed out when the 2 min run out | H N C E | 3 | ✅ |
+| C-END-12 | Resume brings the cover back | an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back. Fails today when the agent takes the drop for a close (D-RES-10) | H N C | 2 | ✅ |
+| C-END-13 | Failed sign-in removes the cover | wrong password → the service's privacy screen dropped, a later manual sign-in isn't covered | H C | 3 | ✅ |
+| C-END-14 | Who turned the cover on | 1104 for the service's cover reads "<admin> … turned the privacy screen on …" although the admin didn't – product finding | E | 3 | ✅ |
+| C-END-15 | The agent notices the drop first | cut ≥ 75 s, resumed within 2 min → same session, no lock; fails today (D-RES-10) | H N PS E | 1 | ✅ |
 
 More refusals and limits (lab/tests/C-AUTO2.Tests.ps1), decided by the agent before Windows is asked:
 
@@ -643,14 +643,14 @@ More refusals and limits (lab/tests/C-AUTO2.Tests.ps1), decided by the agent bef
 | C-AUTO-11 | Rate limit | the 4th automatic sign-in of an account within 15 minutes → "Too many automatic sign-ins", event 2104 | H E | 1 | ✅ |
 | C-AUTO-12 | Provider unusable | `ExcludedCredentialProviders` lists the CLSID / InprocServer32 outside the agent folder / DLL not signed → Hello `autoSignIn` false, refused with that reason | PS H | 1 | ✅ |
 | C-AUTO-13 | IT's policy kept | `NoUserBehavior=SignInScreen` set before an `AUTOSIGNIN=1` install → left as it is; the install records its own choice in `agent.json` and the log says the policy decides ("… it decides, so automatic sign-in stays off"); still there after the uninstall | PS | 1 | ✅ |
-| C-AUTO-14 | Sign-in not confirmed | the console's new session has another SID → signed out, 3101 "… the console session N has user <sid>, not <acct> … – signed out", Ended "The automatic sign-in couldn't be confirmed, so it was undone …" (needs a provider test build) | H PS E | 2 | ◐ |
-| C-AUTO-15 | Console changed before the ticket | someone signs in at the console between SignInReady and the ticket → SignInFailed "Someone is signed in on the console now …", 2104 SessionChanged, no ticket sent | H C E | 2 | ◐ |
-| C-AUTO-16 | Provider never loads | LogonUI doesn't load the provider → SignInFailed "The device's sign-in screen didn't load the RemoteHub credential provider." (2104 NoProvider); result timeout → "The sign-in screen didn't take the sign-in. …" | H PS E | 2 | ◐ |
-| C-AUTO-17 | Second sign-in at once | two connections ask at the same time → the second gets "Another automatic sign-in is running on this device." | H | 3 | ◐ |
-| C-AUTO-18 | Pipe squatted | `\\.\pipe\RemoteHubAgent.AutoSignIn` created by another process before the service → 3102 "Automatic sign-in unavailable: the pipe … couldn't be created (…)", Hello `autoSignIn` false | PS H E | 2 | ◐ |
-| C-AUTO-19 | Foreign pipe client refused | a client that isn't LogonUI / SYSTEM / the console connects → log "Automatic sign-in: pipe client refused (<why>)", a later automatic sign-in still works; an RDP session's LogonUI on Server refused ("session N isn't the console") | PS | 2 | ◐ |
-| C-AUTO-20 | Windows refusals | account locked / disabled / expired password / "Deny log on locally" → SignInFailed with Windows' reason ("The account is locked." …), 2105 with the status (Windows 11 leaves locked and disabled accounts off the sign-in screen: the provider reports "not offered" after 10 s and the agent asks Windows itself (LogonUserW) – 2105 "didn't offer the account; checked with Windows: error N (0x…)", no 50 s wait); evidence `c-auto3-refusals-logs` with the provider's trace (`provider-*.log`, which calls LogonUI made per refusal – credential-provider-design.md §8.6) | H PS E | 2 | ◐ |
-| C-AUTO-21 | DLL signed by another certificate | trusted, but not signed by the agent's certificate → "… isn't signed by the same certificate as the agent", Hello `autoSignIn` false | PS H | 3 | ◐ |
+| C-AUTO-14 | Sign-in not confirmed | the console's new session has another SID → signed out, 3101 "… the console session N has user <sid>, not <acct> … – signed out", Ended "The automatic sign-in couldn't be confirmed, so it was undone …" (needs a provider test build) | H PS E | 2 | ✅ |
+| C-AUTO-15 | Console changed before the ticket | someone signs in at the console between SignInReady and the ticket → SignInFailed "Someone is signed in on the console now …", 2104 SessionChanged, no ticket sent | H C E | 2 | ✅ |
+| C-AUTO-16 | Provider never loads | LogonUI doesn't load the provider → SignInFailed "The device's sign-in screen didn't load the RemoteHub credential provider." (2104 NoProvider); result timeout → "The sign-in screen didn't take the sign-in. …" | H PS E | 2 | ✅ |
+| C-AUTO-17 | Second sign-in at once | two connections ask at the same time → the second gets "Another automatic sign-in is running on this device." | H | 3 | ✅ |
+| C-AUTO-18 | Pipe squatted | `\\.\pipe\RemoteHubAgent.AutoSignIn` created by another process before the service → 3102 "Automatic sign-in unavailable: the pipe … couldn't be created (…)", Hello `autoSignIn` false | PS H E | 2 | ✅ |
+| C-AUTO-19 | Foreign pipe client refused | a client that isn't LogonUI / SYSTEM / the console connects → log "Automatic sign-in: pipe client refused (<why>)", a later automatic sign-in still works; an RDP session's LogonUI on Server refused ("session N isn't the console") | PS | 2 | ✅ |
+| C-AUTO-20 | Windows refusals | account locked / disabled / expired password / "Deny log on locally" → SignInFailed with Windows' reason ("The account is locked." …), 2105 with the status (Windows 11 leaves locked and disabled accounts off the sign-in screen: the provider reports "not offered" after 10 s and the agent asks Windows itself (LogonUserW) – 2105 "didn't offer the account; checked with Windows: error N (0x…)", no 50 s wait); evidence `c-auto3-refusals-logs` with the provider's trace (`provider-*.log`, which calls LogonUI made per refusal – credential-provider-design.md §8.6) | H PS E | 2 | ✅ |
+| C-AUTO-21 | DLL signed by another certificate | trusted, but not signed by the agent's certificate → "… isn't signed by the same certificate as the agent", Hello `autoSignIn` false | PS H | 3 | ✅ |
 
 
 ### 9.13 Jump hosts (J)
@@ -670,26 +670,26 @@ From [jump-host-design.md](jump-host-design.md) §11 (J0…J12 there). `lab/test
 | J-08 | Throughput | 2 GB to the device arrive unchanged while its remote desktop keeps sending pictures | H | 2 | ✅ | Jump |
 | J-09 | Install and update through it | the scope offered is the jump host's address (`LocalAddressAsync`: a probe – the agent only resolves and checks the target, answers Refused `probe` "<host>:<port> is allowed; not connected (probe).", no TCP connection to the device), install over WinRM through the jump host, firewall rule scoped to the jump host, update through the agent through it | H PS | 1 | ✅ | Jump |
 | J-10 | Shares of a device behind it | SMB (always RemoteHub's own client: "SMB · RemoteHub client"), SFTP and WebDAV copy both ways; FTP refused ("FTP can't go through a jump host …", J-22) | H PS | 2 | ✅ | Jump, Server |
-| J-11 | Moving in the tree | connection / folder moved between jump host, folder under it, another jump host and a plain folder → the route follows; the drops of §4.3 refused with "<target> is reached through <outer>. Only one jump host is supported for now." / "<j> is a jump host itself …" / "<inner> in this folder is a jump host itself …"; *Move under* lists only connections with an agent or children (at most 40); settings inherited past the jump host | U | 2 | ◐ | Jump |
-| J-12 | Older RemoteHub | a RemoteHub without jump hosts (≤ 0.18.7) opens the new database and shared file, keeps the items below a jump host as ordinary items, and its save keeps them | U PS | 2 | ◐ | Jump |
+| J-11 | Moving in the tree | connection / folder moved between jump host, folder under it, another jump host and a plain folder → the route follows; the drops of §4.3 refused with "<target> is reached through <outer>. Only one jump host is supported for now." / "<j> is a jump host itself …" / "<inner> in this folder is a jump host itself …"; *Move under* lists only connections with an agent or children (at most 40); settings inherited past the jump host | U | 2 | ✅ | Jump |
+| J-12 | Older RemoteHub | a RemoteHub without jump hosts (≤ 0.18.7) opens the new database and shared file, keeps the items below a jump host as ordinary items, and its save keeps them | U PS | 2 | ✅ | Jump |
 | J-13 | Other refusals | a name that doesn't resolve → `dns`; a closed port → `unreachable` / `timeout`; more than `MaxTunnelStreams` → `limit`; no 2200 for these – unreachable only in the agent log "Jump connection <acct> from <src>: <host:port> unreachable (…)" | PS H | 2 | ✅ | Jump |
 | J-14 | Limits shared with sessions | jump connections count toward `maxSessions`; an unreadable policy key → `/v1/tunnel` 404 | PS H | 3 | ✅ | Jump |
-| J-15 | Indentation | inside a jump host's frame its connections, folders and shares sit 12 px further in than a folder's items | U | 3 | ◐ | Jump |
-| J-16 | Route shown | tree "via <jump>" beside the address, tooltip "Reached through <jump> (its RemoteHub Agent is the jump host) …"; editor "Reached through <jump> – its RemoteHub Agent is the jump host …"; share tab "<description> · via <jump>"; tooltip location "… › <jump> › <device>" | U | 2 | ◐ | Jump |
-| J-17 | Jump host without agent | connecting a child → "<c> is reached through <j>, but <j> has no RemoteHub Agent. Install it there …, or move <c> out of <j> to connect directly."; tree tooltip "<j> has no RemoteHub Agent – install it there to reach the items below it." | U | 2 | ◐ | Jump |
-| J-18 | Jump host credentials | none → "No credentials are set for the jump host <j> …"; no stored password → asked once ("… kept in memory only."), then reused for every child and tab, or taken from an open agent tab of <j> | U | 2 | ◐ | Jump |
-| J-19 | Deleting a jump host | "Delete connection "<n>"? … <k> item(s) are reached through it …" with *Keep them* (moved next to it, reached directly) or *Delete all* | U | 2 | ◐ | Jump |
-| J-20 | Duplicate a jump host | copy "<n> (copy)" without the items under it; its agent and RDP certificate pin cleared | H | 3 | ◐ | Jump |
-| J-21 | Move changes credentials | moving into or out of a jump host when the inherited credentials change → "Move – credentials change", target 'connection "<j>" (reached through it)'; the jump host's own credentials are never inherited | U | 2 | ◐ | Jump |
-| J-22 | FTP share behind a jump host | menu *Open* off, tooltip "Reached through <j>. FTP can't go through a jump host – its data connections go to addresses the server announces. SMB, SFTP and WebDAV can."; opened anyway → the same text | U H | 2 | ◐ | Jump |
-| J-23 | Share editor host hints | a jump host's share on another host → "Reached directly, like <s> itself. …"; a child's share → "Another device, reached through <j> like <s>." | U | 3 | ◐ | Jump |
-| J-24 | Drops beside §4.3 | a share on its own dropped onto a connection lands next to it; *Move under* puts it under a jump host; an .rdp file dropped on a jump host is imported under it, on a child next to that child (under the same jump host) | U | 3 | ◐ | Jump |
-| J-25 | Install below a jump host without WinRM | the install dialog defaults to "Save the installer and the enrollment file to a folder…", hints "<c> is reached through <j> … allow connections from <j>'s address …", hides "Use the agent … afterwards" | U | 2 | ◐ | Jump |
-| J-26 | Agent refusals of /v1/tunnel | 404 → "The RemoteHub Agent on <h:p> can't be used as a jump host: jump connections are turned off by a policy on the device (TunnelEnabled), or the agent there is older …"; 403 → "… may not use … as a jump host … (right Tunnel – by default the administrators)."; both as "Can't use the jump host <j>: …" | H | 2 | ◐ | Jump |
-| J-27 | The jump host's own address | its own adapter address refused by default, also when its subnet is in TunnelTargets; allowed only by an entry naming that single address; reason `policy` "… is this jump host itself or a special address …", 2200 "(own or special address)" | PS H E | 2 | ◐ | Jump |
-| J-28 | Unreadable policy entries | TunnelTargets / TunnelPorts with only invalid entries (`not a host!`, `0`, `99999`) refuse every Open with `policy`, never "any" | PS H | 3 | ◐ | Jump |
-| J-29 | Bad tunnel traffic | more than 256 KB unacknowledged on a stream resets it; a text or garbled frame or a duplicate stream id ends the tunnel, 1202 "(protocol error: …)"; a target not closing within 60 s after Close is reset | H E | 3 | ◐ | Jump |
-| J-30 | A name with allowed and disallowed addresses | one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed) | PS H | 3 | ◐ | Jump |
+| J-15 | Indentation | inside a jump host's frame its connections, folders and shares sit 12 px further in than a folder's items | U | 3 | ✅ | Jump |
+| J-16 | Route shown | tree "via <jump>" beside the address, tooltip "Reached through <jump> (its RemoteHub Agent is the jump host) …"; editor "Reached through <jump> – its RemoteHub Agent is the jump host …"; share tab "<description> · via <jump>"; tooltip location "… › <jump> › <device>" | U | 2 | ✅ | Jump |
+| J-17 | Jump host without agent | connecting a child → "<c> is reached through <j>, but <j> has no RemoteHub Agent. Install it there …, or move <c> out of <j> to connect directly."; tree tooltip "<j> has no RemoteHub Agent – install it there to reach the items below it." | U | 2 | ✅ | Jump |
+| J-18 | Jump host credentials | none → "No credentials are set for the jump host <j> …"; no stored password → asked once ("… kept in memory only."), then reused for every child and tab, or taken from an open agent tab of <j> | U | 2 | ✅ | Jump |
+| J-19 | Deleting a jump host | "Delete connection "<n>"? … <k> item(s) are reached through it …" with *Keep them* (moved next to it, reached directly) or *Delete all* | U | 2 | ✅ | Jump |
+| J-20 | Duplicate a jump host | copy "<n> (copy)" without the items under it; its agent and RDP certificate pin cleared | H | 3 | ✅ | Jump |
+| J-21 | Move changes credentials | moving into or out of a jump host when the inherited credentials change → "Move – credentials change", target 'connection "<j>" (reached through it)'; the jump host's own credentials are never inherited | U | 2 | ✅ | Jump |
+| J-22 | FTP share behind a jump host | menu *Open* off, tooltip "Reached through <j>. FTP can't go through a jump host – its data connections go to addresses the server announces. SMB, SFTP and WebDAV can."; opened anyway → the same text | U H | 2 | ✅ | Jump |
+| J-23 | Share editor host hints | a jump host's share on another host → "Reached directly, like <s> itself. …"; a child's share → "Another device, reached through <j> like <s>." | U | 3 | ✅ | Jump |
+| J-24 | Drops beside §4.3 | a share on its own dropped onto a connection lands next to it; *Move under* puts it under a jump host; an .rdp file dropped on a jump host is imported under it, on a child next to that child (under the same jump host) | U | 3 | ✅ | Jump |
+| J-25 | Install below a jump host without WinRM | the install dialog defaults to "Save the installer and the enrollment file to a folder…", hints "<c> is reached through <j> … allow connections from <j>'s address …", hides "Use the agent … afterwards" | U | 2 | ✅ | Jump |
+| J-26 | Agent refusals of /v1/tunnel | 404 → "The RemoteHub Agent on <h:p> can't be used as a jump host: jump connections are turned off by a policy on the device (TunnelEnabled), or the agent there is older …"; 403 → "… may not use … as a jump host … (right Tunnel – by default the administrators)."; both as "Can't use the jump host <j>: …" | H | 2 | ✅ | Jump |
+| J-27 | The jump host's own address | its own adapter address refused by default, also when its subnet is in TunnelTargets; allowed only by an entry naming that single address; reason `policy` "… is this jump host itself or a special address …", 2200 "(own or special address)" | PS H E | 2 | ✅ | Jump |
+| J-28 | Unreadable policy entries | TunnelTargets / TunnelPorts with only invalid entries (`not a host!`, `0`, `99999`) refuse every Open with `policy`, never "any" | PS H | 3 | ✅ | Jump |
+| J-29 | Bad tunnel traffic | more than 256 KB unacknowledged on a stream resets it; a text or garbled frame or a duplicate stream id ends the tunnel, 1202 "(protocol error: …)"; a target not closing within 60 s after Close is reset | H E | 3 | ✅ | Jump |
+| J-30 | A name with allowed and disallowed addresses | one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed) | PS H | 3 | ✅ | Jump |
 
 ## 10. RemoteHub on a Windows client (C, R)
 
@@ -708,54 +708,54 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 | C-MSI-06 | Downgrade | refused | PS | 2 | ✅ |
 | C-MSI-07 | Uninstall | program folder, shortcut, ProgId gone; user data kept (documented leftovers only) | PS | 2 | ✅ |
 | C-MSI-08 | Install as standard user | refused / UAC prompt (per-machine) | S | 3 | ✅ |
-| C-MSI-09 | Same-version reinstall | a rebuilt MSI with the same version replaces the installed one (`AllowSameVersionUpgrades`), exit 0, one Apps entry | PS | 3 | ◐ |
+| C-MSI-09 | Same-version reinstall | a rebuilt MSI with the same version replaces the installed one (`AllowSameVersionUpgrades`), exit 0, one Apps entry | PS | 3 | ✅ |
 
 ### 10.2 Storage, protection, audit
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| C-DB-01 | New database | `%LOCALAPPDATA%\RemoteHub\remotehub.db` not readable as plain SQLite; `db.key` DPAPI-protected; the test password not in any file (byte search) | U PS | 1 | ◐ | |
-| C-DB-02 | Other Windows user | normaluser can't open Admin's database (DPAPI) | PS | 1 | ◐ | |
-| C-DB-03 | Migration from settings.dat | 0.13 `settings.dat` → database, field-by-field equal, renamed `.migrated` | PS U | 1 | ◐ | |
-| C-DB-04 | Daily backup | `backup\remotehub-<UTC yyyyMMdd-HHmmss>.db`: one per day, taken in the background at start only (newest ≥ 24 h old, after `PRAGMA quick_check`), 7 kept (clock moved forward) | PS U | 2 | ◐ | |
-| C-DB-05 | Corrupt database | byte 2048 (first page) flipped → RemoteHub offers the latest backup, restores it, damaged file kept as `remotehub.db.damaged-<yyyyMMdd-HHmmss>` (local time) with `-wal` / `-shm`; *No* leads to C-DB-06 | PS U | 1 | ◐ | |
-| C-DB-06 | Unreadable database, no usable backup | "RemoteHub's database can't be opened: <reason> Start with empty settings? The unreadable database is kept in <dir> …" (OK / Cancel); OK → `remotehub.db`, `-wal`, `-shm`, `db.key` renamed `.damaged-<stamp>`, `backup\` → `backup.damaged-<stamp>`, a new empty database; Cancel → RemoteHub ends, nothing changed | PS U | 2 | ◐ | |
-| C-DB-07 | Older backup when the newest fails | restoring a backup fails → the offer comes again for the next older one | PS U | 3 | ◐ | |
-| C-DB-08 | db.key missing | reason "The database key file (db.key) is missing." | PS U | 3 | ◐ | |
-| C-DB-09 | Database of a newer version | reason "The database was created by a newer version of RemoteHub (schema N)." | PS U | 3 | ◐ | |
-| C-DB-10 | Daily check finds damage | no backup made, the existing ones kept; audit "Database check failed": "The database check found a problem; the existing backups were kept." | PS U | 2 | ◐ | |
-| C-DB-11 | Migration fails | the new database deleted, `settings.dat` stays in use; a `settings.dat` that reappears next to a database with data is ignored | PS | 3 | ◐ | |
-| C-DB-12 | `.migrated` clean-up | 30 days after the migration `settings.dat.migrated` and `settings.dat.bak` deleted at start | PS | 3 | ◐ | |
-| C-DB-13 | Unreadable `settings.dat` | a copy `settings.dat.unreadable-<stamp>`; "The settings file could not be read (<err>). A copy was saved to: <path> …"; starts empty | PS U | 3 | ◐ | |
-| C-LOCK-01 | Startup password | on (Windows Hello unticked) → restart asks ("RemoteHub – locked"); wrong password refused; right one opens; database re-encrypted with a new key (old `db.key` copy opens nothing), old backups deleted and exactly one new one written, `settings.dat.migrated` / `.bak` deleted; audit "Unlock failed" "Wrong startup password (attempt n)" written after the next successful unlock | U PS | 1 | ◐ | |
-| C-LOCK-02 | Auto-lock | "Lock when you're away" 1 min (5 min on builds without that option; saved at once, no password needed; default Never) → after 1:00–1:15 idle the windows hidden, password asked; sessions keep running | U | 2 | ◐ | |
-| C-LOCK-03 | Windows Hello PIN | VM with vTPM + Hello PIN: unlock with Hello | U S | 3 | ◐ | vTPM |
-| C-LOCK-04 | Turn off | password removed, database re-keyed, old backups removed, exactly one new backup (made by the re-encryption) | U PS | 2 | ◐ | |
-| C-LOCK-05 | Change the startup password | needs the current one; a new key (an old `lock.json` copy opens nothing), database re-keyed, Hello set up again if it was; "The startup password was changed." | U PS | 2 | ◐ | |
-| C-LOCK-06 | Password rules | "Use at least 8 characters.", "The passwords do not match.", "The current password is wrong.", empty unlock → "Enter the startup password." | U | 3 | ◐ | |
-| C-LOCK-07 | Exit while auto-locked | *Exit RemoteHub* ("Disconnects all sessions and closes RemoteHub") ends it without showing the windows again | U | 2 | ◐ | |
-| C-LOCK-08 | No auto-lock under a dialog | a modal dialog open → no lock; it locks after the dialog closes | U | 3 | ◐ | |
-| C-LOCK-09 | Old RDP Manager folder | with `%APPDATA%\RdpManager` present, turning on offers "Delete the old, unprotected copy of the RDP Manager settings (<path>)"; ticked → the folder deleted | U PS | 3 | ◐ | |
-| C-LOCK-10 | keys.dat sealed | with protection on `keys.dat` starts with `RHK2` | PS | 3 | ◐ | |
-| C-SHARE-01 | Shared folder on SMB | settings on a share (`RemoteHub.settings`), the password set once when creating the file (*Protect shared settings*, ≥ 8 characters), `keys.dat` remembers it – never asked again on that PC | U | 2 | ◐ | SMB |
-| C-SHARE-02 | Sync conflict | file changed from a second VM while edited → Reload / Keep mine offered, nothing overwritten silently | U | 2 | ◐ | SMB, 2VM |
-| C-SHARE-03 | Share unavailable at start | share offline (or the password prompt cancelled: "Password entry was cancelled.") → starts with local settings, "Settings: this PC (shared file unavailable – changes stay on this PC)", shared file untouched | U N | 2 | ◐ | SMB |
-| C-SHARE-04 | Change seen with nothing pending | "Settings updated": "The settings file was updated on another device. Load the new version now?" (*Reload*) | U | 2 | ◐ | SMB, 2VM |
-| C-SHARE-05 | Join an existing shared file | "Open shared settings": "This folder already contains a shared settings file. Enter its password … The connections currently on this PC are replaced by the shared ones …" (*Open*) | U | 2 | ◐ | SMB |
-| C-SHARE-06 | Back to this PC only | "Use this PC only" … "The shared file itself is not deleted." (*Switch*); audit "Settings location changed" "Settings: this PC" | U | 3 | ◐ | SMB |
-| C-SHARE-07 | Forget remembered passwords | `keys.dat` deleted, "Done – the password will be asked again at the next start.", "Unlock shared settings" at the next start | U | 3 | ◐ | SMB |
-| C-AUD-01 | Audit entries | connect, edit, delete, password copied for the Windows password prompt (detail "For the Windows password prompt (cleared after 30 s)"), transfer, record → entries without values or passwords | U | 2 | ◐ | |
-| C-AUD-02 | Append-only | direct SQL update/delete of an entry refused; Verify integrity finds a changed entry | PS U | 1 | ◐ | |
-| C-AUD-03 | Retention policy | `AuditRetentionDays=1` → older entries pruned | PS U | 3 | ◐ | |
-| C-AUD-04 | CSV export | formula-like values defused (`=cmd` → `'=cmd`) | U | 2 | ◐ | |
-| C-AUD-05 | Retention in Settings → Logs | choices 30 days … 10 years, default "1 year (default)", "Older entries are removed the next time RemoteHub starts."; audit "Audit log retention changed" "Entries kept for <x> (before: <y>)"; under the policy the box is off, "Set by your organisation." | U | 2 | ◐ | |
-| C-AUD-06 | Newest entries removed | Verify: "The newest entries were removed: the log ends at entry X, but entry Y was written."; intact → "All N entries are unchanged and complete since they were written." | PS U | 2 | ◐ | |
-| C-AUD-07 | More events | "Added", "Connection failed", "Startup protection changed" ("Startup password" / "… and Windows Hello" / "Off"), "Settings location changed", "Backup exported" ("<n> folders and connections, <m> saved credentials") | U | 3 | ◐ | |
-| C-AUD-08 | Bulk save summary | more than 50 changes in one save → one "Changed" entry, target "<n> items", detail "<a> added, <c> changed, <d> deleted" | PS U | 3 | ◐ | |
-| C-BAK-01 | Backup round trip | export `.rhbackup` with password, import on a fresh profile (normaluser) as new folder and as replace → identical incl. credentials | U | 1 | ◐ | |
-| C-BAK-02 | Wrong backup password | refused, nothing imported | U | 2 | ◐ | |
-| C-BAK-03 | Old `.rdpmbackup` | still imports (accepted by its format `rdpmanager-backup`, not the extension; 10,000–10,000,000 PBKDF2 iterations) | U | 3 | ◐ | |
-| C-BAK-04 | Not a backup file | "Import failed": "Not a RemoteHub backup file." | U | 3 | ◐ | |
+| C-DB-01 | New database | `%LOCALAPPDATA%\RemoteHub\remotehub.db` not readable as plain SQLite; `db.key` DPAPI-protected; the test password not in any file (byte search) | U PS | 1 | ✅ | |
+| C-DB-02 | Other Windows user | normaluser can't open Admin's database (DPAPI) | PS | 1 | ✅ | |
+| C-DB-03 | Migration from settings.dat | 0.13 `settings.dat` → database, field-by-field equal, renamed `.migrated` | PS U | 1 | ✅ | |
+| C-DB-04 | Daily backup | `backup\remotehub-<UTC yyyyMMdd-HHmmss>.db`: one per day, taken in the background at start only (newest ≥ 24 h old, after `PRAGMA quick_check`), 7 kept (clock moved forward) | PS U | 2 | ✅ | |
+| C-DB-05 | Corrupt database | byte 2048 (first page) flipped → RemoteHub offers the latest backup, restores it, damaged file kept as `remotehub.db.damaged-<yyyyMMdd-HHmmss>` (local time) with `-wal` / `-shm`; *No* leads to C-DB-06 | PS U | 1 | ✅ | |
+| C-DB-06 | Unreadable database, no usable backup | "RemoteHub's database can't be opened: <reason> Start with empty settings? The unreadable database is kept in <dir> …" (OK / Cancel); OK → `remotehub.db`, `-wal`, `-shm`, `db.key` renamed `.damaged-<stamp>`, `backup\` → `backup.damaged-<stamp>`, a new empty database; Cancel → RemoteHub ends, nothing changed | PS U | 2 | ✅ | |
+| C-DB-07 | Older backup when the newest fails | restoring a backup fails → the offer comes again for the next older one | PS U | 3 | ✅ | |
+| C-DB-08 | db.key missing | reason "The database key file (db.key) is missing." | PS U | 3 | ✅ | |
+| C-DB-09 | Database of a newer version | reason "The database was created by a newer version of RemoteHub (schema N)." | PS U | 3 | ✅ | |
+| C-DB-10 | Daily check finds damage | no backup made, the existing ones kept; audit "Database check failed": "The database check found a problem; the existing backups were kept." | PS U | 2 | ✅ | |
+| C-DB-11 | Migration fails | the new database deleted, `settings.dat` stays in use; a `settings.dat` that reappears next to a database with data is ignored | PS | 3 | ✅ | |
+| C-DB-12 | `.migrated` clean-up | 30 days after the migration `settings.dat.migrated` and `settings.dat.bak` deleted at start | PS | 3 | ✅ | |
+| C-DB-13 | Unreadable `settings.dat` | a copy `settings.dat.unreadable-<stamp>`; "The settings file could not be read (<err>). A copy was saved to: <path> …"; starts empty | PS U | 3 | ✅ | |
+| C-LOCK-01 | Startup password | on (Windows Hello unticked) → restart asks ("RemoteHub – locked"); wrong password refused; right one opens; database re-encrypted with a new key (old `db.key` copy opens nothing), old backups deleted and exactly one new one written, `settings.dat.migrated` / `.bak` deleted; audit "Unlock failed" "Wrong startup password (attempt n)" written after the next successful unlock | U PS | 1 | ✅ | |
+| C-LOCK-02 | Auto-lock | "Lock when you're away" 1 min (5 min on builds without that option; saved at once, no password needed; default Never) → after 1:00–1:15 idle the windows hidden, password asked; sessions keep running | U | 2 | ✅ | |
+| C-LOCK-03 | Windows Hello PIN | VM with vTPM + Hello PIN: unlock with Hello | U S | 3 | ✅ | vTPM |
+| C-LOCK-04 | Turn off | password removed, database re-keyed, old backups removed, exactly one new backup (made by the re-encryption) | U PS | 2 | ✅ | |
+| C-LOCK-05 | Change the startup password | needs the current one; a new key (an old `lock.json` copy opens nothing), database re-keyed, Hello set up again if it was; "The startup password was changed." | U PS | 2 | ✅ | |
+| C-LOCK-06 | Password rules | "Use at least 8 characters.", "The passwords do not match.", "The current password is wrong.", empty unlock → "Enter the startup password." | U | 3 | ✅ | |
+| C-LOCK-07 | Exit while auto-locked | *Exit RemoteHub* ("Disconnects all sessions and closes RemoteHub") ends it without showing the windows again | U | 2 | ✅ | |
+| C-LOCK-08 | No auto-lock under a dialog | a modal dialog open → no lock; it locks after the dialog closes | U | 3 | ✅ | |
+| C-LOCK-09 | Old RDP Manager folder | with `%APPDATA%\RdpManager` present, turning on offers "Delete the old, unprotected copy of the RDP Manager settings (<path>)"; ticked → the folder deleted | U PS | 3 | ✅ | |
+| C-LOCK-10 | keys.dat sealed | with protection on `keys.dat` starts with `RHK2` | PS | 3 | ✅ | |
+| C-SHARE-01 | Shared folder on SMB | settings on a share (`RemoteHub.settings`), the password set once when creating the file (*Protect shared settings*, ≥ 8 characters), `keys.dat` remembers it – never asked again on that PC | U | 2 | ✅ | SMB |
+| C-SHARE-02 | Sync conflict | file changed from a second VM while edited → Reload / Keep mine offered, nothing overwritten silently | U | 2 | ✅ | SMB, 2VM |
+| C-SHARE-03 | Share unavailable at start | share offline (or the password prompt cancelled: "Password entry was cancelled.") → starts with local settings, "Settings: this PC (shared file unavailable – changes stay on this PC)", shared file untouched | U N | 2 | ✅ | SMB |
+| C-SHARE-04 | Change seen with nothing pending | "Settings updated": "The settings file was updated on another device. Load the new version now?" (*Reload*) | U | 2 | ✅ | SMB, 2VM |
+| C-SHARE-05 | Join an existing shared file | "Open shared settings": "This folder already contains a shared settings file. Enter its password … The connections currently on this PC are replaced by the shared ones …" (*Open*) | U | 2 | ✅ | SMB |
+| C-SHARE-06 | Back to this PC only | "Use this PC only" … "The shared file itself is not deleted." (*Switch*); audit "Settings location changed" "Settings: this PC" | U | 3 | ✅ | SMB |
+| C-SHARE-07 | Forget remembered passwords | `keys.dat` deleted, "Done – the password will be asked again at the next start.", "Unlock shared settings" at the next start | U | 3 | ✅ | SMB |
+| C-AUD-01 | Audit entries | connect, edit, delete, password copied for the Windows password prompt (detail "For the Windows password prompt (cleared after 30 s)"), transfer, record → entries without values or passwords | U | 2 | ✅ | |
+| C-AUD-02 | Append-only | direct SQL update/delete of an entry refused; Verify integrity finds a changed entry | PS U | 1 | ✅ | |
+| C-AUD-03 | Retention policy | `AuditRetentionDays=1` → older entries pruned | PS U | 3 | ✅ | |
+| C-AUD-04 | CSV export | formula-like values defused (`=cmd` → `'=cmd`) | U | 2 | ✅ | |
+| C-AUD-05 | Retention in Settings → Logs | choices 30 days … 10 years, default "1 year (default)", "Older entries are removed the next time RemoteHub starts."; audit "Audit log retention changed" "Entries kept for <x> (before: <y>)"; under the policy the box is off, "Set by your organisation." | U | 2 | ✅ | |
+| C-AUD-06 | Newest entries removed | Verify: "The newest entries were removed: the log ends at entry X, but entry Y was written."; intact → "All N entries are unchanged and complete since they were written." | PS U | 2 | ✅ | |
+| C-AUD-07 | More events | "Added", "Connection failed", "Startup protection changed" ("Startup password" / "… and Windows Hello" / "Off"), "Settings location changed", "Backup exported" ("<n> folders and connections, <m> saved credentials") | U | 3 | ✅ | |
+| C-AUD-08 | Bulk save summary | more than 50 changes in one save → one "Changed" entry, target "<n> items", detail "<a> added, <c> changed, <d> deleted" | PS U | 3 | ✅ | |
+| C-BAK-01 | Backup round trip | export `.rhbackup` with password, import on a fresh profile (normaluser) as new folder and as replace → identical incl. credentials | U | 1 | ✅ | |
+| C-BAK-02 | Wrong backup password | refused, nothing imported | U | 2 | ✅ | |
+| C-BAK-03 | Old `.rdpmbackup` | still imports (accepted by its format `rdpmanager-backup`, not the extension; 10,000–10,000,000 PBKDF2 iterations) | U | 3 | ✅ | |
+| C-BAK-04 | Not a backup file | "Import failed": "Not a RemoteHub backup file." | U | 3 | ✅ | |
 
 ### 10.3 Policies, updates, telemetry, crash reports
 
@@ -769,24 +769,24 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 | C-POL-06 | `RecordingFolder` with `%USERPROFILE%` | recordings land there, can't be changed | PS U | 2 | ✅ | |
 | C-POL-07 | HKCU vs HKLM, legacy `RdpManager` key | per value HKLM wins, also with 0 (HKLM `DisableRecording`=0 beats HKCU 1); the legacy `Policies\RdpManager` key is read only for `SettingsFolder` (HKLM\RemoteHub, HKLM\RdpManager, HKCU\RemoteHub, HKCU\RdpManager), its other values ignored | PS U | 3 | ✅ | |
 | C-POL-08 | `DisableAgentAutoSignIn` | the editor rows "Sign in automatically when nobody is signed in" and "When an automatic sign-in's connection ends" shown but greyed out ("Turned off by your organisation"); the agent desktop's connect page never offers automatic sign-in, even with the stored option On; the menu entry *Install credential provider* and the install dialog's "Allow automatic sign-in" stay | PS U | 2 | ✅ | |
-| C-POL-09 | `UpdateChannel` values and types | `ga` / `release` read as stable, `prerelease` / `pre-release` as beta (any case); an unknown value (`nightly`) ignored – the user's channel applies, the channel buttons stay on; a DWORD policy stored as REG_SZ (`DisableTelemetry`="1") ignored | PS U M | 3 | ◐ | |
+| C-POL-09 | `UpdateChannel` values and types | `ga` / `release` read as stable, `prerelease` / `pre-release` as beta (any case); an unknown value (`nightly`) ignored – the user's channel applies, the channel buttons stay on; a DWORD policy stored as REG_SZ (`DisableTelemetry`="1") ignored | PS U M | 3 | ✅ | |
 | C-UPD-01 | Update offered | mock announces a higher version → bar shown; lower / equal → nothing | U M | 2 | ✅ | |
 | C-UPD-02 | Checksum mismatch | download deleted, not installed | U M | 1 | ✅ | |
 | C-UPD-03 | Untrusted host | download URL outside GitHub / remotehub.dev → refused | U M | 1 | ✅ | |
 | C-UPD-04 | Install | UAC approved on the secure desktop with the console keyboard (Alt+Y) → MSI installs, RemoteHub restarts with the new version | U C M | 2 | ✅ | |
 | C-UPD-05 | Mandatory / skip | skipped version hidden; mandatory (or below `minSupportedVersion`) can't be skipped and is offered even when that version was skipped before | U M | 3 | ✅ | |
-| C-UPD-06 | No valid checksum | `download.sha256` missing, not 64 characters or not hex → "The update has no valid SHA-256 checksum, so it can't be verified."; nothing requested from the download URL | U M | 1 | ◐ | |
-| C-UPD-07 | Size mismatch | more than `download.size` → "The download is larger than announced."; less → "The download is incomplete (x of y bytes)."; neither `.partial` nor `.msi` kept | U M | 3 | ◐ | |
-| C-UPD-08 | Untrusted redirect | an allowed URL redirecting to a host other than github.com / githubusercontent.com / remotehub.dev (and subdomains) → "The download was redirected to an address that isn't trusted." | U M | 2 | ◐ | |
-| C-UPD-09 | Update server errors | *Check for updates now*: 404 on stable → "No release in this channel yet" / "There is no GA (stable) release yet. Switch to the Beta channel…", on beta → "The update server has no release for this channel."; 500 → "Couldn't check for updates"; bad JSON → "…an answer RemoteHub doesn't understand."; no answer in 15 s → "The update server didn't answer in time."; a lower version → "RemoteHub is up to date" (only updates to a higher version) | U M | 3 | ◐ | |
-| C-UPD-10 | Install declined at the open-sessions question | "Install cancelled. The verified download is kept until the next update."; no install started (no msiexec other than the Windows Installer service, no `install-update.cmd`); *Download and install* enabled again | U M | 3 | ◐ | |
+| C-UPD-06 | No valid checksum | `download.sha256` missing, not 64 characters or not hex → "The update has no valid SHA-256 checksum, so it can't be verified."; nothing requested from the download URL | U M | 1 | ✅ | |
+| C-UPD-07 | Size mismatch | more than `download.size` → "The download is larger than announced."; less → "The download is incomplete (x of y bytes)."; neither `.partial` nor `.msi` kept | U M | 3 | ✅ | |
+| C-UPD-08 | Untrusted redirect | an allowed URL redirecting to a host other than github.com / githubusercontent.com / remotehub.dev (and subdomains) → "The download was redirected to an address that isn't trusted." | U M | 2 | ✅ | |
+| C-UPD-09 | Update server errors | *Check for updates now*: 404 on stable → "No release in this channel yet" / "There is no GA (stable) release yet. Switch to the Beta channel…", on beta → "The update server has no release for this channel."; 500 → "Couldn't check for updates"; bad JSON → "…an answer RemoteHub doesn't understand."; no answer in 15 s → "The update server didn't answer in time."; a lower version → "RemoteHub is up to date" (only updates to a higher version) | U M | 3 | ✅ | |
+| C-UPD-10 | Install declined at the open-sessions question | "Install cancelled. The verified download is kept until the next update."; no install started (no msiexec other than the Windows Installer service, no `install-update.cmd`); *Download and install* enabled again | U M | 3 | ✅ | |
 | C-TEL-01 | Telemetry content | `app_start`: exactly `event, version, channel, os` (Windows 10 / 11 correct per VM), `arch`, `installId` and the counts `connections, agents, shares, folders` (match the tree); `app_session` after a second start: the six base keys and `runSeconds` (only when the previous session ran > 0 s; its `version` is the previous session's); `channel` is the effective one (`beta` for 0.x); nothing else | U M | 1 | ✅ | |
 | C-TEL-02 | Off deletes install ID | `install-id` file gone | U PS | 2 | ✅ | |
-| C-TEL-03 | Off discards local records | telemetry off (setting or policy) → at the next start pending `crash\crash-*.json` deleted and never sent, `run-time.json` removed and `install-id` deleted – with the policy as with the setting (telemetry fully off) | PS U M | 2 | ◐ | |
+| C-TEL-03 | Off discards local records | telemetry off (setting or policy) → at the next start pending `crash\crash-*.json` deleted and never sent, `run-time.json` removed and `install-id` deleted – with the policy as with the setting (telemetry fully off) | PS U M | 2 | ✅ | |
 | C-CRASH-01 | .NET crash | forced crash → file in `crash\`, sent at next start as `app_crash`, redacted (no user, host, path, IP) | U M | 2 | ✅ | |
 | C-CRASH-02 | Unexpected exit | killed in Task Manager → `UnexpectedExit` next start | U M | 3 | ✅ | |
-| C-CRASH-03 | Native crash | unclean exit with an Application Error 1000 for RemoteHub.exe → `app_crash` with `errorType` `NativeCrash`, message "Exception 0x… in <module> <ver>", stack "<module>+0x<offset>", `version` of the crashed session | U E M | 3 | ◐ | |
-| C-CRASH-04 | Crash queue limits | at most the newest 5 reports sent; reports older than 30 days deleted; a report the server refuses stays in `crash\` and goes at the next start; a handled "RemoteHub – unexpected error" recorded at most 3 times per session | PS U M | 3 | ◐ | |
+| C-CRASH-03 | Native crash | unclean exit with an Application Error 1000 for RemoteHub.exe → `app_crash` with `errorType` `NativeCrash`, message "Exception 0x… in <module> <ver>", stack "<module>+0x<offset>", `version` of the crashed session | U E M | 3 | ✅ | |
+| C-CRASH-04 | Crash queue limits | at most the newest 5 reports sent; reports older than 30 days deleted; a report the server refuses stays in `crash\` and goes at the next start; a handled "RemoteHub – unexpected error" recorded at most 3 times per session | PS U M | 3 | ✅ | |
 
 The mock (M) is a small HTTPS server on the host with a lab root certificate trusted in the VM and the
 `update.remotehub.dev` name pointed at it through the VM's hosts file. It records every request for the checks.
@@ -795,22 +795,22 @@ The mock (M) is a small HTTPS server on the host with a lab root certificate tru
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| R-RDP-01 | Connect with saved credentials | session to the device VM reaches its desktop (device-side: new session for PSAdmin) | U PS | 1 | ◐ | 2VM |
-| R-RDP-02 | Local account `.\user` | signs in as the device's local account | U PS | 2 | ◐ | 2VM |
-| R-RDP-03 | NTLM saved-credential policy message | non-domain target without the delegation policy → Windows' message about saved credentials in the tab (RemoteHub adds no explanation of its own) | U | 3 | ◐ | 2VM |
-| R-RDP-04 | Password prompt helper | device with "Always prompt" → password on the clipboard, excluded from history, cleared after 30 s or after login | U PS | 2 | ◐ | 2VM |
-| R-RDP-05 | Clipboard / drive redirection | text both ways; drive redirection shows `\\tsclient\C` only when on | U PS | 2 | ◐ | 2VM |
-| R-RDP-06 | Dynamic resolution | resize the tab → device session resolution follows | U PS | 3 | ◐ | 2VM |
-| R-RDP-07 | Ctrl+Alt+Del, full screen, detach/dock | each works, keyboard focus frame shown | U | 3 | ◐ | 2VM |
-| R-RDP-08 | .rdp import/export | export with password, import on normaluser → connects; risks dialog lists redirections | U | 2 | ◐ | 2VM |
-| R-RDP-09 | Single instance | opening a `.rdp` while running → same window, entry reused | U | 3 | ◐ | 2VM |
-| R-RDP-10 | Password toast *Clear now* | 'Stored password for "<name>" copied' / "Press Ctrl+V in the password field, then OK." with *Clear now* (clipboard emptied at once); closes when Windows' dialog closes or the clipboard changes | U | 3 | ◐ | 2VM |
-| R-RDP-11 | Password prompt "Do nothing" | *When Windows asks for the password* = Do nothing → clipboard untouched, no toast, no "Password copied" audit | U PS | 2 | ◐ | 2VM |
-| R-RDP-12 | Switch hotkey inside RDP | Ctrl+Alt+< → next tab, Ctrl+Alt+Shift+< → previous (full screen left first); on de-DE AltGr+< types the pipe character in the session instead | U C | 3 | ◐ | 2VM |
-| R-RDP-13 | Additional RDP session | with an RDP tab open *Open additional session* (tree) / *Additional remote desktop session* (tab) → a second tab and a second session on the device | U PS | 3 | ◐ | 2VM |
+| R-RDP-01 | Connect with saved credentials | session to the device VM reaches its desktop (device-side: new session for PSAdmin) | U PS | 1 | ✅ | 2VM |
+| R-RDP-02 | Local account `.\user` | signs in as the device's local account | U PS | 2 | ✅ | 2VM |
+| R-RDP-03 | NTLM saved-credential policy message | non-domain target without the delegation policy → Windows' message about saved credentials in the tab (RemoteHub adds no explanation of its own) | U | 3 | ✅ | 2VM |
+| R-RDP-04 | Password prompt helper | device with "Always prompt" → password on the clipboard, excluded from history, cleared after 30 s or after login | U PS | 2 | ✅ | 2VM |
+| R-RDP-05 | Clipboard / drive redirection | text both ways; drive redirection shows `\\tsclient\C` only when on | U PS | 2 | ✅ | 2VM |
+| R-RDP-06 | Dynamic resolution | resize the tab → device session resolution follows | U PS | 3 | ✅ | 2VM |
+| R-RDP-07 | Ctrl+Alt+Del, full screen, detach/dock | each works, keyboard focus frame shown | U | 3 | ✅ | 2VM |
+| R-RDP-08 | .rdp import/export | export with password, import on normaluser → connects; risks dialog lists redirections | U | 2 | ✅ | 2VM |
+| R-RDP-09 | Single instance | opening a `.rdp` while running → same window, entry reused | U | 3 | ✅ | 2VM |
+| R-RDP-10 | Password toast *Clear now* | 'Stored password for "<name>" copied' / "Press Ctrl+V in the password field, then OK." with *Clear now* (clipboard emptied at once); closes when Windows' dialog closes or the clipboard changes | U | 3 | ✅ | 2VM |
+| R-RDP-11 | Password prompt "Do nothing" | *When Windows asks for the password* = Do nothing → clipboard untouched, no toast, no "Password copied" audit | U PS | 2 | ✅ | 2VM |
+| R-RDP-12 | Switch hotkey inside RDP | Ctrl+Alt+< → next tab, Ctrl+Alt+Shift+< → previous (full screen left first); on de-DE AltGr+< types the pipe character in the session instead | U C | 3 | ✅ | 2VM |
+| R-RDP-13 | Additional RDP session | with an RDP tab open *Open additional session* (tree) / *Additional remote desktop session* (tab) → a second tab and a second session on the device | U PS | 3 | ✅ | 2VM |
 | R-AGENT-01 | Full agent flow from the UI | Install RemoteHub Agent… over remoting from the UI, then PowerShell, file transfer, registry, services, processes and agent desktop tabs work | U | 1 | ✅ | 2VM |
-| R-AGENT-02 | Automatic → agent desktop | "Remote desktop through: Automatic" opens the agent desktop; *Use RDP instead* opens RDP | U | 2 | ◐ | 2VM |
-| R-AGENT-03 | Own RDP session warning | picking the session connected by RDP from this PC warns | U | 3 | ◐ | 2VM |
+| R-AGENT-02 | Automatic → agent desktop | "Remote desktop through: Automatic" opens the agent desktop; *Use RDP instead* opens RDP | U | 2 | ✅ | 2VM |
+| R-AGENT-03 | Own RDP session warning | picking the session connected by RDP from this PC warns | U | 3 | ✅ | 2VM |
 
 ### 10.5 End to end through RemoteHub's window (2VM)
 
@@ -826,68 +826,68 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-AG-01 | Install from the UI | right-click → RemoteHub Agent → *Install RemoteHub Agent…* (silent over remoting) → rows end "Installed – service Running." and "RemoteHub Agent <v> answers on port 58732 with the expected certificate.", *Done*; the shield's tooltip "RemoteHub Agent <version>: active – …"; audit "Agent installed" "Installed – Remoting" | U PS | 1 | ✅ |
 | UI-AG-02 | Test RemoteHub Agent | right-click → Tools → *Test RemoteHub Agent* (offered until the agent is known to work; then the tools are offered instead) → "The RemoteHub Agent works (PowerShell <x.y> on <COMPUTERNAME>)." | U | 1 | ✅ |
 | UI-AG-03 | Wrong pin | change the device certificate (re-enroll from another "RemoteHub") → warning that can't be clicked through; no 4625 / sign-in line on the device | U PS E | 1 | ✅ |
-| UI-AG-04 | Wrong password / not allowed | credential with wrong password → clear message; normaluser → "not allowed" message | U | 2 | ◐ |
+| UI-AG-04 | Wrong password / not allowed | credential with wrong password → clear message; normaluser → "not allowed" message | U | 2 | ✅ |
 | UI-AG-05 | Agent stopped | stop the service → tabs report the connection failure, no hang; start → reconnects on retry | U PS | 2 | ✅ |
-| UI-AG-06 | Update from the UI | *RemoteHub Agent → Update RemoteHub Agent…* with the agent installed → through the agent, new version shown on the shield | U PS | 1 | ◐ |
-| UI-AG-07 | Allow automatic sign-in in the install dialog | checkbox shown only when the package contains the provider, enabled only for remoting and through the agent (shown but off for clipboard / save to folder, nothing passed); starts ticked (on by default) unless RemoteHub's record says the provider was removed; ticked → `AUTOSIGNIN=1`; unticked → `AUTOSIGNIN=0` (the MSI installs the provider by default otherwise) | U PS | 2 | ◐ |
-| UI-AG-08 | Credential provider from the UI | right-click → *RemoteHub Agent* → *Install credential provider* (only with the agent installed and the provider in RemoteHub's package) → confirmed, "The credential provider is installed and registered.", audit `agent.credential_provider` "Installed – credential provider"; the entry then reads *Remove credential provider*; with "Sign in automatically when nobody is signed in" On the sign-in screen is signed in, audit `agent.auto_sign_in` "Requested" then "Signed in automatically on the console" | U PS | 2 | ◐ |
-| UI-AG-09 | Connect page offers automatic sign-in | checkbox "Sign in automatically as <account>" only for the console session at the sign-in screen, when the device reports `autoSignIn` and `Rights.AutoSignIn` and `DisableAgentAutoSignIn` isn't set; ticked when the connection option is On; *View only* switches it off; hidden for any other session | U S | 2 | ◐ |
-| UI-AG-10 | Sign out asks first | end action *Sign out*: the notice after SignedIn ends "When you disconnect, the session is signed out."; Disconnect, closing the tab (x, middle click, Ctrl+W) or the group asks "Sign out on the device?" (*Disconnect* / Cancel keeps it) – the tab's own x shows only with more than one tab of the connection, with one tab the group's x closes it; with Lock, or the device's `AutoSignInEndAction` = Lock, "… is locked." and nothing asked | U S | 2 | ◐ |
-| UI-AG-11 | 2-minute reconnect after automatic sign-in | after SignedIn the device's network cut 60 s → the tab shows "Attempt n – trying for up to 120 s." and resumes the same session; past 120 s: "The connection dropped and couldn't be restored within 120 s: …"; a normal session keeps 30 s (UI-NET-01) | U N | 2 | ◐ |
-| UI-AG-12 | Password checks before sending | no stored password → "Automatic sign-in needs a stored password for this connection – sign in on the device's screen instead."; over 256 characters → "The password is too long for the automatic sign-in – …"; nothing sent, no "Requested" audit entry | U | 3 | ◐ |
-| UI-AG-13 | Agent test fails → offer to install | agent stopped, *Test RemoteHub Agent* → "The RemoteHub Agent on <name> could not be used. <reason>" with *Install / update the agent…*; the entry then reads "Test RemoteHub Agent again", tooltip "Last result: <reason>" | U PS | 2 | ◐ |
-| UI-AG-14 | Install dialog checks its fields | port 0 / x → "The port must be a number from 1 to 65535."; scope "abc" → "\"Allow connections from\" must be IP addresses or ranges …"; empty label → "Enter a device label."; the dialog stays open | U | 3 | ◐ |
-| UI-AG-15 | Installed but this PC can't reach it | scope leaving out the admin's PC → after 5 tries "Installed, but this PC can't reach the agent on <host>:<port> (<error>). Check firewalls …"; still marked installed | U PS | 2 | ◐ |
-| UI-AG-16 | Throttled sign-in in the UI | after repeated wrong passwords the tab shows "The RemoteHub Agent on <host>:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts." | U | 3 | ◐ |
-| UI-JUMP-01 | RDP tab through a jump host | **2VM** + jump host: connection under the jump host → RemoteHub asks "Trust this RDP certificate?" ("<name> is reached through <jump> …", issued to the device's computer name, thumbprint) → *Trust and connect* → RDP signs in with NTLM through the forwarder (4624 NTLM), no certificate warning from the RDP client | U | 1 | ◐ |
-| UI-JUMP-02 | RDP certificate pin | the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab | U | 2 | ◐ |
+| UI-AG-06 | Update from the UI | *RemoteHub Agent → Update RemoteHub Agent…* with the agent installed → through the agent, new version shown on the shield | U PS | 1 | ✅ |
+| UI-AG-07 | Allow automatic sign-in in the install dialog | checkbox shown only when the package contains the provider, enabled only for remoting and through the agent (shown but off for clipboard / save to folder, nothing passed); starts ticked (on by default) unless RemoteHub's record says the provider was removed; ticked → `AUTOSIGNIN=1`; unticked → `AUTOSIGNIN=0` (the MSI installs the provider by default otherwise) | U PS | 2 | ✅ |
+| UI-AG-08 | Credential provider from the UI | right-click → *RemoteHub Agent* → *Install credential provider* (only with the agent installed and the provider in RemoteHub's package) → confirmed, "The credential provider is installed and registered.", audit `agent.credential_provider` "Installed – credential provider"; the entry then reads *Remove credential provider*; with "Sign in automatically when nobody is signed in" On the sign-in screen is signed in, audit `agent.auto_sign_in` "Requested" then "Signed in automatically on the console" | U PS | 2 | ✅ |
+| UI-AG-09 | Connect page offers automatic sign-in | checkbox "Sign in automatically as <account>" only for the console session at the sign-in screen, when the device reports `autoSignIn` and `Rights.AutoSignIn` and `DisableAgentAutoSignIn` isn't set; ticked when the connection option is On; *View only* switches it off; hidden for any other session | U S | 2 | ✅ |
+| UI-AG-10 | Sign out asks first | end action *Sign out*: the notice after SignedIn ends "When you disconnect, the session is signed out."; Disconnect, closing the tab (x, middle click, Ctrl+W) or the group asks "Sign out on the device?" (*Disconnect* / Cancel keeps it) – the tab's own x shows only with more than one tab of the connection, with one tab the group's x closes it; with Lock, or the device's `AutoSignInEndAction` = Lock, "… is locked." and nothing asked | U S | 2 | ✅ |
+| UI-AG-11 | 2-minute reconnect after automatic sign-in | after SignedIn the device's network cut 60 s → the tab shows "Attempt n – trying for up to 120 s." and resumes the same session; past 120 s: "The connection dropped and couldn't be restored within 120 s: …"; a normal session keeps 30 s (UI-NET-01) | U N | 2 | ✅ |
+| UI-AG-12 | Password checks before sending | no stored password → "Automatic sign-in needs a stored password for this connection – sign in on the device's screen instead."; over 256 characters → "The password is too long for the automatic sign-in – …"; nothing sent, no "Requested" audit entry | U | 3 | ✅ |
+| UI-AG-13 | Agent test fails → offer to install | agent stopped, *Test RemoteHub Agent* → "The RemoteHub Agent on <name> could not be used. <reason>" with *Install / update the agent…*; the entry then reads "Test RemoteHub Agent again", tooltip "Last result: <reason>" | U PS | 2 | ✅ |
+| UI-AG-14 | Install dialog checks its fields | port 0 / x → "The port must be a number from 1 to 65535."; scope "abc" → "\"Allow connections from\" must be IP addresses or ranges …"; empty label → "Enter a device label."; the dialog stays open | U | 3 | ✅ |
+| UI-AG-15 | Installed but this PC can't reach it | scope leaving out the admin's PC → after 5 tries "Installed, but this PC can't reach the agent on <host>:<port> (<error>). Check firewalls …"; still marked installed | U PS | 2 | ✅ |
+| UI-AG-16 | Throttled sign-in in the UI | after repeated wrong passwords the tab shows "The RemoteHub Agent on <host>:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts." | U | 3 | ✅ |
+| UI-JUMP-01 | RDP tab through a jump host | **2VM** + jump host: connection under the jump host → RemoteHub asks "Trust this RDP certificate?" ("<name> is reached through <jump> …", issued to the device's computer name, thumbprint) → *Trust and connect* → RDP signs in with NTLM through the forwarder (4624 NTLM), no certificate warning from the RDP client | U | 1 | ✅ |
+| UI-JUMP-02 | RDP certificate pin | the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab | U | 2 | ✅ |
 
 **Agent remote desktop**
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| UI-AD-01 | Open | *Remote desktop* opens the agent tab, session picker lists the device's sessions, Connected; tab picture equals a console screenshot of the device | U C | 1 | ◐ |
-| UI-AD-02 | Control | click into the tab and type → Notepad on the device gets the text (incl. German layout case) | U S | 1 | ◐ |
-| UI-AD-03 | Monitor / All monitors / Resolution menu | each choice changes the picture and the device resolution as in D-MON / D-FIT: *Fit to this window* follows the tab, *The device's own resolution* keeps it, *3840 × 2160* makes it larger than the tab (scaled down); resolution restored on disconnect | U PS | 2 | ◐ |
-| UI-AD-04 | Key combinations | Alt+Tab and Win+R in the tab go to the device; Win+L stays local | U S | 2 | ◐ |
-| UI-AD-05 | Ask | user Allows (OCR + console mouse on the device) → tab connects; Denies → "The user at the device didn't allow it." | U S | 1 | ◐ |
-| UI-AD-06 | Show them a code | code read on the device, typed into RemoteHub's PIN box → connected; wrong → "That code isn't right. Try again." with "2 attempt(s) left." / "1 attempt(s) left.", then "The code was entered wrong too often." | U S | 1 | ◐ |
-| UI-AD-07 | View-only | *View only – no mouse and keyboard* ticked on the connect page (no toggle once connected) → badge "View only", typing doesn't reach the device, no clipboard, Ctrl+Alt+Del off | U S | 1 | ◐ |
-| UI-AD-08 | Use RDP instead | button opens an RDP tab to the same device | U | 2 | ◐ |
-| UI-AD-09 | No usable session | nobody signed in, no SecureDesktop right → entries end " – your account may not see it" and are off, "Nobody is using a session right now, and your account may not see the sign-in or lock screen …", *Connect* off | U PS | 2 | ◐ |
-| UI-AD-10 | Consent choices per session | own signed-in session: "Connect without asking (they see a banner)" offered even when the policy lacks None; locked / sign-in session: "When someone unlocks or signs in: ask them / show them a code / don't ask (they see a banner)" | U | 3 | ◐ |
+| UI-AD-01 | Open | *Remote desktop* opens the agent tab, session picker lists the device's sessions, Connected; tab picture equals a console screenshot of the device | U C | 1 | ✅ |
+| UI-AD-02 | Control | click into the tab and type → Notepad on the device gets the text (incl. German layout case) | U S | 1 | ✅ |
+| UI-AD-03 | Monitor / All monitors / Resolution menu | each choice changes the picture and the device resolution as in D-MON / D-FIT: *Fit to this window* follows the tab, *The device's own resolution* keeps it, *3840 × 2160* makes it larger than the tab (scaled down); resolution restored on disconnect | U PS | 2 | ✅ |
+| UI-AD-04 | Key combinations | Alt+Tab and Win+R in the tab go to the device; Win+L stays local | U S | 2 | ✅ |
+| UI-AD-05 | Ask | user Allows (OCR + console mouse on the device) → tab connects; Denies → "The user at the device didn't allow it." | U S | 1 | ✅ |
+| UI-AD-06 | Show them a code | code read on the device, typed into RemoteHub's PIN box → connected; wrong → "That code isn't right. Try again." with "2 attempt(s) left." / "1 attempt(s) left.", then "The code was entered wrong too often." | U S | 1 | ✅ |
+| UI-AD-07 | View-only | *View only – no mouse and keyboard* ticked on the connect page (no toggle once connected) → badge "View only", typing doesn't reach the device, no clipboard, Ctrl+Alt+Del off | U S | 1 | ✅ |
+| UI-AD-08 | Use RDP instead | button opens an RDP tab to the same device | U | 2 | ✅ |
+| UI-AD-09 | No usable session | nobody signed in, no SecureDesktop right → entries end " – your account may not see it" and are off, "Nobody is using a session right now, and your account may not see the sign-in or lock screen …", *Connect* off | U PS | 2 | ✅ |
+| UI-AD-10 | Consent choices per session | own signed-in session: "Connect without asking (they see a banner)" offered even when the policy lacks None; locked / sign-in session: "When someone unlocks or signs in: ask them / show them a code / don't ask (they see a banner)" | U | 3 | ✅ |
 
 **Copy and paste**
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| UI-CP-01 | Text admin → device (agent) | Ctrl+C in Notepad on the admin's PC, Ctrl+V in Notepad on the device through the tab → same text (Unicode, multi-line) | U S | 1 | ◐ |
-| UI-CP-02 | Text device → admin (agent) | copy on the device, paste on the admin's PC → same text | U S | 1 | ◐ |
-| UI-CP-03 | Image both ways (agent) | Paint / screenshot copied → pasted on the other side, pixels equal; from the device it is fetched on paste: "Pasted the image from the device." | U S | 2 | ◐ |
-| UI-CP-04 | Files admin → device (agent) | copy 3 files + a folder in Explorer, paste in Explorer on the device → arrive, hashes equal; "Copying <n> files to the device" for 1 MB or more; after the device's receipt "Copied <n> files to the device – paste it there." | U S | 1 | ◐ |
-| UI-CP-05 | Files device → admin (agent) | copy in Explorer on the device, paste in Explorer on the admin's PC → fetched on paste, "Pasted <n> files from the device.", hashes equal | U S | 1 | ◐ |
-| UI-CP-06 | Too much | 101 MiB (the limit is 100 MiB) copied while connected → RemoteHub says to use the file transfer, nothing offered, nothing partial | U S | 2 | ◐ |
-| UI-CP-07 | Policy text only | `DesktopClipboard=1` → text works, files refused with RemoteHub's notice "Copying images and files isn't allowed on this device – only text." | U S PS | 2 | ◐ |
-| UI-CP-08 | Copy on the lock screen | session locked → no clipboard to or from the device until unlocked and allowed | U S | 1 | ◐ |
-| UI-CP-09 | Text both ways (RDP) | as UI-CP-01/02 through an RDP tab | U S | 1 | ◐ |
-| UI-CP-10 | Files both ways (RDP) | Explorer copy/paste through an RDP tab, hashes equal | U S | 2 | ◐ |
-| UI-CP-11 | Image both ways (RDP) | pixels equal | U S | 3 | ◐ |
-| UI-CP-12 | Across sessions | copy in an RDP tab, paste in an agent tab to another device → arrives | U S | 3 | ◐ |
-| UI-CP-13 | DesktopClipboard=2 (images) | an image reaches the device; a file copy is refused – today with "Copying images and files isn't allowed on this device – only text.", which is wrong for level 2 (the agent says "Copying files isn't allowed on this device.") | U S PS | 3 | ◐ |
-| UI-CP-14 | Copies from before connecting are quiet | a too-big or refused copy already on the clipboard when the tab goes live → no notice; the same copy while connected → the notice | U S | 3 | ◐ |
-| UI-CP-15 | Cancel a copy to the device | 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived." | U S | 3 | ◐ |
+| UI-CP-01 | Text admin → device (agent) | Ctrl+C in Notepad on the admin's PC, Ctrl+V in Notepad on the device through the tab → same text (Unicode, multi-line) | U S | 1 | ✅ |
+| UI-CP-02 | Text device → admin (agent) | copy on the device, paste on the admin's PC → same text | U S | 1 | ✅ |
+| UI-CP-03 | Image both ways (agent) | Paint / screenshot copied → pasted on the other side, pixels equal; from the device it is fetched on paste: "Pasted the image from the device." | U S | 2 | ✅ |
+| UI-CP-04 | Files admin → device (agent) | copy 3 files + a folder in Explorer, paste in Explorer on the device → arrive, hashes equal; "Copying <n> files to the device" for 1 MB or more; after the device's receipt "Copied <n> files to the device – paste it there." | U S | 1 | ✅ |
+| UI-CP-05 | Files device → admin (agent) | copy in Explorer on the device, paste in Explorer on the admin's PC → fetched on paste, "Pasted <n> files from the device.", hashes equal | U S | 1 | ✅ |
+| UI-CP-06 | Too much | 101 MiB (the limit is 100 MiB) copied while connected → RemoteHub says to use the file transfer, nothing offered, nothing partial | U S | 2 | ✅ |
+| UI-CP-07 | Policy text only | `DesktopClipboard=1` → text works, files refused with RemoteHub's notice "Copying images and files isn't allowed on this device – only text." | U S PS | 2 | ✅ |
+| UI-CP-08 | Copy on the lock screen | session locked → no clipboard to or from the device until unlocked and allowed | U S | 1 | ✅ |
+| UI-CP-09 | Text both ways (RDP) | as UI-CP-01/02 through an RDP tab | U S | 1 | ✅ |
+| UI-CP-10 | Files both ways (RDP) | Explorer copy/paste through an RDP tab, hashes equal | U S | 2 | ✅ |
+| UI-CP-11 | Image both ways (RDP) | pixels equal | U S | 3 | ✅ |
+| UI-CP-12 | Across sessions | copy in an RDP tab, paste in an agent tab to another device → arrives | U S | 3 | ✅ |
+| UI-CP-13 | DesktopClipboard=2 (images) | an image reaches the device; a file copy is refused – today with "Copying images and files isn't allowed on this device – only text.", which is wrong for level 2 (the agent says "Copying files isn't allowed on this device.") | U S PS | 3 | ✅ |
+| UI-CP-14 | Copies from before connecting are quiet | a too-big or refused copy already on the clipboard when the tab goes live → no notice; the same copy while connected → the notice | U S | 3 | ✅ |
+| UI-CP-15 | Cancel a copy to the device | 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived." | U S | 3 | ✅ |
 
 **Ctrl+Alt+Del**
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| UI-SAS-01 | Agent tab, desktop | Ctrl+Alt+Del button → security options in the tab; Esc back | U | 1 | ◐ |
-| UI-SAS-02 | Agent tab, **lock screen** | device locked → button → password field; password typed in the tab unlocks; the user who allowed the connection before isn't asked again – the tab continues (as for the own account; someone else is asked, D-LOCK-02) | U S C | 1 | ◐ |
-| UI-SAS-03 | Agent tab, sign-in screen | nobody signed in → button → sign in as PSAdmin through the tab → desktop | U C | 1 | ◐ |
-| UI-SAS-04 | Agent tab, UAC | UAC prompt on the device → visible in the tab, approved with an administrator's password typed in the tab (the prompt offers the console account with its password field) | U S | 1 | ◐ |
-| UI-SAS-05 | Physical Ctrl+Alt+Del stays local | Ctrl+Alt+Del on the admin's PC (console keyboard) → admin's own security screen, nothing sent to the device | U C | 2 | ◐ |
-| UI-SAS-06 | RDP tab, desktop | Ctrl+Alt+Del action → security screen in the RDP session | U | 1 | ◐ |
-| UI-SAS-07 | RDP tab, **lock screen** | RDP session locked → Ctrl+Alt+Del action → password field, unlock by typing in the tab | U S | 1 | ◐ |
+| UI-SAS-01 | Agent tab, desktop | Ctrl+Alt+Del button → security options in the tab; Esc back | U | 1 | ✅ |
+| UI-SAS-02 | Agent tab, **lock screen** | device locked → button → password field; password typed in the tab unlocks; the user who allowed the connection before isn't asked again – the tab continues (as for the own account; someone else is asked, D-LOCK-02) | U S C | 1 | ✅ |
+| UI-SAS-03 | Agent tab, sign-in screen | nobody signed in → button → sign in as PSAdmin through the tab → desktop | U C | 1 | ✅ |
+| UI-SAS-04 | Agent tab, UAC | UAC prompt on the device → visible in the tab, approved with an administrator's password typed in the tab (the prompt offers the console account with its password field) | U S | 1 | ✅ |
+| UI-SAS-05 | Physical Ctrl+Alt+Del stays local | Ctrl+Alt+Del on the admin's PC (console keyboard) → admin's own security screen, nothing sent to the device | U C | 2 | ✅ |
+| UI-SAS-06 | RDP tab, desktop | Ctrl+Alt+Del action → security screen in the RDP session | U | 1 | ✅ |
+| UI-SAS-07 | RDP tab, **lock screen** | RDP session locked → Ctrl+Alt+Del action → password field, unlock by typing in the tab | U S | 1 | ✅ |
 
 **Tools and network**
 
@@ -899,28 +899,28 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-TL-04 | Services tab | stop / start Spooler → state on the device agrees | U PS | 2 | ✅ |
 | UI-TL-05 | Processes tab | end a notepad on the device; lsass refused | U PS | 2 | ✅ |
 | UI-TL-06 | Set up PowerShell remoting | *Set up on the target…* → script copied (*Copy script*) or saved (*Save as .ps1…*), run on the device (PS Direct), *Test again* → available over HTTPS | U PS | 2 | ✅ |
-| UI-TL-07 | WinRM account refused | "PowerShell remoting answers on <name>, but the account was refused. <msg>", no *Set up on the target…* | U | 3 | ◐ |
-| UI-TL-08 | Untrusted HTTPS from the remoting test | "<name> answers over HTTPS, but this PC doesn't trust its certificate yet. …" → *Check the certificate…* → "Trust this certificate?" / *Same – trust it*; declined → "Not trusted. Nothing was changed on this PC." | U | 2 | ◐ |
-| UI-TL-09 | Copy script | *Test again* only after Copy or Save; "Copied. Open an elevated PowerShell on <host>, paste … Then click \"Test again\" …"; clipboard kept out of history, cleared after 120 s | U | 3 | ◐ |
-| UI-NET-01 | Agent tab reconnect | cut the device's network 10 s → the tab is back within 30 s without asking the user again (a short cut usually keeps the TCP connection; a dead one is noticed through the 30 s keep-alive and resumed, event 1103) | U N | 1 | ◐ |
-| UI-NET-02 | RDP auto-reconnect | cut 10 s → RDP reconnects ("Connection lost – reconnecting (<n>/20)…" in the tab's tooltip), same session on the device | U N | 2 | ◐ |
-| UI-NET-03 | Agent reconnect gives up | cut longer than 30 s (normal session) → "Connection lost – reconnecting…", "Attempt n – trying for up to 30 s.", then "The connection dropped and couldn't be restored within 30 s: <error>"; *Stop reconnecting* ends it at once ("Disconnected.", not the 30 s message; the lab allows 10 s after the click for its own UI round trips) | U N | 2 | ◐ |
+| UI-TL-07 | WinRM account refused | "PowerShell remoting answers on <name>, but the account was refused. <msg>", no *Set up on the target…* | U | 3 | ✅ |
+| UI-TL-08 | Untrusted HTTPS from the remoting test | "<name> answers over HTTPS, but this PC doesn't trust its certificate yet. …" → *Check the certificate…* → "Trust this certificate?" / *Same – trust it*; declined → "Not trusted. Nothing was changed on this PC." | U | 2 | ✅ |
+| UI-TL-09 | Copy script | *Test again* only after Copy or Save; "Copied. Open an elevated PowerShell on <host>, paste … Then click \"Test again\" …"; clipboard kept out of history, cleared after 120 s | U | 3 | ✅ |
+| UI-NET-01 | Agent tab reconnect | cut the device's network 10 s → the tab is back within 30 s without asking the user again (a short cut usually keeps the TCP connection; a dead one is noticed through the 30 s keep-alive and resumed, event 1103) | U N | 1 | ✅ |
+| UI-NET-02 | RDP auto-reconnect | cut 10 s → RDP reconnects ("Connection lost – reconnecting (<n>/20)…" in the tab's tooltip), same session on the device | U N | 2 | ✅ |
+| UI-NET-03 | Agent reconnect gives up | cut longer than 30 s (normal session) → "Connection lost – reconnecting…", "Attempt n – trying for up to 30 s.", then "The connection dropped and couldn't be restored within 30 s: <error>"; *Stop reconnecting* ends it at once ("Disconnected.", not the 30 s message; the lab allows 10 s after the click for its own UI round trips) | U N | 2 | ✅ |
 
 ### 10.6 Recordings
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| C-REC-01 | Record each tab type | RDP, agent desktop, PowerShell, file transfer, registry, services, processes → MP4 in `Videos\RemoteHub`, or the policy / settings folder, named `<connection> - <tab> - <yyyy-MM-dd HH-mm-ss>.mp4` (local time, ` (2)` on a clash), plays (Media Foundation reads duration > 0) | U PS | 2 | ◐ | 2VM |
-| C-REC-02 | Settings | 30 fps / Full HD → file metadata matches | U PS | 3 | ◐ | 2VM |
-| C-REC-03 | GPU capture | on Win11 no yellow border; Win10 records too | U | 3 | ◐ | 2VM |
-| C-REC-04 | Unexpected stop | kill RemoteHub while recording → file still plays (fragmented MP4) | U PS | 2 | ◐ | 2VM |
-| C-REC-05 | Stop time | last frame not after the stop (fix of 0.14.2) | U PS | 3 | ◐ | 2VM |
-| C-REC-06 | N edition | clear message, no crash | U | 3 | ◐ | N |
-| C-REC-07 | Record a network-share tab | `<connection> - <share name> - <date time>.mp4` | U PS | 3 | ◐ | 2VM |
-| C-REC-08 | Tab hidden while recording | every frame of the hidden period shows "Tab not visible – recording continues when it is shown again" – not the remote screen | U PS | 3 | ◐ | 2VM |
-| C-REC-09 | Normal exit while recording | recordings finish (up to 10 s), the file plays, no dialog | U PS | 2 | ◐ | 2VM |
-| C-REC-10 | "Recording saved" | file, `mm:ss · size`, folder; Play / Show in folder / Close / *Delete recording…* (to the Recycle Bin) | U | 3 | ◐ | 2VM |
-| C-REC-11 | Unsafe connection names | invalid characters → `_`, cut at 80 characters, a second file ` (2)` | PS | 3 | ◐ | |
+| C-REC-01 | Record each tab type | RDP, agent desktop, PowerShell, file transfer, registry, services, processes → MP4 in `Videos\RemoteHub`, or the policy / settings folder, named `<connection> - <tab> - <yyyy-MM-dd HH-mm-ss>.mp4` (local time, ` (2)` on a clash), plays (Media Foundation reads duration > 0) | U PS | 2 | ✅ | 2VM |
+| C-REC-02 | Settings | 30 fps / Full HD → file metadata matches | U PS | 3 | ✅ | 2VM |
+| C-REC-03 | GPU capture | on Win11 no yellow border; Win10 records too | U | 3 | ✅ | 2VM |
+| C-REC-04 | Unexpected stop | kill RemoteHub while recording → file still plays (fragmented MP4) | U PS | 2 | ✅ | 2VM |
+| C-REC-05 | Stop time | last frame not after the stop (fix of 0.14.2) | U PS | 3 | ✅ | 2VM |
+| C-REC-06 | N edition | clear message, no crash | U | 3 | ✅ | N |
+| C-REC-07 | Record a network-share tab | `<connection> - <share name> - <date time>.mp4` | U PS | 3 | ✅ | 2VM |
+| C-REC-08 | Tab hidden while recording | every frame of the hidden period shows "Tab not visible – recording continues when it is shown again" – not the remote screen | U PS | 3 | ✅ | 2VM |
+| C-REC-09 | Normal exit while recording | recordings finish (up to 10 s), the file plays, no dialog | U PS | 2 | ✅ | 2VM |
+| C-REC-10 | "Recording saved" | file, `mm:ss · size`, folder; Play / Show in folder / Close / *Delete recording…* (to the Recycle Bin) | U | 3 | ✅ | 2VM |
+| C-REC-11 | Unsafe connection names | invalid characters → `_`, cut at 80 characters, a second file ` (2)` | PS | 3 | ✅ | |
 
 ### 10.7 Policies of both products and the Group Policy template (POL)
 
@@ -932,18 +932,18 @@ RemoteHub and the agent on the same VM (`POL-CLIENT.Tests.ps1`).
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| POL-01 | Template in the Group Policy editor | `RemoteHub.admx` and `en-US\RemoteHub.adml` from the build copied into `%WINDIR%\PolicyDefinitions`: `gpedit.msc` opens without an *Administrative Templates* error dialog, and *Computer Configuration → Administrative Templates* lists *RemoteHub* with both *RemoteHub Console* and *RemoteHub Agent* | PS S | 1 | ◐ | |
-| POL-02 | Both products on one VM: each reads only its own key | agent `DesktopEnabled` = 0 → the desktop *to* this VM is refused (404, "turned off by a policy on the device"), and RemoteHub on the same VM still lists `DesktopEnabled` only under *RemoteHub Agent on this PC* on Settings → Policies; console `DisableRecording` = 1 at `…\Policies\RemoteHub` → the agent's `policy` output doesn't list it and the agent still allows everything | PS H U | 1 | ◐ | |
-| POL-03 | `RemoteHubAgent.exe policy` | with `MaxSessions` = 50, `PowerShellEnabled` = 0, `ConsentTimeoutSeconds` = 9999 set: `MaxSessions 50 [policy]`, `PowerShellEnabled Off [policy]`, `ListenPort 58732 [agent.json]`, `ConsentTimeoutSeconds 30 [default]` plus "INVALID in the policy: 9999 is outside 5–600 – ignored"; every agent value of the template is listed; the policy key unreadable for SYSTEM (deny ACE) → "THE POLICY KEY CAN'T BE READ" | PS | 2 | ◐ | |
-| POL-04 | New agent values apply without a restart | `MaxSessions` = 1: a second PowerShell session while one is held → 503 "limit of simultaneous sessions", and the log says "session limit (1)"; `MaxSessions` = 0 → ignored (default), "Policy MaxSessions: 0 is outside 1–200 – ignored" logged exactly once after two connections; `PrivacyScreenMessage` = "Contoso IT is working on this PC" → the device's screen (console screenshot, OCR) shows it on the privacy screen with message, and without the policy "Remote Support Session in Progress" | PS H C E | 2 | ◐ | |
-| POL-05 | `PowerShellEnabled` = 0 | health's features have no `powershell`; a PowerShell session through the agent is refused before any sign-in (404, no failed-logon event 4625 for the try), the error says "turned off … by a policy on the device (PowerShellEnabled)", the log says "Refused PowerShell from … (policy PowerShellEnabled)"; the remote desktop still connects; policy removed → PowerShell works again without a restart | PS H E | 1 | ◐ | |
-| POL-06 | `AllowedGroups` | `AllowedGroups` = a new local group with a new user in it: that user gets PowerShell and the desktop; PSAdmin (not in it) is refused (403) for both; `Rights\Desktop` = Administrators set as well → PSAdmin gets the desktop again but not PowerShell; `DesktopViewOnly`, `ConsentBypass`, `AutoSignIn` stay nobody | PS H | 1 | ◐ | |
-| POL-07 | `ListenPort` and the firewall rule | `ListenPort` = 58800, service restarted: the agent listens on 58800 only, health with the pin answers there, the rule *RemoteHub Agent* has local port 58800 and the same remote address scope as before, the log says "moved to port 58800"; policy removed and restarted → 58732 again, rule back; `ListenPort` = 0 → ignored, 58732 | PS H E | 1 | ◐ | |
-| POL-08 | Automatic sign-in moves out of the policy key on update | previous release installed with `AUTOSIGNIN=1` (it wrote `NoUserBehavior` and `Rights\AutoSignIn` into the policy key and `autosignin.policy`; once the previous release is 0.18.12 or later the test leaves those values and the marker itself), updated to the build under test: both values gone from the policy key, `agent.json` has `noUserBehavior` = AutoSignIn and `autoSignInGroups`, `autosignin.policy` gone, the log says "moved NoUserBehavior and Rights\AutoSignIn"; `policy` shows both as `[agent.json]`; automatic sign-in still works (harness `auto-sign-in`). Variant: `NoUserBehavior` set to SignInScreen by IT before the update → it stays in the policy key, the log says "left in the policy key", automatic sign-in is refused | PS H E | 1 | ◐ | |
-| POL-09 | What the device's policy decides, in health | `ListenPort`, `VirtualDisplay` and `NoUserBehavior` set: health's `managed` = `autoSignIn`, `virtualDisplay`, `port` – nothing else, no values; one invalid (`ListenPort` = 0) → not named; none set → no `managed` | PS H | 2 | ◐ | |
+| POL-01 | Template in the Group Policy editor | `RemoteHub.admx` and `en-US\RemoteHub.adml` from the build copied into `%WINDIR%\PolicyDefinitions`: `gpedit.msc` opens without an *Administrative Templates* error dialog, and *Computer Configuration → Administrative Templates* lists *RemoteHub* with both *RemoteHub Console* and *RemoteHub Agent* | PS S | 1 | ✅ | |
+| POL-02 | Both products on one VM: each reads only its own key | agent `DesktopEnabled` = 0 → the desktop *to* this VM is refused (404, "turned off by a policy on the device"), and RemoteHub on the same VM still lists `DesktopEnabled` only under *RemoteHub Agent on this PC* on Settings → Policies; console `DisableRecording` = 1 at `…\Policies\RemoteHub` → the agent's `policy` output doesn't list it and the agent still allows everything | PS H U | 1 | ✅ | |
+| POL-03 | `RemoteHubAgent.exe policy` | with `MaxSessions` = 50, `PowerShellEnabled` = 0, `ConsentTimeoutSeconds` = 9999 set: `MaxSessions 50 [policy]`, `PowerShellEnabled Off [policy]`, `ListenPort 58732 [agent.json]`, `ConsentTimeoutSeconds 30 [default]` plus "INVALID in the policy: 9999 is outside 5–600 – ignored"; every agent value of the template is listed; the policy key unreadable for SYSTEM (deny ACE) → "THE POLICY KEY CAN'T BE READ" | PS | 2 | ✅ | |
+| POL-04 | New agent values apply without a restart | `MaxSessions` = 1: a second PowerShell session while one is held → 503 "limit of simultaneous sessions", and the log says "session limit (1)"; `MaxSessions` = 0 → ignored (default), "Policy MaxSessions: 0 is outside 1–200 – ignored" logged exactly once after two connections; `PrivacyScreenMessage` = "Contoso IT is working on this PC" → the device's screen (console screenshot, OCR) shows it on the privacy screen with message, and without the policy "Remote Support Session in Progress" | PS H C E | 2 | ✅ | |
+| POL-05 | `PowerShellEnabled` = 0 | health's features have no `powershell`; a PowerShell session through the agent is refused before any sign-in (404, no failed-logon event 4625 for the try), the error says "turned off … by a policy on the device (PowerShellEnabled)", the log says "Refused PowerShell from … (policy PowerShellEnabled)"; the remote desktop still connects; policy removed → PowerShell works again without a restart | PS H E | 1 | ✅ | |
+| POL-06 | `AllowedGroups` | `AllowedGroups` = a new local group with a new user in it: that user gets PowerShell and the desktop; PSAdmin (not in it) is refused (403) for both; `Rights\Desktop` = Administrators set as well → PSAdmin gets the desktop again but not PowerShell; `DesktopViewOnly`, `ConsentBypass`, `AutoSignIn` stay nobody | PS H | 1 | ✅ | |
+| POL-07 | `ListenPort` and the firewall rule | `ListenPort` = 58800, service restarted: the agent listens on 58800 only, health with the pin answers there, the rule *RemoteHub Agent* has local port 58800 and the same remote address scope as before, the log says "moved to port 58800"; policy removed and restarted → 58732 again, rule back; `ListenPort` = 0 → ignored, 58732 | PS H E | 1 | ✅ | |
+| POL-08 | Automatic sign-in moves out of the policy key on update | previous release installed with `AUTOSIGNIN=1` (it wrote `NoUserBehavior` and `Rights\AutoSignIn` into the policy key and `autosignin.policy`; once the previous release is 0.18.12 or later the test leaves those values and the marker itself), updated to the build under test: both values gone from the policy key, `agent.json` has `noUserBehavior` = AutoSignIn and `autoSignInGroups`, `autosignin.policy` gone, the log says "moved NoUserBehavior and Rights\AutoSignIn"; `policy` shows both as `[agent.json]`; automatic sign-in still works (harness `auto-sign-in`). Variant: `NoUserBehavior` set to SignInScreen by IT before the update → it stays in the policy key, the log says "left in the policy key", automatic sign-in is refused | PS H E | 1 | ✅ | |
+| POL-09 | What the device's policy decides, in health | `ListenPort`, `VirtualDisplay` and `NoUserBehavior` set: health's `managed` = `autoSignIn`, `virtualDisplay`, `port` – nothing else, no values; one invalid (`ListenPort` = 0) → not named; none set → no `managed` | PS H | 2 | ✅ | |
 | POL-10 | Intune import | the ADMX imports in Intune (*Devices → Configuration → Import ADMX*) without a prerequisite, and a profile from it writes the values to a test device | – | 2 | ○ | Intune tenant (manual) |
-| POL-11 | Settings → Policies | HKLM `DisableTelemetry` = 1, HKCU `AuditRetentionDays` = 0, agent `DesktopClipboard` = 1: the page says "2 settings of RemoteHub on this PC are set by your organisation (1 for the computer, 1 for your user account)" (the invalid one counts), lists *Turn off usage data and crash reports: Turned off* with "Computer · HKLM\SOFTWARE\Policies\RemoteHub\DisableTelemetry", shows "AuditRetentionDays 0 is outside 1–36500 – ignored", and lists *Clipboard: Text* under *RemoteHub Agent on this PC*; *Copy as text* puts the same on the clipboard; a value changed while the page is open shows after *Refresh*; nothing set → "No policies are set for RemoteHub on this PC"; *Settings overview* has the *Policies* section and *Show policies…* opens the page | PS U | 2 | ◐ | |
-| POL-12 | Set by policy = greyed out, not hidden | with `DisableTelemetry`, `UpdateChannel`, `AuditRetentionDays` = 90 and `RecordingFolder` set: the usage data toggle, the GA channel button, *Keep entries for* (showing the policy's 90 days) and *Change folder…* are there but disabled; without the policies they are there and enabled | PS U | 2 | ◐ | |
+| POL-11 | Settings → Policies | HKLM `DisableTelemetry` = 1, HKCU `AuditRetentionDays` = 0, agent `DesktopClipboard` = 1: the page says "2 settings of RemoteHub on this PC are set by your organisation (1 for the computer, 1 for your user account)" (the invalid one counts), lists *Turn off usage data and crash reports: Turned off* with "Computer · HKLM\SOFTWARE\Policies\RemoteHub\DisableTelemetry", shows "AuditRetentionDays 0 is outside 1–36500 – ignored", and lists *Clipboard: Text* under *RemoteHub Agent on this PC*; *Copy as text* puts the same on the clipboard; a value changed while the page is open shows after *Refresh*; nothing set → "No policies are set for RemoteHub on this PC"; *Settings overview* has the *Policies* section and *Show policies…* opens the page | PS U | 2 | ✅ | |
+| POL-12 | Set by policy = greyed out, not hidden | with `DisableTelemetry`, `UpdateChannel`, `AuditRetentionDays` = 90 and `RecordingFolder` set: the usage data toggle, the GA channel button, *Keep entries for* (showing the policy's 90 days) and *Change folder…* are there but disabled; without the policies they are there and enabled | PS U | 2 | ✅ | |
 | POL-13 | What the device's policy decides, in RemoteHub's install dialog | the device's `ListenPort` set: RemoteHub's *Update RemoteHub Agent…* for it shows "Set by the device's policy (ListenPort)" under *Port*, the field greyed out even with *Create a new device certificate* ticked; `VirtualDisplay` / `NoUserBehavior` set: the hints of *Virtual display* and *Allow automatic sign-in* say the device's policy decides when they're used, both still changeable. Needs RemoteHub to have installed the agent itself (the UI-AGENT flow) | U H | 2 | ○ | 2VM |
 | POL-14 | Console features: hidden and refused (admx-design.md §5, phase 3) | HKLM `AllowAgent` = 0 with a connection that has the agent: no *Remote desktop via RemoteHub Agent*, *Install / Update RemoteHub Agent…* or credential provider entry in the tree, *+* and tab menus; *Connect through* and *Remote desktop through* greyed out with "Turned off by your organisation"; the tools go over WinRM. `AllowPowerShellRemoting` = 0 (agent allowed): no WinRM tools, test or setup entries for a WinRM connection, the agent's tools still offered. `AllowAgentFileTransfer` = 0: *File transfer* gone for an agent connection, still there over WinRM. `AllowRdp`, `AllowNetworkShares`, `AllowRdpFileImport`, `AllowBackupExport` = 0 hide their entries; an RDP tab opened before the policy refuses *Reconnect* in the tab, and quick connect with `AllowQuickConnect` = 0 shows "Quick connect is turned off by your organisation". Settings → Policies marks `AllowAgentDesktop` = 1 with *Off because "Allow the RemoteHub Agent" is off* | U | 1 | ○ | |
 | POL-15 | Settings and connection settings by policy (admx-design.md §6, §7, phase 4) | HKLM `Connections\RedirectDrives` = 0 with a connection that has *Local drives* on: the RDP session has no drives, and *Local drives* shows *No*, greyed out with "Set by your organisation", in the connection's editor, its folder's and the global defaults; saving the connection keeps its own *Yes* in the settings file. `Theme` = Light: Settings → General shows *Light* greyed out and the window is light. `DisableTelemetry` = 0 with usage data off: the switch is on and greyed out. `AgentDesktopViewOnly` = 1: the start panel's *View only* is ticked and greyed out, and the session can't be controlled. `AgentInstall\Methods` = Clipboard, SaveFiles: *Install silently over PowerShell remoting* is greyed out. `Connections\RemoteDesktopVia` = Agent with `AllowAgentDesktop` = 0: Settings → Policies shows the conflict in amber, and *Connect* says the agent desktop is turned off | U | 1 | ○ | |
