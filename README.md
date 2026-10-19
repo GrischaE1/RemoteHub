@@ -45,7 +45,7 @@ Optional parameters: `-Version 0.9.0` (default: `<Version>` in `src/RemoteHub/Re
   ```
 
 - **Downgrade from an older 2.x install:** the MSI refuses to install over a higher version. Uninstall RemoteHub 2.x first (settings in `%APPDATA%\RemoteHub` are kept), then install 0.9.x.
-- **Not yet in place:** code signing. The MSI and the program are unsigned, so SmartScreen may warn when they're downloaded.
+- **Signing:** releases are signed through SSL.com eSigner, which allows 240 signings a year (a release takes 4, 5 with the credential provider). So a release waits for an approval in the GitHub environment `release-signing` before it builds. **Test releases** – a tag with a suffix, e.g. `v0.19.1-test.1` – skip the approval and stay unsigned (SmartScreen may warn, and the agent MSI has no credential provider). CI and lab builds never use eSigner.
 
 ## Features
 
