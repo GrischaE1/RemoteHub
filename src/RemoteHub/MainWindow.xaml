@@ -7,6 +7,7 @@
         xmlns:r="clr-namespace:RemoteHub.Rdp"
                  xmlns:s="clr-namespace:RemoteHub.Services"
                  xmlns:rm="clr-namespace:RemoteHub.Remoting"
+                 xmlns:v="clr-namespace:RemoteHub.Views"
                  Title="RemoteHub" Width="1400" Height="860" MinWidth="820" MinHeight="520"
                  ExtendsContentIntoTitleBar="True" WindowBackdropType="None" WindowCornerPreference="Round"
                  WindowStartupLocation="CenterScreen" AllowDrop="True">
@@ -37,6 +38,19 @@
         </ui:TitleBar>
 
         <Grid Grid.Row="2">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ================= View rail (notes-view-design.md §3) ================= -->
+        <v:ViewRail x:Name="Rail" Grid.Column="0" />
+
+        <!-- Notes view (§4); created when first shown -->
+        <Border x:Name="NotesHost" Grid.Column="1" Visibility="Hidden" />
+
+        <!-- Remote Control view. Hidden, not collapsed, while another view is shown: the RDP controls keep their size. -->
+        <Grid x:Name="RemoteView" Grid.Column="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="SidebarColumn" Width="360" MinWidth="300" MaxWidth="700" />
                 <ColumnDefinition Width="Auto" />
@@ -46,7 +60,7 @@
             </Grid.ColumnDefinitions>
 
             <!-- ================= Sidebar ================= -->
-            <Border Grid.Column="0" Margin="10,0,2,10" CornerRadius="10" Padding="10,10,8,8"
+            <Border Grid.Column="0" Margin="0,0,2,10" CornerRadius="10" Padding="10,10,8,8"
                     Background="{DynamicResource SidebarBackgroundBrush}" BorderBrush="{DynamicResource ChromeStrokeBrush}" BorderThickness="1">
             <Grid>
             <!-- Collapsed: slim rail -->
@@ -65,8 +79,6 @@
                            AutomationProperties.Name="New" ToolTip="New connection, network share, folder or import .rdp files" />
                 <ui:Button Icon="{ui:SymbolIcon Search24}" Click="RailSearch_Click"
                            AutomationProperties.Name="Search" ToolTip="Search folders &amp; connections (Ctrl+F)" Margin="0,0,0,8" />
-                <ui:Button Icon="{ui:SymbolIcon Settings24}" Click="Settings_Click" Margin="0,0,0,8"
-                           AutomationProperties.Name="Settings" ToolTip="Settings (Ctrl+,)" />
             </StackPanel>
             <Grid x:Name="SidebarFull">
                 <Grid.RowDefinitions>
@@ -78,7 +90,7 @@
                 </Grid.RowDefinitions>
 
                 <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
-                    <!-- Option C: New (menu), Settings, collapse – app items live in Settings -->
+                    <!-- New (menu) and collapse; Settings is on the view rail, app items live in Settings -->
                     <ui:Button x:Name="NewButton" DockPanel.Dock="Left" Appearance="Primary" Click="NewMenu_Click"
                                AutomationProperties.Name="New" ToolTip="New connection (Ctrl+N), network share, new folder (Ctrl+Shift+N) or import .rdp files">
                         <StackPanel Orientation="Horizontal">
@@ -98,8 +110,6 @@
                     </ui:Button>
                     <ui:Button DockPanel.Dock="Right" Margin="6,0,0,0" Icon="{ui:SymbolIcon PanelLeftContract24}" Click="ToggleSidebar_Click"
                                AutomationProperties.Name="Hide navigation" ToolTip="Hide navigation (Ctrl+B)" />
-                    <ui:Button DockPanel.Dock="Right" Icon="{ui:SymbolIcon Settings24}" Click="Settings_Click"
-                               AutomationProperties.Name="Settings" ToolTip="Settings (Ctrl+,) – also backup, saved credentials, updates, help and about" />
                 </DockPanel>
 
                 <DockPanel Grid.Row="1" Margin="0,0,0,8">
@@ -494,6 +504,7 @@
                                     <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
                                               ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
                                 </MenuItem>
+                                <MenuItem x:Name="CmNotes" Header="Notes" Click="CmNotes_Click" Icon="{ui:SymbolIcon Notebook24}" />
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
@@ -837,6 +848,7 @@
                     </DockPanel>
                 </Grid>
             </Border>
+        </Grid>
         </Grid>
     </Grid>
 </ui:FluentWindow>

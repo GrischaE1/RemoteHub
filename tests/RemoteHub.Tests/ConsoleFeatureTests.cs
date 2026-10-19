@@ -162,4 +162,20 @@ public class ConsoleFeatureTests
             Assert.Equal("WebDAV shares are turned off by your organisation – see Settings → Policies.", ex.Message);
         });
     }
+
+    [Fact]
+    public void Blocked_notes_leave_the_rail_and_a_saved_Notes_view_opens_Remote_Control()
+    {
+        var blocked = Set(("AllowNotes", 0));
+        Assert.Equal([MainWindow.RemoteViewId], MainWindow.RailViews(blocked).Select(v => v.Id));
+        Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor(MainWindow.NotesViewId, blocked));
+        Assert.Equal("Notes are turned off by your organisation – see Settings → Policies.", Features.WhyNot(Feature.Notes, blocked));
+
+        foreach (var allowed in new[] { Set(), Set(("AllowNotes", 1)) })
+        {
+            Assert.Equal([MainWindow.RemoteViewId, MainWindow.NotesViewId], MainWindow.RailViews(allowed).Select(v => v.Id));
+            Assert.Equal(MainWindow.NotesViewId, MainWindow.ViewFor(MainWindow.NotesViewId, allowed));
+        }
+        Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor("Scripts", Set()));
+    }
 }

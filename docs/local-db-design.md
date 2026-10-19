@@ -106,6 +106,7 @@ credentials       (id TEXT PK, name TEXT, username TEXT, domain TEXT, version IN
 secrets           (owner_kind TEXT, owner_id TEXT, purpose TEXT, value BLOB,          -- field-encrypted
                    PRIMARY KEY (owner_kind, owner_id, purpose))
 settings          (key TEXT PK, data TEXT, version INT, modified_utc INT, dirty INT)  -- Defaults, Tools
+-- Notes: replaced by the tables in notes-view-design.md §5.1 (notebooks, note_sections, notes, note_files, note_links).
 notes             (id TEXT PK, connection_id TEXT, folder_id TEXT, title TEXT, body TEXT,
                    created_utc INT, version INT, modified_utc INT, dirty INT)
 notes_fts         FTS5 (title, body, content='notes')                               -- full-text search
@@ -254,7 +255,7 @@ Not built: "password shown" (RemoteHub logs copying a password, there is no sepa
 | 0 | Spike with SQLite3MC: x64 and arm64 binaries, key pragmas, FTS5 and WAL encrypted, benchmark the targets in section 7 | **Done** – see section 14 |
 | 1 | `DataStore` replacing `SettingsStore.Load/Save`; key handling; migration; backups. No visible change | **Done** (0.14.0) – see section 15. Migration on real data: still to be checked on a real install |
 | 2 | Audit log + connection history (+ "unused connections" filter on real history) | **Done** (0.14.0) – see section 15 |
-| 3 | Notes: per connection/folder, Markdown, attachments, full-text search | |
+| 3 | Notes: notebooks, sections and pages (Markdown), images, links to folders and connections, full-text search | **Built** on `notes-view` (schema version 2) – see [notes-view-design.md](notes-view-design.md) |
 | 4 | Device sync with item files; migrating the sync file; audit log sync; sync-conflict audit event; recovery from the sync folder | Two-device tests pass |
 | 5 | Scripts | Own design |
 
@@ -355,8 +356,8 @@ database can't be opened); the audit log is tamper-evident, not tamper-proof (se
 
 ## 16. Not done yet
 
-- Notes, attachments and full-text search (phase 3); device sync, audit sync, sync conflicts and recovery from the sync
+- Device sync, audit sync, sync conflicts and recovery from the sync
   folder (phase 4); scripts (phase 5).
 - Passwords decrypted only when used (today: when loading – section 15).
 - Audit events planned but not built: "password shown", "sync conflict", "script run" (section 11).
-- Schema migration steps with a backup before each (there is only schema version 1 so far).
+- (Done with schema version 2: numbered migration steps, each in its own transaction, with a backup before the first one.)

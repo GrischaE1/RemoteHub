@@ -38,6 +38,7 @@ The devices themselves are protected by the RemoteHub Agent's policy (the catego
       <string id="Cat_Console_Connections">Connections</string>
       <string id="Cat_Console_Shares">Jump hosts and network shares</string>
       <string id="Cat_Console_ImportExport">Import and export</string>
+      <string id="Cat_Console_Notes">Notes</string>
       <string id="Cat_Agent">RemoteHub Agent</string>
       <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
 
@@ -376,6 +377,15 @@ Disabled: Import backup… isn't shown.
 This binds RemoteHub on this PC only.
 
 Registry: AllowBackupImport (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowNotes">Allow Notes</string>
+      <string id="Console_AllowNotes_Help">Enabled or Not configured: allowed.
+
+Disabled: the Notes view isn't shown. The view rail has no Notes item, Ctrl+2 and links to pages do nothing, and the connection tree's Notes command isn't shown. Notes already stored on this PC are kept, not deleted: they come back when the policy is removed, and backups still include them.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowNotes (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_AllowSharedSettings">Allow a shared settings folder</string>
       <string id="Console_AllowSharedSettings_Help">Enabled or Not configured: allowed.

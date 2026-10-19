@@ -14,6 +14,7 @@ public enum Feature
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
     Recording,
     RdpFileImport, RdpFileExport, BackupExport, BackupImport, SharedSettings,
+    Notes,
 }
 
 /// <summary>The tabs that work through the agent or WinRM; which switch applies depends on the connection's transport.</summary>
@@ -67,6 +68,7 @@ public static class Features
         [Feature.BackupExport] = new(PolicyCatalog.AllowBackupExport, "Exporting a backup"),
         [Feature.BackupImport] = new(PolicyCatalog.AllowBackupImport, "Importing a backup"),
         [Feature.SharedSettings] = new(PolicyCatalog.AllowSharedSettings, "A shared settings folder"),
+        [Feature.Notes] = new(PolicyCatalog.AllowNotes, "Notes", Plural: true),
     };
 
     /// <summary>The title of a refusal dialog: the topic, as the neighbouring dialogs name it ("Jump host", "Network share").</summary>

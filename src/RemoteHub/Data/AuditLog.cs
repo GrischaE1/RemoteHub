@@ -21,6 +21,9 @@ public static class AuditEvents
     public const string RecordingStarted = "recording.started", RecordingStopped = "recording.stopped";
     public const string StorageMigrated = "storage.migrated", StorageCheckFailed = "storage.check_failed", StorageRestored = "storage.restored",
         StorageLocationChanged = "storage.location_changed";
+    // Notes: page and section ids only, never titles or text (docs/notes-view-design.md §9).
+    public const string NoteAdded = "note.added", NoteChanged = "note.changed", NoteDeleted = "note.deleted", NoteRestored = "note.restored",
+        NotesExported = "notes.exported", NotesImported = "notes.imported";
 
     public static string Label(string e) => e switch
     {
@@ -48,6 +51,12 @@ public static class AuditEvents
         StorageCheckFailed => "Database check failed",
         StorageRestored => "Database restored",
         StorageLocationChanged => "Settings location changed",
+        NoteAdded => "Note added",
+        NoteChanged => "Note changed",
+        NoteDeleted => "Note deleted",
+        NoteRestored => "Note restored",
+        NotesExported => "Notes exported",
+        NotesImported => "Notes imported",
         _ => e,
     };
 
@@ -59,6 +68,7 @@ public static class AuditEvents
         ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
         ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
+        ("Notes", [NoteAdded, NoteChanged, NoteDeleted, NoteRestored, NotesExported, NotesImported]),
     ];
 }
 

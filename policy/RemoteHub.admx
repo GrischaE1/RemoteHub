@@ -46,6 +46,7 @@
     <category name="Console_Connections" displayName="$(string.Cat_Console_Connections)"><parentCategory ref="Console_Features" /></category>
     <category name="Console_Shares" displayName="$(string.Cat_Console_Shares)"><parentCategory ref="Console_Features" /></category>
     <category name="Console_ImportExport" displayName="$(string.Cat_Console_ImportExport)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Notes" displayName="$(string.Cat_Console_Notes)"><parentCategory ref="Console_Features" /></category>
 
     <category name="Agent" displayName="$(string.Cat_Agent)" explainText="$(string.Cat_Agent_Help)">
       <parentCategory ref="RemoteHub" />
@@ -333,6 +334,14 @@
     <policy name="Console_AllowBackupImport" class="Both" displayName="$(string.Console_AllowBackupImport)" explainText="$(string.Console_AllowBackupImport_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowBackupImport">
       <parentCategory ref="Console_ImportExport" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowNotes" class="Both" displayName="$(string.Console_AllowNotes)" explainText="$(string.Console_AllowNotes_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowNotes">
+      <parentCategory ref="Console_Notes" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>

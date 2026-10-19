@@ -47,6 +47,7 @@ public partial class MainWindow : FluentWindow
         Height = ui.Height;
         SidebarColumn.Width = new GridLength(ui.SidebarWidth);
         ApplySidebarState();
+        InitViews();
         if (ui.Maximized) WindowState = WindowState.Maximized;
         SwitchHotkeys.Current = SwitchHotkeys.Get(AppPolicy.SwitchKeys ?? ui.SwitchKeys);
         _promptWatcher.PromptShown += OnCredentialPrompt;
@@ -225,7 +226,13 @@ public partial class MainWindow : FluentWindow
 
     private void Vm_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.SelectedSession)) { UpdateSessionVisibility(); UpdateRecordButton(); UpdateSendFilesButton(); }
+        if (e.PropertyName == nameof(MainViewModel.SelectedSession))
+        {
+            UpdateSessionVisibility();
+            UpdateRecordButton();
+            UpdateSendFilesButton();
+            if (_vm.SelectedSession is not null) ShowView(RemoteViewId); // a session opened or picked from anywhere
+        }
         if (e.PropertyName == nameof(MainViewModel.Items)) HookItems();
         if (e.PropertyName is nameof(MainViewModel.HasTransfers) or nameof(MainViewModel.ShowTransfers)) ApplyTransfersPane();
     }
@@ -549,10 +556,12 @@ public partial class MainWindow : FluentWindow
         var altGr = Keyboard.IsKeyDown(Key.RightAlt) && !Keyboard.IsKeyDown(Key.LeftAlt);
         if (ctrl && alt && !altGr && (key == sw.Prev || key == sw.Next))
         {
+            ShowView(RemoteViewId);
             _vm.SelectNextSession(sw.ShiftReverses ? (shift ? -1 : 1) : key == sw.Prev ? -1 : 1);
             e.Handled = true;
             return;
         }
+        if (HandleViewKeys(e, ctrl)) return;
         if (ctrl && e.Key == Key.N) { if (shift) NewFolder_Click(this, e); else NewConnection_Click(this, e); e.Handled = true; }
         else if (ctrl && e.Key == Key.F)
         {
@@ -721,6 +730,7 @@ public partial class MainWindow : FluentWindow
     {
         var n = _vm.SelectedNode;
         Visibility V(bool b) => b ? Visibility.Visible : Visibility.Collapsed;
+        UpdateNotesMenu(n);
         // What this PC's policy blocks isn't offered (docs/admx-design.md §4.2).
         var rdpOn = Features.IsAllowed(Feature.Rdp);
         var agentDesktopOn = Features.IsAllowed(Feature.AgentDesktop);
@@ -789,7 +799,7 @@ public partial class MainWindow : FluentWindow
         var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
         var toolsShown = CmTools.Visibility == Visibility.Visible || CmManage.Visibility == Visibility.Visible;
         CmPsSep.Visibility = V(connectShown && toolsShown);
-        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown));
+        CmSep1.Visibility = V(n is not null && (connectShown || toolsShown || CmNotes.Visibility == Visibility.Visible));
     }
 
     private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);
@@ -2107,6 +2117,7 @@ public partial class MainWindow : FluentWindow
             SettingsOverview: () => SettingsOverview_Click(this, e),
             About: () => new AboutWindow { Owner = Application.Current.Windows.OfType<Window>().FirstOrDefault(w => w.IsActive) ?? this }.ShowDialog());
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
+        UpdateRailVersion();
     }
 
     private UpdateCheckResult? _availableUpdate;
@@ -2130,6 +2141,7 @@ public partial class MainWindow : FluentWindow
         if (result.Required) { ShowUpdateWindow(result, channel); return; }
         if (result.Info!.Version == ui.SkippedUpdateVersion) return;
         _availableUpdate = result;
+        UpdateRailVersion();
         UpdateBannerText.Text = $"RemoteHub {result.Info.Version} is available – you have {UpdateService.Current}.";
         UpdateBanner.Visibility = Visibility.Visible;
     }
@@ -2498,9 +2510,11 @@ public partial class MainWindow : FluentWindow
         if (pw.ShowDialog() != true) return;
         try
         {
-            Backup.Export(_vm.Data, dlg.FileName, pw.Password);
+            _ = Notes?.Save(sync: true);
+            var notes = Data.LocalDb.IsOpen ? Data.NoteStore.ExportAll() : null;
+            Backup.Export(_vm.Data, dlg.FileName, pw.Password, notes);
             Data.AuditLog.Write(Data.AuditEvents.BackupExported, null, Path.GetFileName(dlg.FileName),
-                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials");
+                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials, {notes?.Pages.Count ?? 0} pages");
             _ = Dialogs.Info(this, "Export backup", $"Backup saved to\n{dlg.FileName}\n\nKeep the password safe – it cannot be recovered.");
         }
         catch (Exception ex) { _ = Dialogs.Info(this, "Export failed", ex.Message); }
@@ -2515,7 +2529,8 @@ public partial class MainWindow : FluentWindow
         if (pw.ShowDialog() != true) return;
 
         AppData imported;
-        try { imported = Backup.Import(dlg.FileName, pw.Password); }
+        Data.NotesExport? importedNotes;
+        try { imported = Backup.Import(dlg.FileName, pw.Password, out importedNotes); }
         catch (Exception ex) { await Dialogs.Info(this, "Import failed", ex.Message); return; }
 
         var choice = await Dialogs.Ask(this, "Import backup",
@@ -2523,7 +2538,19 @@ public partial class MainWindow : FluentWindow
             "Add as folder", "Replace everything");
         if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary)
             Data.AuditLog.Write(Data.AuditEvents.BackupImported, null, Path.GetFileName(dlg.FileName),
-                choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? "Added as a folder" : "Replaced all settings");
+                (choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? "Added as a folder" : "Replaced all settings") + (importedNotes is { IsEmpty: false } n0 ? $", and {n0.Pages.Count} pages" : ""));
+        if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary && importedNotes is { IsEmpty: false } notes && Data.LocalDb.IsOpen)
+        {
+            // Added: the backup's notebooks come in next to yours, named after the file. Replaced: yours go to Recently deleted.
+            _ = Notes?.Save(sync: true);
+            try
+            {
+                Data.NoteStore.Import(notes, replace: choice == Wpf.Ui.Controls.MessageBoxResult.Secondary,
+                    addedSuffix: choice == Wpf.Ui.Controls.MessageBoxResult.Primary ? Path.GetFileNameWithoutExtension(dlg.FileName) : null);
+                Notes?.Reload();
+            }
+            catch (Exception ex) { await Dialogs.Info(this, "Import failed", "The notes in the backup could not be imported: " + ex.Message); }
+        }
         if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {
             foreach (var sc in imported.SavedCredentials)
@@ -2604,6 +2631,7 @@ public partial class MainWindow : FluentWindow
     /// <param name="locked">Exited from the auto-lock: the settings key is gone – they were saved when it locked.</param>
     private void Shutdown(bool locked = false)
     {
+        if (!locked) _ = Notes?.Save(sync: true); // the open page, before the database closes
         if (!locked)
         {
             var ui = _vm.Data.Ui;

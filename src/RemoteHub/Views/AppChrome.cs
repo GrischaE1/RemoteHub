@@ -62,6 +62,12 @@ public static class AppChrome
     /// <summary>Brand accent used for the window border and the default session frame.</summary>
     public static readonly Color Accent = Color.FromRgb(0x00, 0x78, 0xD4);
 
+    /// <summary>The palette in use (set by <see cref="ApplyPalette"/>).</summary>
+    public static bool IsDark { get; private set; } = true;
+
+    /// <summary>Raised after the palette changed, for colours that aren't resources (syntax colouring).</summary>
+    public static event Action? PaletteChanged;
+
     public static void ApplyPalette(bool dark)
     {
         var r = Application.Current.Resources;
@@ -73,6 +79,7 @@ public static class AppChrome
             Set("SessionAreaBrush", "#0F131B");        // behind sessions (darker than any remote desktop chrome)
             Set("SessionHeaderBrush", "#232A3A");
             Set("ChromeStrokeBrush", "#2E3850");
+            Set("NoteCodeBackgroundBrush", "#121722");  // script blocks and inline code in notes
         }
         else
         {
@@ -81,8 +88,11 @@ public static class AppChrome
             Set("SessionAreaBrush", "#CBD5E4");
             Set("SessionHeaderBrush", "#F7F9FC");
             Set("ChromeStrokeBrush", "#B7C3D6");
+            Set("NoteCodeBackgroundBrush", "#F4F6FA");
         }
         r["BrandAccentBrush"] = ColorTags.Frozen(Accent);
+        IsDark = dark;
+        PaletteChanged?.Invoke();
     }
 
     // DWMWA_BORDER_COLOR (Windows 11 22000+). Ignored on older Windows.

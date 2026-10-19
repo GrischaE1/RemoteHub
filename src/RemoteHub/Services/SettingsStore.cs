@@ -764,7 +764,10 @@ public static class SettingsStore
     }
 }
 
-/// <summary>Password-protected, portable export/import (AES-256-GCM, PBKDF2-SHA256).</summary>
+/// <summary>
+/// The password-protected backup file (.rhbackup; .rdpmbackup from RdpManager still imports). Settings and, since
+/// version 2, the notes are each encrypted with AES-256-GCM under a key from the password (docs/notes-view-design.md §9.1).
+/// </summary>
 public static class Backup
 {
     private const int Iterations = 600_000;
@@ -779,41 +782,35 @@ public static class Backup
         public string Nonce { get; set; } = "";
         public string Tag { get; set; } = "";
         public string Data { get; set; } = "";
+        /// <summary>The notes (version 2): their own nonce and tag under the same key; null when there are none.</summary>
+        public string? NotesNonce { get; set; }
+        public string? NotesTag { get; set; }
+        public string? NotesData { get; set; }
         public DateTime CreatedUtc { get; set; }
     }
 
-    public static void Export(AppData data, string path, string password)
+    public static void Export(AppData data, string path, string password, NotesExport? notes = null)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
-        var nonce = RandomNumberGenerator.GetBytes(12);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, Iterations, HashAlgorithmName.SHA256, 32);
-        var plain = SettingsStore.ToJson(data);
-        var cipher = new byte[plain.Length];
-        var tag = new byte[16];
         try
         {
-            using var aes = new AesGcm(key, 16);
-            aes.Encrypt(nonce, plain, cipher, tag);
+            var env = new Envelope { Iterations = Iterations, Salt = Convert.ToBase64String(salt), CreatedUtc = DateTime.UtcNow };
+            (env.Nonce, env.Tag, env.Data) = Seal(key, SettingsStore.ToJson(data));
+            if (notes is { IsEmpty: false })
+            {
+                env.Version = 2;
+                (env.NotesNonce, env.NotesTag, env.NotesData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(notes));
+            }
+            File.WriteAllText(path, JsonSerializer.Serialize(env, new JsonSerializerOptions { WriteIndented = true }));
         }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(plain);
-            CryptographicOperations.ZeroMemory(key);
-        }
-
-        var env = new Envelope
-        {
-            Iterations = Iterations,
-            Salt = Convert.ToBase64String(salt),
-            Nonce = Convert.ToBase64String(nonce),
-            Tag = Convert.ToBase64String(tag),
-            Data = Convert.ToBase64String(cipher),
-            CreatedUtc = DateTime.UtcNow,
-        };
-        File.WriteAllText(path, JsonSerializer.Serialize(env, new JsonSerializerOptions { WriteIndented = true }));
+        finally { CryptographicOperations.ZeroMemory(key); }
     }
 
-    public static AppData Import(string path, string password)
+    public static AppData Import(string path, string password) => Import(path, password, out _);
+
+    /// <summary>Reads a backup; <paramref name="notes"/> is null for a backup without notes (older ones, RdpManager's).</summary>
+    public static AppData Import(string path, string password, out NotesExport? notes)
     {
         var env = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(path))
                   ?? throw new InvalidDataException("Empty backup file.");
@@ -822,22 +819,54 @@ public static class Backup
         SettingsStore.CheckIterations(env.Iterations);
         var salt = Convert.FromBase64String(env.Salt);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, env.Iterations, HashAlgorithmName.SHA256, 32);
-        var cipher = Convert.FromBase64String(env.Data);
+        try
+        {
+            var plain = Open(key, env.Nonce, env.Tag, env.Data);
+            try
+            {
+                var data = SettingsStore.FromJson(plain);
+                notes = null;
+                if (env.NotesData is not null && env.NotesNonce is not null && env.NotesTag is not null)
+                {
+                    var notesPlain = Open(key, env.NotesNonce, env.NotesTag, env.NotesData);
+                    try { notes = JsonSerializer.Deserialize<NotesExport>(notesPlain); }
+                    finally { CryptographicOperations.ZeroMemory(notesPlain); }
+                }
+                return data;
+            }
+            finally { CryptographicOperations.ZeroMemory(plain); }
+        }
+        finally { CryptographicOperations.ZeroMemory(key); }
+    }
+
+    private static (string Nonce, string Tag, string Data) Seal(byte[] key, byte[] plain)
+    {
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[plain.Length];
+        var tag = new byte[16];
+        try
+        {
+            using var aes = new AesGcm(key, 16);
+            aes.Encrypt(nonce, plain, cipher, tag);
+        }
+        finally { CryptographicOperations.ZeroMemory(plain); }
+        return (Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher));
+    }
+
+    private static byte[] Open(byte[] key, string nonce, string tag, string data)
+    {
+        var cipher = Convert.FromBase64String(data);
         var plain = new byte[cipher.Length];
         try
         {
             using var aes = new AesGcm(key, 16);
-            aes.Decrypt(Convert.FromBase64String(env.Nonce), cipher, Convert.FromBase64String(env.Tag), plain);
-            return SettingsStore.FromJson(plain);
+            aes.Decrypt(Convert.FromBase64String(nonce), cipher, Convert.FromBase64String(tag), plain);
+            return plain;
         }
         catch (AuthenticationTagMismatchException)
         {
-            throw new UnauthorizedAccessException("Wrong password or the backup file is damaged.");
-        }
-        finally
-        {
             CryptographicOperations.ZeroMemory(plain);
-            CryptographicOperations.ZeroMemory(key);
+            throw new UnauthorizedAccessException("Wrong password or the backup file is damaged.");
         }
     }
 }

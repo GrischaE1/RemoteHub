@@ -21,7 +21,7 @@ public sealed class DatabaseUnreadableException(string message, Exception? inner
 /// </summary>
 public static class LocalDb
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
     private const int KeptBackups = 7;
 
     private static readonly object Gate = new();
@@ -84,7 +84,7 @@ public static class LocalDb
             try
             {
                 _db = Connect(FilePath, keys.Db, wal: true);
-                Migrate(_db);
+                Migrate(_db, keys.Db);
                 _keys = keys;
                 DeviceId = Meta(_db, "device_id") ?? "";
                 Generation++;
@@ -227,23 +227,39 @@ public static class LocalDb
 
     // ------------------------------------------------------------------ schema
 
-    private static void Migrate(SqliteConnection c)
+    private static void Migrate(SqliteConnection c, byte[] key)
     {
         var version = Convert.ToInt32(Scalar(c, "PRAGMA user_version"));
         if (version > SchemaVersion)
             throw new DatabaseUnreadableException($"The database was created by a newer version of RemoteHub (schema {version}).");
         if (version == SchemaVersion) return;
-        // Later versions: a backup before each step, then numbered steps, each in its own transaction.
-        using var t = c.BeginTransaction();
+        // An existing database gets a backup before its first step (it is one of the automatic backups).
+        if (version >= 1) BackupBeforeMigration(c, key);
         if (version < 1)
         {
+            using var t = c.BeginTransaction();
             Exec(c, Schema1, t);
             SetMeta(c, "device_id", Guid.NewGuid().ToString("N"), t);
             SetMeta(c, "device_name", Environment.MachineName, t);
             SetMeta(c, "created_utc", DateTime.UtcNow.ToString("O"), t);
+            Exec(c, "PRAGMA user_version = 1", t);
+            t.Commit();
         }
-        Exec(c, $"PRAGMA user_version = {SchemaVersion}", t);
-        t.Commit();
+        if (version < 2)
+        {
+            using var t = c.BeginTransaction();
+            Exec(c, Schema2, t);
+            Exec(c, "PRAGMA user_version = 2", t);
+            t.Commit();
+        }
+    }
+
+    private static void BackupBeforeMigration(SqliteConnection c, byte[] key)
+    {
+        System.IO.Directory.CreateDirectory(BackupFolder);
+        var path = Path.Combine(BackupFolder, $"remotehub-{DateTime.UtcNow:yyyyMMdd-HHmmss}.db");
+        using (var dst = Connect(path, key, wal: false)) c.BackupDatabase(dst);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
     }
 
     // Same columns for nodes, credentials and settings, so one code path reads and writes all records.
@@ -277,6 +293,29 @@ public static class LocalDb
         CREATE TABLE connection_history (id INTEGER PRIMARY KEY, connection_id TEXT NOT NULL, kind TEXT NOT NULL,
                                          start_utc INTEGER NOT NULL, end_utc INTEGER, result TEXT);
         CREATE INDEX ix_history_connection ON connection_history(connection_id, start_utc);
+        """;
+
+    // Notes (docs/notes-view-design.md §5.1). deleted_utc marks "Recently deleted"; rid gives the full-text index a rowid
+    // that VACUUM can't renumber. notes_fts keeps its own copy of the text (inside the encrypted file like everything);
+    // NoteStore writes it in the same transaction as the page – with trusted_schema off, triggers can't write to FTS5.
+    private const string NoteColumns = "version INTEGER NOT NULL DEFAULT 1, modified_utc INTEGER NOT NULL, dirty INTEGER NOT NULL DEFAULT 1";
+
+    private const string Schema2 = $"""
+        CREATE TABLE notebooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, sort INTEGER NOT NULL, deleted_utc INTEGER, {NoteColumns});
+        CREATE TABLE note_sections (id TEXT PRIMARY KEY, notebook_id TEXT NOT NULL, name TEXT NOT NULL, color TEXT,
+                                    sort INTEGER NOT NULL, deleted_utc INTEGER, {NoteColumns});
+        CREATE INDEX ix_note_sections ON note_sections(notebook_id, sort);
+        CREATE TABLE notes (rid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, section_id TEXT NOT NULL, title TEXT NOT NULL,
+                            body TEXT NOT NULL, body_text TEXT NOT NULL, sort INTEGER NOT NULL, created_utc INTEGER NOT NULL,
+                            deleted_utc INTEGER, {NoteColumns});
+        CREATE INDEX ix_notes_section ON notes(section_id, sort);
+        CREATE INDEX ix_notes_modified ON notes(modified_utc);
+        CREATE TABLE note_files (id TEXT PRIMARY KEY, note_id TEXT NOT NULL, mime TEXT NOT NULL, width INTEGER NOT NULL,
+                                 height INTEGER NOT NULL, size INTEGER NOT NULL, sha256 BLOB NOT NULL, data BLOB NOT NULL, {NoteColumns});
+        CREATE INDEX ix_note_files ON note_files(note_id);
+        CREATE TABLE note_links (note_id TEXT NOT NULL, node_id TEXT NOT NULL, PRIMARY KEY (note_id, node_id));
+        CREATE INDEX ix_note_links_node ON note_links(node_id);
+        CREATE VIRTUAL TABLE notes_fts USING fts5(title, body_text, tokenize = 'unicode61 remove_diacritics 2');
         """;
 
     // ------------------------------------------------------------------ access
