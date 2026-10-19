@@ -1,4 +1,5 @@
-﻿using System.Threading.Tasks;
+﻿using System.Threading;
+using System.Threading.Tasks;
 using RemoteHub.Services;
 using Xunit;
 
@@ -95,6 +96,8 @@ public class RecordingTests
                 fixed (byte* p = bits)
                     for (var f = 0; f < frames; f++) writer.Write(p, f * TimeSpan.TicksPerSecond / fps, TimeSpan.TicksPerSecond / fps);
                 if (finish) writer.Finish();
+                // The crash comes once fragments are on disk: the encoder runs behind Write, slowly on a busy CI runner.
+                else Assert.True(SpinWait.SpinUntil(() => new FileInfo(path).Length > 1000, TimeSpan.FromSeconds(30)), "no fragment written within 30 s");
             }
             Assert.True(new FileInfo(path).Length > 1000, $"length {new FileInfo(path).Length}");
 
