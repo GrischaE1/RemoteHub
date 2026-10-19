@@ -5019,7 +5019,7 @@ P2 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD.Tests.ps1
 4. Open *Settings → Updates & privacy*.
 
 **Expected:**
-- Without policy: GET `/latest?channel=beta`.
+- Without policy: GET `/latest?channel=beta` (and `/latest`, because Beta also checks GA).
 - With policy: GET `/latest` (no `?channel=beta`).
 - GA (stable) is selected, both channel buttons disabled; "Some of these settings are managed by your organisation."
 

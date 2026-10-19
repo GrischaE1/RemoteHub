@@ -302,7 +302,7 @@
                     <ui:ToggleSwitch x:Name="UpdateCheckToggle" Content="Check for updates when RemoteHub starts" Margin="0,0,0,12" />
                     <TextBlock Text="Update channel" Margin="0,0,0,4" />
                     <RadioButton x:Name="ChannelStable" GroupName="Channel" Content="GA – stable releases" Margin="0,0,0,2" />
-                    <RadioButton x:Name="ChannelBeta" GroupName="Channel" Content="Beta – pre-releases (newer features, less tested)" />
+                    <RadioButton x:Name="ChannelBeta" GroupName="Channel" Content="Beta – pre-releases, and GA releases when they're newer (newer features, less tested)" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,6,0,10"
                                Text="RemoteHub only updates to a higher version. Switching from Beta to GA doesn't go back to an older version – you get the next GA release that is newer than the one installed." />
                     <ui:Button x:Name="CheckNowButton" Content="Check for updates now" Icon="{ui:SymbolIcon ArrowSync24}" />
