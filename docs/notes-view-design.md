@@ -532,10 +532,10 @@ body loads when a page is opened.
 
 ### 5.3 Downgrade
 
-An older RemoteHub opens a version-2 database. It ignores tables it doesn't know, so connections keep working, and notes
-are simply not shown. The migration code must therefore not change any version-1 table, and older versions must accept
-`schema_version = 2`. Check: does 0.18.x refuse a higher `schema_version`? If it does, the release notes say that
-downgrading needs the pre-v2 backup.
+Not supported. RemoteHub isn't GA yet (local-db-design.md §9 already accepts this before GA), so going back to an older
+version after the upgrade to schema version 2 isn't a goal. The pre-v2 backup (§5.2) is there for a failed migration,
+not for downgrades. Upgrading an existing version-1 database stays a requirement – the databases of current
+installations move forward.
 
 ## 6. Saving, undo and deleting
 
@@ -622,8 +622,8 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 ### 9.1 Backup
 
 - `.rhbackup` (`Backup.Export` in `Services/SettingsStore.cs`) gains the notebooks, sections, pages, images and links,
-  encrypted with the backup password like everything else in the file. The backup format gets a version number, so an
-  older RemoteHub that imports a newer file ignores the notes and imports the connections.
+  encrypted with the backup password like everything else in the file. Older RemoteHub versions don't need to read the
+  new format (not GA, §5.3); backups from older versions, without notes, still import.
 - Import: *Add as folder* adds the notes as a second notebook, named after the backup file. *Replace everything* also
   replaces the notes, after the existing confirmation. The audit entry `backup.imported` gets "… and N pages".
 - `*.rdpmbackup` (from RdpManager) has no notes and imports as today.
@@ -711,7 +711,6 @@ The questions of Draft v1, answered on 2026-10-19:
 | 7 | More views | **Yes:** Scripts and Logs later (§3.8). The version is shown above Settings (§3.9). |
 | 8 | Run or send script blocks? | **No.** Notes are documentation only – no running, no sending to a session (§2, §4.5.5). |
 | 9 | Script languages | **All relevant ones**, including C, C++, C# and the SQL dialects (§4.5.5a). |
+| 10 | Downgrades to older versions | **Not supported** – RemoteHub isn't GA yet (§5.3). |
 
-Still open:
-
-- The downgrade check in §5.3 (does 0.18.x accept `schema_version = 2`?) – to be answered when phase 2 starts.
+Nothing is open.
