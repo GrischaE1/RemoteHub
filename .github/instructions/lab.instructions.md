@@ -9,7 +9,8 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
 
 - Each `lab/tests/<ID>.Tests.ps1` starts with a comment naming the case ID, what it covers and the section of
   `docs/test-lab-cases.md` it implements, and takes `-VmName` and `-EvidenceDir` parameters. A new or changed test
-  should update that section of the cases document (and the test document) in the same PR.
+  should update that section of the cases document (and the test document) in the same PR; the status column
+  follows from the lab results with `lab\Update-LabCaseStatus.ps1`.
 - Shared helpers belong in `lab/RemoteHub.TestLab/RemoteHub.TestLab.psm1` (exported through the `.psd1`), not copied
   between test files. The module uses `Set-StrictMode -Version Latest` and `$ErrorActionPreference = 'Stop'`.
 - Tests must not need elevation or an interactive sign-in on the host, and must not depend on state from an earlier
