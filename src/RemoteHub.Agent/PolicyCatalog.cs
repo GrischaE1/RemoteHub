@@ -144,7 +144,7 @@ public static class PolicyCatalog
     private static readonly Dictionary<string, string> TurnedOff = new() { ["0"] = "Not turned off (the user decides)", ["1"] = "Turned off" };
     private static readonly Dictionary<string, string> Allowed = new() { ["0"] = "Blocked", ["1"] = "Allowed" };
     private static readonly Dictionary<string, string> YesNo = new() { ["0"] = "No", ["1"] = "Yes" };
-    // DisableTelemetry and DisableUpdateCheck: 0 locks the feature on since 0.18.12 (§12.3, Q3).
+    // DisableTelemetry and DisableUpdateCheck: 0 locks the feature on since 0.19.0 (§12.3, Q3).
     private static readonly Dictionary<string, string> OffOrLockedOn = new() { ["0"] = "On (users can't turn it off)", ["1"] = "Turned off" };
 
     // ------------------------------------------------------------------ RemoteHub (console)
@@ -245,7 +245,7 @@ public static class PolicyCatalog
 
     private const string Phase5 = "0.20.2"; // the first release with these
 
-    private const string Phase3 = "0.18.12";
+    private const string Phase3 = "0.19.0";
 
     // Phase 4 (docs/admx-design.md §7): one property of every connection's settings each, in the subkey Connections. The
     // value name is the RdpOptions property name; words are the enum members' names, so a policy doesn't depend on their order.
@@ -278,7 +278,7 @@ public static class PolicyCatalog
     ];
 
     public const string ConnectionsKey = "Connections";
-    private const string Phase4 = "0.18.12";
+    private const string Phase4 = "0.19.0";
 
     private static PolicyEntry ConnFlag(string name, string group, string title) =>
         new(PolicyProduct.Console, ConnectionsKey, name, PolicyKind.Number, "Connection settings – " + group, title, 0, 1, Labels: YesNo, Since: Phase4);
@@ -320,7 +320,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry LogRetentionDays = Agent("LogRetentionDays", PolicyKind.Number, "Service", "Keep log files (days)", 1, 3650, since: Phase2);
     public static readonly PolicyEntry MaxSessions = Agent("MaxSessions", PolicyKind.Number, "Service", "Sessions at once", 1, 200, since: Phase2);
 
-    private const string Phase2 = "0.18.12";
+    private const string Phase2 = "0.19.0";
 
     /// <summary>Subkey Rights: one list of groups per AgentRight, in the enum's order.</summary>
     public static readonly IReadOnlyList<PolicyEntry> Rights =

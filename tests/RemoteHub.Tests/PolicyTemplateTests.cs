@@ -200,6 +200,23 @@ public class PolicyTemplateTests
             Assert.Contains((string)policy.Element(P + "supportedOn")!.Attribute("ref")!, supported);
     }
 
+    [Fact]
+    public void Each_policy_is_supported_on_the_release_that_brought_its_newest_value()
+    {
+        // A policy that writes values of several releases needs the newest of them, and the product the values belong to.
+        var entries = PolicyCatalog.All.ToDictionary(e => Id(e.FullKey, e.Name));
+        var supportedOn = Admx.Descendants(P + "policy")
+            .ToDictionary(p => (string)p.Attribute("name")!, p => (string)p.Element(P + "supportedOn")!.Attribute("ref")!);
+        foreach (var policy in Writes().GroupBy(w => w.Policy))
+        {
+            var values = policy.Select(w => entries[Id(w.Key, w.Name)]).ToList();
+            var newest = values.MaxBy(e => Version.Parse(e.Since))!;
+            var product = newest.Product == PolicyProduct.Agent ? "Agent" : "RemoteHub";
+            Assert.True(supportedOn[policy.Key] == $"SUPPORTED_{product}_{newest.Since.Replace('.', '_')}",
+                $"{policy.Key} is supported on {supportedOn[policy.Key]}, but {newest.Name} is new in {product} {newest.Since}");
+        }
+    }
+
     // ------------------------------------------------------------------ what the agent does with the template's values
 
     internal sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues

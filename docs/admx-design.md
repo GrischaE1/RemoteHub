@@ -768,7 +768,7 @@ What was built, and where it differs from the sections above:
 
 What was built, and where it differs from §9, §8 and §11.3:
 
-- **New agent values** in `PolicyCatalog` and `AgentPolicy`, since 0.18.12:
+- **New agent values** in `PolicyCatalog` and `AgentPolicy`, since 0.19.0:
   - `PowerShellEnabled`, `AllowedGroups`, `VirtualDisplay`, `PrivacyScreenMessage`, `ListenPort`, `LogRetentionDays` and
     `MaxSessions`.
   - `VirtualDisplay`, `ListenPort`, `LogRetentionDays` and `MaxSessions` fall back to agent.json, and `AllowedGroups` to
@@ -809,7 +809,7 @@ What was built, and where it differs from §9, §8 and §11.3:
     - values IT changed stay in the policy key;
     - values removed since aren't brought back;
     - the marker is deleted after.
-- **Template:** revision 1.1, 39 policies, a new category *Features*, and supported on *RemoteHub Agent 0.18.12 or later*.
+- **Template:** revision 1.1, 39 policies, a new category *Features*, and supported on *RemoteHub Agent 0.19.0 or later*.
   The rights' help texts name *Default groups for every right*. The skill's validator again reports only the two known
   gaps (§16).
 - **Tests:**
@@ -824,7 +824,7 @@ What was built, and where it differs from §9, §8 and §11.3:
 What was built, and where it differs from §5, §4.2 and §11.2:
 
 - **Values:** 29 `Allow…` DWORDs in `PolicyCatalog` (`FeatureEntries`, plus `AllowSharedSettings` under *Settings storage*),
-  since 0.18.12. `AllowConnectionEditing`, `AllowSavedPasswords` and `AllowPasswordCopy` are new behaviour and stay in
+  since 0.19.0. `AllowConnectionEditing`, `AllowSavedPasswords` and `AllowPasswordCopy` are new behaviour and stay in
   phase 5.
 - **`Features`** (`src\RemoteHub\Services\Features.cs`): `IsAllowed(Feature)`, `IsAllowed(RemoteTool, viaAgent)`,
   `IsAllowed(ShareProtocol)` and `WhyNot`, which names the switch that blocks ("The RemoteHub Agent is turned off by your
@@ -862,7 +862,7 @@ What was built, and where it differs from §5, §4.2 and §11.2:
   conflicts with §7's connection values come with phase 4.
 - **Template:** revision 1.2, 69 policies, a category *Features* under *RemoteHub Console* with *RDP*, *RemoteHub Agent*
   (the old *RemoteHub Agent features*, moved under it), *PowerShell remoting*, *Connections*, *Jump hosts and network
-  shares*, *Import and export* and *Notes*; supported on *RemoteHub 0.18.12 or later*.
+  shares*, *Import and export* and *Notes*; supported on *RemoteHub 0.19.0 or later*.
 - **`AllowNotes`** (§5.7) came with the Notes view: `Feature.Notes`; `MainWindow.RailViews` and `ViewFor` leave Notes
   out, and the rail is rebuilt when the window is activated after the value changed (a page being edited is saved first).
 - **Tests:** `ConsoleFeatureTests` (13): catalogue ↔ switches, nothing set, own value, the `Disable…` values, both main
@@ -874,7 +874,7 @@ What was built, and where it differs from §5, §4.2 and §11.2:
 
 What was built, and where it differs from §6, §7 and §11.2:
 
-- **Values**, since 0.18.12: 15 settings of §6 in the root key (`Theme`, `SwitchKeys`, the four recording values,
+- **Values**, since 0.19.0: 15 settings of §6 in the root key (`Theme`, `SwitchKeys`, the four recording values,
   `ProcessRefreshSeconds`, `ServiceRefreshSeconds` and the seven `AgentDesktop…` values), 7 install defaults in
   `AgentInstall` (§6.9) and the 22 connection settings in `Connections` (§7). `PolicyEntry.Check` now also takes a fixed
   set of numbers (`ColorDepth`, `RecordingFps`).
@@ -911,6 +911,9 @@ What was built, and where it differs from §6, §7 and §11.2:
   read at start and belong to startup protection and the settings store, which phase 5 changes anyway.
 - **Template:** revision 1.3, 112 policies; new categories *General*, *Remote tools*, *Agent remote desktop*, *Agent
   installation* and *Connection settings* with *Display*, *Devices and resources*, *Security* and *Remoting and agent*.
+- **Template revision 1.5** (after phase 5's 1.4, §20) corrects the supported-on versions of phases 2–4 and *Notes*: they first shipped in 0.19.0,
+  not in 0.18.12, which was never released. The 0.18.12 definitions stay in the template (§12.3), unused.
+  `PolicyTemplateTests` checks that each policy is supported on the newest `Since` of the values it writes.
 - **Tests:** `ConsoleSettingsPolicyTests` (11): precedence over connection, folder and defaults; invalid values and the rules; a copy per caller;
   `UseAgent` below a jump host; the editor's locked row and `Apply`; lock coverage (every connection value has a row that
   locks it, every §6 value a reader in `AppPolicy`); the lock-on values; recordings; and the Policies page conflict.
