@@ -29,6 +29,11 @@ public partial class MainWindow
     {
         route = null;
         if (c.JumpHost is not { } j) return true;
+        if (Features.WhyNot(Feature.JumpHosts) is { } off)
+        {
+            if (!quiet) _ = Dialogs.Info(this, "Jump host", $"{c.Name} is reached through {j.Name}. {off}");
+            return false;
+        }
         if (j.Agent is not { Fingerprint.Length: > 0 } agent)
         {
             if (!quiet)
@@ -142,7 +147,7 @@ public partial class MainWindow
             menu.Items.Add(MoveEntry($"Out of {current.Name} – reached directly", SymbolRegular.ArrowExit20, node, current.Parent,
                 $"Moves it next to {current.Name}."));
         var candidates = _vm.AllNodes().OfType<Connection>()
-            .Where(c => c != node.Parent && (c.Children.Count > 0 || c.Agent is { Fingerprint.Length: > 0 }) && TreeLayout.WhyNot(node, c) is null)
+            .Where(c => c != node.Parent && (c.Children.Count > 0 || c.Agent is { Fingerprint.Length: > 0 }) && WhyNotMove(node, c) is null)
             .OrderByDescending(c => c.Children.Count > 0).ThenBy(c => c.Name, StringComparer.CurrentCultureIgnoreCase)
             .Take(40).ToList();
         if (candidates.Count > 0 && menu.Items.Count > 0) menu.Items.Add(new Separator());
@@ -162,9 +167,16 @@ public partial class MainWindow
     private MenuItem MoveEntry(string header, SymbolRegular icon, NodeBase node, NodeBase? into, string tip) =>
         MenuEntry(header, icon, () => _ = MoveUnder(node, into), tip: tip);
 
+    /// <summary>
+    /// Why <paramref name="node"/> can't go into <paramref name="into"/>: the tree's rules, and – with jump hosts blocked by this
+    /// PC's policy – not below a connection. Moving out of a jump host stays possible.
+    /// </summary>
+    private static string? WhyNotMove(NodeBase node, NodeBase? into) =>
+        TreeLayout.WhyNot(node, into) ?? (into is Connection || into?.JumpHost is not null ? Features.WhyNot(Feature.JumpHosts) : null);
+
     private async Task MoveUnder(NodeBase node, NodeBase? into)
     {
-        if (TreeLayout.WhyNot(node, into) is { } why) { await Dialogs.Info(this, "Move", why); return; }
+        if (WhyNotMove(node, into) is { } why) { await Dialogs.Info(this, "Move", why); return; }
         if (!await ConfirmMove(node, into)) return;
         _vm.Move(node, into);
         node.IsSelected = true;

@@ -12,12 +12,17 @@ internal static class PolicyLock
 {
     public const string ToolTipText = PolicyReport.ManagedText + " – see Settings → Policies.";
 
-    public static void Apply(params FrameworkElement[] controls)
+    public static void Apply(params FrameworkElement[] controls) => Lock(ToolTipText, controls);
+
+    /// <summary>An option that belongs to a feature the policy blocks: greyed out the same way, with "Turned off by your organisation".</summary>
+    public static void TurnedOff(params FrameworkElement[] controls) => Lock(Features.TurnedOff, controls);
+
+    private static void Lock(string tip, FrameworkElement[] controls)
     {
         foreach (var c in controls)
         {
             c.IsEnabled = false;
-            c.ToolTip = ToolTipText;
+            c.ToolTip = tip;
             ToolTipService.SetShowOnDisabled(c, true);
         }
     }

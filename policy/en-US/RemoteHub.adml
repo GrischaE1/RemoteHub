@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                           revision="1.1" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                           revision="1.2" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <displayName>RemoteHub</displayName>
   <description>Policies for RemoteHub (the console) and the RemoteHub Agent.</description>
   <resources>
     <stringTable>
       <string id="SUPPORTED_RemoteHub_0_18_11">RemoteHub 0.18.11 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_18_12">RemoteHub 0.18.12 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
 
@@ -21,7 +22,13 @@ The devices themselves are protected by the RemoteHub Agent's policy (the catego
       <string id="Cat_Console_Updates">Updates and usage data</string>
       <string id="Cat_Console_Recordings">Recordings</string>
       <string id="Cat_Console_Logs">Logs</string>
-      <string id="Cat_Console_Agent">RemoteHub Agent features</string>
+      <string id="Cat_Console_Features">Features</string>
+      <string id="Cat_Console_Rdp">RDP</string>
+      <string id="Cat_Console_Agent">RemoteHub Agent</string>
+      <string id="Cat_Console_Remoting">PowerShell remoting</string>
+      <string id="Cat_Console_Connections">Connections</string>
+      <string id="Cat_Console_Shares">Jump hosts and network shares</string>
+      <string id="Cat_Console_ImportExport">Import and export</string>
       <string id="Cat_Agent">RemoteHub Agent</string>
       <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
 
@@ -103,6 +110,268 @@ Registry: AuditRetentionDays (REG_DWORD).</string>
 Disabled or Not configured: users can turn it on per connection. The device must allow it too: RemoteHub Agent → Automatic sign-in.
 
 Registry: DisableAgentAutoSignIn (REG_DWORD) = 1.</string>
+
+      <!-- Console: features -->
+      <string id="Console_AllowRdp">Allow remote desktop over RDP</string>
+      <string id="Console_AllowRdp_Help">Enabled or Not configured: allowed.
+
+Disabled: RemoteHub doesn't open RDP sessions. The RDP entries in the menus aren't shown, and opening a connection, a .rdp file or a reconnect over RDP is refused with "Remote desktop over RDP is turned off by your organisation". Remote desktop through the RemoteHub Agent isn't affected.
+
+This binds RemoteHub on this PC only. To stop RDP to a device, turn RDP off on the device.
+
+Registry: AllowRdp (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgent">Allow the RemoteHub Agent</string>
+      <string id="Console_AllowAgent_Help">Enabled or Not configured: allowed.
+
+Disabled: RemoteHub doesn't use the RemoteHub Agent at all: no remote desktop, tools, installation or automatic sign-in through it, and no jump hosts, whatever the other policies in this category say. The connection settings "Connect through" and "Remote desktop through" are greyed out; the tools go over PowerShell remoting and the remote desktop over RDP.
+
+This binds RemoteHub on this PC only. What the agent allows on a device is decided by the device's own policy: RemoteHub Agent → Features and Remote desktop.
+
+Registry: AllowAgent (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentDesktop">Allow remote desktop through the agent</string>
+      <string id="Console_AllowAgentDesktop_Help">Enabled or Not configured: allowed.
+
+Disabled: Remote desktop through the RemoteHub Agent isn't offered, and opening it is refused. Connections set to it use RDP. The connection settings "Remote desktop through" and the automatic sign-in settings are greyed out.
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Remote desktop → "Allow remote desktop" (DesktopEnabled).
+
+Registry: AllowAgentDesktop (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentPowerShell">Allow PowerShell through the agent</string>
+      <string id="Console_AllowAgentPowerShell_Help">Enabled or Not configured: allowed.
+
+Disabled: The PowerShell tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow PowerShell over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentPowerShell (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentFileTransfer">Allow file transfer through the agent</string>
+      <string id="Console_AllowAgentFileTransfer_Help">Enabled or Not configured: allowed.
+
+Disabled: The file transfer tab isn't offered for connections that use the RemoteHub Agent, and opening it or dropping files on a PowerShell tab is refused. Over PowerShell remoting it depends on "Allow file transfer over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentFileTransfer (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentRegistry">Allow the registry through the agent</string>
+      <string id="Console_AllowAgentRegistry_Help">Enabled or Not configured: allowed.
+
+Disabled: The registry tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow the registry over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentRegistry (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentServices">Allow services through the agent</string>
+      <string id="Console_AllowAgentServices_Help">Enabled or Not configured: allowed.
+
+Disabled: The services tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow services over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentServices (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentProcesses">Allow processes through the agent</string>
+      <string id="Console_AllowAgentProcesses_Help">Enabled or Not configured: allowed.
+
+Disabled: The processes tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow processes over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentProcesses (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentInstall">Allow installing and updating the agent</string>
+      <string id="Console_AllowAgentInstall_Help">Enabled or Not configured: allowed.
+
+Disabled: Install RemoteHub Agent… and Update RemoteHub Agent… aren't offered, for every method – for organisations that deploy the agent with Intune or Configuration Manager.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowAgentInstall (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowCredentialProviderInstall">Allow installing and removing the credential provider</string>
+      <string id="Console_AllowCredentialProviderInstall_Help">Enabled or Not configured: allowed.
+
+Disabled: Install credential provider and Remove credential provider aren't offered, and the install dialog's "Allow automatic sign-in" is greyed out.
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Automatic sign-in → "When nobody is signed in" (NoUserBehavior).
+
+Registry: AllowCredentialProviderInstall (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowPowerShellRemoting">Allow PowerShell remoting (WinRM)</string>
+      <string id="Console_AllowPowerShellRemoting_Help">Enabled or Not configured: allowed.
+
+Disabled: RemoteHub doesn't use PowerShell remoting at all: no tools over it, no remoting check or test, no setup script, and no agent installation over it, whatever the other policies in this category say. The connection settings "Check automatically after RDP login" and "Use HTTPS" are greyed out. Connections that use the RemoteHub Agent aren't affected.
+
+This binds RemoteHub on this PC only. To stop WinRM to a device, turn it off on the device.
+
+Registry: AllowPowerShellRemoting (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingPowerShell">Allow PowerShell over WinRM</string>
+      <string id="Console_AllowRemotingPowerShell_Help">Enabled or Not configured: allowed.
+
+Disabled: The PowerShell tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow PowerShell through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingPowerShell (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingFileTransfer">Allow file transfer over WinRM</string>
+      <string id="Console_AllowRemotingFileTransfer_Help">Enabled or Not configured: allowed.
+
+Disabled: The file transfer tab isn't offered for connections that use PowerShell remoting, and opening it or dropping files on a PowerShell tab is refused. Through the agent it depends on "Allow file transfer through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingFileTransfer (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingRegistry">Allow the registry over WinRM</string>
+      <string id="Console_AllowRemotingRegistry_Help">Enabled or Not configured: allowed.
+
+Disabled: The registry tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow the registry through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingRegistry (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingServices">Allow services over WinRM</string>
+      <string id="Console_AllowRemotingServices_Help">Enabled or Not configured: allowed.
+
+Disabled: The services tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow services through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingServices (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingProcesses">Allow processes over WinRM</string>
+      <string id="Console_AllowRemotingProcesses_Help">Enabled or Not configured: allowed.
+
+Disabled: The processes tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow processes through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingProcesses (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingSetup">Allow setting up PowerShell remoting on a target</string>
+      <string id="Console_AllowRemotingSetup_Help">Enabled or Not configured: allowed.
+
+Disabled: Set up PowerShell remoting on the target… isn't offered, and the remoting test doesn't offer the setup script.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingSetup (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowQuickConnect">Allow quick connect to a typed address</string>
+      <string id="Console_AllowQuickConnect_Help">Enabled or Not configured: allowed.
+
+Disabled: Typing a name or address that isn't a saved connection in the search box (Ctrl+F) and pressing Enter doesn't connect. Saved connections still open.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowQuickConnect (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowJumpHosts">Allow jump hosts</string>
+      <string id="Console_AllowJumpHosts_Help">Enabled or Not configured: allowed.
+
+Disabled: Connections below a jump host don't connect, Move under isn't shown, and items can't be dragged below a connection. They stay in the tree. Also off when "Allow the RemoteHub Agent" is disabled, because a jump host is an agent.
+
+This binds RemoteHub on this PC only. On the jump host: RemoteHub Agent → Jump host → "Allow this device as a jump host" (TunnelEnabled).
+
+Registry: AllowJumpHosts (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowNetworkShares">Allow network shares</string>
+      <string id="Console_AllowNetworkShares_Help">Enabled or Not configured: allowed.
+
+Disabled: Network shares can't be added or opened, whatever the policies for the single protocols say. Shares already in the tree stay there.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowNetworkShares (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowSmb">Allow SMB shares</string>
+      <string id="Console_AllowSmb_Help">Enabled or Not configured: allowed.
+
+Disabled: SMB shares can't be opened; they stay in the tree. "Allow network shares" disabled wins over this.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowSmb (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowSftp">Allow SFTP shares</string>
+      <string id="Console_AllowSftp_Help">Enabled or Not configured: allowed.
+
+Disabled: SFTP shares can't be opened; they stay in the tree. "Allow network shares" disabled wins over this.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowSftp (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowFtp">Allow FTP shares</string>
+      <string id="Console_AllowFtp_Help">Enabled or Not configured: allowed.
+
+Disabled: FTP shares can't be opened; they stay in the tree. "Allow network shares" disabled wins over this.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowFtp (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowWebDav">Allow WebDAV shares</string>
+      <string id="Console_AllowWebDav_Help">Enabled or Not configured: allowed.
+
+Disabled: WebDAV shares can't be opened; they stay in the tree. "Allow network shares" disabled wins over this.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowWebDav (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRdpFileImport">Allow importing .rdp files</string>
+      <string id="Console_AllowRdpFileImport_Help">Enabled or Not configured: allowed.
+
+Disabled: Import .rdp files… isn't shown, and .rdp files dropped on RemoteHub or opened with it aren't imported.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRdpFileImport (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRdpFileExport">Allow saving .rdp files</string>
+      <string id="Console_AllowRdpFileExport_Help">Enabled or Not configured: allowed.
+
+Disabled: Save as .rdp file… and Export folder as .rdp files… aren't shown.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRdpFileExport (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowBackupExport">Allow exporting a backup</string>
+      <string id="Console_AllowBackupExport_Help">Enabled or Not configured: allowed.
+
+Disabled: Export backup… isn't shown. A backup holds every stored password.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowBackupExport (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowBackupImport">Allow importing a backup</string>
+      <string id="Console_AllowBackupImport_Help">Enabled or Not configured: allowed.
+
+Disabled: Import backup… isn't shown.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowBackupImport (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowSharedSettings">Allow a shared settings folder</string>
+      <string id="Console_AllowSharedSettings_Help">Enabled or Not configured: allowed.
+
+Disabled: Users can't choose a shared settings folder; a folder already in use stays until they switch to this PC only. The policy "Shared settings folder" still applies.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowSharedSettings (REG_DWORD) = 1 or 0.</string>
 
       <!-- Agent: features -->
       <string id="Agent_PowerShellEnabled">Allow PowerShell, files, registry, services and processes</string>

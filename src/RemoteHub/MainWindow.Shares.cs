@@ -35,6 +35,7 @@ public partial class MainWindow
     /// <summary>New → Network share: a share on its own, in the selected folder.</summary>
     private void NewShare_Click(object sender, RoutedEventArgs e)
     {
+        if (Refused(Feature.NetworkShares)) return;
         var share = new NetworkShare();
         var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew());
         share.Parent = parent;
@@ -46,6 +47,7 @@ public partial class MainWindow
 
     private void AddShare(Connection c)
     {
+        if (Refused(Feature.NetworkShares)) return;
         var share = new NetworkShare { Server = c };
         if (new ShareEditorWindow(share, c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         c.Shares.Add(share);
@@ -88,13 +90,17 @@ public partial class MainWindow
         e.Handled = true;
         share.IsSelected = true;
         var cm = new ContextMenu();
-        var why = WhyNotOpen(share);
-        var open = new MenuItem { Header = "Open", FontWeight = FontWeights.SemiBold, Icon = new SymbolIcon(Enum.Parse<SymbolRegular>(share.DisplaySymbol)),
-            IsEnabled = why is null, ToolTip = why };
-        ToolTipService.SetShowOnDisabled(open, true);
-        open.Click += (_, _) => OpenShare(share);
-        cm.Items.Add(open);
-        cm.Items.Add(new Separator());
+        // Blocked by this PC's policy: the share stays in the tree, but opening it isn't offered (docs/admx-design.md §4.3).
+        if (Features.IsAllowed(share.Protocol))
+        {
+            var why = WhyNotOpen(share);
+            var open = new MenuItem { Header = "Open", FontWeight = FontWeights.SemiBold, Icon = new SymbolIcon(Enum.Parse<SymbolRegular>(share.DisplaySymbol)),
+                IsEnabled = why is null, ToolTip = why };
+            ToolTipService.SetShowOnDisabled(open, true);
+            open.Click += (_, _) => OpenShare(share);
+            cm.Items.Add(open);
+            cm.Items.Add(new Separator());
+        }
         cm.Items.Add(MenuEntry("Copy address", SymbolRegular.Link24, () => { try { Clipboard.SetText(share.Address); } catch { /* clipboard busy */ } }));
         var edit = MenuEntry("Edit…", SymbolRegular.Edit24, () => EditShare(share));
         edit.InputGestureText = "F2";
@@ -102,9 +108,12 @@ public partial class MainWindow
         if (share.IsStandalone)
         {
             cm.Items.Add(MenuEntry("Duplicate", SymbolRegular.Copy24, () => _vm.Duplicate(share).IsSelected = true));
-            var moveUnder = new MenuItem { Header = "Move under", Icon = new SymbolIcon(SymbolRegular.Router24) };
-            FillMoveUnder(moveUnder, share);
-            cm.Items.Add(moveUnder);
+            if (Features.IsAllowed(Feature.JumpHosts) || share.Parent is Connection) // blocked: only "out of" a jump host
+            {
+                var moveUnder = new MenuItem { Header = "Move under", Icon = new SymbolIcon(SymbolRegular.Router24) };
+                FillMoveUnder(moveUnder, share);
+                cm.Items.Add(moveUnder);
+            }
         }
         var remove = MenuEntry("Remove", SymbolRegular.Delete24, () => _ = DeleteShare(share));
         remove.InputGestureText = "Del";
@@ -115,7 +124,8 @@ public partial class MainWindow
             cm.Items.Add(new Separator());
             var add = Submenu("New", SymbolRegular.Add24);
             add.Items.Add(MenuEntry("Connection", SymbolRegular.Add24, () => NewConnection_Click(this, new RoutedEventArgs())));
-            add.Items.Add(MenuEntry("Network share", SymbolRegular.FolderLink24, () => NewShare_Click(this, new RoutedEventArgs())));
+            if (Features.IsAllowed(Feature.NetworkShares))
+                add.Items.Add(MenuEntry("Network share", SymbolRegular.FolderLink24, () => NewShare_Click(this, new RoutedEventArgs())));
             add.Items.Add(MenuEntry("Folder", SymbolRegular.FolderAdd24, () => NewFolder_Click(this, new RoutedEventArgs())));
             cm.Items.Add(add);
         }
@@ -139,6 +149,7 @@ public partial class MainWindow
     /// <summary>Opens the share in a new tab: this PC on the left, the share on the right.</summary>
     private void OpenShare(NetworkShare share)
     {
+        if (Refused(Features.For(share.Protocol))) return;
         if (WhyNotOpen(share) is not null)
         {
             _ = Dialogs.Info(this, "Network share", $"{share.Name} is reached through {(share.Server ?? (NodeBase)share).JumpHost!.Name}. {ShareConnector.FtpNotThroughJumpHost}");
@@ -174,6 +185,7 @@ public partial class MainWindow
     /// <summary>Reconnect button: asks for the password again only if it isn't stored and wasn't entered before.</summary>
     private void ConnectShare(ShareSession s)
     {
+        if (RefusedIn(s, Features.For(s.Share.Protocol))) return;
         if (!TryRoute(ServerOf(s.Share), quiet: false, out var via)) return; // the route as it is now (the share may have moved)
         if (ShareAccount(s.Share, s.Account) is not { } account) return;
         s.Account = account.Credentials;

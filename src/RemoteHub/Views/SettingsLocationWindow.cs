@@ -82,6 +82,9 @@ public sealed class SettingsLocationWindow : FluentWindow
         _shared.IsChecked = SettingsStore.IsShared;
         _local.IsChecked = !SettingsStore.IsShared;
         _folder.TextChanged += (_, _) => { if (_folder.Text.Length > 0) _shared.IsChecked = true; };
+        // Blocked by this PC's policy: a shared folder can't be chosen (one in use stays until you switch to this PC only).
+        if (!Features.IsAllowed(Feature.SharedSettings))
+            PolicyLock.TurnedOff([.. row.Children.OfType<FrameworkElement>(), _shared]);
         Build(body);
     }
 
@@ -133,6 +136,7 @@ public sealed class SettingsLocationWindow : FluentWindow
                     DialogResult = false;
                     return;
                 }
+                if (Features.WhyNot(Feature.SharedSettings) is { } off) { _error.Text = off; return; }
 
                 if (File.Exists(SettingsStore.SharedFilePathFor(folder)))
                 {

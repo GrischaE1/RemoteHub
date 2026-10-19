@@ -4,7 +4,7 @@ using RemoteHub.Agent;
 namespace RemoteHub.Services;
 
 /// <summary>One configured policy value as Settings → Policies shows it.</summary>
-public sealed record PolicyRow(string Group, string Title, string Value, string Registry, string Source, string? Problem)
+public sealed record PolicyRow(string Group, string Title, string Value, string Registry, string Source, string? Problem, string? OffBecause = null)
 {
     public bool Valid => Problem is null;
 }
@@ -45,7 +45,9 @@ public sealed record PolicyReport(IReadOnlyList<PolicyRow> Console, IReadOnlyLis
             var where = v.Scope == PolicyScope.Computer ? "Computer" : "User";
             if (v.FromKey is not null) where += " (old RdpManager key)";
             var group = v.Entry.Key == PolicyCatalog.RightsKey ? "Access rights" : v.Entry.Group;
-            return new PolicyRow(group, v.Entry.Title, value, $@"{hive}\{key}\{v.Entry.Name}", where, v.Problem is null ? null : $"{v.Entry.Name} {v.Problem} – ignored");
+            // A feature below a main switch that is off: its own value doesn't matter (docs/admx-design.md §4.4, Effects).
+            var offBecause = v.Entry.Product == PolicyProduct.Console && Features.OffBecause(v.Entry, source) is { } main ? $"Off because \"{main.Title}\" is off" : null;
+            return new PolicyRow(group, v.Entry.Title, value, $@"{hive}\{key}\{v.Entry.Name}", where, v.Problem is null ? null : $"{v.Entry.Name} {v.Problem} – ignored", offBecause);
         }).ToList();
 
     private static string Raw(object? value) => value switch
@@ -81,6 +83,7 @@ public sealed record PolicyReport(IReadOnlyList<PolicyRow> Console, IReadOnlyLis
                 {
                     sb.AppendLine($"    {r.Title}: {r.Value}  [{r.Source}: {r.Registry}]");
                     if (r.Problem is { } p) sb.AppendLine("      INVALID: " + p);
+                    if (r.OffBecause is { } off) sb.AppendLine("      " + off);
                 }
             }
         }

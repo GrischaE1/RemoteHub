@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Remoting;
+using RemoteHub.Services;
 using Wpf.Ui.Controls;
 using Button = Wpf.Ui.Controls.Button;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -25,6 +26,7 @@ public sealed class AgentInstallDialog : FluentWindow
     private readonly TextBlock _autoSignInHint;
     private readonly bool? _hadProvider;
     private readonly bool _portByPolicy; // the device's policy ListenPort decides the port
+    private readonly bool _providerAllowed; // this PC's policy AllowCredentialProviderInstall
     private readonly TextBlock _error = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 0), Foreground = System.Windows.Media.Brushes.IndianRed };
     private readonly Button _install, _close;
     private readonly StackPanel _options;
@@ -37,6 +39,10 @@ public sealed class AgentInstallDialog : FluentWindow
         IReadOnlyCollection<string>? managed = null)
     {
         managed ??= [];
+        // Blocked by this PC's policy: the option stays, greyed out, so the dialog keeps its layout (docs/admx-design.md §4.2).
+        var remotingOff = !Features.IsAllowed(Feature.PowerShellRemoting);
+        if (remotingOff) remotingAvailable = false;
+        _providerAllowed = Features.IsAllowed(Feature.CredentialProviderInstall);
         var existing = c.Agent;
         _hadProvider = existing?.CredentialProvider;
         var installed = existing is { Status: AgentStatus.Installed };
@@ -109,6 +115,7 @@ public sealed class AgentInstallDialog : FluentWindow
             Margin = new Thickness(0, 14, 0, 0),
             Visibility = credentialProvider ? Visibility.Visible : Visibility.Collapsed,
         };
+        if (!_providerAllowed) PolicyLock.TurnedOff(_autoSignIn);
         _options.Children.Add(_autoSignIn);
         _autoSignInHint = Muted("When nobody is signed in on the device, RemoteHub can sign in with the connection's credentials (remote desktop " +
                                 "through the agent). Installs a sign-in component and allows it for the allowed accounts – a policy IT has set " +
@@ -127,7 +134,12 @@ public sealed class AgentInstallDialog : FluentWindow
             true, jumpHost is null && !remotingAvailable && !(installed && agentReachable));
         _viaFiles = Radio("Save the installer and the enrollment file to a folder – install them on the device by hand or with software distribution (both in the same folder)",
             true, jumpHost is not null && !remotingAvailable && !(installed && agentReachable));
-        if (!remotingAvailable)
+        if (remotingOff)
+        {
+            PolicyLock.TurnedOff(_viaRemoting);
+            _options.Children.Add(Muted("PowerShell remoting is turned off by your organisation, so the silent install over WinRM can't be used – see Settings → Policies.", 26, 0, 0, 4));
+        }
+        else if (!remotingAvailable)
             _options.Children.Add(Muted("PowerShell remoting isn't available for this connection, so the silent install isn't offered.", 26, 0, 0, 4));
         if (jumpHost is not null)
             _options.Children.Add(Muted($"{c.Name} is reached through {jumpHost}, so its agent will only be reached from there: allow connections from " +
@@ -169,7 +181,7 @@ public sealed class AgentInstallDialog : FluentWindow
         _label.IsEnabled = _groups.IsEnabled = _firewall.IsEnabled = fresh;
         _port.IsEnabled = fresh && !_portByPolicy;
         // AUTOSIGNIN goes on msiexec's command line: only the silent ways can pass it.
-        if (_autoSignIn is not null) _autoSignIn.IsEnabled = _viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true;
+        if (_autoSignIn is not null) _autoSignIn.IsEnabled = _providerAllowed && (_viaRemoting?.IsChecked == true || _viaAgent?.IsChecked == true);
     }
 
     private void Start()

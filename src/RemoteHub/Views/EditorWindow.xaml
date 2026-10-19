@@ -333,8 +333,8 @@
                         <ui:Button x:Name="FolderButton" Content="Open settings folder" Icon="{ui:SymbolIcon Open24}" />
                     </StackPanel>
 
-                    <TextBlock Text="Backup" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
-                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                    <TextBlock x:Name="BackupHeader" Text="Backup" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock x:Name="BackupText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
                                Text="A password-protected file with all folders, connections, credentials and settings – to move to another PC or keep as a copy." />
                     <StackPanel Orientation="Horizontal">
                         <ui:Button x:Name="ExportButton" Content="Export backup…" Icon="{ui:SymbolIcon ArrowExport24}" Margin="0,0,8,0" />

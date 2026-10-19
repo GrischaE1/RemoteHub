@@ -104,6 +104,13 @@ public sealed partial class PsSession : SessionBase, IConsoleSink
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";
         DropRunspace();
         var gen = ++_connectGeneration;
+        if (Services.Features.WhyNot(Services.Features.For(Services.RemoteTool.PowerShell, target.Agent is not null)) is { } off)
+        {
+            State = SessionState.Failed;
+            StatusText = off;
+            Write(off + "\n", ConsoleColor.Yellow);
+            return;
+        }
         State = SessionState.Connecting;
         StatusText = $"Connecting to {target.Display}…";
         Write($"Connecting to {target.Display}…\n", ConsoleColor.DarkGray);

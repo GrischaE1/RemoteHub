@@ -267,6 +267,10 @@ public sealed partial class EditorViewModel : ObservableObject
             (o, v) => o.PasswordPrompt = (PasswordPromptAction?)v,
             "For servers that refuse saved credentials (\"Your credentials did not work\"): the stored password is copied so you can paste it with Ctrl+V."));
 
+        // Settings of a feature this PC's policy blocks stay visible, greyed out (settings are never hidden, only actions are).
+        var remotingOff = Features.IsAllowed(Feature.PowerShellRemoting) ? null : Features.TurnedOff;
+        var agentOff = Features.IsAllowed(Feature.Agent) ? null : Features.TurnedOff;
+        var agentDesktopOff = Features.IsAllowed(Feature.AgentDesktop) ? null : Features.TurnedOff;
         // Below a jump host an installed agent is used unless the connection itself says WinRM (Inheritance.UsesAgent).
         var jumpNote = _node?.JumpHost is { } jump
             ? $" Reached through {jump.Name}: with an agent installed, it is used unless this connection itself is set to PowerShell remoting. " +
@@ -274,19 +278,18 @@ public sealed partial class EditorViewModel : ObservableObject
             : "";
         PsRows.Add(Row("Check automatically after RDP login", own.PsRemoting, parent.PsRemoting, YesNo,
             (o, v) => o.PsRemoting = (bool?)v,
-            "Tests WinRM after the first RDP login. You can always test by hand: right-click → Test PowerShell remoting. If it works, right-click offers a PowerShell tab and \"File transfer\" with the same credentials."));
+            "Tests WinRM after the first RDP login. You can always test by hand: right-click → Test PowerShell remoting. If it works, right-click offers a PowerShell tab and \"File transfer\" with the same credentials.", remotingOff));
         PsRows.Add(Row("Connect through", own.UseAgent, parent.UseAgent,
             [(false, "PowerShell remoting (WinRM)"), (true, "RemoteHub Agent")],
             (o, v) => o.UseAgent = (bool?)v,
             "RemoteHub Agent: for devices where WinRM isn't allowed. PowerShell, files, registry, services and processes then go through the agent " +
-            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent." + jumpNote));
+            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent." + jumpNote, agentOff));
         PsRows.Add(Row("Remote desktop through", own.RemoteDesktopVia, parent.RemoteDesktopVia,
             [(DesktopVia.Automatic, "Automatic – the agent if installed, otherwise RDP"), (DesktopVia.Rdp, "RDP"), (DesktopVia.Agent, "RemoteHub Agent")],
             (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
             "RemoteHub Agent: the device's screen without RDP – for desktops where RDP is turned off. The device decides who may see or control " +
-            "the screen and whether the signed-in user is asked first. RDP stays available: right-click → Remote desktop via RDP."));
-        // Turned off by policy: the rows stay, greyed out (settings are never hidden, only actions are).
-        var autoSignInOff = AppPolicy.AgentAutoSignInDisabled ? "Turned off by your organisation – see Settings → Policies." : null;
+            "the screen and whether the signed-in user is asked first. RDP stays available: right-click → Remote desktop via RDP.", agentDesktopOff));
+        var autoSignInOff = AppPolicy.AgentAutoSignInDisabled || agentDesktopOff is not null ? Features.TurnedOff : null;
         PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
             (o, v) => o.AgentAutoSignIn = (bool?)v,
             "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
@@ -302,7 +305,7 @@ public sealed partial class EditorViewModel : ObservableObject
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,
-            "Use HTTPS for computers outside the domain or addressed by IP, unless they are in this PC's TrustedHosts list." + jumpNote));
+            "Use HTTPS for computers outside the domain or addressed by IP, unless they are in this PC's TrustedHosts list." + jumpNote, remotingOff));
 
         if (IsDefaults)
         {

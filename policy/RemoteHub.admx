@@ -5,7 +5,7 @@
   Names, types and ranges must match src\RemoteHub.Agent\PolicyCatalog.cs; tests\RemoteHub.Tests\PolicyTemplateTests.cs checks it.
 -->
 <policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                   revision="1.1" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+                   revision="1.2" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
   <policyNamespaces>
     <target prefix="remotehub" namespace="RemoteHub.Policies.RemoteHub" />
   </policyNamespaces>
@@ -14,6 +14,7 @@
   <supportedOn>
     <definitions>
       <definition name="SUPPORTED_RemoteHub_0_18_11" displayName="$(string.SUPPORTED_RemoteHub_0_18_11)" />
+      <definition name="SUPPORTED_RemoteHub_0_18_12" displayName="$(string.SUPPORTED_RemoteHub_0_18_12)" />
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
     </definitions>
@@ -29,7 +30,13 @@
     <category name="Console_Updates" displayName="$(string.Cat_Console_Updates)"><parentCategory ref="Console" /></category>
     <category name="Console_Recordings" displayName="$(string.Cat_Console_Recordings)"><parentCategory ref="Console" /></category>
     <category name="Console_Logs" displayName="$(string.Cat_Console_Logs)"><parentCategory ref="Console" /></category>
-    <category name="Console_Agent" displayName="$(string.Cat_Console_Agent)"><parentCategory ref="Console" /></category>
+    <category name="Console_Features" displayName="$(string.Cat_Console_Features)"><parentCategory ref="Console" /></category>
+    <category name="Console_Rdp" displayName="$(string.Cat_Console_Rdp)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Agent" displayName="$(string.Cat_Console_Agent)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Remoting" displayName="$(string.Cat_Console_Remoting)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Connections" displayName="$(string.Cat_Console_Connections)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Shares" displayName="$(string.Cat_Console_Shares)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_ImportExport" displayName="$(string.Cat_Console_ImportExport)"><parentCategory ref="Console_Features" /></category>
 
     <category name="Agent" displayName="$(string.Cat_Agent)" explainText="$(string.Cat_Agent_Help)">
       <parentCategory ref="RemoteHub" />
@@ -116,6 +123,218 @@
       <supportedOn ref="SUPPORTED_RemoteHub_0_18_11" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><delete /></disabledValue>
+    </policy>
+
+    <!-- ================================================================ RemoteHub (console): features, docs/admx-design.md §5 -->
+
+    <policy name="Console_AllowRdp" class="Both" displayName="$(string.Console_AllowRdp)" explainText="$(string.Console_AllowRdp_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRdp">
+      <parentCategory ref="Console_Rdp" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowAgent" class="Both" displayName="$(string.Console_AllowAgent)" explainText="$(string.Console_AllowAgent_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgent">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentDesktop" class="Both" displayName="$(string.Console_AllowAgentDesktop)" explainText="$(string.Console_AllowAgentDesktop_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentDesktop">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentPowerShell" class="Both" displayName="$(string.Console_AllowAgentPowerShell)" explainText="$(string.Console_AllowAgentPowerShell_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentPowerShell">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentFileTransfer" class="Both" displayName="$(string.Console_AllowAgentFileTransfer)" explainText="$(string.Console_AllowAgentFileTransfer_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentFileTransfer">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentRegistry" class="Both" displayName="$(string.Console_AllowAgentRegistry)" explainText="$(string.Console_AllowAgentRegistry_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentRegistry">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentServices" class="Both" displayName="$(string.Console_AllowAgentServices)" explainText="$(string.Console_AllowAgentServices_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentServices">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentProcesses" class="Both" displayName="$(string.Console_AllowAgentProcesses)" explainText="$(string.Console_AllowAgentProcesses_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentProcesses">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentInstall" class="Both" displayName="$(string.Console_AllowAgentInstall)" explainText="$(string.Console_AllowAgentInstall_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentInstall">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowCredentialProviderInstall" class="Both" displayName="$(string.Console_AllowCredentialProviderInstall)" explainText="$(string.Console_AllowCredentialProviderInstall_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowCredentialProviderInstall">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowPowerShellRemoting" class="Both" displayName="$(string.Console_AllowPowerShellRemoting)" explainText="$(string.Console_AllowPowerShellRemoting_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowPowerShellRemoting">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingPowerShell" class="Both" displayName="$(string.Console_AllowRemotingPowerShell)" explainText="$(string.Console_AllowRemotingPowerShell_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingPowerShell">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingFileTransfer" class="Both" displayName="$(string.Console_AllowRemotingFileTransfer)" explainText="$(string.Console_AllowRemotingFileTransfer_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingFileTransfer">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingRegistry" class="Both" displayName="$(string.Console_AllowRemotingRegistry)" explainText="$(string.Console_AllowRemotingRegistry_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingRegistry">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingServices" class="Both" displayName="$(string.Console_AllowRemotingServices)" explainText="$(string.Console_AllowRemotingServices_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingServices">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingProcesses" class="Both" displayName="$(string.Console_AllowRemotingProcesses)" explainText="$(string.Console_AllowRemotingProcesses_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingProcesses">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingSetup" class="Both" displayName="$(string.Console_AllowRemotingSetup)" explainText="$(string.Console_AllowRemotingSetup_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingSetup">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowQuickConnect" class="Both" displayName="$(string.Console_AllowQuickConnect)" explainText="$(string.Console_AllowQuickConnect_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowQuickConnect">
+      <parentCategory ref="Console_Connections" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowJumpHosts" class="Both" displayName="$(string.Console_AllowJumpHosts)" explainText="$(string.Console_AllowJumpHosts_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowJumpHosts">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowNetworkShares" class="Both" displayName="$(string.Console_AllowNetworkShares)" explainText="$(string.Console_AllowNetworkShares_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowNetworkShares">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowSmb" class="Both" displayName="$(string.Console_AllowSmb)" explainText="$(string.Console_AllowSmb_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowSmb">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowSftp" class="Both" displayName="$(string.Console_AllowSftp)" explainText="$(string.Console_AllowSftp_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowSftp">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowFtp" class="Both" displayName="$(string.Console_AllowFtp)" explainText="$(string.Console_AllowFtp_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowFtp">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowWebDav" class="Both" displayName="$(string.Console_AllowWebDav)" explainText="$(string.Console_AllowWebDav_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowWebDav">
+      <parentCategory ref="Console_Shares" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowRdpFileImport" class="Both" displayName="$(string.Console_AllowRdpFileImport)" explainText="$(string.Console_AllowRdpFileImport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRdpFileImport">
+      <parentCategory ref="Console_ImportExport" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRdpFileExport" class="Both" displayName="$(string.Console_AllowRdpFileExport)" explainText="$(string.Console_AllowRdpFileExport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRdpFileExport">
+      <parentCategory ref="Console_ImportExport" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowBackupExport" class="Both" displayName="$(string.Console_AllowBackupExport)" explainText="$(string.Console_AllowBackupExport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowBackupExport">
+      <parentCategory ref="Console_ImportExport" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowBackupImport" class="Both" displayName="$(string.Console_AllowBackupImport)" explainText="$(string.Console_AllowBackupImport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowBackupImport">
+      <parentCategory ref="Console_ImportExport" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowSharedSettings" class="Both" displayName="$(string.Console_AllowSharedSettings)" explainText="$(string.Console_AllowSharedSettings_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowSharedSettings">
+      <parentCategory ref="Console_Storage" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_18_12" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
     </policy>
 
     <!-- ================================================================ RemoteHub Agent: features -->

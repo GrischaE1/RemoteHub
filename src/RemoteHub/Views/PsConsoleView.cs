@@ -50,9 +50,14 @@ public sealed class PsConsoleView : Border, IRecordableView
     public event Action<IReadOnlyList<string>>? UploadRequested;
     public event Action? UploadPickRequested;
 
-    public PsConsoleView(PsSession session, Action reconnect, Action close)
+    /// <summary>Whether file transfer is allowed for the tab's transport (this PC's policy): the button and dropping files only then.</summary>
+    private readonly Func<bool> _canSendFiles;
+    private readonly Button _sendFiles;
+
+    public PsConsoleView(PsSession session, Action reconnect, Action close, Func<bool>? canSendFiles = null)
     {
         _session = session;
+        _canSendFiles = canSendFiles ?? (() => true);
         DataContext = session;
         CornerRadius = new CornerRadius(8);
         BorderThickness = new Thickness(2);
@@ -80,7 +85,8 @@ public sealed class PsConsoleView : Border, IRecordableView
         left.Children.Add(RemoteToolChrome.RecordingBadge());
 
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
-        tools.Children.Add(HeaderButton(SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder (or drop files here to upload them)", () => UploadPickRequested?.Invoke()));
+        _sendFiles = HeaderButton(SymbolRegular.FolderSwap24, "File transfer", "Open a file transfer tab at the current remote folder (or drop files here to upload them)", () => UploadPickRequested?.Invoke());
+        tools.Children.Add(_sendFiles);
         tools.Children.Add(HeaderButton(SymbolRegular.Stop24, null, "Stop the running command (Ctrl+C)", session.Stop));
         tools.Children.Add(HeaderButton(SymbolRegular.Broom24, null, "Clear the screen (Ctrl+L)", Clear));
         var headerRow = new DockPanel();
@@ -172,8 +178,8 @@ public sealed class PsConsoleView : Border, IRecordableView
         session.FocusRequested += FocusInput;
         session.PropertyChanged += OnSessionChanged;
         SizeChanged += (_, _) => UpdateWidth();
-        DragOver += (_, e) => { e.Effects = Files(e).Length > 0 && session.IsConnected ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
-        Drop += (_, e) => { var f = Files(e); if (f.Length > 0 && session.IsConnected) UploadRequested?.Invoke(f); e.Handled = true; };
+        DragOver += (_, e) => { e.Effects = Files(e).Length > 0 && session.IsConnected && _canSendFiles() ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
+        Drop += (_, e) => { var f = Files(e); if (f.Length > 0 && session.IsConnected && _canSendFiles()) UploadRequested?.Invoke(f); e.Handled = true; };
         MouseLeftButtonUp += (_, _) => { if (_output.Selection.IsEmpty) FocusInput(); };
         UpdateFrame();
     }
@@ -212,6 +218,7 @@ public sealed class PsConsoleView : Border, IRecordableView
     {
         var accent = _session.AccentBrush;
         _headerStripe.Background = accent;
+        _sendFiles.Visibility = _canSendFiles() ? Visibility.Visible : Visibility.Collapsed;
         if (_session.HasKeyboardFocus) BorderBrush = accent;
         else SetResourceReference(BorderBrushProperty, "ChromeStrokeBrush");
     }

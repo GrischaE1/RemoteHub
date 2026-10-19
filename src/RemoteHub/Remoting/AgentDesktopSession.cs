@@ -166,6 +166,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         Drop();
         _resumeToken = null;
         _reconnect?.Cancel();
+        if (Services.Features.WhyNot(Services.Feature.AgentDesktop) is { } off) { Fail(off); return; }
         State = SessionState.Connecting;
         Phase = DesktopPhase.Connecting;
         StatusText = $"Connecting to the RemoteHub Agent on {target.Host}…";
