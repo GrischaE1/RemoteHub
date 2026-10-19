@@ -77,6 +77,14 @@ foreach ($dir in $publish, $publishAgent) {
     }
 }
 
+# The credential provider first: before anything is signed, so a failed C++ build costs no eSigner signing. Its MSBuild
+# output goes to the log; the script's last line is the DLL's path.
+if ($CredentialProvider) {
+    & "$PSScriptRoot\build-credential-provider.ps1" -Configuration Release | Tee-Object -Variable providerBuild | Out-Host
+    if ($LASTEXITCODE) { throw "credential provider build failed" }
+    $built = @($providerBuild)[-1]
+}
+
 # --- Agent
 dotnet publish "$root\src\RemoteHub.Agent\RemoteHub.Agent.csproj" -c $Configuration -r win-x64 --self-contained true `
     -p:Version=$Version -p:DebugType=none -o $publishAgent
@@ -87,8 +95,6 @@ if ($LASTEXITCODE) { throw "agent self-test failed" }
 
 $providerArgs = @()
 if ($CredentialProvider) {
-    $built = & "$PSScriptRoot\build-credential-provider.ps1" -Configuration Release | Select-Object -Last 1
-    if ($LASTEXITCODE) { throw "credential provider build failed" }
     # A copy outside the publish folder: everything in there goes into the MSI unconditionally.
     $providerDll = Join-Path $out "credential-provider\RemoteHubCredentialProvider.dll"
     New-Item -ItemType Directory -Force -Path (Split-Path $providerDll) | Out-Null
