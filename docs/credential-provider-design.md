@@ -49,7 +49,7 @@ Each rule below is there to keep that true. Every design choice is judged agains
 
 | # | Attacker | Goal | Main defences |
 |---|---|---|---|
-| T1 | On the network, no credentials | Trigger a sign-in, or get passwords | Pinned TLS, Windows sign-in, new right `AutoSignIn` (default: nobody), policy off by default, attempt limit per account (§5, §6) |
+| T1 | On the network, no credentials | Trigger a sign-in, or get passwords | Pinned TLS, Windows sign-in, new right `AutoSignIn` (default: the allowed groups, like the other rights; IT narrows or turns it off by policy), attempt limit per account (§5, §6) |
 | T2 | Operator with a desktop right but not `AutoSignIn`, or connected view-only | Sign in without the right, or gain control through the sign-in | The rights and the view-only flag are checked in the service, not trusted from RemoteHub (§6.2) |
 | T3 | Operator with `AutoSignIn` | Sign in as **another** account, or into an occupied session | Only the account that authenticated the connection (same SID); console must be in the `SignIn` state when the ticket is claimed; never ends or takes over a session (§6.3) |
 | T4 | Local user without admin rights on the device | Inject credentials into the provider, read them, or squat the pipe | Pipe owned by the service and created at start (`FIRST_PIPE_INSTANCE`), SYSTEM-only DACL, remote clients rejected, both ends check the peer process, one-shot ticket (§7) |
@@ -58,7 +58,7 @@ Each rule below is there to keep that true. Every design choice is judged agains
 | T7 | Memory disclosure (dump, crash report, pagefile) | Read the password | Password kept only in pinned buffers, protected with `CryptProtectMemory`, zeroed after use, never in a .NET `string`, never in logs (§10). Plaintext left in the TLS and Kestrel buffer pools is the same as for the Basic sign-in today and is accepted (§10.1). |
 | T8 | Compromised RemoteHub PC | — | Out of scope: it already has the stored passwords. Automatic sign-in adds nothing for it. |
 | T9 | Local admin or SYSTEM on the device | — | Out of scope: they already control the device. |
-| T10 | Bug or crash in the provider | Sign-in screen broken for everyone (denial of service) | Minimal native code, no blocking calls on LogonUI threads, input fuzzed, inert unless a ticket is pending, install is opt-in, policy kill switch (§8) |
+| T10 | Bug or crash in the provider | Sign-in screen broken for everyone (denial of service) | Minimal native code, no blocking calls on LogonUI threads, input fuzzed, inert unless a ticket is pending, can be left out at install (`AUTOSIGNIN=0`), policy kill switch (§8) |
 | T11 | Compromised jump host on the route | Read the password, or trigger a sign-in | Agent TLS is end to end to the target's pinned certificate ([jump-host-design.md](jump-host-design.md) §1.1 rule 3), so the jump host sees neither the Basic sign-in nor `SignInRequest`. It can only drop or delay traffic. |
 
 ## 4. Architecture
@@ -92,30 +92,30 @@ They never touch:
 - logs;
 - the WebSocket JSON serializer, or `ReceiveWs`'s message buffers (§10.1).
 
-## 5. Enabling: four switches, all off by default
+## 5. Enabling: four switches, on by default, each with a policy to turn it off
 
-Automatic sign-in works only if **all** of these are on.
+Automatic sign-in works only if **all** of these are on. Like every RemoteHub feature it is available by default, and admins switch it off through the ADMX templates ([admx-design.md](admx-design.md)) – each layer has its own policy.
 
-| Layer | Switch | Default | Why |
+| Layer | Switch | Default | Turned off by |
 |---|---|---|---|
-| Install | MSI property `AUTOSIGNIN=1` (MSI feature `CredentialProvider`; set by RemoteHub's install dialog or right-click entry, §8.4). Without it, the provider DLL **isn't installed or registered** at all. | off | A device that never uses it has no extra code in LogonUI. |
-| Device policy | `HKLM\SOFTWARE\Policies\RemoteHub\Agent` `NoUserBehavior` = `AutoSignIn` (REG_SZ). Missing / `SignInScreen` / unreadable → off. | off | IT decides per device (ADMX later). Read for every request. |
-| Right | `Rights\AutoSignIn` (REG_MULTI_SZ, group SIDs). | **nobody** (like `ConsentBypass`) | Separate from `SecureDesktop`, so seeing the sign-in screen doesn't imply signing in automatically. |
-| Client | Per connection: *Sign in automatically when nobody is signed in* (inherited like the other agent settings, default off). App policy `DisableAgentAutoSignIn` (DWORD 1) in `HKLM/HKCU\SOFTWARE\Policies\RemoteHub` hides it. | off | The operator decides per connection. RemoteHub never sends the password for this unasked. |
+| Install | MSI feature `CredentialProvider` (§8.4), in agent MSIs built with `build-installer.ps1 -CredentialProvider` – every signed release. `AUTOSIGNIN=0` leaves it out; RemoteHub's install dialog (*Allow automatic sign-in (installs a credential provider)*) and right-click entry set it. | installed | `AUTOSIGNIN=0`; console policies `AgentInstall\AutoSignIn` = 0 (install dialog unticked, so silent installs pass `AUTOSIGNIN=0`) and `AllowCredentialProviderInstall` = 0; on the device Windows' *Exclude credential providers* with our CLSID. |
+| Device policy | `HKLM\SOFTWARE\Policies\RemoteHub\Agent` `NoUserBehavior` (REG_SZ), else `agent.json` `noUserBehavior`. Not set anywhere → `AutoSignIn`. `SignInScreen`, an unknown word, or an unreadable key → off. | allowed | Policy *When nobody is signed in* = *Show the sign-in screen*. Read for every request. |
+| Right | `Rights\AutoSignIn` (REG_MULTI_SZ, group SIDs), else `agent.json` `autoSignInGroups`, else the groups every other right defaults to (policy `AllowedGroups`, else the install's allowed groups – local Administrators unless chosen otherwise). | allowed groups | Policy *Who may sign in automatically* with other groups, or `S-1-0-0` for nobody. Separate from `SecureDesktop`, so IT can allow the sign-in screen without automatic sign-in. |
+| Client | Per connection: *Sign in automatically when nobody is signed in* (inherited like the other agent settings). The connect screen shows *Sign in automatically as …* whenever the device offers it; the connection's setting only decides whether it starts ticked. | offered, unticked | Console policy `DisableAgentAutoSignIn` (DWORD 1) in `HKLM/HKCU\SOFTWARE\Policies\RemoteHub`, or `Connections\AgentAutoSignIn`. RemoteHub never sends the password for this unasked. |
 
 **Prerequisites, not switches** (decided, §15 Q9): the account must also hold the `Desktop` right (control) and the `SecureDesktop` right, and the connection must not be view-only. That's the §1.1 baseline: without them the operator couldn't type the password into the sign-in screen either.
 
 **Optional device policy** (decided, §15 Q7): `AutoSignInRequirePrivacyScreen` (DWORD, default 0). With 1, automatic sign-in is off on a device that can't show the privacy screen (policy `PrivacyScreen` = 0, or Windows build < 19041) (§9.1).
 
-- **Set at install, or by IT:** the policy and the right can come from Group Policy / Intune, or from the agent itself.
-  - The agent writes them when installed with `AUTOSIGNIN=1`: the install dialog's *Allow automatic sign-in (installs a credential provider)*, or RemoteHub's *Install credential provider*. Both run `RemoteHubAgent.exe auto-sign-in on`, which sets `NoUserBehavior = AutoSignIn` and `Rights\AutoSignIn` = the agent's allowed groups (`agent.json`).
-  - A value that already exists is never changed, so IT's policy wins.
-  - What the agent wrote is recorded in `%ProgramData%\RemoteHub\Agent\autosignin.policy`. `auto-sign-in off` (`AUTOSIGNIN=0`, *Remove credential provider*, uninstall through `cleanup`) removes exactly that, and only while it is unchanged: a value IT changed since (or set before) stays, on uninstall too.
-  - The MSI writes the values only through `AgentEnroll`, which runs when the product itself is installed or updated. A hand-run `msiexec … ADDLOCAL=CredentialProvider` / `REMOVE=CredentialProvider` on an installed agent changes the provider only, not the policy values; RemoteHub's right-click entry runs `auto-sign-in on|off` itself after msiexec (§8.4).
-  - **Gap:** `AgentEnroll` passes `auto-sign-in=[AUTOSIGNIN]` in every package, so `AUTOSIGNIN=1` on an MSI built without the provider still writes the policy values, with no provider to use them. Harmless (Hello reports `AutoSignIn` false, "the credential provider isn't installed"), but it leaves values behind that nothing asked for.
-  - The install dialog offers it only for the silent ways (WinRM, through the agent): a hand-run MSI needs `AUTOSIGNIN=1` on its command line.
+- **Set at install, or by IT:** the policy and the right come from Group Policy / Intune, else from `agent.json`, else the defaults above.
+  - The install's choice is kept in `agent.json` (since 0.18.12; [admx-design.md](admx-design.md) §11.3). `AUTOSIGNIN=1` and RemoteHub's *Install credential provider* run `RemoteHubAgent.exe auto-sign-in on`, which writes `noUserBehavior = AutoSignIn` and `autoSignInGroups` = the agent's allowed groups. `AUTOSIGNIN=0`, *Remove credential provider* and uninstall (`cleanup`) run `auto-sign-in off`, which writes `noUserBehavior = SignInScreen` – explicitly, because not set means allowed.
+  - No `AUTOSIGNIN` (a hand-run MSI, an ordinary update) leaves `agent.json` as it is; a first install then has the defaults: allowed.
+  - The agent never writes the policy key, so IT's policy always wins.
+  - The MSI writes `agent.json` only through `AgentEnroll`, which runs when the product itself is installed or updated. A hand-run `msiexec … ADDLOCAL=CredentialProvider` / `REMOVE=CredentialProvider` on an installed agent changes the provider only; RemoteHub's right-click entry runs `auto-sign-in on|off` itself after msiexec (§8.4).
+  - **Gap:** `AgentEnroll` passes `auto-sign-in=[AUTOSIGNIN]` in every package, so `AUTOSIGNIN=1` on an MSI built without the provider still writes `agent.json`, with no provider to use it. Harmless (Hello reports `AutoSignIn` false, "the credential provider isn't installed").
+  - The install dialog's option applies only to the silent ways (WinRM, through the agent). The other ways run the MSI by hand, which installs the provider unless `AUTOSIGNIN=0` is added to its command line.
 - **Kill switch:** Windows' own policy *Exclude credential providers* (`ExcludedCredentialProviders`) with our CLSID disables the provider on the device without uninstalling.
-- **Policy cannot be read:** fail closed. `AgentPolicy.Refused` turns everything off, and its `NoUserBehavior` is the default `SignInScreen` and `Rights\AutoSignIn` is nobody, so automatic sign-in is off too.
+- **Policy cannot be read:** fail closed. `AgentPolicy.Refused` turns everything off: its `NoUserBehavior` is `SignInScreen` and `Rights\AutoSignIn` is nobody, so automatic sign-in is off too – the "allowed by default" applies only to a key that was read and doesn't set the value.
 
 ## 6. Protocol and service-side checks
 
@@ -136,7 +136,7 @@ Automatic sign-in works only if **all** of these are on.
   - `SigningIn`.
   - `SignedIn`: the provider reported success and the new session's SID matched (§6.3). It carries the end action (`EndAction`) that applies.
   - `SignInFailed`: carries a readable message; the agent's audit carries the reason code (`AutoSignInFailure`: `notAllowed`, `unavailable`, `sessionState`, `existingSession`, `busy`, `rateLimit`, `timeout`, `noProvider`, `sessionChanged`, `windows`, `wrongAccount`). Windows' refusals are described from the NTSTATUS (`AutoSignInStatus`: wrong password, account doesn't exist, locked, password expired, disabled, account expired, "Allow log on locally", time of day, workstation, smart card / Windows Hello needed, authentication firewall; anything else "Windows refused the sign-in (0x…)"). The message never echoes input.
-- `AgentPolicy.Refused` and the defaults include `AutoSignIn` = nobody.
+- `AgentPolicy.Refused` includes `AutoSignIn` = nobody; the defaults give it to the allowed groups (§5).
 
 > Why the password is sent a second time instead of keeping it from the Basic header (decided, §15 Q4): the agent doesn't keep the Basic sign-in password after `LogonUser`. Keeping it for every connection "just in case" would put every operator's password in memory for the whole session. Sending it again only on explicit request keeps the exposure to a few seconds, and only for connections that use the feature.
 >
@@ -307,14 +307,15 @@ SignInRequest(pw) ─────────▶ checks 6.2 (7–8); ticket = {S
 ### 8.4 Installation and integrity
 
 - **Install location:** `C:\Program Files\RemoteHub Agent\RemoteHubCredentialProvider.dll`. Program Files ACLs: Administrators and SYSTEM write, Users read and execute. **Never** install it in a user-writable or `ProgramData` folder.
-- **Registration in the agent MSI** (component conditioned on `AUTOSIGNIN=1`), with WiX `RegistryKey`, not `regsvr32`:
+- **Registration in the agent MSI** (component in the feature `CredentialProvider`, below), with WiX `RegistryKey`, not `regsvr32`:
   - `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{CLSID}` (default = "RemoteHub Agent");
   - `HKCR\CLSID\{CLSID}\InprocServer32` (default = full path, `ThreadingModel = Apartment`).
   - The CLSID is a fixed GUID that never changes, so IT can exclude it: **`{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}`**.
-- **Its own MSI feature, `CredentialProvider`** ("Automatic sign-in (credential provider)"), present only in MSIs built with `build-installer.ps1 -CredentialProvider`, and not installed by default. Its level is 1000, above `INSTALLLEVEL`; `AUTOSIGNIN=1` sets it to 1 and `AUTOSIGNIN=0` to 0, which rules it out.
+- **Its own MSI feature, `CredentialProvider`** ("Automatic sign-in (credential provider)"), present only in MSIs built with `build-installer.ps1 -CredentialProvider`, and installed by default (level 1), like every feature. `AUTOSIGNIN=0` sets its level to 0, which rules it out. The release workflow passes `-CredentialProvider` whenever its signing step can sign (step output `enabled`); without signing the release has no provider, because it is never built unsigned.
 - **Upgrades** (decided, §15 Q6), the same rule as `VIRTUALDISPLAY`:
   - `AUTOSIGNIN=1` installs or keeps the provider; `AUTOSIGNIN=0` removes it;
   - no value (an ordinary update) **keeps what's installed**. Windows Installer carries the feature's state over to the new version (`MigrateFeatureStates`), so nothing has to be remembered.
+  - An update from a package without the feature (an unsigned release) installs it, as a first install would: the old version had no state to carry over. `agent.json` is left as it is, so automatic sign-in is allowed unless the install had turned it off (§5).
 - **Adding or removing it on an installed agent** (RemoteHub: right-click → *Install credential provider* / *Remove credential provider*, `AgentInstaller.ChangeCredentialProvider` over the agent's PowerShell):
   - **Adding:** `msiexec /i <package> ADDLOCAL=CredentialProvider`. RemoteHub uploads its own agent package, because Windows' cached copy of the MSI has no files in it. This only works when the device runs the **same build** (same ProductCode). Any other version would be an update, so RemoteHub refuses with "Update the agent first".
   - **Removing:** `msiexec /i {ProductCode} REMOVE=CredentialProvider`, which needs nothing uploaded.
@@ -322,7 +323,7 @@ SignInRequest(pw) ─────────▶ checks 6.2 (7–8); ticket = {S
   - Still only the signed MSI registers the provider (§8.5).
   - RemoteHub remembers what it last did (`AgentDevice.CredentialProvider`) to choose the menu entry, and audits it (`agent.credential_provider`).
   - Exit code 3010 (the sign-in screen has the DLL loaded) is reported as "after the device restarts".
-  - The entry (right-click → *RemoteHub Agent* → *Install credential provider* / *Remove credential provider*) shows only for an installed agent and only when RemoteHub's agent package contains the feature (`AgentInstaller.PackageHasCredentialProvider`), so release builds won't show it until phase 5.
+  - The entry (right-click → *RemoteHub Agent* → *Install credential provider* / *Remove credential provider*) shows only for an installed agent and only when RemoteHub's agent package contains the feature (`AgentInstaller.PackageHasCredentialProvider`): every signed release, and lab builds. An unsigned release has no provider, so the entry and the install dialog's option don't show.
 - **Uninstall,** or an upgrade with `AUTOSIGNIN=0`, removes both keys and the DLL (the MSI's `ForceDeleteOnUninstall`). `cleanup` at uninstall deletes `autosignin.json` and runs `auto-sign-in off`; it doesn't delete the provider keys itself (§16).
 - **Through a jump host:** installing the agent through a jump host (supported since jump hosts) passes `AUTOSIGNIN` the same way. Nothing in the provider depends on the route.
 - **Signing:** the DLL **and** `RemoteHubAgent.exe` must be Authenticode-signed (SHA-256, timestamped).
@@ -345,7 +346,7 @@ Security tools may still alert, because registering a credential provider is a k
 - the agent's general behaviour of a remote access tool (screen capture, `SendInput`, Ctrl+Alt+Del from a service, low-level input hooks for the privacy screen, and tunnelling on a jump host).
 
 Measures:
-- **Only where asked for:** install the provider only with `AUTOSIGNIN=1`, so most devices never get the registry write.
+- **Left out where not wanted:** `AUTOSIGNIN=0` (or the console policy `AgentInstall\AutoSignIn` = 0 for RemoteHub's silent installs) keeps the provider and its registry write off a device; Windows' *Exclude credential providers* turns an installed one off.
 - **One known writer:** registration is done by the signed MSI (`msiexec`), never by the service at runtime.
 - **One stable identity:** the same publisher certificate for every release, the fixed CLSID, and a fixed file name. Reputation builds over time.
 - **Before each release:** submit the signed MSI and DLL to Microsoft (Security Intelligence false-positive submission) and to the major EDR vendors on request.
@@ -664,7 +665,7 @@ The questions from v1 were decided by the owner on 2026-10-13. Q5 was reopened b
 |---|---|---|
 | 1 | Is SYSTEM + LogonUI image + session id enough to identify the provider at the pipe, or use ALPC / local RPC with a security callback? | **Named pipe**, as in §7: less native code in LogonUI, easier to review and fuzz. |
 | 2 | `Lock` or `SignOut` as the default end action? | **`Lock` by default**, configurable **per connection** in RemoteHub; the **device policy wins** when set (§9.2). |
-| 3 | Limit the right to non-built-in accounts (refuse RID 500) or a dedicated group? | **No extra rule:** any account that holds the `AutoSignIn` right (default nobody) and authenticated the connection. |
+| 3 | Limit the right to non-built-in accounts (refuse RID 500) or a dedicated group? | **No extra rule:** any account that holds the `AutoSignIn` right (default: the allowed groups; nobody until the switch to on by default) and authenticated the connection. |
 | 4 | Re-send the password, or keep it protected from the Basic sign-in for the connection? | **Re-send on request** (§6.1), keeping the extra copy to seconds, and only for connections that use the feature. |
 | 5 | Does T6 (a person at the console) need privacy mode before release? | v2: no, ship with a documented limit. **v3: the privacy screen is on.** Privacy mode now exists, so the session created by automatic sign-in starts with the privacy screen on, and local input is blocked when the policy allows it. Only an operator with the `PrivacyScreen` right can turn it off (§9.1). Where the device can't show it, the v2 behaviour and the documented limit stay. |
 | 6 | (added) What does an agent update without `AUTOSIGNIN` do? | **Keeps what's installed**, like `VIRTUALDISPLAY` (§8.4). |

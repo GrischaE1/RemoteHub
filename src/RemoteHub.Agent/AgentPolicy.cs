@@ -22,7 +22,8 @@ public enum AgentRight
     Tunnel,
     /// <summary>
     /// Sign in automatically on the console when nobody is signed in, with the account that signed in to the agent
-    /// (policy <c>NoUserBehavior</c> = AutoSignIn must allow it too; also needs Desktop and SecureDesktop). Default: nobody.
+    /// (policy <c>NoUserBehavior</c> = AutoSignIn must allow it too; also needs Desktop and SecureDesktop). Default: the
+    /// allowed groups, like the other rights – unless the install chose its own (agent.json <c>autoSignInGroups</c>).
     /// </summary>
     AutoSignIn,
 }
@@ -44,7 +45,7 @@ public enum AgentRight
 /// <item><c>TunnelTargets</c> (REG_MULTI_SZ) – where a jump connection may go: address ranges (<c>10.20.0.0/16</c>, <c>fd00::/8</c>, <c>10.1.2.3</c>) and names (<c>sql01.contoso.local</c>, <c>*.contoso.local</c>). Unset: anywhere – except this device's own loopback, link-local and multicast addresses, which only an address range naming them allows.</item>
 /// <item><c>TunnelPorts</c> (REG_MULTI_SZ) – ports a jump connection may go to: <c>3389</c>, <c>5985-5986</c>, <c>*</c>. Unset: every port.</item>
 /// <item><c>MaxTunnelStreams</c> (DWORD) – connections open at once through one jump connection (default 64).</item>
-/// <item><c>NoUserBehavior</c> (REG_SZ) – <c>SignInScreen</c> (default): nobody on the console shows the sign-in screen; <c>AutoSignIn</c>: the admin may sign in automatically there (right AutoSignIn).</item>
+/// <item><c>NoUserBehavior</c> (REG_SZ) – <c>SignInScreen</c>: nobody on the console shows the sign-in screen; <c>AutoSignIn</c> (default, unless agent.json turns it off): the admin may sign in automatically there (right AutoSignIn).</item>
 /// <item><c>AutoSignInRequirePrivacyScreen</c> (DWORD) – 1: no automatic sign-in where the privacy screen can't be shown.</item>
 /// <item><c>AutoSignInEndAction</c> (REG_SZ) – <c>Lock</c> or <c>SignOut</c>: what happens to an automatically signed-in session when its connection ends; wins over RemoteHub's setting.</item>
 /// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (REG_MULTI_SZ) – group SIDs or names.</item>
@@ -127,10 +128,11 @@ public sealed record AgentPolicy
             [AgentRight.ConsentBypass] = [],
             [AgentRight.PrivacyScreen] = allowed,
             [AgentRight.Tunnel] = allowed,
-            // Not the allowed groups: automatic sign-in is only for whom the install (or a policy) chose.
-            [AgentRight.AutoSignIn] = config.AutoSignInGroups ?? [],
+            // On by default like every feature (admins turn it off by policy); the install may have chosen other groups.
+            [AgentRight.AutoSignIn] = config.AutoSignInGroups ?? allowed,
         },
-        NoUserBehavior = NoUserBehaviors.Valid(config.NoUserBehavior),
+        // Not chosen by the install: allowed. Chosen but not one of the two words: the sign-in screen, the stricter one.
+        NoUserBehavior = config.NoUserBehavior is null ? NoUserBehaviors.AutoSignIn : NoUserBehaviors.Valid(config.NoUserBehavior),
         VirtualDisplay = VirtualDisplayModes.IsValid(config.VirtualDisplay) ? config.VirtualDisplay : VirtualDisplayModes.Auto,
         ListenPort = config.ListenPort,
         LogRetentionDays = Math.Max(1, config.LogRetentionDays),

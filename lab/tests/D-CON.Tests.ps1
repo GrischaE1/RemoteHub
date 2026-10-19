@@ -50,16 +50,18 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
     Context 'Hello' {
         BeforeAll {
             $r = Invoke-LabDesktop -Name $VmName -Pin $pin -Out (Out 'hello') -Steps @(@{ do = 'connect' }, @{ do = 'close' })
+            # automatic sign-in is on by default; it is offered when the MSI under test carries the credential provider
+            $provider = [bool](Get-LabAgentState -Name $VmName).AutoSignIn.Provider
             Save 'hello' $r
         }
 
-        It 'D-CON-01 Hello: account, rights, modes Ask+Pin, sessions, limits 60 fps / 100, timeout 30, clipboard 3, features, version' -Tag 'D-CON-01' {
+        It 'D-CON-01 Hello: account, rights (autoSignIn by default), modes Ask+Pin, sessions, limits 60 fps / 100, timeout 30, clipboard 3, features, version' -Tag 'D-CON-01' {
             $h = $r.hello
             $h.account | Should -Match ([regex]::Escape($vm.AdminAccount))
             $h.rights.control | Should -BeTrue
             $h.rights.secureDesktop | Should -BeTrue
             $h.rights.consentBypass | Should -BeFalse
-            $h.rights.autoSignIn | Should -BeFalse
+            $h.rights.autoSignIn | Should -Be $provider
             @($h.consentModes) | Should -Be @('Ask', 'Pin')
             @($h.sessions).Count | Should -BeGreaterThan 0
             $h.maxFramesPerSecond | Should -Be 60
@@ -67,7 +69,7 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
             $h.consentTimeoutSeconds | Should -Be 30
             $h.clipboard | Should -Be 3
             @($h.features) | Should -Contain 'resume'
-            @($h.features) | Should -Not -Contain 'autoSignIn'
+            (@($h.features) -contains 'autoSignIn') | Should -Be $provider
             $h.version | Should -Be (Get-LabMsiVersion (Get-LabAgentMsi))
         }
     }

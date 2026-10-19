@@ -27,12 +27,12 @@ public sealed class AgentConfig
 
     /// <summary>
     /// Automatic sign-in as the install chose it (MSI AUTOSIGNIN, RemoteHub's "Install credential provider"):
-    /// "AutoSignIn" allows it, null leaves it off. The policy NoUserBehavior wins. Before 0.18.12 this was written into the
-    /// policy key instead (<see cref="AutoSignInSetup.Migrate"/>).
+    /// "SignInScreen" turns it off, "AutoSignIn" or null (not chosen) allow it – on by default like every feature. The
+    /// policy NoUserBehavior wins. Before 0.18.12 this was written into the policy key instead (<see cref="AutoSignInSetup.Migrate"/>).
     /// </summary>
     public string? NoUserBehavior { get; set; }
 
-    /// <summary>Who may sign in automatically, as the install chose it (null: nobody). The policy Rights\AutoSignIn wins.</summary>
+    /// <summary>Who may sign in automatically, as the install chose it (null: the allowed groups). The policy Rights\AutoSignIn wins.</summary>
     public List<string>? AutoSignInGroups { get; set; }
     public const string AdministratorsSid = "S-1-5-32-544";
 

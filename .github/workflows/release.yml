@@ -105,6 +105,9 @@ jobs:
           ES_TOTP_SECRET: ${{ steps.signing.outputs.enabled == 'true' && secrets.ES_TOTP_SECRET || '' }}
         run: |
           $sign = if ('${{ steps.signing.outputs.enabled }}' -eq 'true') { @{ SigningCertificate = '${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}'; ESigner = $true } } else { @{} }
+          # The credential provider (automatic sign-in, installed by default) only when the build can sign it: it is never
+          # built unsigned (credential-provider-design.md §8.4), and build-installer.ps1 refuses that on its own.
+          if ('${{ steps.signing.outputs.enabled }}' -eq 'true') { $sign.CredentialProvider = $true }
           ./build/build-installer.ps1 -Version "${{ steps.version.outputs.version }}" -Configuration Release -OutputPath artifacts @sign
 
       - name: Locate MSIs

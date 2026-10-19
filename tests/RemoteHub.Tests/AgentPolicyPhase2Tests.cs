@@ -49,13 +49,15 @@ public class AgentPolicyPhase2Tests
     {
         var config = new A.AgentConfig { AllowedGroups = [Admins] };
         var p = From(config, new() { ["AllowedGroups"] = new[] { Helpdesk, " " }, [@"Rights\Tunnel"] = new[] { Admins } });
-        foreach (var right in new[] { A.AgentRight.PowerShell, A.AgentRight.Desktop, A.AgentRight.SecureDesktop, A.AgentRight.PrivacyScreen })
+        foreach (var right in new[] { A.AgentRight.PowerShell, A.AgentRight.Desktop, A.AgentRight.SecureDesktop, A.AgentRight.PrivacyScreen, A.AgentRight.AutoSignIn })
             Assert.Equal([Helpdesk], p.Groups(right));
         Assert.Equal([Admins], p.Groups(A.AgentRight.Tunnel)); // set on its own: wins
         // Never given by the default groups.
         Assert.Empty(p.Groups(A.AgentRight.DesktopViewOnly));
         Assert.Empty(p.Groups(A.AgentRight.ConsentBypass));
-        Assert.Empty(p.Groups(A.AgentRight.AutoSignIn));
+        // Groups the install chose for automatic sign-in stay its own.
+        var chosen = From(new A.AgentConfig { AllowedGroups = [Admins], AutoSignInGroups = [Admins] }, new() { ["AllowedGroups"] = new[] { Helpdesk } });
+        Assert.Equal([Admins], chosen.Groups(A.AgentRight.AutoSignIn));
     }
 
     [Fact]
@@ -71,8 +73,31 @@ public class AgentPolicyPhase2Tests
         Assert.Equal([Helpdesk], p.Groups(A.AgentRight.AutoSignIn));
         // An invalid policy value still means the sign-in screen: a policy that restricts must not turn into a permission.
         Assert.Equal(A.NoUserBehaviors.SignInScreen, From(installed, new() { ["NoUserBehavior"] = "Maybe" }).NoUserBehavior);
-        // Nothing installed, nothing set: off.
-        Assert.Equal(A.NoUserBehaviors.SignInScreen, From(new A.AgentConfig(), null).NoUserBehavior);
+    }
+
+    [Fact]
+    public void Automatic_sign_in_is_on_by_default_for_the_allowed_groups_and_a_policy_turns_it_off()
+    {
+        // Nothing chosen by the install, nothing set by IT: allowed, for the groups that have the other rights.
+        var fresh = new A.AgentConfig { AllowedGroups = [Admins, Helpdesk] };
+        var d = From(fresh, null);
+        Assert.Equal(A.NoUserBehaviors.AutoSignIn, d.NoUserBehavior);
+        Assert.Equal([Admins, Helpdesk], d.Groups(A.AgentRight.AutoSignIn));
+        Assert.Equal(A.NoUserBehaviors.AutoSignIn, From(fresh, new() { ["DesktopEnabled"] = 1 }).NoUserBehavior); // a policy key without the value
+
+        // IT turns it off, or narrows who may.
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, From(fresh, new() { ["NoUserBehavior"] = "SignInScreen" }).NoUserBehavior);
+        Assert.Empty(From(fresh, new() { [@"Rights\AutoSignIn"] = new[] { " " } }).Groups(A.AgentRight.AutoSignIn));
+        Assert.Equal([Helpdesk], From(fresh, new() { [@"Rights\AutoSignIn"] = new[] { Helpdesk } }).Groups(A.AgentRight.AutoSignIn));
+
+        // The install turned it off (AUTOSIGNIN=0, "Remove credential provider"), or wrote something unknown: off.
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, From(new A.AgentConfig { NoUserBehavior = "SignInScreen" }, null).NoUserBehavior);
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, From(new A.AgentConfig { NoUserBehavior = "Maybe" }, null).NoUserBehavior);
+
+        // A policy key that can't be read still turns it off.
+        var refused = A.AgentPolicy.Refused("access denied");
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, refused.NoUserBehavior);
+        Assert.Empty(refused.Groups(A.AgentRight.AutoSignIn));
     }
 
     [Fact]
@@ -118,6 +143,12 @@ public class AgentPolicyPhase2Tests
         foreach (var e in A.PolicyCatalog.AgentEntries) Assert.Contains(e.Name, report);
 
         Assert.Contains("THE POLICY KEY CAN'T BE READ", A.PolicyCommand.Report(config, null, A.AgentPolicy.Refused("denied"), []));
+
+        // Not chosen by the install: on, for the allowed groups from agent.json.
+        var fresh = new A.AgentConfig { AllowedGroups = [Admins] };
+        var defaults = A.PolicyCommand.Report(fresh, null, From(fresh, null), []);
+        Assert.Matches(@"NoUserBehavior\s+AutoSignIn\s+\[default\]", defaults);
+        Assert.Matches(@"Rights\\AutoSignIn\s+S-1-5-32-544\s+\[agent.json\]", defaults);
     }
 
     [Theory]
@@ -167,10 +198,11 @@ public class AgentPolicyPhase2Tests
         Assert.Contains("it decides, so automatic sign-in stays off", A.AutoSignInSetup.On([Admins], path, ("SignInScreen", null)));
         Assert.Contains(@"Rights\AutoSignIn is set on this device", A.AutoSignInSetup.On([Admins], path, (null, [Helpdesk])));
 
-        Assert.Equal("Automatic sign-in: off as far as the install allowed it.", A.AutoSignInSetup.Off(path, (null, null)));
+        Assert.Equal("Automatic sign-in: turned off on this device.", A.AutoSignInSetup.Off(path, (null, null)));
         var off = A.AgentConfig.Load(path);
-        Assert.Null(off.NoUserBehavior);
+        Assert.Equal("SignInScreen", off.NoUserBehavior); // said explicitly: not set would mean on (the default)
         Assert.Null(off.AutoSignInGroups);
+        Assert.Equal(A.NoUserBehaviors.SignInScreen, From(off, null).NoUserBehavior);
         Assert.Contains("still allows it", A.AutoSignInSetup.Off(path, ("AutoSignIn", null)));
     }
 

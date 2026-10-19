@@ -23,7 +23,7 @@ public static class AutoSignInSetup
     /// <summary>Allows automatic sign-in for <paramref name="groups"/>; returns what happened, for the log and RemoteHub.</summary>
     public static string On(IReadOnlyList<string> groups) => On(groups, AgentConfig.DefaultPath, ReadPolicy());
 
-    /// <summary>Stops automatic sign-in as the install allowed it. The policy, if IT set one, stays as it is.</summary>
+    /// <summary>Turns automatic sign-in off in agent.json. The policy, if IT set one, stays as it is and still wins.</summary>
     public static string Off() => Off(AgentConfig.DefaultPath, ReadPolicy());
 
     internal static string On(IReadOnlyList<string> groups, string configPath, (string? Behavior, string[]? Right) policy)
@@ -48,14 +48,15 @@ public static class AutoSignInSetup
         Migrate(configPath);
         if (File.Exists(configPath))
         {
+            // Said explicitly: not set means allowed (on by default, AgentPolicy.Defaults).
             var config = AgentConfig.Load(configPath);
-            config.NoUserBehavior = null;
+            config.NoUserBehavior = NoUserBehaviors.SignInScreen;
             config.AutoSignInGroups = null;
             config.Save(configPath);
         }
         return policy.Behavior is { } behavior && NoUserBehaviors.Valid(behavior) == NoUserBehaviors.AutoSignIn
-            ? $"Automatic sign-in: the install's permission was removed, but the policy {BehaviorValue} on this device still allows it."
-            : "Automatic sign-in: off as far as the install allowed it.";
+            ? $"Automatic sign-in: turned off by the install, but the policy {BehaviorValue} on this device still allows it."
+            : "Automatic sign-in: turned off on this device.";
     }
 
     /// <summary>

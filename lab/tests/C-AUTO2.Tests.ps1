@@ -34,7 +34,9 @@ AfterAll {
 
 Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
 
-    Context 'installed without the option' {
+    # Automatic sign-in is on by default (credential-provider-design.md section 5): an install without the option has
+    # the provider and allows it for the allowed groups; AUTOSIGNIN=0 turns it off.
+    Context 'installed without the option, and with AUTOSIGNIN=0' {
         BeforeAll {
             Reset-LabVm -Name $VmName
             $install = Install-LabAgent -Name $VmName
@@ -42,17 +44,35 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
             $state = Get-LabAgentState -Name $VmName
             Disconnect-LabConsole -Name $VmName
             $r = Run
-            Save 'default-off' @{ State = $state.AutoSignIn; Run = $r }
+            Save 'default-on' @{ State = $state.AutoSignIn; Run = $r }
+
+            Reset-LabVm -Name $VmName
+            $install = Install-LabAgent -Name $VmName -AutoSignIn $false
+            $pin = $install.pin
+            $offState = Get-LabAgentState -Name $VmName
+            Disconnect-LabConsole -Name $VmName
+            $off = Run
+            Save 'install-off' @{ State = $offState.AutoSignIn; Run = $off }
         }
 
-        It 'C-AUTO-07 without AUTOSIGNIN: nothing in agent.json, no policy value, Hello autoSignIn false, "turned off on this device (policy NoUserBehavior)"' -Tag 'C-AUTO-07' {
+        It 'C-AUTO-07 without AUTOSIGNIN: provider installed, nothing in agent.json or the policy key, Hello autoSignIn true, signs in; with AUTOSIGNIN=0: no provider, agent.json SignInScreen, Hello autoSignIn false' -Tag 'C-AUTO-07' {
+            $state.AutoSignIn.Dll | Should -BeTrue
+            $state.AutoSignIn.Provider | Should -BeTrue
             $state.AutoSignIn.ConfigBehavior | Should -BeNullOrEmpty
             @($state.AutoSignIn.ConfigGroups) | Should -BeNullOrEmpty
             $state.AutoSignIn.Behavior | Should -BeNullOrEmpty
             $state.AutoSignIn.Marker | Should -BeFalse
-            $r.rights.autoSignIn | Should -BeFalse
-            @($r.features) | Should -Not -Contain 'autoSignIn'
-            Text $r | Should -Match 'turned off on this device \(policy NoUserBehavior\)'
+            $r.rights.autoSignIn | Should -BeTrue
+            @($r.features) | Should -Contain 'autoSignIn'
+            Text $r | Should -Match 'SignedIn: Signed in as'
+
+            $offState.AutoSignIn.Dll | Should -BeFalse
+            $offState.AutoSignIn.Provider | Should -BeFalse
+            $offState.AutoSignIn.ConfigBehavior | Should -Be 'SignInScreen'
+            $offState.AutoSignIn.Behavior | Should -BeNullOrEmpty
+            $off.rights.autoSignIn | Should -BeFalse
+            @($off.features) | Should -Not -Contain 'autoSignIn'
+            Text $off | Should -Match 'turned off on this device \(policy NoUserBehavior\)'
         }
     }
 

@@ -100,4 +100,20 @@ public class DesktopResolutionTests
         Assert.Equal(DesktopMessage.Settings, DesktopWire.TypeOf(m));
         Assert.Equal(sent, DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings));
     }
+
+    [Theory]
+    [InlineData(1920, 1080, 1920, 1080)]     // the area exactly
+    [InlineData(1398, 900, 1399, 900)]       // the area is odd: the fitted size one pixel smaller
+    [InlineData(1398, 898, 1399.5, 899.5)]   // fractional areas (125 % scaling)
+    [InlineData(1920, 1080, 1919.6, 1080)]   // the area's size rounded down
+    public void A_fitted_picture_a_pixel_or_two_smaller_than_the_tab_is_shown_unscaled(int pw, int ph, double aw, double ah) =>
+        Assert.True(Views.PictureFit.ShowsNative(pw, ph, aw, ah));
+
+    [Theory]
+    [InlineData(1920, 1080, 1400, 900)]      // larger than the tab: scaled down
+    [InlineData(1280, 720, 1920, 1080)]      // the device's own, much smaller: scaled up as before
+    [InlineData(1920, 1080, 1919, 1080)]     // a whole pixel too wide
+    [InlineData(0, 0, 1920, 1080)]           // no picture yet
+    public void Other_pictures_are_scaled_to_the_tab(int pw, int ph, double aw, double ah) =>
+        Assert.False(Views.PictureFit.ShowsNative(pw, ph, aw, ah));
 }
