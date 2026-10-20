@@ -311,4 +311,39 @@ public class ViewFilterTests
         pane.Refresh().GetAwaiter().GetResult();
         Assert.Equal(["b.log"], pane.SelectedEntries.Select(e => e.Name));
     });
+
+    [Fact]
+    public void A_registry_key_typed_while_the_start_key_still_loads_is_the_one_shown() => Sta.Run(w =>
+    {
+        var slow = new TaskCompletionSource<RegListing>();
+        var hklmCalls = 0;
+        RegListing Key(string path, params string[] subKeys) =>
+            new(path, subKeys.Select(k => new RegSubKey(k, false)).ToList(), [new RegValue("", RegKind.String, "", IsSet: false)]);
+        var session = new RegistrySession(new Connection { Name = "SRV01", Host = "srv01" }, null)
+        {
+            // the first listing of HKLM (the start key's walk) is slow; the one for the typed key answers at once
+            Lister = path => path switch
+            {
+                "HKEY_LOCAL_MACHINE" when ++hklmCalls == 1 => slow.Task,
+                "HKEY_LOCAL_MACHINE" => Task.FromResult(Key(path, "SOFTWARE")),
+                @"HKEY_LOCAL_MACHINE\SOFTWARE" => Task.FromResult(Key(path, "RemoteHubLab")),
+                _ => Task.FromResult(Key(path)),
+            },
+        };
+        session.State = RemoteHub.Rdp.SessionState.Connected;
+        var view = new RegistryView(session, () => { }, () => { });
+        w.Content = view;
+        Sta.Pump();
+
+        var start = view.Navigate(@"HKEY_LOCAL_MACHINE\SOFTWARE");          // what the tab opens first
+        var typed = view.Navigate(@"HKLM\SOFTWARE\RemoteHubLab");            // what the user types meanwhile
+        for (var i = 0; i < 20 && !typed.IsCompleted; i++) Sta.Pump();
+        Assert.True(typed.IsCompleted && typed.Result);
+        Assert.Equal(@"HKEY_LOCAL_MACHINE\SOFTWARE\RemoteHubLab", view.CurrentPath);
+
+        slow.SetResult(Key("HKEY_LOCAL_MACHINE", "SOFTWARE"));               // the start key's walk ends later
+        for (var i = 0; i < 20 && !start.IsCompleted; i++) Sta.Pump();
+        Assert.False(start.Result);                                          // it gave way
+        Assert.Equal(@"HKEY_LOCAL_MACHINE\SOFTWARE\RemoteHubLab", view.CurrentPath);
+    });
 }

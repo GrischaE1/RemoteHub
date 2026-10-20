@@ -78,6 +78,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
     private int _token;
     private int _busyCount;
     private bool _started;
+    private int _navigation;
 
     /// <summary>A key was opened (argument: its canonical path).</summary>
     public event Action<string>? Navigated;
@@ -178,7 +179,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         var start = _started ? CurrentPath : _session.StartPath;
         _started = true;
         foreach (var h in _hives) { h.Loaded = false; h.Children.Clear(); h.SetHasChildren(true); h.IsExpanded = false; }
-        if (!await Navigate(string.IsNullOrWhiteSpace(start) ? DefaultStart : start)) await Navigate(DefaultStart);
+        // The default key only if the start key failed and nothing was opened meanwhile (a key typed while this loads wins).
+        var before = _navigation;
+        if (!await Navigate(string.IsNullOrWhiteSpace(start) ? DefaultStart : start) && _navigation == before + 1) await Navigate(DefaultStart);
     }
 
     // ================================================================== tree
@@ -279,11 +282,15 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         catch (ArgumentException ex) { SetError(ex.Message); ShowPath(); return false; }
         if (path.Length == 0) { SetError("Choose a hive, e.g. HKEY_LOCAL_MACHINE."); return false; }
 
+        // A newer navigation (a key typed while the tab still opens its start key) makes this one give way instead of
+        // selecting its key afterwards.
+        var navigation = ++_navigation;
         var parts = path.Split('\\');
         var node = _hives.First(h => h.Name == parts[0]);
         foreach (var part in parts.Skip(1))
         {
             if (!node.Loaded && !await LoadChildren(node)) return false;
+            if (navigation != _navigation) return false;
             var next = node.Children.FirstOrDefault(c => !c.IsPlaceholder && string.Equals(c.Name, part, StringComparison.OrdinalIgnoreCase));
             if (next is null)
             {
@@ -294,7 +301,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
             node.IsExpanded = true;
             node = next;
         }
-        return await Select(node);
+        return navigation == _navigation && await Select(node);
     }
 
     private async Task<bool> Select(RegNode node)

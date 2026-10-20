@@ -341,8 +341,9 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'Filter' -Value 'set:Spooler' -TimeoutSec 60
             # the first match is selected at once (the services list allows one selection: this used to throw), so the
             # service's buttons are on before any row is clicked; RemoteHub is still running
-            Start-Sleep -Seconds 1
-            $r.serviceAutoSelected = (Ui 'Stop the service' -Value exists -Optional).enabled
+            # (the list loads over the agent for a few seconds; rows that arrive after the text was typed get the match too)
+            $until = (Get-Date).AddSeconds(15)
+            do { $r.serviceAutoSelected = [bool](Ui 'Stop the service' -Value exists -Optional).enabled; if ($r.serviceAutoSelected) { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $until)
             $r.aliveAfterFilter = [bool](Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue })
             $null = Ui 'Print Spooler' -Value realclick
             $null = Ui 'Stop the service'
