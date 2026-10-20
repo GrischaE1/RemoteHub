@@ -78,7 +78,7 @@ BeforeAll {
         $null = Ui 'Test again' -Title 'Set up PowerShell remoting'
         $s.trust = Ui 'Same*trust it' -Title '*' -TimeoutSec 60
         $s.windows = Ui 'Yes' -Title 'Security Warning' -TimeoutSec 30
-        $s.result = Message -TimeoutSec 90
+        $s.result = Message -Title $psTitles -TimeoutSec 90 # a bare "?*" would match the main window before the box opens
         $null = Ui 'Close' -Title 'Set up PowerShell remoting' -Optional
         $s.trusted = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { @(Get-ChildItem Cert:\CurrentUser\Root | Where-Object FriendlyName -like 'RemoteHub*WinRM*' | ForEach-Object FriendlyName) -join ';' }
         $s
@@ -104,10 +104,10 @@ BeforeAll {
                 if (-not $box) { throw "Tools: '$($m.value)' gave no answer within 180 s (no box like '$($titles -join "' / '")')." }
                 $title = [WildcardPattern]::Escape($box.window)
                 $answer = @($box.items) -join "`n"
-                if ($answer -match 'works \(') { $null = Ui 'OK' -Title $title -Optional -TimeoutSec 10 }
+                if ($answer -match 'works \(') { $null = Ui 'OK' -Title '?*' -Optional -TimeoutSec 10 }
                 elseif ($SetUp -and -not $setUpDone -and $answer -match 'Set up on the target') { $setUpDone = $true; $null = SetUpRemoting }
                 else {
-                    $null = Ui 'Cancel' -Title $title -Optional -TimeoutSec 10
+                    $null = Ui 'Cancel' -Title '?*' -Optional -TimeoutSec 10
                     throw "Tools: '$($m.value)' from the menu didn't pass$(if ($setUpDone) { ' (after the setup)' }) - $answer"
                 }
                 $last = "after '$($m.value)'"
@@ -324,12 +324,14 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'Value data' -Title 'New REG*' -Value 'setnext:set in the registry tab'
             $null = Ui 'Create' -Title 'New REG*'
             Start-Sleep -Seconds 3
-            $r.reg = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-ItemProperty HKLM:\SOFTWARE\RemoteHubLab -ErrorAction SilentlyContinue).FromUi }
-            # the value filter: "FromUi" selects the value, Enter opens it for editing (its dialog names the key)
+            # read on the device until the value is there (the tab writes it in the background), for up to 20 s
+            $until = (Get-Date).AddSeconds(20)
+            do { $r.reg = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-ItemProperty HKLM:\SOFTWARE\RemoteHubLab -ErrorAction SilentlyContinue).FromUi }; if ($r.reg) { break }; Start-Sleep -Seconds 2 } while ((Get-Date) -lt $until)
+            # the value filter: "FromUi" selects the value, Enter opens it for editing ("Edit REG_SZ"; value data = 2nd Edit)
             $null = Ui 'Filter values' -Value 'set:FromUi'
             $null = Ui 'Filter values' -Value 'keys:{ENTER}'
-            $r.regFilterEdit = (Ui 'Value data' -Title '*RemoteHubLab*' -Value read -Optional -TimeoutSec 15).value
-            $null = Ui 'Cancel' -Title '*RemoteHubLab*' -Optional
+            $r.regFilterEdit = (Ui 'type:Edit#2' -Title 'Edit REG*' -Value read -Optional -TimeoutSec 15).value
+            $null = Ui 'Cancel' -Title 'Edit REG*' -Optional
             $null = Ui 'Filter values' -Value 'keys:{ESC}'
             }
             # services
@@ -443,21 +445,33 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             Esc
             Menu 'RemoteHub Agent>Uninstall RemoteHub Agent*'
             # the question names what goes; Uninstall starts it (the progress window has the same title)
-            $x.question = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -TimeoutSec 30).items) -join "`n")
-            $null = Ui 'Uninstall' -Title 'Uninstall RemoteHub Agent'
+            # the question is a message box: inside the main window, named by its text ('?*'); the progress is a window of
+            # its own, titled Uninstall RemoteHub Agent
+            $x.question = (@((Ui '*' -Title '?*' -Value list -TimeoutSec 30).items) -join "`n")
+            $null = Ui 'Uninstall' -Title '?*'
             $x.done = (Ui 'Done' -Title 'Uninstall RemoteHub Agent' -Value exists -Optional -TimeoutSec 300).found
             $x.progress = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -Optional -TimeoutSec 5).items) -join "`n")
             Shot 'uninstalled'
             $null = Ui 'Done' -Title 'Uninstall RemoteHub Agent' -Optional
-            $x.device = Invoke-LabGuest -Name $device.Name -ScriptBlock {
-                [pscustomobject]@{
-                    Service  = [bool](Get-Service RemoteHubAgent -ErrorAction SilentlyContinue)
-                    Product  = [bool](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' })
-                    Firewall = [bool](Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'RemoteHub Agent*' })
-                    Provider = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}'
-                    Log      = Test-Path "$env:SystemRoot\Temp\RemoteHub-Agent-uninstall.log"
+            # the agent goes silent early in the uninstall (its service is stopped first); msiexec goes on removing the rest:
+            # the device is checked until msiexec has ended and nothing is left, for up to 3 minutes
+            $until = (Get-Date).AddMinutes(3)
+            do {
+                $x.device = Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                    $log = "$env:SystemRoot\Temp\RemoteHub-Agent-uninstall.log"
+                    [pscustomobject]@{
+                        Msiexec  = @(Get-CimInstance Win32_Process -Filter "Name = 'msiexec.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match '/x' }).Count
+                        Service  = [bool](Get-Service RemoteHubAgent -ErrorAction SilentlyContinue)
+                        Product  = [bool](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' })
+                        Firewall = [bool](Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'RemoteHub Agent*' })
+                        Provider = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}'
+                        Log      = Test-Path $log
+                        LogTail  = @(Get-Content $log -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Return value 3|Error \d{4}|MainEngineThread is returning|Removal completed' } | Select-Object -Last 6)
+                    }
                 }
-            }
+                if ($x.device.Msiexec -eq 0 -and -not ($x.device.Service -or $x.device.Firewall -or $x.device.Provider)) { break }
+                Start-Sleep -Seconds 10
+            } while ((Get-Date) -lt $until)
             $x.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
             Esc
             Save 'uninstall' $x
@@ -543,11 +557,11 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # it fails, and RemoteHub offers to remove the agent from the connection here only
             $h.deviceBefore = "$((Get-LabAgentState -Name $device.Name).Service.State)"
             Menu 'RemoteHub Agent>Uninstall RemoteHub Agent*'
-            $null = Ui 'Uninstall' -Title 'Uninstall RemoteHub Agent' -TimeoutSec 30
-            $h.offer = (Ui 'Remove here' -Title 'Uninstall RemoteHub Agent' -Value exists -Optional -TimeoutSec 300).found
-            $h.offerText = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -Optional -TimeoutSec 5).items) -join "`n")
+            $null = Ui 'Uninstall' -Title '?*' -TimeoutSec 30
+            $h.offer = (Ui 'Remove here' -Title '?*' -Value exists -Optional -TimeoutSec 300).found
+            $h.offerText = (@((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 5).items) -join "`n")
             Shot 'remove-here'
-            $null = Ui 'Remove here' -Title 'Uninstall RemoteHub Agent' -Optional
+            $null = Ui 'Remove here' -Title '?*' -Optional
             $null = Ui 'Close' -Title 'Uninstall RemoteHub Agent' -Optional -TimeoutSec 5
             $h.deviceAfter = "$((Get-LabAgentState -Name $device.Name).Service.State)"
             $h.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)

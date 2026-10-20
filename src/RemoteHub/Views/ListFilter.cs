@@ -66,6 +66,8 @@ internal sealed class ListFilter<TRow, TSort> where TRow : class where TSort : s
         if (!samePlace && _filter.Text.Length > 0) _filter.Text = "";
         _view = new ListCollectionView((System.Collections.IList)rows) { CustomSort = new Order(this), Filter = o => o is TRow r && Passes(r) };
         _list.ItemsSource = _view;
+        // A refresh that keeps the filter: the first match is selected when nothing is (a row arrived after the text was typed).
+        if (Active && _list.SelectedItem is null) { _list.SelectedItem = _view.Cast<TRow>().FirstOrDefault(); if (_list.SelectedItem is { } first) _list.ScrollIntoView(first); }
         Changed?.Invoke();
     }
 

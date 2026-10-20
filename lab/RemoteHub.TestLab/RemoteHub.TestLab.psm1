@@ -3206,13 +3206,16 @@ function Start-LabClient {
     $task
 }
 
+# VMs and accounts whose first start a test file has already handled (the module's state lasts one file: imported -Force)
+$script:LabFirstStartSeen = @{}
+
 # Closes the welcome tour ("Skip") or What's new ("Close") if one opens within -TimeoutSec of the main window, and
 # answers which it was ('' when none did). Once per VM and account in a test file: after the first start the version is
 # remembered and neither comes again, so later starts don't wait.
 function Close-LabFirstStart {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int]$TimeoutSec = 20)
-    if (-not $script:LabFirstStartSeen) { $script:LabFirstStartSeen = @{} }
+
     $key = "$Name|$Account"
     if ($script:LabFirstStartSeen.ContainsKey($key)) { return '' }
     $script:LabFirstStartSeen[$key] = $true

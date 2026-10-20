@@ -193,8 +193,12 @@ public sealed class FilePane : DockPanel, IFilterableView
             Entries = listing.Entries;
             // Another folder starts unfiltered; a refresh of the same one keeps the filter.
             _rows.SetRows(listing.Entries, same);
-            if (keep is { Count: > 0 })
-                foreach (var e in listing.Entries.Where(e => keep.Contains(e.Name))) _listView.SelectedItems.Add(e);
+            // The previous selection comes back as it was (instead of the first match SetRows picks with a filter).
+            if (keep is { Count: > 0 } && listing.Entries.Where(e => keep.Contains(e.Name)).ToList() is { Count: > 0 } kept)
+            {
+                _listView.SelectedItems.Clear();
+                foreach (var e in kept) _listView.SelectedItems.Add(e);
+            }
             ShowPath();
             UpdateStatus();
             Navigated?.Invoke(CurrentPath);

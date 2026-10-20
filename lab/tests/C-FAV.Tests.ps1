@@ -62,20 +62,24 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-RAIL' -Skip:(-not $isClie
             Shot 'pinned'
             $f.group = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 10).found
             $f.after = Count 'Alpha'
-            # the link is the upper "Alpha" (Favourites is at the top): its menu, and Edit opens the connection itself
-            $f.linkMenu = MenuEntries 'Alpha'
-            $null = Ui 'Alpha' -Value realclick
-            $null = Ui 'Alpha' -Value 'keys:{F2}'
+            # the link by its own name "Alpha (favourite)" (both rows show a label "Alpha"): its menu, and Edit opens the
+            # connection itself; the element list kept for the record
+            $f.uia = @((Ui '*' -Value list -TimeoutSec 10).items | Where-Object { $_ -match 'Alpha|Favourites|Lab' })
+            $f.linkMenu = MenuEntries 'Alpha (favourite)'
+            $null = Ui 'Alpha (favourite)' -Value realclick
+            # F2 and Del on the console keyboard: the row is selected, and a name label can't take the focus itself
+            $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 71
             $f.editTitle = (Ui 'Display name' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 15).found
-            $f.editName = (Ui 'Display name' -Title 'Edit connection' -Value read -Optional).value
+            # the editor's display name box (AutomationId NameBox)
+            $f.editName = (Ui 'NameBox' -Title 'Edit connection' -Value read -Optional).value
             $null = Ui 'Cancel' -Title 'Edit connection' -Optional
             # restarted: kept
             Stop-LabClient -Name $VmName -Task $script:task
             $script:task = Start-LabClient -Name $VmName
             $f.afterRestart = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 15).found
             # Del on the link unpins; the connection stays in its folder
-            $null = Ui 'Alpha' -Value realclick
-            $null = Ui 'Alpha' -Value 'keys:{DEL}'
+            $null = Ui 'Alpha (favourite)' -Value realclick
+            $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 2E
             Start-Sleep -Seconds 1
             $f.groupAfterDel = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 3).found
             $f.countAfterDel = Count 'Alpha'
@@ -124,7 +128,8 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-RAIL' -Skip:(-not $isClie
     Context 'the rail' {
         BeforeAll {
             $r = [ordered]@{}
-            $null = Ui 'RemoteHub version'
+            # the button is named "RemoteHub <version> - about this version" (an en dash in the app)
+            $null = Ui 'RemoteHub * about this version'
             $r.about = (Ui 'Close' -Title 'About RemoteHub' -Value exists -Optional -TimeoutSec 15).found
             $r.update = (Ui 'Download and install' -Title 'RemoteHub updates' -Value exists -Optional -TimeoutSec 2).found
             Shot 'about'

@@ -7604,7 +7604,7 @@ P3 · How: U · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`
 - after repeated wrong passwords the tab shows "The RemoteHub Agent on <host>:58732 refuses sign-ins from this PC for a few minutes after too many failed attempts."
 
 #### UI-AG-17 · Uninstall from the UI
-P2 · How: U PS · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P2 · How: U PS · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Expected:**
 - right-click → RemoteHub Agent → *Uninstall RemoteHub Agent…*; the question names "its credential provider, certificate and firewall rule" (and the connections reached through it, if any); *Uninstall*
@@ -7613,7 +7613,7 @@ P2 · How: U PS · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
 - the connection's menu offers *Install RemoteHub Agent…* again (no *Update* / *Uninstall*); audit "Agent uninstalled" "Uninstalled"
 
 #### UI-AG-18 · Remove here only
-P3 · How: U PS · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P3 · How: U PS · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Preconditions:** the device runs an agent with a certificate RemoteHub didn't make (after UI-AG-03).
 
@@ -7685,25 +7685,25 @@ P3 · How: U · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`
 - *Test again* only after Copy or Save; "Copied. Open an elevated PowerShell on <host>, paste … Then click \"Test again\" …"; clipboard kept out of history, cleared after 120 s
 
 #### UI-TL-10 · File pane filter
-P2 · How: U · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Expected:**
 - *Filter This PC* "UpFol" in `C:\Users\Public` → only UpFolder is listed and selected; Enter opens it (*Path This PC* = `C:\Users\Public\UpFolder`); the filter is empty in the new folder
 
 #### UI-TL-11 · Ctrl+F in a file pane
-P3 · How: U · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P3 · How: U · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Expected:**
 - the focus on the device's side (its path box), Ctrl+F, then W I N on the console keyboard → *Filter <device>* = "win"; *Filter This PC* empty; the navigation search doesn't get it
 
 #### UI-TL-12 · Registry value filter
-P2 · How: U · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Expected:**
 - in `HKLM\SOFTWARE\RemoteHubLab`, *Filter values* "FromUi" selects the value; Enter opens its edit dialog, whose *Value data* is "set in the registry tab"
 
 #### UI-TL-13 · Services filter
-P1 · How: U · Needs: – · Status: ◐ Written – `UI-AGENT.Tests.ps1`
+P1 · How: U · Needs: – · Status: ✅ Automated – `UI-AGENT.Tests.ps1`
 
 **Expected:**
 - *Filter* "Spooler" selects Print Spooler at once – the services list allows one selection only, and clearing its selection used to throw – RemoteHub keeps running, *Stop the service* is enabled before any row is clicked
@@ -7794,37 +7794,37 @@ P2 · How: U · Needs: – · Status: ◐ Written – `UI-NOTES.Tests.ps1`
 RemoteHub alone in the client VM, driven by UI Automation in `Admin`'s session. Test files: `C-FIRST.Tests.ps1`, `C-FAV.Tests.ps1`. Every other console test closes the welcome tour (or What's new) as a user would: `Start-LabClient` and the files' own start helpers call `Close-LabFirstStart`.
 
 #### C-FIRST-01 · Welcome tour on a new install
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - the first start after a new install opens "Welcome to RemoteHub"; its first page has no *Back*
 
 #### C-FIRST-02 · Tour pages
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - *Next* goes through 5 pages: the welcome, *Add your connections*, *The RemoteHub Agent*, *Notes*, *Keep it safe*; the last page's button says *Get started* and closes the tour
 
 #### C-FIRST-03 · Shown once
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - the next start opens neither the tour nor What's new (UiState.LastSeenVersion)
 
 #### C-FIRST-04 · From Help & about
-P3 · How: U · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P3 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - *Settings → Help & about → Welcome tour…* opens the tour; *What's new…* opens "What's new in RemoteHub <version>"
 
 #### C-FIRST-05 · Pages left out by policy
-P3 · How: U PS · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P3 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - with `AllowNotes` = 0 and `AllowAgent` = 0 the tour from Help & about has 3 pages, none about Notes or the agent
 
 #### C-FIRST-06 · What's new after an upgrade
-P2 · How: U PS · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Preconditions:** the previous release installed and started once with an .rdp file (a connection; settings without a remembered version).
 
@@ -7832,43 +7832,43 @@ P2 · How: U PS · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
 - after installing this version, the first start shows What's new, not the tour: "What's new in RemoteHub <version>", this version's highlights (e.g. Favourites), *All release notes*
 
 #### C-FIRST-07 · What's new once
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FIRST.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
 - the next start shows neither window
 
 #### C-FAV-01 · Pin a connection
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - folder *Lab* (Ctrl+Shift+N), connection *Alpha* in it (Ctrl+N with the folder selected); right-click *Alpha* → *Add to favourites* → a *Favourites* group at the top with a link; *Alpha* shows twice (the link and the connection in *Lab*)
 
 #### C-FAV-02 · The link's menu and Edit
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - the link's menu offers *Remove from favourites* and no *Delete* or *Duplicate*; F2 on the link opens *Edit connection* with display name *Alpha*
 
 #### C-FAV-03 · Kept after a restart
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - after RemoteHub restarts the *Favourites* group is there
 
 #### C-FAV-04 · Del unpins
-P2 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P2 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - Del on the link: no question, the group is gone, *Alpha* shows once (in *Lab*)
 
 #### C-FAV-05 · Deleted with its folder
-P3 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - *Alpha* pinned again, then *Lab* deleted (right-click → *Delete*, confirmed): the group is gone, *Alpha* doesn't show
 
 #### C-RAIL-01 · The rail's version
-P3 · How: U · Needs: – · Status: ◐ Written – `C-FAV.Tests.ps1`
+P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - clicking the version on the rail opens *About RemoteHub*, not the update window

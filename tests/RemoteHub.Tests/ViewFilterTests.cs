@@ -272,4 +272,43 @@ public class ViewFilterTests
         Assert.Equal("Favourites", new FavoritesGroup().ToString());
         Assert.Equal("DC01 (favourite)", new FavoriteLink(new Connection { Name = "DC01" }).ToString());
     });
+
+    [Fact]
+    public void Rows_that_arrive_after_the_filter_was_typed_get_the_first_match_selected() => Sta.Run(w =>
+    {
+        // the services list loads in the background: typing before the first load must still select a match
+        var view = new ServicesView(new ServicesSession(new Connection { Name = "SRV01", Host = "srv01" }), () => 0, () => { }, () => { });
+        w.Content = view;
+        Sta.Pump();
+        var rows = (ObservableCollection<ServiceRow>)typeof(RemoteListView<ServiceRow>)
+            .GetField("Rows", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(view)!;
+        var list = Sta.Find<ListView>(view);
+        Sta.Find<TextBox>(view, t => t is Wpf.Ui.Controls.TextBox { PlaceholderText: "Filter" }).Text = "spool";
+        Assert.Null(list.SelectedItem);
+        rows.Add(new ServiceRow(new ServiceInfo("WinRM", "Windows Remote Management", "Running", ServiceStartup.Automatic, "NetworkService", 2, "", "", true)));
+        rows.Add(new ServiceRow(new ServiceInfo("Spooler", "Print Spooler", "Running", ServiceStartup.Automatic, "LocalSystem", 1, "", "", true)));
+        Assert.Equal("Spooler", ((ServiceRow)list.SelectedItem!).Name);
+
+        // and in a file pane: a refresh of the same folder that brings the first match
+        var h = new Harness(w);
+        h.Rows.SetRows(new List<FileEntry> { F("a.txt") }, samePlace: false);
+        h.Filter.Text = "log";
+        Assert.Null(h.List.SelectedItem);
+        h.Rows.SetRows(new List<FileEntry> { F("a.txt"), F("new.log") }, samePlace: true);
+        Assert.Equal("new.log", ((FileEntry)h.List.SelectedItem!).Name);
+    });
+
+    [Fact]
+    public void A_refresh_with_a_filter_keeps_the_selection_the_user_made() => Sta.Run(w =>
+    {
+        var pane = new FilePane("This PC", "Desktop24", p => Task.FromResult(new Listing(@"C:\x", [F("a.log"), F("b.log"), F("c.txt")])), _ => Task.FromResult(""));
+        w.Content = pane;
+        Sta.Pump();
+        pane.Navigate(@"C:\x").GetAwaiter().GetResult();
+        Sta.Find<TextBox>(pane, t => t is Wpf.Ui.Controls.TextBox { PlaceholderText: "Filter (Ctrl+F)" }).Text = "log";
+        var list = Sta.Find<ListView>(pane);
+        list.SelectedItem = list.Items.Cast<FileEntry>().Single(e => e.Name == "b.log");
+        pane.Refresh().GetAwaiter().GetResult();
+        Assert.Equal(["b.log"], pane.SelectedEntries.Select(e => e.Name));
+    });
 }

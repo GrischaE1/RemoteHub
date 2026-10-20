@@ -87,8 +87,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         _filter.TextChanged += (_, _) =>
         {
             View!.Refresh();
-            // Setting SelectedItem selects just that row, in single and in multiple selection mode alike.
-            if (_filter.Text.Trim().Length > 0) { List.SelectedItem = View.Cast<TRow>().FirstOrDefault(); if (List.SelectedItem is { } first) List.ScrollIntoView(first); }
+            if (_filter.Text.Trim().Length > 0) SelectFirstMatch();
             UpdateStatus();
         };
         bar.Children.Add(_filter);
@@ -103,6 +102,9 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         // ---- list
         View = new ListCollectionView(Rows) { IsLiveSorting = true, Filter = o => o is TRow r && (_filter.Text.Trim() is not { Length: > 0 } f || Matches(r, f)) };
         List.ItemsSource = View;
+        // Rows that arrive after the filter was typed (the first load, a refresh): the first match is selected when nothing
+        // is, as if the text had just been typed.
+        Rows.CollectionChanged += (_, _) => { if (_filter.Text.Trim().Length > 0 && List.SelectedItem is null) SelectFirstMatch(); };
         List.View = _grid;
         VirtualizingPanel.SetIsVirtualizing(List, true);
         VirtualizingPanel.SetVirtualizationMode(List, VirtualizationMode.Recycling);
@@ -166,6 +168,13 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     protected List<TRow> Selected => List.SelectedItems.Cast<TRow>().ToList();
 
     public void FocusFilter() { _filter.Focus(); _filter.SelectAll(); }
+
+    /// <summary>Selects the first row the filter shows. Setting SelectedItem selects just that row, in single and in multiple selection mode alike.</summary>
+    private void SelectFirstMatch()
+    {
+        List.SelectedItem = View.Cast<TRow>().FirstOrDefault();
+        if (List.SelectedItem is { } first) List.ScrollIntoView(first);
+    }
     protected Window? Owner => Window.GetWindow(this);
     protected string Where => Session.Connection.Name;
 

@@ -322,7 +322,12 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         Merge(node, l.Keys);
         _valueList = l.Values;
         _rows.SetRows(l.Values, sameKey);
-        if (keep is { Count: > 0 }) foreach (var v in l.Values.Where(v => keep.Contains(v.Name))) _values.SelectedItems.Add(v);
+        // The previous selection comes back as it was (instead of the first match SetRows picks with a filter).
+        if (keep is { Count: > 0 } && l.Values.Where(v => keep.Contains(v.Name)).ToList() is { Count: > 0 } kept)
+        {
+            _values.SelectedItems.Clear();
+            foreach (var v in kept) _values.SelectedItems.Add(v);
+        }
         ShowPath();
         ResetStatusColour();
         _keyStatus = $"{l.Keys.Count} keys, {l.Values.Count(v => v.IsSet)} values" +
