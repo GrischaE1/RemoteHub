@@ -57,6 +57,16 @@ BeforeAll {
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-agent-$name.png") }
     # Esc on the console keyboard (a menu left open after a missed entry: RhPerson closes only the submenu)
     function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 500 }
+    # the entries of the connection's RemoteHub Agent submenu (an entry that isn't there answers them; tried again when the
+    # menu didn't open in time and answered none); the menu is closed again with Esc by the caller
+    function AgentMenu {
+        for ($i = 0; $i -lt 3; $i++) {
+            $e = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            if ($e.Count -gt 0) { return , $e }
+            Esc; Start-Sleep -Seconds 2
+        }
+        , @()
+    }
 
     # RemoteHub's setup of PowerShell remoting, from its answer that WinRM isn't available (open when this is called):
     # Set up on the target, Copy script (Windows' Save As dialog has no usable UIA patterns here); the admin pastes it
@@ -312,6 +322,8 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { $null = New-Item HKLM:\SOFTWARE\RemoteHubLab -Force }
             Step registry {
             Tool 'Registry'
+            # the tab has to be connected and showing its start key first: a key typed before that isn't opened
+            $null = Ui '* keys, * values*' -Value exists -TimeoutSec 90
             $null = Ui 'Registry key' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
             $null = Ui 'Registry key' -Value 'keys:{ENTER}'
             Start-Sleep -Seconds 3
@@ -442,7 +454,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $x = [ordered]@{}
             # installed from RemoteHub (its certificate pinned), so the uninstall goes through the agent's own PowerShell
             $x.agent = AgentReady
-            $x.menuBefore = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            $x.menuBefore = (AgentMenu)
             Esc
             Menu 'RemoteHub Agent>Uninstall RemoteHub Agent*'
             # the question names what goes; Uninstall starts it (the progress window has the same title)
@@ -473,7 +485,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
                 if ($x.device.Msiexec -eq 0 -and -not ($x.device.Service -or $x.device.Firewall -or $x.device.Provider)) { break }
                 Start-Sleep -Seconds 10
             } while ((Get-Date) -lt $until)
-            $x.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            $x.menuAfter = (AgentMenu)
             Esc
             Save 'uninstall' $x
         }
@@ -565,7 +577,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'Remove here' -Title '?*' -Optional
             $null = Ui 'Close' -Title 'Uninstall RemoteHub Agent' -Optional -TimeoutSec 5
             $h.deviceAfter = "$((Get-LabAgentState -Name $device.Name).Service.State)"
-            $h.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            $h.menuAfter = (AgentMenu)
             Esc
             Save 'remove-here' $h
         }
