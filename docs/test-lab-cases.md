@@ -722,10 +722,10 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 
 | ID | Test | Pass when | How | P | St |
 |---|---|---|---|---|---|
-| C-MSI-01 | Silent install | `msiexec /i /qn` exit 0; `C:\Program Files\RemoteHub\RemoteHub.exe` version = MSI; Start menu shortcut; `Agent\RemoteHub-Agent-x64.msi` bundled and identical to the agent MSI | PS | 1 | ✅ |
+| C-MSI-01 | Silent install | `msiexec /i /qn` exit 0; `C:\Program Files\RemoteHub\RemoteHub.exe` version = MSI; Start menu shortcut to the exe, with the exe's icon (not one under `C:\Windows\Installer`, gone after the next upgrade); `Agent\RemoteHub-Agent-x64.msi` bundled and identical to the agent MSI | PS | 1 | ✅ |
 | C-MSI-02 | Starts without .NET installed | first start shows the main window (no runtime prompt) | U | 1 | ✅ |
 | C-MSI-03 | .rdp association | RemoteHub in "Open with" and Default apps; mstsc still the default | PS | 2 | ✅ |
-| C-MSI-04 | Upgrade from the previous release | settings, connections, credentials, audit log intact; one ARP entry | PS U | 1 | ✅ |
+| C-MSI-04 | Upgrade from the previous release | settings, connections, credentials, audit log intact; one ARP entry; the shortcut's icon file exists | PS U | 1 | ✅ |
 | C-MSI-05 | Upgrade from RDP Manager 2.x | a direct install over 2.x is refused ("A newer version of RemoteHub is already installed.": 2.x is numbered higher); after uninstalling 2.x one Apps entry "RemoteHub"; on the first start `%APPDATA%\RdpManager` is copied to `%APPDATA%\RemoteHub` (only if that doesn't exist), the old folder kept | PS U | 2 | ✅ |
 | C-MSI-06 | Downgrade | refused | PS | 2 | ✅ |
 | C-MSI-07 | Uninstall | program folder, shortcut, ProgId gone; user data kept (documented leftovers only) | PS | 2 | ✅ |

@@ -4630,13 +4630,13 @@ P1 · How: PS · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 **Steps:**
 1. PS Direct as `PSAdmin`: run `msiexec /i RemoteHub-<ver>-x64.msi /qn /l*v C:\lab\rh-install.log` and wait for it.
 2. Read the exit code.
-3. Read the file version of `C:\Program Files\RemoteHub\RemoteHub.exe`.
+4. Look for the Start menu shortcut `RemoteHub` in `%ProgramData%\Microsoft\Windows\Start Menu\Programs` and read its target and icon location (`WScript.Shell` `CreateShortcut`).
 4. Look for the Start menu shortcut `RemoteHub` in `%ProgramData%\Microsoft\Windows\Start Menu\Programs`.
 5. Compute SHA-256 of `C:\Program Files\RemoteHub\Agent\RemoteHub-Agent-x64.msi` and of the agent MSI of the same build.
 
 **Expected:**
 - Exit code 0.
-- `RemoteHub.exe` file version = MSI version with `.0` appended (e.g. MSI 0.16.5 → 0.16.5.0).
+- Shortcut `RemoteHub` exists, description "Remote desktop, PowerShell and admin tools in one place". It is a plain shortcut to `C:\Program Files\RemoteHub\RemoteHub.exe`, not an advertised one, and its icon is the exe's – not a file under `C:\Windows\Installer`, which the next upgrade removes (a copy pinned to the taskbar would then show a blank page).
 - Shortcut `RemoteHub` exists, description "Remote desktop, PowerShell and admin tools in one place".
 - `Agent\RemoteHub-Agent-x64.msi` exists and its SHA-256 equals the agent MSI under test.
 
@@ -4684,13 +4684,13 @@ P1 · How: PS U · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
 4. Check the tree, open *Settings → Security & storage → Manage saved credentials…*, check the theme.
 5. Open *Settings → Logs → Open audit log…* and count entries; click *Verify integrity*.
 
-**Expected:**
+2. List uninstall entries under `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall` with DisplayName `RemoteHub`, and check that the Start menu shortcut's icon file exists.
 - Exit code 0; exactly one uninstall entry `RemoteHub` with the new version.
 - Folder, both connections, the saved credential and the theme are unchanged.
 - Audit entry count ≥ the noted count; *Verify integrity* shows "Audit log intact".
 
 #### C-MSI-05 · Upgrade from RDP Manager 2.x
-P2 · How: PS U · Needs: – · Status: ✅ Automated – `C-MSI.Tests.ps1`
+- Exit code 0; exactly one uninstall entry `RemoteHub` with the new version; the shortcut's icon file exists.
 
 **Preconditions:** An RDP Manager 2.x build installed with settings in `%APPDATA%\RdpManager` (connections, `local.json`).
 
