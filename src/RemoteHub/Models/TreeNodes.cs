@@ -347,6 +347,8 @@ public sealed class UiState
     public string? LastNoteSectionId { get; set; }
     public string? LastNotePageId { get; set; }
     public bool NotesSharedHintDismissed { get; set; }
+    /// <summary>Pages show as Markdown text (View Markdown) instead of formatted.</summary>
+    public bool NotesMarkdownView { get; set; }
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }

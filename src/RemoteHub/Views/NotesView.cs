@@ -102,6 +102,8 @@ public sealed class NotesView : Grid
         _editor.Message += ShowError;
         _editor.NoteLinkRequested += id => OpenPage(id, null);
         _editor.StoreImage = StoreImage;
+        if (host.Ui.NotesMarkdownView) _editor.SetMarkdownView(true);
+        _editor.MarkdownViewChanged += on => { host.Ui.NotesMarkdownView = on; host.SaveUi(); };
         _title.TextChanged += (_, _) => OnEdited();
         _title.KeyDown += (_, e) => { if (e.Key == Key.Enter) { _editor.FocusStart(); e.Handled = true; } };
         AutomationProperties.SetName(_title, "Page title");

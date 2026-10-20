@@ -440,6 +440,11 @@ The editor's `FlowDocument` is converted to Markdown on every save and back when
   page when nothing is selected – on the clipboard as Markdown text. *Paste Markdown* (Ctrl+Alt+V) reads Markdown text
   from the clipboard and inserts it formatted (headings, lists, tables, script blocks …). Ctrl+Alt uses the left Alt
   key only: AltGr types characters on many keyboards.
+- **View Markdown** (the *Markdown* toggle at the end of the format bar, Ctrl+Shift+M): the page shows as its Markdown
+  text, with colouring, and can be edited there; the format buttons are off meanwhile. Turning it off shows the edited
+  Markdown formatted again. The choice is kept (`UiState.NotesMarkdownView`) and applies to every page.
+- **Inside a script block** paste, copy and the shortcuts are the script block's own: Ctrl+V pastes plain text into the
+  script, and Markdown typed there (`# `, `- `) stays text.
 
 #### 4.5.8 Size limit
 
