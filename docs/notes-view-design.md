@@ -159,7 +159,10 @@ card). `SidebarRail` keeps *Show navigation*, *New* and *Search*, and loses *Set
 
 ### 3.8 Later views
 
-Scripts (local-db-design.md phase 5) and **Logs** come next. Logs is today's audit log viewer (`AuditLogWindow`) as a
+**Scripts** (Ctrl+3) is built: [scripts-view-design.md](scripts-view-design.md). A note's PowerShell or SQL script block
+can be saved as a script there (*Save as script…*); the block itself still never runs. The undo bar and *Recently
+deleted* are shared views now (`UndoBar`, `RecentlyDeletedWindow` with a source per view), used by Notes, Scripts and
+the connection tree. **Logs** comes next. Logs is today's audit log viewer (`AuditLogWindow`) as a
 view, so it no longer needs its own window. Each gets its own design and policy. The rail is built from a list of
 views (`id`, icon, label, shortcut, factory, the policy that can hide it), so a new view is one entry. Shortcuts follow
 the order: Ctrl+3, Ctrl+4. Up to about six views fit before the rail would need to scroll at the minimum window height.

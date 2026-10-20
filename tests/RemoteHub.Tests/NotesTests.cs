@@ -261,13 +261,16 @@ public class NotesTests : IDisposable
         {
             foreach (var table in new[] { "notes_fts", "note_links", "note_files", "notes", "note_sections", "notebooks" })
                 LocalDb.Exec(c, $"DROP TABLE {table}");
+            // The later schema's tables too: a version 1 database had none of them.
+            foreach (var table in new[] { "scripts_fts", "script_runs", "script_versions", "scripts", "script_folders", "deleted_nodes" })
+                LocalDb.Exec(c, $"DROP TABLE {table}");
             LocalDb.Exec(c, "PRAGMA user_version = 1");
         });
         LocalDb.Close();
         var backupsBefore = LocalDb.Backups().Count;
         LocalDb.Open();
         Assert.Equal(backupsBefore + 1, LocalDb.Backups().Count);
-        Assert.Equal(2L, LocalDb.Use((c, _) => (long)LocalDb.Scalar(c, "PRAGMA user_version")!));
+        Assert.Equal((long)LocalDb.SchemaVersion, LocalDb.Use((c, _) => (long)LocalDb.Scalar(c, "PRAGMA user_version")!));
         NoteStore.EnsureDefault();
         Assert.Single(NoteStore.Notebooks());
     }

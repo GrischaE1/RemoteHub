@@ -397,6 +397,38 @@ public sealed partial class MainViewModel : ObservableObject
         RequestSave();
     }
 
+    /// <summary>
+    /// Deletes an item the user chose to delete: it goes to "Recently deleted" with what is below it and its favourite
+    /// pins (docs/scripts-view-design.md §4.9), then leaves the tree. Without the database it is only removed.
+    /// </summary>
+    public void Delete(NodeBase node)
+    {
+        var ids = node.Descendants().Prepend(node).OfType<Connection>().Select(c => c.Id).ToHashSet();
+        var pinned = Data.Ui.FavoriteConnections.Where(ids.Contains).ToList();
+        if (RemoteHub.Data.LocalDb.IsOpen)
+            try { RemoteHub.Data.DeletedNodeStore.Add(node, pinned); }
+            catch (Exception ex) { DiagLog.Write("Recently deleted: keeping the item failed: " + ex.GetType().Name); }
+        Remove(node);
+    }
+
+    /// <summary>
+    /// Puts an item from "Recently deleted" back: into its folder if that still exists, otherwise at the top level, with
+    /// its favourite pins. Null when it isn't there any more, or an item with its id is in the tree again.
+    /// </summary>
+    public NodeBase? RestoreDeleted(string id)
+    {
+        if (Guid.TryParse(id, out var gid) && AllNodes().Any(n => n.Id == gid)) return null;
+        if (RemoteHub.Data.DeletedNodeStore.Take(id) is not { } taken) return null;
+        var parent = taken.ParentId is { } p ? AllNodes().FirstOrDefault(n => n.Id == p && n is Folder or Connection) : null;
+        if (parent is not null && !CanMove(taken.Node, parent)) parent = null;
+        Add(taken.Node, parent);
+        foreach (var c in taken.Node.Descendants().Prepend(taken.Node).OfType<Connection>().Where(c => taken.Pinned.Contains(c.Id)))
+            if (!Data.Ui.FavoriteConnections.Contains(c.Id)) Data.Ui.FavoriteConnections.Add(c.Id);
+        RefreshFavorites();
+        SaveNow();
+        return taken.Node;
+    }
+
     private static void Expand(NodeBase? container)
     {
         if (container is Folder f) f.IsExpanded = true;

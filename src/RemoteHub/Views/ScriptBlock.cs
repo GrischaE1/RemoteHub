@@ -217,9 +217,30 @@ public sealed class ScriptBlock : Border, INoteScriptBlock
         wrap.Click += (_, _) => { _editor.WordWrap = !_editor.WordWrap; FitHeight(); };
         m.Items.Add(wrap);
         m.Items.Add(RemoteToolChrome.Item("Save as file…", SymbolRegular.Save24, SaveAs));
+        // A PowerShell or SQL block can become a script in the Scripts view (scripts-view-design.md §4.7); the block stays text.
+        var scriptLanguage = _languageId == "powershell" ? Data.ScriptStore.PowerShell : Data.ScriptStore.IsSql(_languageId) ? _languageId : null;
+        if (scriptLanguage is not null && Features.IsAllowed(Feature.Scripts) && Data.LocalDb.IsOpen)
+            m.Items.Add(RemoteToolChrome.Item("Save as script…", SymbolRegular.Code24, () => SaveAsScript(scriptLanguage)));
         m.Items.Add(new Separator());
         m.Items.Add(RemoteToolChrome.Item("Delete script block", SymbolRegular.Delete24, () => DeleteRequested?.Invoke(this)));
         return m;
+    }
+
+    /// <summary>Creates a draft script from the block's text in a folder the user picks; nothing is deployed or run.</summary>
+    private void SaveAsScript(string language)
+    {
+        var owner = Window.GetWindow(this);
+        if (Data.ScriptStore.Folders().Count == 0) Data.ScriptStore.CreateFolder(null, "Scripts", "Blue");
+        var folders = Data.ScriptStore.Folders().ToDictionary(f => f.Id);
+        var targets = folders.Values.Select(f => new NoteLinkTarget(f.Id, f.Name, ScriptCatalog.FolderPath(f.Id, folders), true))
+            .OrderBy(t => t.Path, StringComparer.CurrentCultureIgnoreCase).ToList();
+        var picker = new FolderPickerWindow(targets) { Owner = owner, Title = "Save as script" };
+        if (picker.ShowDialog() != true || picker.Selected is not { } folder) return;
+        var name = new InputDialog("Save as script", "Name of the script", language == Data.ScriptStore.PowerShell ? "New script" : "New query") { Owner = owner };
+        if (name.ShowDialog() != true) return;
+        var content = ScriptHeader.Apply(Code, Data.ScriptContent.Empty(language), language == Data.ScriptStore.PowerShell);
+        var id = Data.ScriptStore.CreateScript(folder, name.Value, language, content);
+        Data.AuditLog.Write(Data.AuditEvents.ScriptAdded, null, id, "from a note");
     }
 
     private void SaveAs()

@@ -1,6 +1,7 @@
 # RemoteHub – Scripts view
 
-Status: v2 (2026-10-20) – solution design, nothing built yet. v2 takes in the answers to the open questions of v1
+Status: v4 (2026-10-20) – phases 1–4 are built on the branch `scripts-view-design`; §15 lists what differs from the
+plan. v2 took in the answers to the open questions of v1
 (§13): a fourth run context *As me*, favourites as links like the connection tree's (0.21.0), the console user for
 *User* runs, no script signing, and shared undo, *Recently deleted* and colour pieces that connections get too.
 v3 (2026-10-20): autosave writes a **draft**, *Ready to deploy* makes it a **version**, the last 10 versions are kept
@@ -743,3 +744,37 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
   "This is a draft, not a deployed version", "The draft has changes that aren't deployed – version N runs", "Keep
   both", "Replace", "Skip", "Protect with a password".
 - **Theme:** `DiffAddedBrush`, `DiffRemovedBrush` and their strong variants, dark and light (§4.10).
+
+## 15. As built (phases 1–4)
+
+What differs from the plan above, and why:
+
+- **Script packages are a JSON envelope, not a ZIP** (§4.7): the same format of key derivation and encryption as a
+  backup (PBKDF2-SHA256, AES-256-GCM), the folders and scripts inside as JSON. With no file paths in a package there is
+  nothing to traverse; the checks of §4.7 (counts, sizes, depth, loops) run on the JSON before anything is written.
+- **"Recently deleted" for connections keeps a sealed record per item** (§4.9), in the table `deleted_nodes`, instead
+  of a `deleted_utc` column on `nodes`: the tree is saved as a whole and a row in `nodes` is the live tree. The record
+  holds the item with everything below it and its passwords, sealed with the database's secret key and bound to its row.
+  It works the same in shared-folder mode. The confirmation before deleting stays; *Undo* and *More → Recently
+  deleted…* bring an item back into its folder, or to the top when the folder is gone, with its favourite pins.
+- **The shared colour piece is the context menu's *Colour* entry** (`Views/ColorMenu.cs`): Notes sections, script
+  folders and scripts, and – new – folders and connections in the tree use it. The connection editor keeps its
+  *Appearance* swatches, which also offer *Inherit*.
+- **Favourites:** a Favourites group of links at the top of the folder tree, *Add to favourites* / *Remove from
+  favourites* in the menus, Del on a link unpins; pinned scripts show a star in the list. Dragging a script onto the
+  group isn't built.
+- **Editor:** find is AvalonEdit's search panel (Ctrl+F); there is no replace (Ctrl+H) yet. The command syntax shows on
+  hover over a command rather than after typing it. Snippets aren't built.
+- **Settings:** *Keep the output of runs* is in *Settings → Logs*, next to the audit log, not on a page of its own.
+  Turning it off removes the output already kept.
+- **Run history:** for a script in its ⋯ menu, for a connection in *More → Run history…*.
+- **The folder frame is shared:** the connection tree's `FolderItemTemplate` moved to `Themes/Styles.xaml`, so Scripts folders
+  get the same frame in their colour. *Versions…* uses the branch icon, so the clock means *Run history…* everywhere.
+- **Library copies:** *Duplicate to My scripts* deploys the copy as version 1, by "RemoteHub", with a note naming the
+  release – the library is part of the app (§4.10).
+- **`script_versions.number`:** the version number column is `number`, because `version` is the row's sync counter
+  that every table of notes and scripts has.
+- **The run window asks the device first** (client or server, administrator or not, who is signed in) while the
+  confirmation shows; a script for the other kind of Windows gets a warning there.
+- **Lab:** S-SCRIPT-01 … 09 (docs/test-lab-cases.md §7.2). An account without administrator rights isn't covered in
+  the lab – the agent admits only administrators by default; the message is a unit test.

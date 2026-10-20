@@ -349,6 +349,20 @@ public sealed class UiState
     public bool NotesSharedHintDismissed { get; set; }
     /// <summary>Pages show as Markdown text (View Markdown) instead of formatted.</summary>
     public bool NotesMarkdownView { get; set; }
+    // Scripts view (docs/scripts-view-design.md §4): pane widths, sorting, collapsed folders, last folder and script, the
+    // favourites (script ids, library ones as "library/INV-05", in pin order), the comparison's layout, the run window.
+    public double ScriptsFoldersWidth { get; set; } = 250;
+    public double ScriptsListWidth { get; set; } = 290;
+    public string ScriptsSort { get; set; } = "name";
+    public List<string> ScriptsCollapsedFolders { get; set; } = [];
+    public string? LastScriptFolderId { get; set; }
+    public string? LastScriptId { get; set; }
+    public List<string> FavoriteScripts { get; set; } = [];
+    public bool ScriptsCompareInline { get; set; }
+    public double RunScriptWidth { get; set; } = 760;
+    public double RunScriptHeight { get; set; } = 580;
+    /// <summary>The output of script runs is kept in the run history (§6.6).</summary>
+    public bool KeepScriptRunOutput { get; set; } = true;
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }

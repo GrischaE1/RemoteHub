@@ -80,6 +80,13 @@ public static class AppChrome
             Set("SessionHeaderBrush", "#232A3A");
             Set("ChromeStrokeBrush", "#2E3850");
             Set("NoteCodeBackgroundBrush", "#121722");  // script blocks and inline code in notes
+            // Comparing script versions (docs/scripts-view-design.md §4.10): lines, then the changed words in them.
+            Set("DiffAddedBrush", "#1B3A2A");
+            Set("DiffAddedStrongBrush", "#2B6A44");
+            Set("DiffRemovedBrush", "#41232A");
+            Set("DiffRemovedStrongBrush", "#7A2F3B");
+            Set("ScriptErrorBrush", "#F87171");      // syntax errors underlined in the script editor
+            Set("ScriptWarningBrush", "#FBBF24");
         }
         else
         {
@@ -89,6 +96,12 @@ public static class AppChrome
             Set("SessionHeaderBrush", "#F7F9FC");
             Set("ChromeStrokeBrush", "#B7C3D6");
             Set("NoteCodeBackgroundBrush", "#F4F6FA");
+            Set("DiffAddedBrush", "#DDF4E4");
+            Set("DiffAddedStrongBrush", "#A6E3B8");
+            Set("DiffRemovedBrush", "#FBE3E6");
+            Set("DiffRemovedStrongBrush", "#F3B1BA");
+            Set("ScriptErrorBrush", "#B42318");
+            Set("ScriptWarningBrush", "#92400E");
         }
         r["BrandAccentBrush"] = ColorTags.Frozen(Accent);
         IsDark = dark;

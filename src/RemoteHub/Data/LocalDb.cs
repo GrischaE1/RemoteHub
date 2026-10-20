@@ -21,7 +21,7 @@ public sealed class DatabaseUnreadableException(string message, Exception? inner
 /// </summary>
 public static class LocalDb
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     private const int KeptBackups = 7;
 
     private static readonly object Gate = new();
@@ -252,6 +252,13 @@ public static class LocalDb
             Exec(c, "PRAGMA user_version = 2", t);
             t.Commit();
         }
+        if (version < 3)
+        {
+            using var t = c.BeginTransaction();
+            Exec(c, Schema3, t);
+            Exec(c, "PRAGMA user_version = 3", t);
+            t.Commit();
+        }
     }
 
     private static void BackupBeforeMigration(SqliteConnection c, byte[] key)
@@ -316,6 +323,35 @@ public static class LocalDb
         CREATE TABLE note_links (note_id TEXT NOT NULL, node_id TEXT NOT NULL, PRIMARY KEY (note_id, node_id));
         CREATE INDEX ix_note_links_node ON note_links(node_id);
         CREATE VIRTUAL TABLE notes_fts USING fts5(title, body_text, tokenize = 'unicode61 remove_diacritics 2');
+        """;
+
+    // Scripts (docs/scripts-view-design.md §7.1). A script row holds the draft – what the editor shows and autosave
+    // writes; script_versions holds what was deployed (at most 10 per script, never changed once written). Runs keep
+    // their own hash of what ran, so removing a version doesn't lose what a run did. scripts_fts indexes the drafts.
+    // deleted_nodes holds folders and connections in "Recently deleted" (§4.9): one sealed record per deleted item, its
+    // passwords inside and encrypted with the secret key, so a restore brings them back.
+    private const string Schema3 = $"""
+        CREATE TABLE script_folders (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, color TEXT,
+                                     sort INTEGER NOT NULL, deleted_utc INTEGER, {NoteColumns});
+        CREATE INDEX ix_script_folders ON script_folders(parent_id, sort);
+        CREATE TABLE scripts (rid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, folder_id TEXT NOT NULL, name TEXT NOT NULL,
+                              language TEXT NOT NULL, body TEXT NOT NULL, description TEXT NOT NULL, run_context TEXT,
+                              risk TEXT, os_scope TEXT, timeout_sec INTEGER, deployed_version INTEGER, color TEXT,
+                              library_id TEXT, sort INTEGER NOT NULL, created_utc INTEGER NOT NULL, deleted_utc INTEGER, {NoteColumns});
+        CREATE INDEX ix_scripts_folder ON scripts(folder_id, sort);
+        CREATE TABLE script_versions (script_id TEXT NOT NULL, number INTEGER NOT NULL, body TEXT NOT NULL,
+                                      description TEXT NOT NULL, run_context TEXT, risk TEXT, os_scope TEXT, timeout_sec INTEGER,
+                                      body_sha256 BLOB NOT NULL, note TEXT NOT NULL, deployed_by TEXT NOT NULL,
+                                      deployed_utc INTEGER NOT NULL, {NoteColumns}, PRIMARY KEY (script_id, number));
+        CREATE TABLE script_runs (id TEXT PRIMARY KEY, script_id TEXT NOT NULL, version INTEGER, body_sha256 BLOB NOT NULL,
+                                  node_id TEXT NOT NULL, context TEXT NOT NULL, run_user TEXT, transport TEXT NOT NULL,
+                                  started_utc INTEGER NOT NULL, duration_ms INTEGER, state TEXT NOT NULL, exit_code INTEGER,
+                                  output TEXT);
+        CREATE INDEX ix_script_runs ON script_runs(script_id, started_utc);
+        CREATE INDEX ix_script_runs_node ON script_runs(node_id, started_utc);
+        CREATE VIRTUAL TABLE scripts_fts USING fts5(name, description, body, tokenize = 'unicode61 remove_diacritics 2');
+        CREATE TABLE deleted_nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind TEXT NOT NULL,
+                                    items INTEGER NOT NULL, deleted_utc INTEGER NOT NULL, data BLOB NOT NULL);
         """;
 
     // ------------------------------------------------------------------ access

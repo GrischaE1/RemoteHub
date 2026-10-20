@@ -794,6 +794,12 @@ public partial class MainWindow : FluentWindow
         if (n is Connection fav) CmFavorite.Header = _vm.IsFavorite(fav) ? "Remove from favourites" : "Add to favourites";
         // On a favourite the connection is moved, duplicated or deleted from its folder, not from here.
         if (Tree.SelectedItem is FavoriteLink) CmMoveUnder.Visibility = CmDuplicate.Visibility = CmDelete.Visibility = Visibility.Collapsed;
+        // The shared colour menu (as in Notes and Scripts); no colour of its own means it takes its folder's.
+        CmColour.Visibility = V(editable && n is Folder or Connection);
+        if (editable && n is Folder or Connection)
+            ColorMenu.Fill(CmColour, this, n!.Options.ColorTag, colour => SetNodeColour(n, colour), "Inherit from the folder");
+        CmRecentlyDeleted.Visibility = V(editable && Data.LocalDb.IsOpen);
+        CmScriptRuns.Visibility = V(n is Connection && Features.IsAllowed(Feature.Scripts) && Data.LocalDb.IsOpen);
 
         var c = n as Connection;
         var viaAgent = c is not null && UsesAgent(c);
@@ -803,6 +809,8 @@ public partial class MainWindow : FluentWindow
         var available = psOn && st == PsRemotingState.Available;
         CmPsSep.Visibility = V(c is not null);
         CmPs.Visibility = V(available && Features.IsAllowed(RemoteTool.PowerShell, viaAgent));
+        // A run is the PowerShell tool used another way (scripts-view-design.md §6.5, §9).
+        CmRunScript.Visibility = V(available && Features.IsAllowed(RemoteTool.PowerShell, viaAgent) && Features.IsAllowed(Feature.ScriptRun));
         CmSendFiles.Visibility = V(available && Features.IsAllowed(RemoteTool.FileTransfer, viaAgent));
         CmRegistry.Visibility = V(available && Features.IsAllowed(RemoteTool.Registry, viaAgent));
         CmServices.Visibility = V(available && Features.IsAllowed(RemoteTool.Services, viaAgent));
@@ -834,7 +842,7 @@ public partial class MainWindow : FluentWindow
         }
         // A group shows only when something in it does.
         CmSharesSep.Visibility = V(CmAddShare.Visibility == Visibility.Visible &&
-                                   new[] { CmPs, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
+                                   new[] { CmPs, CmRunScript, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
         CmTools.Visibility = V(GroupHasItems(CmTools));
         CmManage.Visibility = V(GroupHasItems(CmManage));
         CmMore.Visibility = V(GroupHasItems(CmMore));
@@ -919,6 +927,7 @@ public partial class MainWindow : FluentWindow
         if (Features.AnyTool(toolsViaAgent) && st == PsRemotingState.Available)
         {
             Tool(RemoteTool.PowerShell, "PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c));
+            if (Features.IsAllowed(Feature.ScriptRun)) Tool(RemoteTool.PowerShell, "Run script…", SymbolRegular.Play24, () => RunScriptOn(c, ps?.Target ?? KnownTarget(c)));
             Tool(RemoteTool.FileTransfer, "File transfer", SymbolRegular.FolderSwap24, () => OpenFileTransfer(c, ps?.Location, ps?.Target ?? KnownTarget(c)));
             Tool(RemoteTool.Registry, "Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c)));
             Tool(RemoteTool.Services, "Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c)));
@@ -2188,12 +2197,10 @@ public partial class MainWindow : FluentWindow
         var names = string.Join("\n", list.Take(12).Select(c => "• " + c.Name)) + (list.Count > 12 ? $"\n… and {list.Count - 12} more" : "");
         if (!await Dialogs.Confirm(this, "Delete unused connections",
                 $"Delete these {list.Count} connection(s), {MainViewModel.FilterText(_vm.UnusedDays)}?\n\n{names}\n\n" +
-                "Their saved credentials and agent pairing go with them. A backup (Settings → Security & storage → Export backup…) can bring them back.", "Delete")) return;
+                $"They stay in Recently deleted for {Data.DeletedNodeStore.KeepDays} days, with their saved credentials and agent pairing.", "Delete")) return;
         foreach (var c in list)
-        {
             foreach (var s in _vm.Sessions.Where(s => s.Connection == c).ToList()) s.Close();
-            _vm.Remove(c);
-        }
+        DeleteWithUndo(list);
         DiagLog.Write($"Deleted {list.Count} connection(s) {MainViewModel.FilterText(_vm.UnusedDays)}");
         RefreshUnused();
     }
@@ -2221,15 +2228,15 @@ public partial class MainWindow : FluentWindow
                 var list = _vm.ChildrenOf(n.Parent);
                 var at = list.IndexOf(n);
                 foreach (var child in jumpHost.Children.ToList()) _vm.Move(child, n.Parent, ++at);
-                _vm.Remove(n);
+                DeleteWithUndo([n]);
             }
-            else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary) _vm.Remove(n);
+            else if (choice == Wpf.Ui.Controls.MessageBoxResult.Secondary) DeleteWithUndo([n]);
             return;
         }
         var what = n is Folder f
             ? $"Delete folder \"{n.Name}\" and the {f.Descendants().Count()} item(s) inside it?"
             : $"Delete connection \"{n.Name}\"?";
-        if (await Dialogs.Confirm(this, "Delete", what, "Delete")) _vm.Remove(n);
+        if (await Dialogs.Confirm(this, "Delete", what, "Delete")) DeleteWithUndo([n]);
     }
 
     // =====================================================================
@@ -2714,10 +2721,12 @@ public partial class MainWindow : FluentWindow
         try
         {
             _ = Notes?.Save(sync: true);
+            Scripts?.Save();
             var notes = Data.LocalDb.IsOpen ? Data.NoteStore.ExportAll() : null;
-            Backup.Export(_vm.Data, dlg.FileName, pw.Password, notes);
+            var scripts = Data.LocalDb.IsOpen ? Data.ScriptStore.ExportAll() : null;
+            Backup.Export(_vm.Data, dlg.FileName, pw.Password, notes, scripts);
             Data.AuditLog.Write(Data.AuditEvents.BackupExported, null, Path.GetFileName(dlg.FileName),
-                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials, {notes?.Pages.Count ?? 0} pages");
+                $"{_vm.AllNodes().Count()} folders and connections, {_vm.Data.SavedCredentials.Count} saved credentials, {notes?.Pages.Count ?? 0} pages, {scripts?.Scripts.Count ?? 0} scripts");
             _ = Dialogs.Info(this, "Export backup", $"Backup saved to\n{dlg.FileName}\n\nKeep the password safe – it cannot be recovered.");
         }
         catch (Exception ex) { _ = Dialogs.Info(this, "Export failed", ex.Message); }
@@ -2734,7 +2743,12 @@ public partial class MainWindow : FluentWindow
 
         AppData imported;
         Data.NotesExport? importedNotes;
-        try { imported = Backup.Import(dlg.FileName, pw.Password, out importedNotes); }
+        Data.ScriptsExport? importedScripts;
+        try
+        {
+            imported = Backup.Import(dlg.FileName, pw.Password, out importedNotes, out importedScripts);
+            if (importedScripts is not null) ScriptTransfer.Validate(importedScripts);
+        }
         catch (Exception ex) { await Dialogs.Info(this, "Import failed", ex.Message); return; }
         // Policy AllowSavedPasswords = 0: what comes in is stored without its passwords (§5.6).
         if (!Features.IsAllowed(Feature.SavedPasswords) && SavedPasswords.Remove(imported, imported.Items.SelectMany(i => (IEnumerable<NodeBase>)[i, .. i.Descendants()])) is > 0 and var dropped)
@@ -2757,6 +2771,20 @@ public partial class MainWindow : FluentWindow
                 Notes?.Reload();
             }
             catch (Exception ex) { await Dialogs.Info(this, "Import failed", "The notes in the backup could not be imported: " + ex.Message); }
+        }
+        if (choice is Wpf.Ui.Controls.MessageBoxResult.Primary or Wpf.Ui.Controls.MessageBoxResult.Secondary && importedScripts is { IsEmpty: false } scripts && Data.LocalDb.IsOpen)
+        {
+            // Added: into a folder named after the file, deployed as they were (a backup is the user's own). Replaced: yours go to Recently deleted.
+            Scripts?.Save();
+            try
+            {
+                var replace = choice == Wpf.Ui.Controls.MessageBoxResult.Secondary;
+                var target = replace ? null : Data.ScriptStore.CreateFolder(null, Path.GetFileNameWithoutExtension(dlg.FileName), null);
+                var count = Data.ScriptStore.Import(scripts, target, keepDeployed: true, replaceAll: replace);
+                DiagLog.Write($"Backup import: {count} scripts");
+                Scripts?.Reload();
+            }
+            catch (Exception ex) { await Dialogs.Info(this, "Import failed", "The scripts in the backup could not be imported: " + ex.Message); }
         }
         if (choice == Wpf.Ui.Controls.MessageBoxResult.Primary)
         {

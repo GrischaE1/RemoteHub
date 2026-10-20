@@ -10,97 +10,25 @@ using TextBox = Wpf.Ui.Controls.TextBox;
 
 namespace RemoteHub.Views;
 
-/// <summary>"Recently deleted" of the Notes view: what was deleted in the last 30 days, to restore or delete for good.</summary>
-public sealed class RecentlyDeletedWindow : FluentWindow
+/// <summary>"Recently deleted" of the Notes view: notebooks, sections and pages deleted in the last 30 days.</summary>
+public sealed class NotesDeletedSource : IRecentlyDeletedSource
 {
-    private readonly ListView _list = new() { Height = 300, SelectionMode = SelectionMode.Single, BorderThickness = new Thickness(0) };
-    private readonly Button _restore = new() { Content = "Restore", Appearance = ControlAppearance.Primary, MinWidth = 90, Margin = new Thickness(0, 0, 8, 0), IsEnabled = false };
-    private readonly Button _delete = new() { Content = "Delete now", Appearance = ControlAppearance.Danger, MinWidth = 90, Margin = new Thickness(0, 0, 8, 0), IsEnabled = false };
+    public string Info => $"Deleted notebooks, sections and pages are kept for {NoteStore.KeepDeletedDays} days.";
+    public string Empty => $"Nothing was deleted in the last {NoteStore.KeepDeletedDays} days.";
 
-    /// <summary>Something was restored or deleted (the view reloads).</summary>
-    public bool Changed { get; private set; }
+    public IReadOnlyList<DeletedEntry> Entries() => NoteStore.Deleted().Select(d => new DeletedEntry(d.Kind, d.Id,
+        d.Name.Length > 0 ? d.Name : "Untitled page",
+        d.Kind switch { NoteStore.NotebookKind => $"Notebook, {d.Pages} pages", NoteStore.SectionKind => $"Section, {d.Pages} pages", _ => "Page" },
+        d.DeletedUtc,
+        d.Kind switch { NoteStore.NotebookKind => SymbolRegular.Notebook24, NoteStore.SectionKind => SymbolRegular.Folder24, _ => SymbolRegular.Document24 })).ToList();
 
-    public RecentlyDeletedWindow()
+    public void Restore(DeletedEntry entry)
     {
-        Title = "Recently deleted";
-        Width = 560;
-        SizeToContent = SizeToContent.Height;
-        ResizeMode = ResizeMode.NoResize;
-        WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        ExtendsContentIntoTitleBar = true;
-        WindowBackdropType = WindowBackdropType.None;
-        ShowInTaskbar = false;
-        SetResourceReference(BackgroundProperty, "ChromeBackgroundBrush");
-        SetResourceReference(ForegroundProperty, "TextFillColorPrimaryBrush");
-
-        var info = new TextBlock { Text = $"Deleted notebooks, sections and pages are kept for {NoteStore.KeepDeletedDays} days.", TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
-        info.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-        _list.SelectionChanged += (_, _) => _restore.IsEnabled = _delete.IsEnabled = _list.SelectedItem is not null;
-        _restore.Click += (_, _) => Act(restore: true);
-        _delete.Click += async (_, _) =>
-        {
-            if (_list.SelectedItem is not ListViewItem { Tag: DeletedNote d }) return;
-            if (!await Dialogs.Confirm(this, "Delete now", $"Delete \"{d.Name}\" for good? This can't be undone.", "Delete")) return;
-            Act(restore: false);
-        };
-        var close = new Button { Content = "Close", IsCancel = true, MinWidth = 90 };
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
-        buttons.Children.Add(_restore);
-        buttons.Children.Add(_delete);
-        buttons.Children.Add(close);
-
-        var body = new StackPanel { Margin = new Thickness(20, 4, 20, 20) };
-        body.Children.Add(info);
-        body.Children.Add(_list);
-        body.Children.Add(buttons);
-        var root = new StackPanel();
-        root.Children.Add(new TitleBar { Title = Title, ShowMaximize = false, ShowMinimize = false });
-        root.Children.Add(body);
-        Content = root;
-        Fill();
+        NoteStore.Restore(entry.Kind, entry.Id);
+        AuditLog.Write(AuditEvents.NoteRestored, null, entry.Id, entry.Kind);
     }
 
-    private void Fill()
-    {
-        _list.Items.Clear();
-        var entries = NoteStore.Deleted();
-        if (entries.Count == 0)
-        {
-            var empty = new TextBlock { Text = $"Nothing was deleted in the last {NoteStore.KeepDeletedDays} days.", Margin = new Thickness(4, 8, 4, 8) };
-            empty.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
-            _list.Items.Add(new ListViewItem { Content = empty, IsEnabled = false });
-            return;
-        }
-        foreach (var d in entries)
-        {
-            var row = new DockPanel { Margin = new Thickness(2, 3, 2, 3) };
-            var icon = new SymbolIcon(d.Kind switch { NoteStore.NotebookKind => SymbolRegular.Notebook24, NoteStore.SectionKind => SymbolRegular.Folder24, _ => SymbolRegular.Document24 }) { Margin = new Thickness(0, 0, 10, 0) };
-            DockPanel.SetDock(icon, Dock.Left);
-            row.Children.Add(icon);
-            var when = new TextBlock { Text = d.DeletedUtc.ToLocalTime().ToString("g"), Style = (Style)FindResource("Caption"), Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
-            DockPanel.SetDock(when, Dock.Right);
-            row.Children.Add(when);
-            var kind = d.Kind switch { NoteStore.NotebookKind => $"Notebook, {d.Pages} pages", NoteStore.SectionKind => $"Section, {d.Pages} pages", _ => "Page" };
-            var text = new StackPanel();
-            text.Children.Add(new TextBlock { Text = d.Name.Length > 0 ? d.Name : "Untitled page", TextTrimming = TextTrimming.CharacterEllipsis });
-            text.Children.Add(new TextBlock { Text = kind, Style = (Style)FindResource("Caption") });
-            row.Children.Add(text);
-            _list.Items.Add(new ListViewItem { Content = row, Tag = d });
-        }
-    }
-
-    private void Act(bool restore)
-    {
-        if (_list.SelectedItem is not ListViewItem { Tag: DeletedNote d }) return;
-        if (restore)
-        {
-            NoteStore.Restore(d.Kind, d.Id);
-            AuditLog.Write(AuditEvents.NoteRestored, null, d.Id, d.Kind);
-        }
-        else NoteStore.DeleteNow(d.Kind, d.Id);
-        Changed = true;
-        Fill();
-    }
+    public void DeleteNow(DeletedEntry entry) => NoteStore.DeleteNow(entry.Kind, entry.Id);
 }
 
 /// <summary>A folder or connection a page can be linked to (§4.6).</summary>

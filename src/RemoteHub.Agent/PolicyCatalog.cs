@@ -229,6 +229,22 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowSharedSettings = Feature("AllowSharedSettings", "Settings storage", "Allow a shared settings folder");
     // notes-view-design.md §8: hides the view only; stored notes are kept and still go into backups.
     public static readonly PolicyEntry AllowNotes = Feature("AllowNotes", "Notes", "Allow Notes");
+    // scripts-view-design.md §9: the view, running (and each context), drafts under test, the library, import and export.
+    // Blocking the view keeps the stored scripts; a run is the PowerShell tool used another way, so it needs that too.
+    public static readonly PolicyEntry AllowScripts = ScriptsFeature("AllowScripts", "Allow Scripts");
+    public static readonly PolicyEntry AllowScriptRun = ScriptsFeature("AllowScriptRun", "Allow running scripts on devices");
+    public static readonly PolicyEntry AllowScriptRunSystem = ScriptsFeature("AllowScriptRunSystem", "Allow running scripts as System");
+    public static readonly PolicyEntry AllowScriptRunUser = ScriptsFeature("AllowScriptRunUser", "Allow running scripts as the signed-in user");
+    public static readonly PolicyEntry AllowScriptRunAsMe = ScriptsFeature("AllowScriptRunAsMe", "Allow running scripts as the connection's account");
+    public static readonly PolicyEntry AllowScriptDraftRun = ScriptsFeature("AllowScriptDraftRun", "Allow testing a draft on a device");
+    public static readonly PolicyEntry AllowScriptLibrary = ScriptsFeature("AllowScriptLibrary", "Allow the built-in script library");
+    public static readonly PolicyEntry AllowScriptImport = ScriptsFeature("AllowScriptImport", "Allow importing scripts");
+    public static readonly PolicyEntry AllowScriptExport = ScriptsFeature("AllowScriptExport", "Allow exporting scripts");
+
+    private const string ScriptsSince = "0.21.0";
+
+    private static PolicyEntry ScriptsFeature(string name, string title) =>
+        Console(name, PolicyKind.Number, "Scripts", title, 0, 1, labels: Allowed, since: ScriptsSince);
 
     // Phase 5 (docs/admx-design.md §5.4, §5.6, §6.3–§6.5): values behind new behaviour of the console.
     public static readonly PolicyEntry AllowConnectionEditing = Console("AllowConnectionEditing", PolicyKind.Number, "Connections", "Allow changing folders, connections and shares", 0, 1, labels: Allowed, since: Phase5);
@@ -348,6 +364,8 @@ public static class PolicyCatalog
         AllowSavedPasswords, AllowPasswordCopy,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
         AllowNotes,
+        AllowScripts, AllowScriptRun, AllowScriptRunSystem, AllowScriptRunUser, AllowScriptRunAsMe, AllowScriptDraftRun,
+        AllowScriptLibrary, AllowScriptImport, AllowScriptExport,
     ];
 
     public static readonly IReadOnlyList<PolicyEntry> ConsoleEntries =

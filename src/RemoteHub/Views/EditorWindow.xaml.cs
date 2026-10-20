@@ -313,6 +313,7 @@ public partial class EditorWindow : FluentWindow
             AuditRetentionText.Text = "Older entries are removed the next time RemoteHub starts.";
         }
         static string RetentionChoiceLabel(int d) => AuditLog.RetentionLabel(d) + (d == AuditLog.DefaultRetentionDays ? " (default)" : "");
+        KeepRunOutputToggle.IsChecked = ui.KeepScriptRunOutput;
         ImportButton.Click += (_, _) =>
         {
             // Importing replaces the settings in memory, so this window (and its edits) closes first.
@@ -488,6 +489,10 @@ public partial class EditorWindow : FluentWindow
             // Shortening it removes history, so the change itself is in the log.
             if (days != before) AuditLog.Write(AuditEvents.AuditRetentionChanged, null, "Audit log", $"Entries kept for {AuditLog.RetentionLabel(days)} (before: {AuditLog.RetentionLabel(before)})");
         }
+        // Turning it off removes the output already kept (scripts-view-design.md §6.6).
+        if (ui.KeepScriptRunOutput && KeepRunOutputToggle.IsChecked != true && LocalDb.IsOpen)
+            try { ScriptStore.ClearRunOutputs(); } catch (Exception ex) { DiagLog.Write("Scripts: removing run output failed: " + ex.GetType().Name); }
+        ui.KeepScriptRunOutput = KeepRunOutputToggle.IsChecked == true;
         if (AppPolicy.RecordingUseGpu is null) ui.RecordingUseGpu = RecordingGpuToggle.IsChecked == true;
         if (AppPolicy.RecordingIncludeDetails is null) ui.RecordingShowDetails = RecordingDetailsToggle.IsChecked == true;
         if (AppPolicy.RecordingResolution is null && RecordingResolutionBox.SelectedIndex >= 0)

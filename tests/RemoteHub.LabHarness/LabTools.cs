@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using RemoteHub.Models;
 using RemoteHub.Remoting;
+using RemoteHub.Services;
 
 /// <summary>
 /// RemoteHub's PowerShell connection and remote tools against a lab VM, over the RemoteHub Agent or over WinRM HTTPS -
@@ -99,6 +100,8 @@ internal static class LabTools
             catch (Exception ex) { return new { state = "Unavailable", message = PsRemoting.Explain(ex, target), transport = target.Transport }; }
         }
 
+        if (op is "script-info" or "script-run") return await ScriptOp(target, op, o);
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         try
         {
@@ -122,6 +125,55 @@ internal static class LabTools
         {
             return new { op, transport = target.Transport, refused = ex.Message };
         }
+    }
+
+    /// <summary>
+    /// Scripts (docs/scripts-view-design.md §6.2), through ScriptRunner as the run window uses it:
+    ///   script-info                              who is signed in, client or server, admin or not (ScriptRunner.Info)
+    ///   script-run --context System|User|AsMe --body &lt;file&gt; [--run-user console|DOMAIN\user] [--timeout s]
+    ///              [--cancel-after s] [--params-json {..}]   one run: state, exit code, output, run id
+    /// </summary>
+    private static async Task<object> ScriptOp(PsTarget target, string op, Dictionary<string, string> o)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        if (op == "script-info")
+        {
+            var info = ScriptRunner.Info(target, () => Open(target));
+            return new { op, transport = target.Transport, result = new { info.IsServer, info.Caption, info.IsAdmin, users = info.Users } };
+        }
+        var context = o["context"];
+        string? runUser = null;
+        if (context == RemoteHub.Data.ScriptStore.ContextUser)
+        {
+            runUser = o.GetValueOrDefault("run-user") ?? "console";
+            if (runUser == "console")
+                runUser = ScriptRunner.Info(target, () => Open(target)).Users.FirstOrDefault(u => u.IsConsole)?.User;
+        }
+        var body = File.ReadAllText(o["body"]);
+        var timeout = int.TryParse(o.GetValueOrDefault("timeout"), out var t) ? t : RemoteHub.Data.ScriptStore.DefaultTimeoutSec;
+        Dictionary<string, object?>? args = null;
+        if (o.TryGetValue("params-json", out var json))
+            args = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json)!
+                .ToDictionary(kv => kv.Key, kv => (object?)(kv.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.Number => kv.Value.GetInt64(),
+                    System.Text.Json.JsonValueKind.True => true,
+                    System.Text.Json.JsonValueKind.False => false,
+                    System.Text.Json.JsonValueKind.Array => kv.Value.EnumerateArray().Select(e => e.GetString()).ToArray(),
+                    _ => kv.Value.GetString(),
+                }));
+        var content = new RemoteHub.Data.ScriptContent(body, "", context, RemoteHub.Data.ScriptStore.RiskR0, RemoteHub.Data.ScriptStore.OsBoth, timeout);
+        var runner = new ScriptRunner(new ScriptRunRequest(target, "lab", "lab-script", 1, content, context, runUser, args), () => Open(target));
+        using var cts = new CancellationTokenSource();
+        // --cancel-after: the seconds after the first output, as a user clicking Cancel while it runs
+        if (int.TryParse(o.GetValueOrDefault("cancel-after"), out var after))
+            runner.OutputReceived += _ => { if (!cts.IsCancellationRequested) cts.CancelAfter(TimeSpan.FromSeconds(after)); };
+        var result = await runner.RunAsync(cts.Token);
+        return new
+        {
+            op, transport = target.Transport, seconds = Math.Round(sw.Elapsed.TotalSeconds, 2),
+            result = new { state = result.State.ToString(), exitCode = result.ExitCode, message = result.Message, cut = result.OutputCut, runId = runner.RunId, runUser, output = runner.Output },
+        };
     }
 
     public static PsTarget Target(Dictionary<string, string> o)

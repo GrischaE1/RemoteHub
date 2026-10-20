@@ -215,6 +215,24 @@ both main switches off, there are no remote tools at all, only RDP and network s
 |---|---|
 | `AllowNotes` | The Notes view (notes-view-design.md §8): the view rail has no Notes item, Ctrl+2 and `remotehub://note/` links do nothing, the tree's *Notes* is hidden, and a saved last view of Notes opens Remote Control. Stored notes are kept and still go into backups. |
 
+#### 5.8 Scripts
+
+Since 0.21.0, under *RemoteHub Console → Features → Scripts* (scripts-view-design.md §9). `AllowScripts` is the main
+switch of the others; `AllowScriptRun` the main switch of the four that follow it. A run also needs the transport's
+PowerShell switch (`AllowAgentPowerShell` or `AllowRemotingPowerShell`), and on a device with the agent its own policy.
+
+| Value | Blocks |
+|---|---|
+| `AllowScripts` | The Scripts view: no rail item, Ctrl+3 does nothing, no *Run script…*. Stored scripts are kept and still go into backups. |
+| `AllowScriptRun` | Running scripts on devices (*Run script…*, *Run on…*). |
+| `AllowScriptRunSystem` | Runs as System (and so *Both*). |
+| `AllowScriptRunUser` | Runs as the signed-in user (and so *Both*). |
+| `AllowScriptRunAsMe` | Runs as the connection's account. |
+| `AllowScriptDraftRun` | *Test draft on…*: only deployed versions run. |
+| `AllowScriptLibrary` | The built-in script library. |
+| `AllowScriptImport` | Importing script files, folders and packages. |
+| `AllowScriptExport` | Saving scripts as files and exporting packages. |
+
 The four values that already exist keep their name and polarity: `DisableTelemetry`, `DisableUpdateCheck`,
 `DisableAgentAutoSignIn` and `DisableRecording` (§12.3). In the template they read the same way as the others (*Allow
 usage data*, …), and the template writes the inverted value.

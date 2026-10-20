@@ -9,6 +9,7 @@
       <string id="SUPPORTED_RemoteHub_0_18_12">RemoteHub 0.18.12 or later</string>
       <string id="SUPPORTED_RemoteHub_0_19_0">RemoteHub 0.19.0 or later</string>
       <string id="SUPPORTED_RemoteHub_0_20_2">RemoteHub 0.20.2 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_21_0">RemoteHub 0.21.0 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
       <string id="SUPPORTED_Agent_0_19_0">RemoteHub Agent 0.19.0 or later</string>
@@ -42,6 +43,7 @@ The devices themselves are protected by the RemoteHub Agent's policy (the catego
       <string id="Cat_Console_Connections">Connections</string>
       <string id="Cat_Console_Shares">Jump hosts and network shares</string>
       <string id="Cat_Console_Notes">Notes</string>
+      <string id="Cat_Console_Scripts">Scripts</string>
       <string id="Cat_Console_ImportExport">Passwords, import and export</string>
       <string id="Cat_Agent">RemoteHub Agent</string>
       <string id="Cat_Agent_Help">Settings of the RemoteHub Agent service on this device: who may do what on it, through the agent.
@@ -390,6 +392,65 @@ Disabled: the Notes view isn't shown. The view rail has no Notes item, Ctrl+2 an
 This binds RemoteHub on this PC only.
 
 Registry: AllowNotes (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowScripts">Allow Scripts</string>
+      <string id="Console_AllowScripts_Help">Enabled or Not configured: allowed.
+
+Disabled: the Scripts view isn't shown. The view rail has no Scripts item, Ctrl+3 does nothing, and no "Run script" command is offered. Scripts already stored on this PC are kept, not deleted: they come back when the policy is removed, and backups still include them.
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowScripts (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptRun">Allow running scripts on devices</string>
+      <string id="Console_AllowScriptRun_Help">Enabled or Not configured: allowed.
+
+Disabled: PowerShell scripts can be written, kept and exported, but not run on a device: "Run script" and "Run on" aren't offered. A run is the PowerShell tool used another way, so it also needs PowerShell through the agent or over WinRM (whichever the connection uses) to be allowed.
+
+This binds RemoteHub on this PC only. On a device with the RemoteHub Agent, the agent's own policy (PowerShell and its access right) decides too.
+
+Registry: AllowScriptRun (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptRunSystem">Allow running scripts as System</string>
+      <string id="Console_AllowScriptRunSystem_Help">Enabled or Not configured: allowed.
+
+Disabled: scripts can't run as NT AUTHORITY\SYSTEM on a device (a one-off scheduled task), and so not as "Both" either.
+
+Registry: AllowScriptRunSystem (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptRunUser">Allow running scripts as the signed-in user</string>
+      <string id="Console_AllowScriptRunUser_Help">Enabled or Not configured: allowed.
+
+Disabled: scripts can't run as the user signed in on a device (a one-off scheduled task in their session), and so not as "Both" either.
+
+Registry: AllowScriptRunUser (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptRunAsMe">Allow running scripts as the connection's account</string>
+      <string id="Console_AllowScriptRunAsMe_Help">Enabled or Not configured: allowed.
+
+Disabled: scripts can't run as the account RemoteHub signs in with ("As me"), which the script library uses for Active Directory and server administration.
+
+Registry: AllowScriptRunAsMe (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptDraftRun">Allow testing a draft on a device</string>
+      <string id="Console_AllowScriptDraftRun_Help">Enabled or Not configured: allowed.
+
+Disabled: only versions marked "Ready to deploy" can run on devices; "Test draft on" isn't offered.
+
+Registry: AllowScriptDraftRun (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptLibrary">Allow the built-in script library</string>
+      <string id="Console_AllowScriptLibrary_Help">Enabled or Not configured: allowed.
+
+Disabled: the Scripts view doesn't show the library that comes with RemoteHub, and its scripts can't be run. The organisation's own scripts are still allowed, including copies made from the library before.
+
+Registry: AllowScriptLibrary (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptImport">Allow importing scripts</string>
+      <string id="Console_AllowScriptImport_Help">Enabled or Not configured: allowed.
+
+Disabled: script files, folders and script packages (.rhscripts) can't be imported into the Scripts view.
+
+Registry: AllowScriptImport (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowScriptExport">Allow exporting scripts</string>
+      <string id="Console_AllowScriptExport_Help">Enabled or Not configured: allowed.
+
+Disabled: scripts can't be saved as files or exported as script packages (.rhscripts). Copying a script's text is still possible.
+
+Registry: AllowScriptExport (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_AllowSharedSettings">Allow a shared settings folder</string>
       <string id="Console_AllowSharedSettings_Help">Enabled or Not configured: allowed.
