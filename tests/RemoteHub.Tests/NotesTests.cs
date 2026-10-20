@@ -173,6 +173,29 @@ public class NotesTests : IDisposable
     }
 
     [Fact]
+    public void What_was_deleted_before_its_parent_stays_in_recently_deleted_after_the_parent_is_deleted_now()
+    {
+        var (book, section) = Default();
+        var page = NoteStore.CreatePage(section, "Early page");
+        NoteStore.Delete(NoteStore.PageKind, page);
+        NoteStore.Delete(NoteStore.SectionKind, section);
+        NoteStore.DeleteNow(NoteStore.SectionKind, section);
+        var early = NoteStore.CreateSection(book, "Early section", null);
+        NoteStore.Delete(NoteStore.SectionKind, early);
+        NoteStore.Delete(NoteStore.NotebookKind, book);
+        NoteStore.DeleteNow(NoteStore.NotebookKind, book);
+
+        // lab C-NOTE-09: both vanished from the list (and so from Restore and the 30-day purge) with their parent
+        var listed = NoteStore.Deleted().Select(d => d.Id).ToList();
+        Assert.Contains(page, listed);
+        Assert.Contains(early, listed);
+
+        NoteStore.PurgeDeleted(DateTime.UtcNow.AddDays(NoteStore.KeepDeletedDays + 1));
+        Assert.Null(NoteStore.Page(page));
+        Assert.DoesNotContain(NoteStore.Deleted(), d => d.Id == early);
+    }
+
+    [Fact]
     public void A_restored_page_whose_section_is_gone_goes_to_a_live_section()
     {
         var (book, section) = Default();
