@@ -301,7 +301,7 @@ public static class AgentInstaller
     /// session that started it. The MSI's own cleanup removes the firewall rule, certificate, configuration and the
     /// credential provider. Answers "started", "notInstalled" or "failed:&lt;WMI error&gt;".
     /// </summary>
-    private const string DetachedUninstallScript = """
+    internal const string DetachedUninstallScript = """
         $product = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
             Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' }) | Select-Object -First 1
         if (-not $product) { 'notInstalled'; return }
@@ -324,6 +324,12 @@ public static class AgentInstaller
     {
         progress("Starting the uninstall on the device…");
         var answer = RemoteFs.Invoke(rs, DetachedUninstallScript).Select(o => o.ToString()).LastOrDefault() ?? "";
+        CheckUninstallAnswer(answer);
+    }
+
+    /// <summary>What the uninstall script answered: "started" is fine; anything else is a readable failure.</summary>
+    internal static void CheckUninstallAnswer(string answer)
+    {
         if (answer == "started") return;
         throw new RemoteCommandException(answer == "notInstalled"
             ? "The device has no RemoteHub Agent installed from its installer, so it can't be uninstalled from here. Uninstall it on the device."

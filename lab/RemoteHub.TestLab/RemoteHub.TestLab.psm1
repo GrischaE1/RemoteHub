@@ -1384,7 +1384,20 @@ function Invoke-LabInSession {
             Start-ScheduledTask -TaskName $task
             $deadline = (Get-Date).AddSeconds($timeout)
             while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-            if (-not (Test-Path $done)) { throw "no result from the session task after $timeout s (is $u signed in?)" }
+            if (-not (Test-Path $done)) {
+                # what the next run needs to tell "not signed in / locked / disconnected" from "started but slow" (lab
+                # run 20261019-193627, C-REC-01: only "no result" was known): the task's state and last result, the
+                # sessions (quser: Active / Disc) and the sessions that show a lock or sign-in screen (LogonUI)
+                $why = try {
+                    $ti = Get-ScheduledTaskInfo -TaskName $task -ErrorAction Stop
+                    $st = (Get-ScheduledTask -TaskName $task -ErrorAction Stop).State
+                    $sessions = (@(quser.exe 2>&1 | ForEach-Object { ("$_" -replace '\s+', ' ').Trim() }) -join '; ')
+                    $logonUi = (@(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId) -join ', ')
+                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' })"
+                }
+                catch { "no task details: $($_.Exception.Message)" }
+                throw "no result from the session task after $timeout s (is $u signed in?) - $why"
+            }
             Get-Content $out -Raw
         }
         finally {
@@ -1605,7 +1618,7 @@ function Invoke-LabPerson {
         $found = Invoke-LabPerson -Name $Name -Do $(if ($Do -eq 'click') { 'locate' } else { 'windows' }) -Account $Account -Title $Title -Text $Text -TimeoutSec $TimeoutSec
         if ($Do -eq 'click') {
             if ($found.PSObject.Properties['x']) { Send-LabMouse -Name $Name -X $found.x -Y $found.y; $found.clicked = $true }
-            else { Write-Warning "${Name}: '$Text' not found on the agent's window; OCR read: $(@($found.lines) -join ' | ')" }
+            else { Write-Warning "${Name}: '$Text' not found on the agent's window; OCR read: $(@($found.lines) -join ' | ')$(if ($found.PSObject.Properties['seen']) { '; windows seen: ' + (@($found.seen) -join ' || ') })" }
             return $found
         }
         $w = @($found | Where-Object { $_.Title -like $Title -or $_.Title -like "RemoteHub*$Title" }) | Select-Object -First 1
@@ -1615,6 +1628,7 @@ function Invoke-LabPerson {
     if ($Do -eq 'locate') { $Do = 'click'; $Value = 'locate' }
     $answer = "C:\ProgramData\RemoteHubLab\session\person-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
     $json = $null
+    $noServer = ''
     # through the person server in the session (RhPerson -Do serve, one PowerShell Direct call); RHLAB_PERSON_SERVER=0
     # or a server that doesn't come up: a scheduled task per action, as before
     if ($env:RHLAB_PERSON_SERVER -ne '0') {
@@ -1626,6 +1640,8 @@ function Invoke-LabPerson {
         try { $json = Invoke-LabPersonServer -Name $Name -Account $Account -Request $req -TimeoutSec $TimeoutSec }
         catch { throw "RhPerson -Do $Do through the person server in $Account's session failed: $($_.Exception.Message)" }
         if ("$json" -like 'RHLAB-NOANSWER*') { throw "RhPerson -Do $Do gave no answer in $Account's session: $(("$json" -split '\|', 2)[1])" }
+        # no server: the reason is kept for the error below, should the scheduled task give no answer either
+        if ("$json" -like 'RHLAB-NOSERVER*') { $noServer = ("$json" -split '\|', 2)[1]; $json = $null }
         if ($json) {
             $s = $json | ConvertFrom-Json
             if ($s -isnot [array] -and $s.PSObject.Properties['serveError']) { throw "RhPerson -Do $Do gave no answer: ERROR: $($s.serveError)" }
@@ -1638,7 +1654,8 @@ function Invoke-LabPerson {
     if (-not $json) { Copy-LabPerson -Name $Name }
     foreach ($try in 1..2) {
         if ($json) { break }
-        $raw = Invoke-LabInSession -Name $Name -Account $Account -TimeoutSec ($TimeoutSec + 60) -ScriptBlock ([scriptblock]::Create($cmd))
+        $raw = try { Invoke-LabInSession -Name $Name -Account $Account -TimeoutSec ($TimeoutSec + 60) -ScriptBlock ([scriptblock]::Create($cmd)) }
+        catch { if ($noServer) { throw "$($_.Exception.Message) (before that: $noServer)" } else { throw } }
         # RhPerson writes UTF-8 without a BOM: read as UTF-8 (Get-Content would take it as ANSI: a middle dot or an arrow comes out as two or three wrong characters)
         $json = Invoke-LabGuest -Name $Name -ArgumentList $answer -ScriptBlock { param($f) if (Test-Path $f) { [IO.File]::ReadAllText($f, [Text.Encoding]::UTF8); Remove-Item $f } }
         # an empty answer (the session's task didn't run) is tried once more; an ERROR from the script is not
@@ -1657,15 +1674,22 @@ function Invoke-LabPerson {
         $r | Add-Member -NotePropertyName source -NotePropertyValue 'console' -Force
     }
     elseif ($Do -eq 'click' -and $Value -eq 'locate' -and -not $r.clicked) {
-        $w = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account -Title $Title | Sort-Object { if ($_.Title -eq 'RemoteHub') { 1 } else { 0 } }) | Select-Object -First 1
-        if ($w) {
+        # every agent window, dialogs first (as the session's search); the console's lines are kept apart from the
+        # session's, which say what the dialog read while it was there
+        $consoleLines = @()
+        foreach ($w in @(Invoke-LabPerson -Name $Name -Do windows -Account $Account -Title $Title | Sort-Object { if ($_.Title -eq 'RemoteHub') { 1 } else { 0 } })) {
             $c = Read-LabConsoleWindow -Name $Name -Window $w
             $word = $c.words | Where-Object { $_.text -eq $Text -or ($_.text -replace '[^\p{L}\p{Nd}]+.*$', '') -eq $Text -or ($_.text -replace '^[^\p{L}\p{Nd}]+', '') -eq $Text } |
                 Sort-Object { if (($_.line -replace '[^\p{L}\p{Nd} ]', '').Trim() -eq $Text) { 0 } else { 1 } }, { -$_.y } | Select-Object -First 1
             if ($word) {
                 $r = [pscustomobject]@{ clicked = $true; text = $Text; x = [int]($word.x + $word.w / 2); y = [int]($word.y + $word.h / 2); title = $w.Title; lines = $c.lines; source = 'console' }
+                break
             }
-            else { $r.lines = $c.lines }
+            $consoleLines += @("[$($w.Title)] $(@($c.lines) -join ' / ')")
+        }
+        if (-not $r.clicked) {
+            if (-not @($r.lines).Count -and $consoleLines.Count) { $r.lines = $consoleLines }
+            $r | Add-Member -NotePropertyName consoleLines -NotePropertyValue $consoleLines -Force
         }
     }
     $r
@@ -1961,7 +1985,8 @@ function Copy-LabPerson {
 
 # One person action through RhPerson -Do serve in the account's session (started when it isn't running): the script
 # updated if it changed, the request written, the answer waited for - one PowerShell Direct call instead of a scheduled
-# task and a new PowerShell per action. $null when the server didn't come up (the caller then runs the action the old way).
+# task and a new PowerShell per action. "RHLAB-NOSERVER|<why>" when the server didn't come up (the caller then runs the
+# action the old way).
 function Invoke-LabPersonServer {
     param([string]$Name, [string]$Account, [hashtable]$Request, [int]$TimeoutSec)
     $user = Resolve-LabAccount (Get-LabVm $Name) $Account
@@ -2003,15 +2028,33 @@ function Invoke-LabPersonServer {
             $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -MultipleInstances Parallel
             $null = Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings -Force
             Start-ScheduledTask -TaskName $task
-            $until = (Get-Date).AddSeconds(60)
-            while (-not ((ServerPid) -and (Fresh)) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 300 }
+            $started = Get-Date
+            # The first start in a session compiles the helper and loads the OCR - 20-40 s, more on a VM that was just
+            # reverted and is busy (lab run 20261019-193627, C-REC-01: not up within 60 s, and the fallback's own
+            # PowerShell, compiling again next to it, gave no result within 120 s). Waited for up to 120 s while the
+            # task still runs; a task that ended without a server is not waited for.
+            $until = (Get-Date).AddSeconds(120)
+            $state = ''
+            while (-not ((ServerPid) -and (Fresh)) -and (Get-Date) -lt $until) {
+                Start-Sleep -Milliseconds 300
+                $state = "$((Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue).State)"
+                if ($state -eq 'Ready' -and ((Get-Date) - $started).TotalSeconds -gt 5) { break }
+            }
+            $up = [bool]((ServerPid) -and (Fresh))
+            if (-not $up) {
+                $ti = Get-ScheduledTaskInfo -TaskName $task -ErrorAction SilentlyContinue
+                $sessions = (@(quser.exe 2>&1 | ForEach-Object { ("$_" -replace '\s+', ' ').Trim() }) -join '; ')
+                $logonUi = (@(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId) -join ', ')
+                $script:noServer = "the person server didn't come up within $([int]((Get-Date) - $started).TotalSeconds) s (task $state, last result 0x$(if ($ti) { '{0:X8}' -f $ti.LastTaskResult } else { '?' }); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' }))"
+            }
             Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
-            [bool]((ServerPid) -and (Fresh))
+            $up
         }
+        $script:noServer = ''
         $req = $reqJson | ConvertFrom-Json
         foreach ($try in 1, 2) {
-            # no server: $null - the caller runs the action the old way
-            if (-not ((ServerPid) -and (Fresh)) -and -not (Start-Server)) { return $null }
+            # no server: "RHLAB-NOSERVER|<why>" - the caller runs the action the old way and keeps the reason
+            if (-not ((ServerPid) -and (Fresh)) -and -not (Start-Server)) { return "RHLAB-NOSERVER|$script:noServer" }
             $serverPid = ServerPid
             $id = [guid]::NewGuid().ToString('N').Substring(0, 8)
             $reqFile = Join-Path $q "$id.req.json"
@@ -2029,7 +2072,14 @@ function Invoke-LabPersonServer {
             }
             if (Test-Path $req.out) {
                 Start-Sleep -Milliseconds 50
-                $answer = [IO.File]::ReadAllText($req.out, [Text.Encoding]::UTF8)
+                # the renamed answer can still be held for a moment (lab run 20261019-193627, C-REC: "being used by
+                # another process" - a scanner opening the new file): read again for up to 5 s
+                $answer = $null
+                $readUntil = (Get-Date).AddSeconds(5)
+                while ($null -eq $answer) {
+                    try { $answer = [IO.File]::ReadAllText($req.out, [Text.Encoding]::UTF8) }
+                    catch { if ((Get-Date) -gt $readUntil) { throw }; Start-Sleep -Milliseconds 200 }
+                }
                 Remove-Item $req.out -ErrorAction SilentlyContinue
                 return $answer
             }
@@ -3139,18 +3189,44 @@ function Install-LabClient {
 }
 
 # Starts RemoteHub in the account's session (the console account by default) and waits for its main window. Answers
-# the task to stop it with Stop-LabClient. -Arguments: .rdp paths in the guest.
+# the task to stop it with Stop-LabClient. -Arguments: .rdp paths in the guest. The welcome tour of a new profile (and
+# What's new after an upgrade) is closed, as a user would, unless -KeepFirstStart: every test file starts from the
+# checkpoint with a new profile, and the tour is modal.
 function Start-LabClient {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120)
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [switch]$KeepFirstStart)
     $argText = ($Arguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
     $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
     $main = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec $TimeoutSec
     # (error: the person server's search didn't finish - it names the windows that don't respond)
     if (-not $main.found) { throw "${Name}: RemoteHub's main window didn't appear$(if ($main.PSObject.Properties['error'] -and $main.error) { ' - ' + $main.error }) (windows: $($main.windows -join ', '))." }
+    if (-not $KeepFirstStart) { $null = Close-LabFirstStart -Name $Name -Account $Account }
     # it may open partly off the screen (seen at x < 0): moved into it, so real clicks reach every part
     $null = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 10
     $task
+}
+
+# VMs and accounts whose first start a test file has already handled (the module's state lasts one file: imported -Force)
+$script:LabFirstStartSeen = @{}
+
+# Closes the welcome tour ("Skip") or What's new ("Close") if one opens within -TimeoutSec of the main window, and
+# answers which it was ('' when none did). Once per VM and account in a test file: after the first start the version is
+# remembered and neither comes again, so later starts don't wait.
+function Close-LabFirstStart {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int]$TimeoutSec = 20)
+
+    $key = "$Name|$Account"
+    if ($script:LabFirstStartSeen.ContainsKey($key)) { return '' }
+    $script:LabFirstStartSeen[$key] = $true
+    $until = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($d in @(@{ Title = 'Welcome to RemoteHub'; Button = 'Skip' }, @{ Title = "What's new"; Button = 'Close' })) {
+            $r = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title $d.Title -Text $d.Button -Value click -TimeoutSec 2
+            if ($r.found -and -not ($r.PSObject.Properties['error'] -and $r.error)) { return $d.Title }
+        }
+    } while ((Get-Date) -lt $until)
+    ''
 }
 
 function Stop-LabClient {
@@ -3175,7 +3251,10 @@ function Invoke-LabUi {
     )
     $r = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title $Title -Text $Text -Value $Value -TimeoutSec $TimeoutSec
     if (-not $Optional -and (-not $r.found -or ($r.PSObject.Properties['error'] -and $r.error))) {
-        throw "UI step failed: '$Text' in '$Title' ($Value): $(if ($r.PSObject.Properties['error']) { $r.error + $(if ($r.PSObject.Properties['entries']) { ' - entries: ' + (@($r.entries) -join ', ') }) } else { 'not found; windows: ' + ($r.windows -join ', ') })"
+        # a password typed into a field never goes into the message (it ends up in the evidence and the console log -
+        # lab run 20261019-193627 had the lab password there, UI-RDP's "setnext:..." for 'Password')
+        $shown = if ($Value -match '^(setnext|keys):' -and $Text -match 'Password|PIN|Passwort|Kennwort') { "$(($Value -split ':', 2)[0]):<hidden>" } else { $Value }
+        throw "UI step failed: '$Text' in '$Title' ($shown): $(if ($r.PSObject.Properties['error']) { $r.error + $(if ($r.PSObject.Properties['entries']) { ' - entries: ' + (@($r.entries) -join ', ') }) } else { 'not found; windows: ' + ($r.windows -join ', ') })"
     }
     $r
 }

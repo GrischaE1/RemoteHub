@@ -119,11 +119,13 @@ public sealed class ClipboardOffer
     }
 
     /// <summary>
-    /// Programs that read every new clipboard entry at once – RDP's clipboard sync, Windows' clipboard history – not a
+    /// Programs that read every new clipboard entry at once – RDP's clipboard sync, Windows' clipboard history, the desktop
+    /// helper of a RemoteHub Agent on this PC (it passes every copy to whoever is connected through it) – not a
     /// paste: they get nothing (the device's agent does the same).
     /// </summary>
     public static bool BackgroundReader(string paster) =>
-        paster.StartsWith("rdpclip ", StringComparison.OrdinalIgnoreCase) || paster.StartsWith("svchost ", StringComparison.OrdinalIgnoreCase);
+        paster.StartsWith("rdpclip ", StringComparison.OrdinalIgnoreCase) || paster.StartsWith("svchost ", StringComparison.OrdinalIgnoreCase) ||
+        paster.StartsWith("RemoteHubAgent ", StringComparison.OrdinalIgnoreCase);
 
     private static string Paster()
     {

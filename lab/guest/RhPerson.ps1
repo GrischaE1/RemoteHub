@@ -380,23 +380,38 @@ switch ($Do) {
     'click' {
         $until = (Get-Date).AddSeconds($TimeoutSec)
         $done = $null
+        # Every agent window is read, dialogs first (not only the first one: another window of the agent's in front of
+        # the list would hide the question for the whole wait). What was seen is answered when the label isn't found -
+        # lab run 20261019-193627 (D-CLIP 'abort', C-REC): "OCR read:" was empty because only the last pass was kept,
+        # after the question had already been refused and closed.
+        $seen = [ordered]@{}
+        $lastLines = @()
+        $passes = 0
         do {
-            $r = Read-AgentWindow
-            if ($r) {
+            $passes++
+            $wins = @(Get-AgentWindows | Sort-Object { if ($_.Title -eq 'RemoteHub') { 1 } else { 0 } })
+            if (-not $wins.Count) { $seen['(no agent window)'] = $true }
+            foreach ($w in $wins) {
+                Start-Sleep -Milliseconds 400   # fade-in
+                $bmp = [RhNative]::Capture($w.X, $w.Y, $w.Width, $w.Height)
+                try { $ocr = Get-Ocr $bmp } finally { $bmp.Dispose() }
+                $seen["$($w.Title) $($w.Width)x$($w.Height)@$($w.X),$($w.Y)$(if ([RhNative]::Excluded($w.Handle)) { ' (kept out of captures)' }): $(@($ocr.Lines | Select-Object -First 2) -join ' / ')"] = $true
+                if (@($ocr.Lines).Count) { $lastLines = @($ocr.Lines) }
                 # OCR may glue punctuation or a countdown to the label ("Allow(29)", "Deny."): compare the letters only
-                $word = $r.Ocr.Words | Where-Object { $_.Text -eq $Text -or ($_.Text -replace '[^\p{L}\p{Nd}]+.*$', '') -eq $Text -or ($_.Text -replace '^[^\p{L}\p{Nd}]+', '') -eq $Text } |
+                $word = $ocr.Words | Where-Object { $_.Text -eq $Text -or ($_.Text -replace '[^\p{L}\p{Nd}]+.*$', '') -eq $Text -or ($_.Text -replace '^[^\p{L}\p{Nd}]+', '') -eq $Text } |
                     # a button whose whole label is the text first ("Allow", not the "Allow" of "Allow and hide apps..."), then the last one
                     Sort-Object { if (($_.Line -replace '[^\p{L}\p{Nd} ]', '').Trim() -eq $Text) { 0 } else { 1 } }, { -$_.Y } | Select-Object -First 1
                 if ($word) {
-                    $x = $r.Window.X + $word.X + [int]($word.W / 2); $y = $r.Window.Y + $word.Y + [int]($word.H / 2)
+                    $x = $w.X + $word.X + [int]($word.W / 2); $y = $w.Y + $word.Y + [int]($word.H / 2)
                     # -Value locate: only where (the lab clicks with the console mouse - the agent's windows are SYSTEM's, UIPI drops input sent from here)
                     if ($Value -ne 'locate') { [RhNative]::Click($x, $y) }
-                    $done = @{ clicked = $true; text = $Text; x = $x; y = $y; title = $r.Window.Title; lines = $r.Ocr.Lines }
+                    $done = @{ clicked = $true; text = $Text; x = $x; y = $y; title = $w.Title; lines = $ocr.Lines }
+                    break
                 }
             }
             if (-not $done) { Start-Sleep -Milliseconds 500 }
         } while (-not $done -and (Get-Date) -lt $until)
-        if (-not $done) { $done = @{ clicked = $false; text = $Text; lines = $(if ($r) { $r.Ocr.Lines } else { @() }) } }
+        if (-not $done) { $done = @{ clicked = $false; text = $Text; lines = $lastLines; seen = @($seen.Keys | Select-Object -Last 12); passes = $passes; session = (Get-Process -Id $PID).SessionId } }
         Out-Json $done
     }
     'pin' {
@@ -699,13 +714,20 @@ switch ($Do) {
                 $at = [array]::IndexOf($all, ($all | Where-Object { [Windows.Automation.Automation]::Compare($_, $found) } | Select-Object -First 1))
                 $want = if ($action -like 'setnext:*') { 'ControlType.Edit' } else { 'ControlType.ComboBox' }
                 $field = $all | Select-Object -Skip ($at + 1) | Where-Object { $_.Current.ControlType.ProgrammaticName -eq $want -and $_.Current.IsEnabled } | Select-Object -First 1
-                if (-not $field) { $result.error = "no $want after '$Text'"; break }
+                if (-not $field) {
+                    # what was found and what follows it (lab run 20261019-193627, UI-RDP: "no ControlType.Edit after
+                    # 'Password'" although the list showed the password box right after the label)
+                    $next = @($all | Select-Object -Skip ($at + 1) -First 6 | ForEach-Object { "$($_.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '')|$($_.Current.Name)|$($_.Current.AutomationId)|$(if ($_.Current.IsEnabled) { 'on' } else { 'off' })" })
+                    $result.error = "no $want after '$Text' (found: $($found.Current.ControlType.ProgrammaticName -replace '^ControlType\.', '')|$($found.Current.Name)|$($found.Current.AutomationId) at $at of $($all.Count); next: $($next -join '; '))"
+                    break
+                }
                 if ($action -like 'setnext:*') {
                     $text = $action.Substring(8)
                     $vp = $null
                     if ($field.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) { $vp.SetValue($text) }
                     else { $field.SetFocus(); [Windows.Forms.SendKeys]::SendWait('^a'); [Windows.Forms.SendKeys]::SendWait(($text -replace '[+^%~(){}\[\]]', '{$0}')) }
-                    $result.value = $text
+                    # a password isn't answered back (the answer can end up in the evidence)
+                    $result.value = if ($field.Current.IsPassword) { '<hidden>' } else { $text }
                 }
                 else {
                     $item = $action.Substring(7)

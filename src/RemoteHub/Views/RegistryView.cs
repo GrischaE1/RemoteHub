@@ -67,12 +67,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
     private readonly TreeView _tree = new() { BorderThickness = new Thickness(0) };
     private readonly ListView _values = new() { SelectionMode = SelectionMode.Extended, BorderThickness = new Thickness(0) };
     private readonly TextBox _filter = new() { PlaceholderText = "Filter values (Ctrl+F)", ClearButtonEnabled = true, Icon = new SymbolIcon(SymbolRegular.Search24), Width = 260 };
-    private readonly Dictionary<GridViewColumn, (string Header, RegSortColumn Sort)> _columns = [];
+    private readonly ListFilter<RegValue, RegSortColumn> _rows;
     private List<RegValue> _valueList = [];
-    private ListCollectionView? _valueView;
     private string _keyStatus = "";
-    private RegSortColumn _sortBy = RegSortColumn.Name;
-    private bool _descending;
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(4, 6, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly System.Windows.Controls.ProgressBar _busy = new() { IsIndeterminate = true, Height = 2, Visibility = Visibility.Hidden };
     private readonly ObservableCollection<RegNode> _hives = [];
@@ -81,6 +78,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
     private int _token;
     private int _busyCount;
     private bool _started;
+    private int _navigation;
 
     /// <summary>A key was opened (argument: its canonical path).</summary>
     public event Action<string>? Navigated;
@@ -119,18 +117,13 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         bar.Children.Insert(0, up);
         // The filter narrows the values of the shown key and selects the first match, so Enter edits it.
         _filter.Margin = new Thickness(4, 0, 0, 0);
-        _filter.TextChanged += (_, _) => ApplyFilter();
-        _filter.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Escape) { _filter.Text = ""; _values.Focus(); e.Handled = true; }
-            else if (e.Key == Key.Down) { _values.Focus(); e.Handled = true; }
-            else if (e.Key == Key.Enter && SelectedValues is [var one]) { _ = Modify(one); e.Handled = true; }
-        };
+        System.Windows.Automation.AutomationProperties.SetName(_filter, "Filter values");
         DockPanel.SetDock(_filter, Dock.Right);
         bar.Children.Add(_filter);
         // In a detached window (no main window around it) the view handles Ctrl+F itself.
         PreviewKeyDown += (_, e) => { if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control) { FocusFilter(); e.Handled = true; } };
         _address.Margin = new Thickness(4, 0, 0, 0);
+        System.Windows.Automation.AutomationProperties.SetName(_address, "Registry key");
         _address.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { _ = Navigate(_address.Text); e.Handled = true; }
@@ -157,6 +150,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         var splitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.PreviousAndNext };
         Grid.SetColumn(splitter, 1);
         split.Children.Add(splitter);
+        // A header click sorts by that column (the default value stays on top); Enter in the filter edits the match.
+        _rows = new ListFilter<RegValue, RegSortColumn>(_values, _filter, RegValue.Matches, RegValue.Compare, RegSortColumn.Name, v => _ = Modify(v));
+        _rows.Changed += ShowStatus;
         BuildValues();
         Grid.SetColumn(_values, 2);
         split.Children.Add(_values);
@@ -183,7 +179,9 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         var start = _started ? CurrentPath : _session.StartPath;
         _started = true;
         foreach (var h in _hives) { h.Loaded = false; h.Children.Clear(); h.SetHasChildren(true); h.IsExpanded = false; }
-        if (!await Navigate(string.IsNullOrWhiteSpace(start) ? DefaultStart : start)) await Navigate(DefaultStart);
+        // The default key only if the start key failed and nothing was opened meanwhile (a key typed while this loads wins).
+        var before = _navigation;
+        if (!await Navigate(string.IsNullOrWhiteSpace(start) ? DefaultStart : start) && _navigation == before + 1) await Navigate(DefaultStart);
     }
 
     // ================================================================== tree
@@ -284,11 +282,15 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         catch (ArgumentException ex) { SetError(ex.Message); ShowPath(); return false; }
         if (path.Length == 0) { SetError("Choose a hive, e.g. HKEY_LOCAL_MACHINE."); return false; }
 
+        // A newer navigation (a key typed while the tab still opens its start key) makes this one give way instead of
+        // selecting its key afterwards.
+        var navigation = ++_navigation;
         var parts = path.Split('\\');
         var node = _hives.First(h => h.Name == parts[0]);
         foreach (var part in parts.Skip(1))
         {
             if (!node.Loaded && !await LoadChildren(node)) return false;
+            if (navigation != _navigation) return false;
             var next = node.Children.FirstOrDefault(c => !c.IsPlaceholder && string.Equals(c.Name, part, StringComparison.OrdinalIgnoreCase));
             if (next is null)
             {
@@ -299,7 +301,7 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
             node.IsExpanded = true;
             node = next;
         }
-        return await Select(node);
+        return navigation == _navigation && await Select(node);
     }
 
     private async Task<bool> Select(RegNode node)
@@ -322,13 +324,17 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         if (l is null) return false;
         var keep = _current == node ? _values.SelectedItems.Cast<RegValue>().Select(v => v.Name).ToHashSet() : null;
         // Another key starts unfiltered; a refresh of the same one keeps the filter.
-        if (_current != node && _filter.Text.Length > 0) _filter.Text = "";
+        var sameKey = _current == node;
         _current = node;
         Merge(node, l.Keys);
         _valueList = l.Values;
-        _valueView = new ListCollectionView(l.Values) { CustomSort = new ValueOrder(_sortBy, _descending), Filter = o => o is RegValue v && Shown(v) };
-        _values.ItemsSource = _valueView;
-        if (keep is { Count: > 0 }) foreach (var v in l.Values.Where(v => keep.Contains(v.Name))) _values.SelectedItems.Add(v);
+        _rows.SetRows(l.Values, sameKey);
+        // The previous selection comes back as it was (instead of the first match SetRows picks with a filter).
+        if (keep is { Count: > 0 } && l.Values.Where(v => keep.Contains(v.Name)).ToList() is { Count: > 0 } kept)
+        {
+            _values.SelectedItems.Clear();
+            foreach (var v in kept) _values.SelectedItems.Add(v);
+        }
         ShowPath();
         ResetStatusColour();
         _keyStatus = $"{l.Keys.Count} keys, {l.Values.Count(v => v.IsSet)} values" +
@@ -374,21 +380,11 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
     private void BuildValues()
     {
         var gv = new Wpf.Ui.Controls.GridView();
-        void Column(GridViewColumn c, string header, RegSortColumn sort) { c.Header = header; _columns[c] = (header, sort); gv.Columns.Add(c); }
+        void Column(GridViewColumn c, string header, RegSortColumn sort) { gv.Columns.Add(c); _rows.Column(c, header, sort); }
         Column(new Wpf.Ui.Controls.GridViewColumn { Width = 220, CellTemplate = ValueNameTemplate() }, "Name", RegSortColumn.Name);
         Column(new Wpf.Ui.Controls.GridViewColumn { Width = 120, DisplayMemberBinding = new Binding(nameof(RegValue.TypeName)) }, "Type", RegSortColumn.Type);
         Column(new Wpf.Ui.Controls.GridViewColumn { Width = 420, DisplayMemberBinding = new Binding(nameof(RegValue.DisplayData)) }, "Data", RegSortColumn.Data);
         _values.View = gv;
-        // Clicking a header sorts by it; clicking it again reverses the order. The default value stays on top.
-        _values.AddHandler(GridViewColumnHeader.ClickEvent, new RoutedEventHandler((_, e) =>
-        {
-            if (e.OriginalSource is not GridViewColumnHeader { Column: { } col } || !_columns.TryGetValue(col, out var c)) return;
-            _descending = c.Sort == _sortBy && !_descending;
-            _sortBy = c.Sort;
-            ShowSort();
-            if (_valueView is not null) _valueView.CustomSort = new ValueOrder(_sortBy, _descending);
-        }));
-        ShowSort();
         VirtualizingPanel.SetIsVirtualizing(_values, true);
         _values.MouseDoubleClick += (_, e) => { if (ValueAt(e.OriginalSource) is { } v) _ = Modify(v); };
         _values.PreviewMouseRightButtonDown += (_, e) =>
@@ -552,48 +548,15 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         }
     }
 
-    public void FocusFilter() { _filter.Focus(); _filter.SelectAll(); }
-
-    private bool Shown(RegValue v) => _filter.Text.Trim().Length == 0 || RegValue.Matches(v, _filter.Text);
+    public void FocusFilter() => _rows.Focus();
 
     /// <summary>The key's counts, and how many values the filter shows.</summary>
-    private void ShowStatus() => _status.Text = _keyStatus + (_valueView is not null && _filter.Text.Trim().Length > 0 ? $"  ·  {_valueView.Count} shown" : "");
+    private void ShowStatus() => _status.Text = _keyStatus + (_rows.Active ? $"  ·  {_rows.Shown} shown" : "");
 
-    /// <summary>Narrows the values to the filter and selects the first match.</summary>
-    private void ApplyFilter()
-    {
-        if (_valueView is null) return;
-        _valueView.Refresh();
-        if (_filter.Text.Trim().Length > 0)
-        {
-            _values.SelectedItems.Clear();
-            if (_valueView.Cast<RegValue>().FirstOrDefault() is { } first) { _values.SelectedItem = first; _values.ScrollIntoView(first); }
-        }
-        ShowStatus();
-    }
-
-    /// <summary>The sorted column's header carries an arrow for its direction.</summary>
-    private void ShowSort()
-    {
-        foreach (var (col, (header, sort)) in _columns)
-            col.Header = sort == _sortBy ? header + (_descending ? "  ▼" : "  ▲") : header;
-    }
-
-    private sealed class ValueOrder(RegSortColumn by, bool descending) : System.Collections.IComparer
-    {
-        public int Compare(object? x, object? y) => x is RegValue a && y is RegValue b ? RegValue.Compare(a, b, by, descending) : 0;
-    }
-
+    /// <summary>Selects a value – one the filter hides (just created or renamed) clears the filter.</summary>
     private void SelectValue(string name)
     {
-        if (_valueList.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) is { } v)
-        {
-            // A value the filter hides (just created or renamed) is shown: the filter is cleared.
-            if (!Shown(v)) _filter.Text = "";
-            _values.SelectedItems.Clear();
-            _values.SelectedItem = v;
-            _values.ScrollIntoView(v);
-        }
+        if (_valueList.FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) is { } v) _rows.Reveal(v);
     }
 
     private async Task RenameValue(RegValue v)

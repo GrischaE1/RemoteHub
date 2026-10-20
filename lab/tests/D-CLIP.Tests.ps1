@@ -30,7 +30,7 @@ BeforeAll {
         if (-not $allow.clicked) {
             # refused after 30 s: the context fails here, not at an empty clipboard or a missing transfer later on
             Stop-Job $job; Remove-Job $job -Force
-            throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')"
+            throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')$(if ($allow.PSObject.Properties['seen']) { '; windows seen: ' + (@($allow.seen) -join ' || ') })"
         }
         $job
     }

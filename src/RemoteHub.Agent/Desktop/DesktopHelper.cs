@@ -261,8 +261,10 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         var (id, offset) = DesktopWire.ReadTransferData(m);
                         if (id == r.Transfer.Id) ReceiveData(r, offset, m);
                         break;
-                    case (byte)DesktopMessage.TransferEnd when _receiving is { } r2 && DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd).Id == r2.Transfer.Id:
-                        DropReceiving();
+                    case (byte)DesktopMessage.TransferEnd:
+                        var ended = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd).Id;
+                        if (_receiving is { } r2 && ended == r2.Transfer.Id) DropReceiving();
+                        else PasteFailed(ended); // refused before anything came (the service: the lock screen is up)
                         break;
                 }
             }

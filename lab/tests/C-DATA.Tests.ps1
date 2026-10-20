@@ -99,7 +99,8 @@ if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
     }
     function Wait-Main([string]$Account = 'Console', [string]$On = $VmName, [int]$TimeoutSec = 90) {
         $r = Ui 'SearchBox' -Value exists -Optional -TimeoutSec $TimeoutSec -Account $Account -On $On
-        if ($r.found) { $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
+        # the welcome tour of a new profile (or What's new after an upgrade) closed as a user would - it is modal
+        if ($r.found) { $null = Close-LabFirstStart -Name $On -Account $Account; $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
         [bool]$r.found
     }
     # closed like the user does (so the audit log and the database are written to the end); a connected session asks
@@ -897,7 +898,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 $null = Ui 'Add' -Title 'Add network share to Device'
                 Start-Sleep -Seconds 3
                 $null = Ui 'labshare' -Value doubleclick -TimeoutSec 20
-                $null = Ui 'type:Edit#1' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
+                $null = Ui 'Path This PC' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
                 Start-Sleep -Seconds 3
                 $null = Ui 'UpFolder' -Value realclick
                 $null = Ui 'Upload selected files'

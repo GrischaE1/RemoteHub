@@ -36,6 +36,12 @@ public interface IDesktopSessions
     /// <summary>The session has no screen right now (its RDP connection was closed). Checked every few seconds – kept cheap.</summary>
     bool IsDisconnected(int session) => List().FirstOrDefault(s => s.Id == session)?.State == DesktopSessionState.Disconnected;
 
+    /// <summary>
+    /// Windows' lock, sign-in or Ctrl+Alt+Del screen is up in the session (see <see cref="WtsNative.IsLocked"/>). Asked for
+    /// each clipboard copy, not for every chunk.
+    /// </summary>
+    bool IsLocked(int session) => List().FirstOrDefault(s => s.Id == session)?.State is DesktopSessionState.Locked or DesktopSessionState.SignIn;
+
     /// <summary>The SID of the user signed in to the session (null: nobody, or it can't be read).</summary>
     string? UserSid(int session) => null;
 
@@ -108,6 +114,8 @@ internal sealed class WtsSessions : IDesktopSessions
     public int? ConsoleSessionId() => WtsNative.WTSGetActiveConsoleSessionId() is var id && id != 0xFFFFFFFF ? (int)id : null;
 
     public bool IsDisconnected(int session) => WtsNative.ConnectState(session) == 4; // WTSDisconnected
+
+    public bool IsLocked(int session) => WtsNative.IsLocked(session);
 
     public string? UserSid(int session)
     {

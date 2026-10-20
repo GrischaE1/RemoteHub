@@ -27,7 +27,7 @@ BeforeAll {
             # not connected: the steps after the park are let run to their end, and the context fails here rather than
             # at a missing picture or a wrong state later on
             Set-Content (Join-Path $o 'go.txt') 'go'
-            throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')"
+            throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')$(if ($allow.PSObject.Properties['seen']) { '; windows seen: ' + (@($allow.seen) -join ' || ') })"
         }
         Wait-LabHostFile (Join-Path $o 'ready.txt') -TimeoutSec 120
         $job
@@ -99,7 +99,11 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             # then Disconnect: the session ends, the resume token is void (asked again)
             Go 'control'
             Start-Sleep -Seconds 4
-            $b.disconnect = Invoke-LabPerson -Name $VmName -Do click -Text 'Disconnect'
+            # Disconnect is on the open banner only: by now it has collapsed to the pill (the pointer left it for the
+            # marker), and lab run 20261019-193627 (W11) found no "Disconnect" at all - neither the session's OCR (the
+            # banner is kept out of captures) nor the console's (no words read in its area). Invoke-LabBannerClick opens
+            # it with a hover first, finds the whole label in the console picture and keeps that picture.
+            $b.disconnect = Invoke-LabBannerClick -Name $VmName -Label 'Disconnect' -TimeoutSec 20 -EvidencePath (Join-Path (Out 'control') 'disconnect-console.png')
             $b.again = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 60
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny'
             $b.r = Receive-LabDesktop $job
@@ -139,7 +143,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
         }
 
         It 'D-BAN-05 Disconnect by the user: Ended "The user at the device ended the session.", the resume token is void' -Tag 'D-BAN-05' {
-            $b.disconnect.clicked | Should -BeTrue
+            $b.disconnect.clicked | Should -BeTrue -Because "Disconnect on the banner ($($b.disconnect.why); read there: $(@($b.disconnect.lines) -join ' | '); d-banner-control\disconnect-console.png)"
             (Of $b.r 'Ended')[0].message | Should -Match 'The user at the device ended the session'
             # resumed with the token: asked again
             $b.again.found | Should -BeTrue

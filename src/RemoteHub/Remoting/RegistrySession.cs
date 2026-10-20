@@ -13,7 +13,10 @@ public sealed class RegistrySession : RemoteToolSession
     /// <summary>Key shown first (the last key used for this connection).</summary>
     public string? StartPath { get; set; }
 
-    public Task<RegListing> ListAsync(string path) => Run(rs => RemoteRegistry.List(rs, path));
+    /// <summary>Lists keys instead of the remote registry (tests).</summary>
+    internal Func<string, Task<RegListing>>? Lister { get; set; }
+
+    public Task<RegListing> ListAsync(string path) => Lister?.Invoke(path) ?? Run(rs => RemoteRegistry.List(rs, path));
     public Task SetValueAsync(string key, string name, RegKind kind, object data, bool createOnly) =>
         Run(rs => { RemoteRegistry.SetValue(rs, key, name, kind, data, createOnly); return true; });
     public Task DeleteValuesAsync(string key, IEnumerable<string> names) => Run(rs => { RemoteRegistry.DeleteValues(rs, key, names); return true; });

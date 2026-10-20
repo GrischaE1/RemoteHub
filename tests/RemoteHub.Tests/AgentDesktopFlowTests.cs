@@ -66,6 +66,9 @@ public partial class AgentDesktopFlowTests
         public IReadOnlyList<A.DesktopSessionInfo> List() => Current;
         public volatile bool Disconnected;
         public bool IsDisconnected(int session) => Disconnected;
+        /// <summary>Set to simulate Windows' lock screen in the session.</summary>
+        public volatile bool Locked;
+        public bool IsLocked(int session) => Locked;
         public int? ConsoleSessionId() => Console;
     }
 
@@ -1411,6 +1414,53 @@ public partial class AgentDesktopFlowTests
         d.Helpers.Uis[0].RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
         await Task.Delay(500);
         Assert.Empty(v.Transfers);
+    }
+
+    [Fact]
+    public async Task Nothing_goes_through_the_clipboard_while_the_lock_screen_is_up()
+    {
+        // UI-CP-08 (lab run 20261019-193627): text copied at the admin's PC while the device was locked reached its
+        // clipboard, and text copied in the locked session came back. The service closes the clipboard both ways.
+        await using var d = await StartDevice();
+        using var v = await Connect(d);
+        var offers = new ConcurrentQueue<DesktopTransfer>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferOffer) offers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); };
+        v.Start(ActiveUser.Id, DesktopConsent.None, features: [DesktopFeatures.TransferOnPaste]);
+        v.Next(DesktopStatusState.Connected);
+        var ui = d.Helpers.Uis[0];
+        var requests = new ConcurrentQueue<int>();
+        v.Client.Received += m => { if (DesktopWire.TypeOf(m) == DesktopMessage.TransferRequest) requests.Enqueue(int.Parse(DesktopWire.ReadText(m))); };
+        var before = ClipboardTransfer.Image(4, [1, 2, 3], png: true);
+        v.Client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, before.Transfer, DesktopJson.Default.DesktopTransfer));
+        WaitFor(() => ui.Offered is not null, "the offer made before the lock");
+
+        d.Sessions.Locked = true;
+        // A program in the locked session pasting the earlier offer gets nothing at once (not after the paste's long wait).
+        Assert.Null(await ui.Paste().WaitAsync(TimeSpan.FromSeconds(10)));
+        v.Client.Send(DesktopWire.Text(DesktopMessage.Clipboard, "while locked"));
+        ui.RaiseClipboard("copied in the locked session");
+        // An image offered from RemoteHub is refused with the reason, and isn't offered on the device.
+        var image = ClipboardTransfer.Image(5, [1, 2, 3], png: true);
+        v.Client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, image.Transfer, DesktopJson.Default.DesktopTransfer));
+        WaitFor(() => v.TransferEnds.Any(e => e is { Id: 5, Ok: false, ToDevice: true } && e.Reason == A.DesktopEndpoint.ClipboardClosedReason), "the refused offer");
+        // A paste in RemoteHub of an earlier copy from the device gets an answer at once, and no data.
+        v.Client.Send(DesktopWire.Text(DesktopMessage.TransferRequest, "77"));
+        WaitFor(() => v.TransferEnds.Any(e => e is { Id: 77, Ok: false, ToDevice: false }), "the refused paste");
+        ui.RaiseContent(new A.HelperClipboard([1, 2, 3], Png: true));
+        await Task.Delay(500); // whatever would have gone through is through by now
+        lock (ui.Clipboard) Assert.Empty(ui.Clipboard);
+        Assert.Empty(v.Clipboard);
+        Assert.Equal(1, Volatile.Read(ref ui.Offers)); // only the one from before the lock
+        Assert.Empty(offers);
+        Assert.Empty(requests);
+        Assert.Empty(v.Transfers);
+
+        // Unlocked: copies go both ways again.
+        d.Sessions.Locked = false;
+        v.Client.Send(DesktopWire.Text(DesktopMessage.Clipboard, "after unlock"));
+        WaitFor(() => { lock (ui.Clipboard) return ui.Clipboard.Contains("after unlock"); }, "text on the device after the unlock");
+        ui.RaiseClipboard("from the device again");
+        WaitFor(() => v.Clipboard.Contains("from the device again"), "text from the device after the unlock");
     }
 
     [Fact]
