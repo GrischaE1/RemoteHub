@@ -33,11 +33,22 @@ BeforeAll {
     function Get-ClientState {
         Invoke-LabGuest -Name $VmName -ScriptBlock {
             $exe = 'C:\Program Files\RemoteHub\RemoteHub.exe'
+            $lnk = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\RemoteHub.lnk'
+            # where the shortcut's icon comes from: its own icon file, or (none set) the program it starts
+            $link = $null; $iconFile = $null
+            if (Test-Path $lnk) {
+                $link = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+                $iconFile = ($link.IconLocation -replace ',-?\d+$', '').Trim()
+                if (-not $iconFile) { $iconFile = $link.TargetPath }
+            }
             $arp = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^(RemoteHub|RDP Manager)( |$)' -and $_.DisplayName -notmatch 'Agent' })
             [pscustomobject]@{
                 Exe        = Test-Path $exe
                 Version    = $(if (Test-Path $exe) { (Get-Item $exe).VersionInfo.ProductVersion })
-                Shortcut   = Test-Path 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\RemoteHub.lnk'
+                Shortcut   = Test-Path $lnk
+                LinkTarget = $(if ($link) { $link.TargetPath })
+                LinkIcon   = $iconFile
+                IconExists = [bool]($iconFile -and (Test-Path -LiteralPath $iconFile))
                 BundledSha = $(Get-ChildItem 'C:\Program Files\RemoteHub' -Recurse -Filter 'RemoteHub-Agent*.msi' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash })
                 ProgId     = Test-Path 'Registry::HKEY_CLASSES_ROOT\RemoteHub.rdp\shell\open\command'
                 OpenWith   = [bool](Get-ItemProperty 'Registry::HKEY_CLASSES_ROOT\.rdp\OpenWithProgids' -ErrorAction SilentlyContinue).PSObject.Properties['RemoteHub.rdp']
@@ -82,11 +93,14 @@ Describe 'C-MSI <VmName>' -Tag Client, 'C-MSI' -Skip:(-not $isClient) {
             Save 'install' @{ Install = $install; State = $state; Main = $main; Prompt = $prompt; Uninstall = $uninstall; After = $after; UserData = $userData; DotNet = $dotnet }
         }
 
-        It 'C-MSI-01 silent install: exit 0, RemoteHub.exe of the package''s version, Start menu shortcut, the bundled agent MSI identical' -Tag 'C-MSI-01' {
+        It 'C-MSI-01 silent install: exit 0, RemoteHub.exe of the package''s version, Start menu shortcut with the exe''s icon, the bundled agent MSI identical' -Tag 'C-MSI-01' {
             $install.Exit | Should -BeIn 0, 3010
             $state.Exe | Should -BeTrue
             $state.Version | Should -Match "^$([regex]::Escape($version))"
             $state.Shortcut | Should -BeTrue
+            $state.LinkTarget | Should -Be 'C:\Program Files\RemoteHub\RemoteHub.exe' -Because 'a plain shortcut to the exe, not an advertised one'
+            $state.LinkIcon | Should -Not -Match '\\Installer\\' -Because 'the product code''s folder goes with the next upgrade, and a pinned copy turns blank'
+            $state.IconExists | Should -BeTrue
             $state.BundledSha | Should -Be $agentSha
         }
 
@@ -169,11 +183,12 @@ Describe 'C-MSI <VmName>' -Tag Client, 'C-MSI' -Skip:(-not $isClient) {
             Save 'upgrade' $u
         }
 
-        It 'C-MSI-04 upgrade from the previous release: the data is kept, one entry in Apps' -Tag 'C-MSI-04' {
+        It 'C-MSI-04 upgrade from the previous release: the data is kept, one entry in Apps, the shortcut''s icon there' -Tag 'C-MSI-04' {
             $u.previous.Exit | Should -BeIn 0, 3010
             $u.prevWindow.found | Should -BeTrue -Because 'the previous version made the connection'
             $u.upgrade.Exit | Should -BeIn 0, 3010
             $u.state.Version | Should -Match "^$([regex]::Escape($version))"
+            $u.state.IconExists | Should -BeTrue -Because 'the upgrade removed the previous product code''s folder'
             @($u.state.Arp).Count | Should -Be 1
             $u.kept.found | Should -BeTrue
         }

@@ -32,6 +32,7 @@ public static class FirstStart
             "What's new – after an update, RemoteHub shows what changed, like this.",
             "Updates on the Beta channel also offer a GA release when it's newer than the last pre-release.",
             "The agent no longer loses a program's output on a busy PC, so a failed virtual display install says why.",
+            "RemoteHub pinned to the taskbar keeps its icon after an update. If it shows a blank page now, unpin it and pin it once more.",
         ]),
     ];
 

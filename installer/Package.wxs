@@ -30,23 +30,30 @@
     <Feature Id="Main" Title="RemoteHub">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="MainExe" />
+      <ComponentRef Id="StartMenu" />
     </Feature>
   </Package>
 
   <Fragment>
-    <!-- Everything from the self-contained publish folder except the main exe (declared below for the shortcut). -->
+    <!-- Everything from the self-contained publish folder except the main exe (declared below with the .rdp registration that points to it). -->
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Files Include="$(var.PublishDir)\**">
         <Exclude Files="$(var.PublishDir)\RemoteHub.exe" />
       </Files>
     </ComponentGroup>
 
+    <!-- Not advertised, without an Icon: Windows shows the exe's own icon. An advertised shortcut takes its icon from
+         C:\Windows\Installer\{ProductCode}, which every upgrade (a new product code) removes – a copy pinned to the
+         taskbar then shows a blank page. The exe's path stays the same across upgrades. A non-advertised shortcut needs
+         its own component with an HKCU KeyPath (ICE43/ICE57), as in WiX's own Start menu example. -->
+    <Component Id="StartMenu" Directory="ProgramMenuFolder">
+      <Shortcut Id="StartMenuShortcut" Name="RemoteHub" Target="[INSTALLFOLDER]RemoteHub.exe"
+                Description="Remote desktop, PowerShell and admin tools in one place" WorkingDirectory="INSTALLFOLDER" />
+      <RegistryValue Root="HKCU" Key="Software\RemoteHub\Installer" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
     <Component Id="MainExe" Directory="INSTALLFOLDER">
-      <File Id="RemoteHubExe" Source="$(var.PublishDir)\RemoteHub.exe" KeyPath="yes">
-        <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="RemoteHub"
-                  Description="Remote desktop, PowerShell and admin tools in one place" WorkingDirectory="INSTALLFOLDER"
-                  Icon="AppIcon.ico" Advertise="yes" />
-      </File>
+      <File Id="RemoteHubExe" Source="$(var.PublishDir)\RemoteHub.exe" KeyPath="yes" />
 
       <!-- .rdp ProgId (same component as the exe it points to) -->
       <RegistryKey Root="HKLM" Key="Software\Classes\RemoteHub.rdp">
