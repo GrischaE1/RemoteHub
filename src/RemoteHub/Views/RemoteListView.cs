@@ -86,7 +86,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         _filter.TextChanged += (_, _) =>
         {
             View!.Refresh();
-            if (_filter.Text.Trim().Length > 0 && View.Cast<TRow>().FirstOrDefault() is { } first) { List.SelectedItems.Clear(); List.SelectedItem = first; List.ScrollIntoView(first); }
+            // Setting SelectedItem selects just that row, in single and in multiple selection mode alike.
+            if (_filter.Text.Trim().Length > 0) { List.SelectedItem = View.Cast<TRow>().FirstOrDefault(); if (List.SelectedItem is { } first) List.ScrollIntoView(first); }
             UpdateStatus();
         };
         bar.Children.Add(_filter);
@@ -112,7 +113,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         List.PreviewMouseRightButtonDown += (_, e) =>
         {
             var r = RowAt(e.OriginalSource);
-            if (r is not null && !List.SelectedItems.Contains(r)) { List.SelectedItems.Clear(); List.SelectedItem = r; }
+            if (r is not null && !List.SelectedItems.Contains(r)) List.SelectedItem = r; // just this row; SelectedItems can't be cleared in single selection mode
         };
         List.ContextMenuOpening += (_, e) =>
         {

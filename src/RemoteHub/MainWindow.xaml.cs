@@ -585,9 +585,12 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>The file pane, registry or list view the keyboard focus is in, if any: Ctrl+F there goes to its filter.</summary>
-    private static IFilterableView? FocusedFilterable()
+    private static IFilterableView? FocusedFilterable() => FilterableAncestor(Keyboard.FocusedElement as DependencyObject);
+
+    /// <summary>The nearest view with its own filter that <paramref name="element"/> is in, if any.</summary>
+    internal static IFilterableView? FilterableAncestor(DependencyObject? element)
     {
-        for (var d = Keyboard.FocusedElement as DependencyObject; d is not null;
+        for (var d = element; d is not null;
              d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
             if (d is IFilterableView v) return v;
         return null;
