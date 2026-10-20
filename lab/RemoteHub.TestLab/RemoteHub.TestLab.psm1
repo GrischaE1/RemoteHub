@@ -3189,18 +3189,41 @@ function Install-LabClient {
 }
 
 # Starts RemoteHub in the account's session (the console account by default) and waits for its main window. Answers
-# the task to stop it with Stop-LabClient. -Arguments: .rdp paths in the guest.
+# the task to stop it with Stop-LabClient. -Arguments: .rdp paths in the guest. The welcome tour of a new profile (and
+# What's new after an upgrade) is closed, as a user would, unless -KeepFirstStart: every test file starts from the
+# checkpoint with a new profile, and the tour is modal.
 function Start-LabClient {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120)
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [switch]$KeepFirstStart)
     $argText = ($Arguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
     $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
     $main = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec $TimeoutSec
     # (error: the person server's search didn't finish - it names the windows that don't respond)
     if (-not $main.found) { throw "${Name}: RemoteHub's main window didn't appear$(if ($main.PSObject.Properties['error'] -and $main.error) { ' - ' + $main.error }) (windows: $($main.windows -join ', '))." }
+    if (-not $KeepFirstStart) { $null = Close-LabFirstStart -Name $Name -Account $Account }
     # it may open partly off the screen (seen at x < 0): moved into it, so real clicks reach every part
     $null = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 10
     $task
+}
+
+# Closes the welcome tour ("Skip") or What's new ("Close") if one opens within -TimeoutSec of the main window, and
+# answers which it was ('' when none did). Once per VM and account in a test file: after the first start the version is
+# remembered and neither comes again, so later starts don't wait.
+function Close-LabFirstStart {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int]$TimeoutSec = 20)
+    if (-not $script:LabFirstStartSeen) { $script:LabFirstStartSeen = @{} }
+    $key = "$Name|$Account"
+    if ($script:LabFirstStartSeen.ContainsKey($key)) { return '' }
+    $script:LabFirstStartSeen[$key] = $true
+    $until = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        foreach ($d in @(@{ Title = 'Welcome to RemoteHub'; Button = 'Skip' }, @{ Title = "What's new"; Button = 'Close' })) {
+            $r = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title $d.Title -Text $d.Button -Value click -TimeoutSec 2
+            if ($r.found -and -not ($r.PSObject.Properties['error'] -and $r.error)) { return $d.Title }
+        }
+    } while ((Get-Date) -lt $until)
+    ''
 }
 
 function Stop-LabClient {

@@ -84,7 +84,8 @@ BeforeAll {
     }
     function Wait-Main([string]$Account = 'Console', [string]$On = $VmName, [int]$TimeoutSec = 90) {
         $r = Ui 'SearchBox' -Value exists -Optional -TimeoutSec $TimeoutSec -Account $Account -On $On
-        if ($r.found) { $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
+        # the welcome tour of a new profile (or What's new after an upgrade) closed as a user would - it is modal
+        if ($r.found) { $null = Close-LabFirstStart -Name $On -Account $Account; $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
         [bool]$r.found
     }
     # RemoteHub ended by itself (Cancel at a start-up question, Exit while locked): true when no process is left

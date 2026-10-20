@@ -1,7 +1,8 @@
 # UI-AG / UI-TL / R-AGENT / W-TRUST - RemoteHub's own window on the admin's PC (this client VM, the console account's
 # session), driven by UI Automation (RhPerson.ps1 -Do uia), against the device (the Server VM): a connection made in
 # the dialog, PowerShell remoting set up with RemoteHub's script and its certificate trusted, the agent installed,
-# tested and updated from the menu, every tool tab, and the agent's refusals as RemoteHub shows them. The device side is
+# tested and updated from the menu, every tool tab with its filter, the agent uninstalled from the menu (and removed
+# here only when it can't be reached), and the agent's refusals as RemoteHub shows them. The device side is
 # checked over PowerShell Direct. Client VMs only (2VM). See docs/test-lab-cases.md section 10.5.
 # LabRole: console
 # LabNeeds: lane
@@ -278,15 +279,32 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $local = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Public\UpFolder' -File | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
             Step files {
             Tool 'File transfer'
-            # the address boxes have no names: this PC's (left) is the first, the device's the second
-            $null = Ui 'type:Edit#1' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
-            $null = Ui 'type:Edit#2' -Value 'keys:^aC:\{ENTER}'
+            # the address boxes by name: "Path This PC" and "Path <connection>  (<host>)" (each side has a filter box too)
+            $null = Ui 'Path This PC' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
+            $null = Ui 'Path Device*' -Value 'keys:^aC:\{ENTER}'
             Start-Sleep -Seconds 3
             $null = Ui 'UpFolder' -Value realclick
             $null = Ui 'Upload selected files'
             Start-Sleep -Seconds 15
             $r.uploaded = Invoke-LabGuest -Name $device.Name -ScriptBlock { @(Get-ChildItem 'C:\Users\*\Documents\UpFolder', 'C:\Users\*\UpFolder', 'C:\UpFolder' -File -ErrorAction SilentlyContinue | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
             Shot 'files'
+            # this PC's filter: "UpFol" leaves UpFolder and selects it, Enter opens it
+            $null = Ui 'Filter This PC' -Value 'set:UpFol'
+            $r.filterRows = @((Ui '*' -Value list).items | Where-Object { $_ -match '\|(f\d\.txt|UpFolder|Public|Documents)\|' })
+            $null = Ui 'Filter This PC' -Value 'keys:{ENTER}'
+            Start-Sleep -Seconds 2
+            $r.filterOpened = (Ui 'Path This PC' -Value read).value
+            $r.filterCleared = (Ui 'Filter This PC' -Value read).value
+            # Ctrl+F with the focus on the device's side goes to that side's filter, not to the navigation search;
+            # typed on the console keyboard (W, I, N), which writes into whatever has the focus
+            $null = Ui 'Path Device*' -Value 'keys:^f'
+            foreach ($k in '57', '49', '4E') { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value $k; Start-Sleep -Milliseconds 150 }
+            Start-Sleep -Milliseconds 500
+            $r.ctrlFDevice = (Ui 'Filter Device*' -Value read).value
+            $r.ctrlFThisPc = (Ui 'Filter This PC' -Value read).value
+            $r.ctrlFSearch = (Ui 'SearchBox' -Value read -Optional).value
+            $null = Ui 'Filter Device*' -Value 'keys:{ESC}'
+            Shot 'files-filter'
             }
             # registry
             # the key made on the device before the tab opens (the tab loads HKLM\SOFTWARE once and doesn't look again
@@ -294,8 +312,8 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { $null = New-Item HKLM:\SOFTWARE\RemoteHubLab -Force }
             Step registry {
             Tool 'Registry'
-            $null = Ui 'type:Edit' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
-            $null = Ui 'type:Edit' -Value 'keys:{ENTER}'
+            $null = Ui 'Registry key' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
+            $null = Ui 'Registry key' -Value 'keys:{ENTER}'
             Start-Sleep -Seconds 3
             # WPF drops the '_' of REG_SZ in menu headers (access key): the entry shows 'String value (REGSZ)...'
             $null = Ui 'New key or value' -Value 'pick:String value (REG*SZ)*'
@@ -307,12 +325,23 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'Create' -Title 'New REG*'
             Start-Sleep -Seconds 3
             $r.reg = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-ItemProperty HKLM:\SOFTWARE\RemoteHubLab -ErrorAction SilentlyContinue).FromUi }
+            # the value filter: "FromUi" selects the value, Enter opens it for editing (its dialog names the key)
+            $null = Ui 'Filter values' -Value 'set:FromUi'
+            $null = Ui 'Filter values' -Value 'keys:{ENTER}'
+            $r.regFilterEdit = (Ui 'Value data' -Title '*RemoteHubLab*' -Value read -Optional -TimeoutSec 15).value
+            $null = Ui 'Cancel' -Title '*RemoteHubLab*' -Optional
+            $null = Ui 'Filter values' -Value 'keys:{ESC}'
             }
             # services
             Step services {
             Tool 'Services'
-            # the filter box has no name; the tool buttons are named by their tooltips; Dialogs.Confirm asks first
-            $null = Ui 'type:Edit' -Value 'set:Spooler' -TimeoutSec 60
+            # the filter box is named "Filter"; the tool buttons are named by their tooltips; Dialogs.Confirm asks first
+            $null = Ui 'Filter' -Value 'set:Spooler' -TimeoutSec 60
+            # the first match is selected at once (the services list allows one selection: this used to throw), so the
+            # service's buttons are on before any row is clicked; RemoteHub is still running
+            Start-Sleep -Seconds 1
+            $r.serviceAutoSelected = (Ui 'Stop the service' -Value exists -Optional).enabled
+            $r.aliveAfterFilter = [bool](Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue })
             $null = Ui 'Print Spooler' -Value realclick
             $null = Ui 'Stop the service'
             $null = Ui 'Stop' -Title '?*' -Optional -TimeoutSec 10
@@ -327,13 +356,13 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             Step processes {
             $notepad = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Start-Process notepad.exe -PassThru).Id }
             Tool 'Processes'
-            $null = Ui 'type:Edit' -Value 'set:notepad' -TimeoutSec 60
+            $null = Ui 'Filter' -Value 'set:notepad' -TimeoutSec 60
             $null = Ui 'notepad*' -Value realclick
             $null = Ui 'End process (Del)'
             $null = Ui 'End process' -Title '?*'
             Start-Sleep -Seconds 3
             $r.notepadGone = -not (Invoke-LabGuest -Name $device.Name -ArgumentList $notepad -ScriptBlock { param($p) [bool](Get-Process -Id $p -ErrorAction SilentlyContinue) })
-            $null = Ui 'type:Edit' -Value 'set:lsass'
+            $null = Ui 'Filter' -Value 'set:lsass'
             # a critical process: End is switched off for it, and Del says why
             $null = Ui 'lsass*' -Value realclick
             $r.lsassEnd = (Ui 'End process (Del)' -Value exists).enabled
@@ -380,6 +409,73 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $r.agent | Should -Be 'Running'
             @($r.uploaded).Count | Should -Be 5
             $r.desktop.found | Should -BeTrue
+        }
+
+        It 'UI-TL-10 a file pane''s filter narrows the folder to the matches and selects the first, so Enter opens it' -Tag 'UI-TL-10' {
+            ($r.filterRows -join "`n") | Should -Match '\|UpFolder\|'
+            ($r.filterRows -join "`n") | Should -Not -Match '\|Documents\|'
+            $r.filterOpened | Should -Be 'C:\Users\Public\UpFolder'
+            $r.filterCleared | Should -BeNullOrEmpty -Because 'another folder starts unfiltered'
+        }
+
+        It 'UI-TL-11 Ctrl+F goes to the filter of the side that has the focus, not to the navigation search' -Tag 'UI-TL-11' {
+            $r.ctrlFDevice | Should -Be 'win'
+            $r.ctrlFThisPc | Should -BeNullOrEmpty
+            $r.ctrlFSearch | Should -Not -Be 'win'
+        }
+
+        It 'UI-TL-12 the registry''s value filter selects the matching value; Enter edits it' -Tag 'UI-TL-12' {
+            $r.regFilterEdit | Should -Be 'set in the registry tab'
+        }
+
+        It 'UI-TL-13 the services filter selects the first match without an error (the list allows one selection)' -Tag 'UI-TL-13' {
+            $r.aliveAfterFilter | Should -BeTrue
+            $r.serviceAutoSelected | Should -BeTrue
+        }
+    }
+
+    Context 'the agent uninstalled from RemoteHub' {
+        BeforeAll {
+            $x = [ordered]@{}
+            # installed from RemoteHub (its certificate pinned), so the uninstall goes through the agent's own PowerShell
+            $x.agent = AgentReady
+            $x.menuBefore = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            Esc
+            Menu 'RemoteHub Agent>Uninstall RemoteHub Agent*'
+            # the question names what goes; Uninstall starts it (the progress window has the same title)
+            $x.question = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -TimeoutSec 30).items) -join "`n")
+            $null = Ui 'Uninstall' -Title 'Uninstall RemoteHub Agent'
+            $x.done = (Ui 'Done' -Title 'Uninstall RemoteHub Agent' -Value exists -Optional -TimeoutSec 300).found
+            $x.progress = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -Optional -TimeoutSec 5).items) -join "`n")
+            Shot 'uninstalled'
+            $null = Ui 'Done' -Title 'Uninstall RemoteHub Agent' -Optional
+            $x.device = Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                [pscustomobject]@{
+                    Service  = [bool](Get-Service RemoteHubAgent -ErrorAction SilentlyContinue)
+                    Product  = [bool](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' })
+                    Firewall = [bool](Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'RemoteHub Agent*' })
+                    Provider = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}'
+                    Log      = Test-Path "$env:SystemRoot\Temp\RemoteHub-Agent-uninstall.log"
+                }
+            }
+            $x.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            Esc
+            Save 'uninstall' $x
+        }
+
+        It 'UI-AG-17 Uninstall RemoteHub Agent from the menu: the device has no agent, firewall rule or credential provider left; the connection offers Install again' -Tag 'UI-AG-17' {
+            $x.agent | Should -Be 'Running'
+            ($x.menuBefore -join ', ') | Should -Match 'Uninstall RemoteHub Agent'
+            $x.question | Should -Match 'credential provider, certificate and firewall rule'
+            $x.done | Should -BeTrue
+            $x.progress | Should -Match 'no longer runs the RemoteHub Agent'
+            $x.device.Service | Should -BeFalse
+            $x.device.Product | Should -BeFalse
+            $x.device.Firewall | Should -BeFalse
+            $x.device.Provider | Should -BeFalse
+            $x.device.Log | Should -BeTrue
+            ($x.menuAfter -join ', ') | Should -Match 'Install RemoteHub Agent'
+            ($x.menuAfter -join ', ') | Should -Not -Match 'Uninstall RemoteHub Agent|Update RemoteHub Agent'
         }
     }
 
@@ -437,6 +533,35 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $f.pinMessage | Should -Match 'certificate|fingerprint'
             @($f.pinFailedLogons) | Should -BeNullOrEmpty
             @($f.pinLog) | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'the agent removed here only when the device can''t be reached that way' {
+        BeforeAll {
+            $h = [ordered]@{}
+            # after the refusals the device runs an agent with a certificate RemoteHub didn't make: the uninstall through
+            # it fails, and RemoteHub offers to remove the agent from the connection here only
+            $h.deviceBefore = "$((Get-LabAgentState -Name $device.Name).Service.State)"
+            Menu 'RemoteHub Agent>Uninstall RemoteHub Agent*'
+            $null = Ui 'Uninstall' -Title 'Uninstall RemoteHub Agent' -TimeoutSec 30
+            $h.offer = (Ui 'Remove here' -Title 'Uninstall RemoteHub Agent' -Value exists -Optional -TimeoutSec 300).found
+            $h.offerText = (@((Ui '*' -Title 'Uninstall RemoteHub Agent' -Value list -Optional -TimeoutSec 5).items) -join "`n")
+            Shot 'remove-here'
+            $null = Ui 'Remove here' -Title 'Uninstall RemoteHub Agent' -Optional
+            $null = Ui 'Close' -Title 'Uninstall RemoteHub Agent' -Optional -TimeoutSec 5
+            $h.deviceAfter = "$((Get-LabAgentState -Name $device.Name).Service.State)"
+            $h.menuAfter = @((Ui 'Device' -Value 'menu:RemoteHub Agent>zz-no-such-entry' -Optional).entries)
+            Esc
+            Save 'remove-here' $h
+        }
+
+        It 'UI-AG-18 an uninstall that can''t reach the agent offers Remove here: the connection forgets the agent, the device keeps it' -Tag 'UI-AG-18' {
+            $h.deviceBefore | Should -Be 'Running'
+            $h.offer | Should -BeTrue
+            $h.offerText | Should -Match 'agent stays on the device'
+            $h.deviceAfter | Should -Be 'Running' -Because 'Remove here changes nothing on the device'
+            ($h.menuAfter -join ', ') | Should -Match 'Install RemoteHub Agent'
+            ($h.menuAfter -join ', ') | Should -Not -Match 'Uninstall RemoteHub Agent'
         }
     }
 }

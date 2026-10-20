@@ -12,6 +12,8 @@ public sealed partial class FavoritesGroup : ObservableObject
 {
     public ObservableCollection<FavoriteLink> Children { get; } = [];
     [ObservableProperty] private bool _isExpanded = true;
+    /// <summary>What a screen reader (and UI Automation) calls the group.</summary>
+    public override string ToString() => "Favourites";
     [ObservableProperty] private bool _isSelected;
 }
 
@@ -21,6 +23,8 @@ public sealed partial class FavoriteLink(Connection target) : ObservableObject
     public Connection Target { get; } = target;
     [ObservableProperty] private bool _isSelected;
     public bool IsExpanded { get; set; }
+    /// <summary>What a screen reader (and UI Automation) calls the link: the connection, marked as a favourite.</summary>
+    public override string ToString() => $"{Target.Name} (favourite)";
 }
 
 public static class Favorites

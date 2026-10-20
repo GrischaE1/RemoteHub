@@ -60,7 +60,8 @@ BeforeAll {
     function Start-Rh { $script:task = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' } }
     function Wait-Main([int]$TimeoutSec = 90) {
         $r = Ui 'SearchBox' -Value exists -Optional -TimeoutSec $TimeoutSec
-        if ($r.found) { $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 }
+        # the welcome tour of a new profile (or What's new after an upgrade) closed as a user would - it is modal
+        if ($r.found) { $null = Close-LabFirstStart -Name $VmName; $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 }
         [bool]$r.found
     }
     function Close-Rh {

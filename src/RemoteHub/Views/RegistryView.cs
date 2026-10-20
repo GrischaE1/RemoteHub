@@ -116,11 +116,13 @@ public sealed class RegistryView : Border, IRecordableView, IFilterableView
         bar.Children.Insert(0, up);
         // The filter narrows the values of the shown key and selects the first match, so Enter edits it.
         _filter.Margin = new Thickness(4, 0, 0, 0);
+        System.Windows.Automation.AutomationProperties.SetName(_filter, "Filter values");
         DockPanel.SetDock(_filter, Dock.Right);
         bar.Children.Add(_filter);
         // In a detached window (no main window around it) the view handles Ctrl+F itself.
         PreviewKeyDown += (_, e) => { if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control) { FocusFilter(); e.Handled = true; } };
         _address.Margin = new Thickness(4, 0, 0, 0);
+        System.Windows.Automation.AutomationProperties.SetName(_address, "Registry key");
         _address.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { _ = Navigate(_address.Text); e.Handled = true; }

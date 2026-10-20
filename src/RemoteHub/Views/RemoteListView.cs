@@ -79,6 +79,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         DockPanel.SetDock(_tools, Dock.Left);
         bar.Children.Add(_tools);
         _filter.Margin = new Thickness(0);
+        System.Windows.Automation.AutomationProperties.SetName(_filter, "Filter");
         _filter.MaxWidth = 420;
         _filter.HorizontalAlignment = HorizontalAlignment.Right;
         _filter.Width = 320;

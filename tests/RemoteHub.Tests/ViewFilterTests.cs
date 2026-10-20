@@ -259,4 +259,17 @@ public class ViewFilterTests
         Assert.Same(rows[1], list.SelectedItem);
         Assert.Single(list.SelectedItems);
     });
+
+    [Fact]
+    public void Filter_and_path_boxes_and_favourites_have_names_screen_readers_and_the_lab_use() => Sta.Run(w =>
+    {
+        var pane = new FilePane("This PC", "Desktop24", p => Task.FromResult(new Listing(p, [])), _ => Task.FromResult(""));
+        w.Content = pane;
+        Sta.Pump();
+        var names = Sta.All<TextBox>(pane).Select(System.Windows.Automation.AutomationProperties.GetName).ToList();
+        Assert.Contains("Filter This PC", names);
+        Assert.Contains("Path This PC", names);
+        Assert.Equal("Favourites", new FavoritesGroup().ToString());
+        Assert.Equal("DC01 (favourite)", new FavoriteLink(new Connection { Name = "DC01" }).ToString());
+    });
 }

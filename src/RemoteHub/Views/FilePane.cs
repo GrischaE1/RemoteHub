@@ -65,6 +65,7 @@ public sealed class FilePane : DockPanel, IFilterableView
         head.Children.Add(newFolder);
         head.Children.Add(refresh);
         _address.Margin = new Thickness(4, 0, 4, 0);
+        System.Windows.Automation.AutomationProperties.SetName(_address, $"Path {title}");
         _address.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { _ = Navigate(_address.Text); e.Handled = true; }
@@ -76,6 +77,7 @@ public sealed class FilePane : DockPanel, IFilterableView
 
         // ---- filter: narrows the shown folder and selects the first match, so Enter opens it
         _filter.Margin = new Thickness(0, 0, 0, 6);
+        System.Windows.Automation.AutomationProperties.SetName(_filter, $"Filter {title}");
         DockPanel.SetDock(_filter, Dock.Top);
         Children.Add(_filter);
         // In a detached window (no main window around it) the pane handles Ctrl+F itself.
