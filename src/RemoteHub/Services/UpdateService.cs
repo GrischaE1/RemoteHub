@@ -80,7 +80,32 @@ public static class UpdateService
 
     // ------------------------------------------------------------------ check
 
+    /// <summary>
+    /// The update for <paramref name="channel"/>. Beta also asks for the newest GA release, because a GA release can be
+    /// newer than the last pre-release (0.21.0 after 0.21.0-beta.2), and Beta must not stay behind it.
+    /// </summary>
     public static async Task<UpdateCheckResult> CheckAsync(string channel, CancellationToken ct = default)
+    {
+        if (channel != Beta) return await CheckChannelAsync(Stable, ct).ConfigureAwait(false);
+        var beta = CheckChannelAsync(Beta, ct);
+        var ga = CheckChannelAsync(Stable, ct);
+        return Newer(await beta.ConfigureAwait(false), await ga.ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Beta's answer, unless GA offers a higher version. GA only adds: when it can't be reached, Beta's answer stands,
+    /// and a Beta failure isn't hidden behind a GA "up to date".
+    /// </summary>
+    internal static UpdateCheckResult Newer(UpdateCheckResult beta, UpdateCheckResult ga)
+    {
+        // An Available result always carries a parsed version (Evaluate only gives Available for one).
+        if (ga.Status == UpdateStatus.Available && (beta.Status != UpdateStatus.Available || ga.Info!.ParsedVersion! > beta.Info!.ParsedVersion!))
+            return ga;
+        if (beta.Status == UpdateStatus.NoRelease && ga.Status == UpdateStatus.UpToDate) return ga;
+        return beta;
+    }
+
+    private static async Task<UpdateCheckResult> CheckChannelAsync(string channel, CancellationToken ct)
     {
         try
         {

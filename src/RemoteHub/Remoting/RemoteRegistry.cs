@@ -22,7 +22,30 @@ public sealed record RegValue(string Name, RegKind Kind, string Data, bool IsSet
         RegKind.DWord or RegKind.QWord => "NumberSymbol24",
         _ => "Code24",
     };
+
+    /// <summary>The order the value list shows: the default value first (as Regedit does), then by the column, then by name.</summary>
+    public static int Compare(RegValue a, RegValue b, RegSortColumn by, bool descending)
+    {
+        if (a.IsDefault != b.IsDefault) return a.IsDefault ? -1 : 1;
+        var c = by switch
+        {
+            RegSortColumn.Type => StringComparer.CurrentCultureIgnoreCase.Compare(a.TypeName, b.TypeName),
+            RegSortColumn.Data => StringComparer.CurrentCultureIgnoreCase.Compare(a.DisplayData, b.DisplayData),
+            _ => 0,
+        };
+        if (c == 0) c = StringComparer.CurrentCultureIgnoreCase.Compare(a.Name, b.Name);
+        return descending ? -c : c;
+    }
+
+    /// <summary>The value list's filter: the name or the data contains the text, ignoring case.</summary>
+    public static bool Matches(RegValue v, string filter)
+    {
+        var f = filter.Trim();
+        return v.DisplayName.Contains(f, StringComparison.OrdinalIgnoreCase) || v.DisplayData.Contains(f, StringComparison.OrdinalIgnoreCase);
+    }
 }
+
+public enum RegSortColumn { Name, Type, Data }
 
 public sealed record RegSubKey(string Name, bool HasChildren);
 

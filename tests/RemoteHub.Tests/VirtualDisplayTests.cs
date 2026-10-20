@@ -495,3 +495,34 @@ public class VirtualDisplayTests
         }
     }
 }
+
+/// <summary>Running a program while the thread pool is busy – alone, because the test keeps the pool's threads waiting.</summary>
+[Collection("Busy thread pool")]
+public class VirtualDisplayBusyPoolTests
+{
+    [Fact]
+    public void A_program_s_output_is_kept_while_the_thread_pool_is_busy()
+    {
+        ThreadPool.GetMinThreads(out var workers, out _);
+        using var release = new ManualResetEventSlim();
+        using var started = new CountdownEvent(workers);
+        // More waiting work than the pool has threads, so a read queued on the pool wouldn't run for several seconds.
+        for (var i = 0; i < workers + 64; i++)
+            ThreadPool.QueueUserWorkItem(_ => { if (!started.IsSet) try { started.Signal(); } catch (InvalidOperationException) { } release.Wait(); });
+        try
+        {
+            Assert.True(started.Wait(TimeSpan.FromSeconds(10)), "the pool's threads didn't start");
+            var exit = A.VirtualDisplay.Run(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c echo said & exit 3"),
+                TimeSpan.FromSeconds(20), out var output);
+            Assert.Equal(3, exit);
+            Assert.Contains("said", output);
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+}
+
+[CollectionDefinition("Busy thread pool", DisableParallelization = true)]
+public sealed class BusyThreadPoolCollection;

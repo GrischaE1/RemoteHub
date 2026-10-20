@@ -173,7 +173,8 @@ Above Settings, the rail shows the running version:
 - **Expanded:** "RemoteHub 0.19.2", and under it the channel when it isn't Stable ("Beta channel").
 - **Update available:** when the start-up update check finds a newer version (the same result that shows
   `UpdateBanner`), a small accent dot appears on the version, and the expanded line says "Update available: 0.19.3".
-- **Click:** opens `AboutWindow` (as `About_Click`), or `UpdateWindow` when an update is available. The tooltip and
+- **Click:** opens `AboutWindow` (as `About_Click`), also when an update is available – the update is offered by
+  `UpdateBanner` and in *Settings → Updates & privacy*. The tooltip and
   `AutomationProperties.Name` read "RemoteHub 0.19.2 – about this version".
 - Pre-release builds show their suffix in the expanded line only ("0.19.2-beta.1"). The collapsed line stays short.
 
@@ -439,6 +440,11 @@ The editor's `FlowDocument` is converted to Markdown on every save and back when
   page when nothing is selected – on the clipboard as Markdown text. *Paste Markdown* (Ctrl+Alt+V) reads Markdown text
   from the clipboard and inserts it formatted (headings, lists, tables, script blocks …). Ctrl+Alt uses the left Alt
   key only: AltGr types characters on many keyboards.
+- **View Markdown** (the *Markdown* toggle at the end of the format bar, Ctrl+Shift+M): the page shows as its Markdown
+  text, with colouring, and can be edited there; the format buttons are off meanwhile. Turning it off shows the edited
+  Markdown formatted again. The choice is kept (`UiState.NotesMarkdownView`) and applies to every page.
+- **Inside a script block** paste, copy and the shortcuts are the script block's own: Ctrl+V pastes plain text into the
+  script, and Markdown typed there (`# `, `- `) stays text.
 
 #### 4.5.8 Size limit
 

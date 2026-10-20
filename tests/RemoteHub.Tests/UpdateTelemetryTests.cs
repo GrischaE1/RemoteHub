@@ -70,6 +70,62 @@ public class UpdateTelemetryTests
         Assert.Equal(UpdateService.Stable, WithVersion("0.9.0", () => UpdateService.EffectiveChannel(new UiState { UpdateChannel = "stable" })));
     }
 
+    /// <summary>Answers /latest (GA) and /latest?channel=beta; null means 404, "fail" a 500.</summary>
+    private sealed class ServerHandler(string? ga, string? beta) : HttpMessageHandler
+    {
+        public readonly List<string> Requested = [];
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var url = request.RequestUri!.ToString();
+            lock (Requested) Requested.Add(url);
+            var version = url.Contains("channel=beta") ? beta : ga;
+            var response = version switch
+            {
+                null => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new StringContent("") },
+                "fail" => new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("") },
+                _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($$"""{"version":"{{version}}"}""") },
+            };
+            return Task.FromResult(response);
+        }
+    }
+
+    private static (UpdateCheckResult Result, List<string> Requested) Check(string channel, string current, string? ga, string? beta)
+    {
+        var oldHttp = UpdateService.Http;
+        var handler = new ServerHandler(ga, beta);
+        UpdateService.Http = new HttpClient(handler);
+        try { return (WithVersion(current, () => UpdateService.CheckAsync(channel).GetAwaiter().GetResult()), handler.Requested); }
+        finally { UpdateService.Http = oldHttp; }
+    }
+
+    [Fact]
+    public void Beta_also_offers_a_GA_release_that_is_newer_than_the_last_pre_release()
+    {
+        // GA 0.21.0 is newer than beta 0.21.0-beta.2: Beta offers the GA release.
+        var (result, requested) = Check(UpdateService.Beta, "0.21.0-beta.1", ga: "0.21.0", beta: "0.21.0-beta.2");
+        Assert.Equal(UpdateStatus.Available, result.Status);
+        Assert.Equal("0.21.0", result.Info!.Version);
+        Assert.Equal(["https://update.remotehub.dev/latest", "https://update.remotehub.dev/latest?channel=beta"], requested.Order());
+
+        // A newer pre-release wins over an older GA release.
+        Assert.Equal("0.22.0-beta.1", Check(UpdateService.Beta, "0.21.0", ga: "0.21.0", beta: "0.22.0-beta.1").Result.Info!.Version);
+        // No pre-release published at all: GA still counts.
+        Assert.Equal("0.21.0", Check(UpdateService.Beta, "0.20.2", ga: "0.21.0", beta: null).Result.Info!.Version);
+        Assert.Equal(UpdateStatus.UpToDate, Check(UpdateService.Beta, "0.21.0", ga: "0.21.0", beta: null).Result.Status);
+        // GA unreachable: Beta's answer stands; a Beta failure isn't hidden behind GA's "up to date".
+        Assert.Equal("0.22.0-beta.1", Check(UpdateService.Beta, "0.21.0", ga: "fail", beta: "0.22.0-beta.1").Result.Info!.Version);
+        Assert.Equal(UpdateStatus.Failed, Check(UpdateService.Beta, "0.21.0", ga: "0.21.0", beta: "fail").Result.Status);
+        Assert.Equal("0.21.1", Check(UpdateService.Beta, "0.21.0", ga: "0.21.1", beta: "fail").Result.Info!.Version);
+    }
+
+    [Fact]
+    public void GA_never_asks_for_pre_releases()
+    {
+        var (result, requested) = Check(UpdateService.Stable, "0.21.0", ga: "0.21.0", beta: "0.22.0-beta.1");
+        Assert.Equal(UpdateStatus.UpToDate, result.Status);
+        Assert.Equal(["https://update.remotehub.dev/latest"], requested);
+    }
+
     [Theory]
     [InlineData("https://api.github.com/repositories/1409080301/releases/assets/2", true)]
     [InlineData("https://api.github.com/repos/GrischaE1/RemoteHub/releases/assets/2", true)]

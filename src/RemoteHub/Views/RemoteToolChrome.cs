@@ -15,6 +15,12 @@ public interface IRecordableView
     FrameworkElement RecordingArea { get; }
 }
 
+/// <summary>A view with its own filter box: Ctrl+F with the focus inside it goes there instead of to the navigation search.</summary>
+public interface IFilterableView
+{
+    void FocusFilter();
+}
+
 /// <summary>Header and "not connected" overlay shared by the remote tool tabs (file transfer, registry).</summary>
 internal static class RemoteToolChrome
 {

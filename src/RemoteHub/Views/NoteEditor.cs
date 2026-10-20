@@ -36,6 +36,16 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     private readonly List<NoteImageView> _images = [];
     private Dictionary<string, Data.NoteImage> _imageData = [];
     private bool _loading;
+    // "View Markdown": the page's Markdown as text, editable; the format buttons are off while it shows.
+    private readonly ICSharpCode.AvalonEdit.TextEditor _source = new() { Visibility = Visibility.Collapsed };
+    private readonly System.Windows.Controls.Primitives.ToggleButton _markdownToggle = new() { Margin = new Thickness(0, 0, 2, 0), Padding = new Thickness(8, 4, 8, 4) };
+    private readonly List<UIElement> _formatButtons = [];
+    private bool _sourceMode;
+
+    /// <summary>The page is shown as Markdown text (View Markdown) rather than formatted.</summary>
+    public bool IsMarkdownView => _sourceMode;
+    /// <summary>View Markdown was turned on or off (argument: on).</summary>
+    public event Action<bool>? MarkdownViewChanged;
 
     /// <summary>Stores a prepared image for the open page and returns its id (null: refused, the reason was shown).</summary>
     public Func<PreparedImage, string?>? StoreImage { get; set; }
@@ -51,11 +61,15 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         LastChildFill = true;
         DockPanel.SetDock(_bar, Dock.Top);
         Children.Add(_bar);
-        Children.Add(_box);
+        var body = new Grid();
+        body.Children.Add(_box);
+        body.Children.Add(_source);
+        Children.Add(body);
         _box.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
         _box.SetResourceReference(TextBoxBase.CaretBrushProperty, "TextFillColorPrimaryBrush");
         AutomationProperties.SetName(_box, "Page");
         BuildBar();
+        BuildSource();
 
         _box.TextChanged += (_, _) => { if (!_loading) Changed?.Invoke(); };
         _box.PreviewKeyDown += Box_PreviewKeyDown;
@@ -131,6 +145,9 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
             StyleDocument(_box.Document);
             _box.IsUndoEnabled = true;
             UpdateImageWidths();
+            // In View Markdown the next page shows as Markdown too; its undo history starts empty as well.
+            _source.Text = markdown;
+            _source.Document.UndoStack.ClearAll();
         }
         finally { _loading = false; }
     }
@@ -145,26 +162,116 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         _box.Document = new FlowDocument(new Paragraph());
         StyleDocument(_box.Document);
         _box.IsUndoEnabled = true;
+        _source.Text = "";
+        _source.Document.UndoStack.ClearAll();
         _loading = false;
     }
 
-    public string Markdown() => NoteMarkdown.ToMarkdown(_box.Document);
+    /// <summary>The page's Markdown: the text itself in View Markdown, else written from the formatted page.</summary>
+    public string Markdown() => _sourceMode ? SourceText() : NoteMarkdown.ToMarkdown(_box.Document);
+
+    private string SourceText() => _source.Text.Replace("\r\n", "\n");
 
     public bool IsReadOnly
     {
         get => _box.IsReadOnly;
-        set { _box.IsReadOnly = value; _bar.IsEnabled = !value; }
+        set { _box.IsReadOnly = value; _source.IsReadOnly = value; _bar.IsEnabled = !value; }
     }
 
     /// <summary>Undoes the last change (used when a change made the page too large).</summary>
-    public void UndoLast() { if (_box.CanUndo) _box.Undo(); }
+    public void UndoLast()
+    {
+        if (_sourceMode) { if (_source.CanUndo) _source.Undo(); }
+        else if (_box.CanUndo) _box.Undo();
+    }
 
-    public new void Focus() => _box.Focus();
+    public new void Focus() { if (_sourceMode) _source.Focus(); else _box.Focus(); }
 
     public void FocusStart()
     {
+        if (_sourceMode) { _source.Focus(); _source.CaretOffset = 0; return; }
         _box.Focus();
         _box.CaretPosition = _box.Document.ContentStart.GetInsertionPosition(LogicalDirection.Forward);
+    }
+
+    // ================================================================== View Markdown
+
+    private void BuildSource()
+    {
+        _source.FontFamily = NoteMarkdown.MonoFont;
+        _source.FontSize = 13;
+        _source.WordWrap = true;
+        _source.ShowLineNumbers = false;
+        _source.Background = Brushes.Transparent;
+        _source.Padding = new Thickness(0, 4, 8, 24);
+        _source.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        _source.Options.EnableHyperlinks = false;   // a link in the text is text here; Ctrl+click opens nothing
+        _source.Options.EnableEmailHyperlinks = false;
+        _source.Options.HighlightCurrentLine = false;
+        _source.SyntaxHighlighting = ScriptHighlighting.For("markdown");
+        _source.SetResourceReference(Control.ForegroundProperty, "TextFillColorPrimaryBrush");
+        AutomationProperties.SetName(_source, "Markdown");
+        _source.TextChanged += (_, _) => { if (!_loading && _sourceMode) Changed?.Invoke(); };
+        ScriptHighlighting.Changed += () => Dispatcher.BeginInvoke(() => { _source.SyntaxHighlighting = ScriptHighlighting.For("markdown"); _source.TextArea.TextView.Redraw(); });
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal };
+        row.Children.Add(new SymbolIcon(SymbolRegular.Code24) { FontSize = 16, Margin = new Thickness(0, 0, 6, 0) });
+        row.Children.Add(new System.Windows.Controls.TextBlock { Text = "Markdown", VerticalAlignment = VerticalAlignment.Center });
+        _markdownToggle.Content = row;
+        _markdownToggle.ToolTip = "View Markdown (Ctrl+Shift+M)";
+        AutomationProperties.SetName(_markdownToggle, "View Markdown");
+        AutomationProperties.SetAcceleratorKey(_markdownToggle, "Ctrl+Shift+M");
+        // Checked/Unchecked, not Click: a screen reader or UI Automation toggles without clicking.
+        _markdownToggle.Checked += (_, _) => SetMarkdownView(true);
+        _markdownToggle.Unchecked += (_, _) => SetMarkdownView(false);
+        var spacer = new Border { Width = 1, Margin = new Thickness(4, 6, 4, 6) };
+        spacer.SetResourceReference(Border.BackgroundProperty, "ChromeStrokeBrush");
+        _bar.Children.Add(spacer);
+        _bar.Children.Add(_markdownToggle);
+        // From the page, a script block or the Markdown text alike.
+        PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.M && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { SetMarkdownView(!_sourceMode); e.Handled = true; }
+        };
+    }
+
+    /// <summary>
+    /// Shows the page as Markdown text (on) or formatted (off). The text is the same page: edits in either view are
+    /// kept, and leaving View Markdown shows the edited Markdown formatted.
+    /// </summary>
+    public void SetMarkdownView(bool on)
+    {
+        if (on == _sourceMode) { _markdownToggle.IsChecked = on; return; }
+        _loading = true;
+        try
+        {
+            if (on)
+            {
+                _source.Text = NoteMarkdown.ToMarkdown(_box.Document);
+                _source.Document.UndoStack.ClearAll();
+            }
+            else
+            {
+                var md = SourceText();
+                if (md != NoteMarkdown.ToMarkdown(_box.Document))
+                {
+                    _images.Clear();
+                    _box.IsUndoEnabled = false;
+                    _box.Document = NoteMarkdown.ToFlowDocument(md, this);
+                    StyleDocument(_box.Document);
+                    _box.IsUndoEnabled = true;
+                    UpdateImageWidths();
+                }
+            }
+        }
+        finally { _loading = false; }
+        _sourceMode = on;
+        _markdownToggle.IsChecked = on;
+        _box.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        _source.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+        foreach (var b in _formatButtons) b.IsEnabled = !on;
+        Dispatcher.BeginInvoke(() => Focus(), System.Windows.Threading.DispatcherPriority.Input);
+        MarkdownViewChanged?.Invoke(on);
     }
 
     private static void StyleDocument(FlowDocument d)
@@ -181,6 +288,12 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     {
         var word = (words ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         if (word is null) return;
+        if (_sourceMode)
+        {
+            var i = _source.Text.IndexOf(word, StringComparison.CurrentCultureIgnoreCase);
+            if (i >= 0) { _source.Select(i, word.Length); _source.ScrollTo(_source.Document.GetLineByOffset(i).LineNumber, 0); }
+            return;
+        }
         for (var p = _box.Document.ContentStart; p is not null && p.CompareTo(_box.Document.ContentEnd) < 0; p = p.GetNextContextPosition(LogicalDirection.Forward))
         {
             if (p.GetPointerContext(LogicalDirection.Forward) == TextPointerContext.EmbeddedElement && p.GetAdjacentElement(LogicalDirection.Forward) is ScriptBlock sb && sb.Highlight(word)) { sb.BringIntoView(); return; }
@@ -273,6 +386,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
             m.IsOpen = true;
         };
         _bar.Children.Add(text);
+        _formatButtons.Add(text);
         Add(SymbolRegular.TextBold24, "Bold (Ctrl+B)", () => EditingCommands.ToggleBold.Execute(null, _box));
         Add(SymbolRegular.TextItalic24, "Italic (Ctrl+I)", () => EditingCommands.ToggleItalic.Execute(null, _box));
         Add(SymbolRegular.TextStrikethrough24, "Strikethrough (Ctrl+Shift+X)", ToggleStrike);
@@ -293,6 +407,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         {
             var b = BarButton(icon, tip);
             b.Click += (_, _) => { a(); _box.Focus(); };
+            _formatButtons.Add(b);
             _bar.Children.Add(b);
         }
         void Separator()
@@ -324,6 +439,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
 
     private void Box_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (FromEmbedded(e.OriginalSource)) return; // typing in a script block is the script block's
         var mods = Keyboard.Modifiers;
         var ctrl = mods.HasFlag(ModifierKeys.Control);
         var shift = mods.HasFlag(ModifierKeys.Shift);
@@ -368,6 +484,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     /// <summary>Markdown typed at the start of a line becomes its format (§4.5.2): "# ", "- ", "1. ", "[] ", "> ".</summary>
     private void Box_PreviewTextInput(object sender, TextCompositionEventArgs e)
     {
+        if (FromEmbedded(e.OriginalSource)) return;
         if (e.Text != " " || _box.Selection.IsEmpty is false) return;
         var caret = _box.CaretPosition;
         if (caret.Paragraph is not { } p || CurrentCell() is not null) return;
@@ -804,12 +921,28 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
 
     private void Box_PreviewDrop(object sender, DragEventArgs e)
     {
+        if (FromEmbedded(e.OriginalSource)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
         e.Handled = true;
         if (_box.GetPositionFromPoint(e.GetPosition(_box), snapToText: true) is { } at) _box.CaretPosition = at;
         InsertImageFiles(files);
     }
 
+
+    /// <summary>
+    /// True when an input or clipboard event comes from inside a control embedded in the page (a script block, an
+    /// image) rather than from the page's own text: those events bubble up through the RichTextBox, and the page's
+    /// handlers must leave them to the control (paste, copy, shortcuts, Markdown typed at a line start).
+    /// </summary>
+    public bool FromEmbedded(object? source)
+    {
+        for (var x = source as DependencyObject; x is not null && !ReferenceEquals(x, _box); x = Parent(x))
+            if (x is Views.ScriptBlock or NoteImageView) return true;
+        return false;
+
+        static DependencyObject? Parent(DependencyObject d) =>
+            d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) ?? LogicalTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d);
+    }
     // ================================================================== clipboard
 
     private static string ClipboardText()
@@ -823,6 +956,13 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     /// (code-looking text becomes a script block). The clipboard's XAML and RTF are never loaded.
     /// </summary>
     private void OnPaste(object sender, DataObjectPastingEventArgs e)
+    {
+        // A paste into a script block bubbles up to here: it is the script block's, as plain text.
+        if (FromEmbedded(e.OriginalSource)) return;
+        PasteIntoPage(e);
+    }
+
+    private void PasteIntoPage(DataObjectPastingEventArgs e)
     {
         e.CancelCommand();
         var data = e.DataObject;
@@ -898,7 +1038,9 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     public void PasteMarkdown()
     {
         var text = ClipboardText();
-        if (text.Length > 0) InsertMarkdown(text);
+        if (text.Length == 0) return;
+        if (_sourceMode) _source.TextArea.Selection.ReplaceSelectionWithText(text); // already Markdown: as it is
+        else InsertMarkdown(text);
     }
 
     /// <summary>Inserts Markdown at the caret: one plain paragraph goes into the line, anything else as blocks.</summary>
@@ -952,6 +1094,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     /// <summary>Copy: adds our Markdown and HTML (for Word, Outlook, Teams) next to the editor's own formats.</summary>
     private void OnCopy(object sender, DataObjectCopyingEventArgs e)
     {
+        if (FromEmbedded(e.OriginalSource)) return;
         if (e.IsDragDrop) return;
         var md = SelectionMarkdown();
         if (md.Length == 0) return;
@@ -969,7 +1112,8 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     /// <summary>"Copy as Markdown": the selection (or the whole page) as plain Markdown text.</summary>
     public void CopyAsMarkdown()
     {
-        var md = _box.Selection.IsEmpty ? Markdown() : SelectionMarkdown();
+        var md = _sourceMode ? (_source.SelectionLength > 0 ? _source.SelectedText.Replace("\r\n", "\n") : SourceText())
+            : _box.Selection.IsEmpty ? Markdown() : SelectionMarkdown();
         SetClipboardText(md);
     }
 

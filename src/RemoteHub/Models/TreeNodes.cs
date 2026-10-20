@@ -347,6 +347,8 @@ public sealed class UiState
     public string? LastNoteSectionId { get; set; }
     public string? LastNotePageId { get; set; }
     public bool NotesSharedHintDismissed { get; set; }
+    /// <summary>Pages show as Markdown text (View Markdown) instead of formatted.</summary>
+    public bool NotesMarkdownView { get; set; }
     /// <summary>Width of the file transfers pane on the right.</summary>
     public double TransfersWidth { get; set; } = 360;
     public bool Maximized { get; set; }
@@ -365,6 +367,12 @@ public sealed class UiState
     public bool UpdateCheckEnabled { get; set; } = true;
     /// <summary>"stable" or "beta"; null = the default for the running version (see <see cref="Services.UpdateService.DefaultChannel"/>).</summary>
     public string? UpdateChannel { get; set; }
+    /// <summary>The last version that started here: the welcome tour and What's new are shown once (see <see cref="Services.FirstStart"/>).</summary>
+    public string? LastSeenVersion { get; set; }
+    /// <summary>Connections pinned to the Favourites group, in pin order (links: the connections stay in their folders).</summary>
+    public List<Guid> FavoriteConnections { get; set; } = [];
+    /// <summary>The Favourites group is collapsed.</summary>
+    public bool FavoritesCollapsed { get; set; }
     /// <summary>Folder for session recordings; null = Videos\RemoteHub (see <see cref="Services.Recordings.Folder"/>).</summary>
     public string? RecordingFolder { get; set; }
     /// <summary>Frames per second of recordings (5, 10, 15, 30, 60).</summary>

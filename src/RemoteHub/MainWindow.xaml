@@ -138,7 +138,7 @@
                 </DockPanel>
 
                 <Grid Grid.Row="2">
-                    <TreeView x:Name="Tree" ItemsSource="{Binding Items}" AllowDrop="True"
+                    <TreeView x:Name="Tree" AllowDrop="True"
                               Background="Transparent" BorderThickness="0"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                               VirtualizingPanel.ScrollUnit="Pixel" ScrollViewer.CanContentScroll="True"
@@ -358,6 +358,21 @@
                                     </StackPanel>
                                 </Grid>
                             </DataTemplate>
+                            <!-- Favourites: links to pinned connections; the connections stay in their folders -->
+                            <HierarchicalDataTemplate DataType="{x:Type m:FavoritesGroup}" ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Margin="0,4">
+                                    <ui:SymbolIcon Symbol="Star24" Filled="True" FontSize="16" Margin="0,0,8,0" Foreground="{DynamicResource SystemAccentColorPrimaryBrush}" />
+                                    <TextBlock Text="Favourites" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </HierarchicalDataTemplate>
+                            <DataTemplate DataType="{x:Type m:FavoriteLink}">
+                                <!-- The connection as it shows in its folder, with a link arrow in front -->
+                                <DockPanel>
+                                    <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowUpRight16" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                    <ContentPresenter Content="{Binding Target}" />
+                                </DockPanel>
+                            </DataTemplate>
                             <!-- A connection: its shares, then the connections and folders reached through it (a jump host) -->
                             <HierarchicalDataTemplate DataType="{x:Type m:Connection}">
                                 <HierarchicalDataTemplate.ItemsSource>
@@ -503,8 +518,12 @@
                                     <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
                                     <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
                                               ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
+                                    <MenuItem x:Name="CmAgentUninstall" Header="Uninstall RemoteHub Agent…" Click="CmAgentUninstall_Click" Icon="{ui:SymbolIcon Delete24}"
+                                              ToolTip="Removes the agent from the device; the connection goes back to RDP and PowerShell remoting" />
                                 </MenuItem>
                                 <MenuItem x:Name="CmNotes" Header="Notes" Click="CmNotes_Click" Icon="{ui:SymbolIcon Notebook24}" />
+                                <MenuItem x:Name="CmFavorite" Header="Add to favourites" Click="CmFavorite_Click" Icon="{ui:SymbolIcon Star24}"
+                                          ToolTip="Pins a link to the top of the navigation; the connection stays in its folder" />
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />

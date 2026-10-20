@@ -18,7 +18,30 @@ public sealed record FileEntry(string Name, string FullPath, EntryKind Kind, lon
     /// <summary>Folders first, then by name.</summary>
     public static List<FileEntry> Sort(IEnumerable<FileEntry> e) =>
         e.OrderBy(x => x.Kind == EntryKind.File ? 1 : 0).ThenBy(x => x.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+
+    /// <summary>
+    /// The order a file pane shows: folders and drives above files, whichever column sorts and in either direction;
+    /// within each group by <paramref name="by"/>, then by name.
+    /// </summary>
+    public static int Compare(FileEntry a, FileEntry b, FileSortColumn by, bool descending)
+    {
+        var group = (a.Kind == EntryKind.File ? 1 : 0).CompareTo(b.Kind == EntryKind.File ? 1 : 0);
+        if (group != 0) return group;
+        var c = by switch
+        {
+            FileSortColumn.Size => a.Size.CompareTo(b.Size),
+            FileSortColumn.Modified => Nullable.Compare(a.Modified, b.Modified),
+            _ => 0,
+        };
+        if (c == 0) c = StringComparer.CurrentCultureIgnoreCase.Compare(a.Name, b.Name);
+        return descending ? -c : c;
+    }
+
+    /// <summary>The pane's filter: the name contains the text, ignoring case.</summary>
+    public static bool Matches(FileEntry e, string filter) => e.Name.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
 }
+
+public enum FileSortColumn { Name, Size, Modified }
 
 /// <summary>Folder listing result: the resolved path ("" = drive list) and its entries.</summary>
 public sealed record Listing(string Path, List<FileEntry> Entries);
