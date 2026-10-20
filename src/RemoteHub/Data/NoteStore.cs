@@ -122,14 +122,16 @@ public static class NoteStore
                                                   WHERE s.notebook_id = b.id AND n.deleted_utc = b.deleted_utc)
             FROM notebooks b WHERE b.deleted_utc IS NOT NULL
             """, r => new DeletedNote(NotebookKind, r.GetString(0), r.GetString(1), Time(r.GetInt64(2)), r.GetInt32(3))));
-        // A section or page deleted together with its notebook (same time stamp) is listed only as the notebook.
+        // A section or page deleted together with its notebook (same time stamp) is listed only as the notebook. One
+        // deleted before its parent keeps its own stamp, and stays listed (LEFT JOIN) when "Delete now" has removed the
+        // parent since – Restore then puts it into a live notebook or section.
         list.AddRange(Rows(c, """
             SELECT s.id, s.name, s.deleted_utc, (SELECT COUNT(*) FROM notes n WHERE n.section_id = s.id AND n.deleted_utc = s.deleted_utc)
-            FROM note_sections s JOIN notebooks b ON b.id = s.notebook_id
+            FROM note_sections s LEFT JOIN notebooks b ON b.id = s.notebook_id
             WHERE s.deleted_utc IS NOT NULL AND (b.deleted_utc IS NULL OR b.deleted_utc <> s.deleted_utc)
             """, r => new DeletedNote(SectionKind, r.GetString(0), r.GetString(1), Time(r.GetInt64(2)), r.GetInt32(3))));
         list.AddRange(Rows(c, """
-            SELECT n.id, n.title, n.deleted_utc FROM notes n JOIN note_sections s ON s.id = n.section_id
+            SELECT n.id, n.title, n.deleted_utc FROM notes n LEFT JOIN note_sections s ON s.id = n.section_id
             WHERE n.deleted_utc IS NOT NULL AND (s.deleted_utc IS NULL OR s.deleted_utc <> n.deleted_utc)
             """, r => new DeletedNote(PageKind, r.GetString(0), r.GetString(1), Time(r.GetInt64(2)), 1)));
         return list.OrderByDescending(d => d.DeletedUtc).ToList();
@@ -306,8 +308,9 @@ public static class NoteStore
         return LocalDb.Use((c, _) =>
         {
             using var t = c.BeginTransaction();
+            // LEFT JOIN: a page whose section (or a section whose notebook) "Delete now" removed is purged by its own stamp
             var n = Purge(c, t, """
-                SELECT n.id FROM notes n JOIN note_sections s ON s.id = n.section_id JOIN notebooks b ON b.id = s.notebook_id
+                SELECT n.id FROM notes n LEFT JOIN note_sections s ON s.id = n.section_id LEFT JOIN notebooks b ON b.id = s.notebook_id
                 WHERE n.deleted_utc < $cut OR s.deleted_utc < $cut OR b.deleted_utc < $cut
                 """, ("$cut", cutoff));
             Command(c, t, "DELETE FROM note_sections WHERE deleted_utc < $cut OR notebook_id IN (SELECT id FROM notebooks WHERE deleted_utc < $cut)", ("$cut", cutoff));

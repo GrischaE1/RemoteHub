@@ -76,12 +76,17 @@ function Get-LabVm {
     }
 }
 
-# The other VM a test needs next to its own: by default the device for a test on the admin PC - the Server VM of the
-# same lane (lane 1: "... - en-US", lane 2: "... - en-US - 2"; the runner keeps a lane's VMs together). -Os W11 / Console
-# for another kind. $null when the lab has none.
+# The other VM a test needs next to its own: by default the device for a test on the admin PC - a Server VM. -Os W11 /
+# Console for another kind. Inside a run it is the VM the scheduler kept for this file (RHLAB_DEVICES, "Server=<name>;
+# W11=<name>" - a free one of any lane); outside a run the one of the same lane (lane 1: "... - en-US", lane 2:
+# "... - en-US - 2"), else any. $null when the lab has none.
 function Get-LabDevice {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$For, [string]$Os = 'Server')
+    foreach ($pair in @("$env:RHLAB_DEVICES" -split ';' | Where-Object { $_ })) {
+        $os1, $name = $pair -split '=', 2
+        if ($os1 -eq $Os -and $name) { return Get-LabVm $name }
+    }
     $me = Get-LabVm $For
     # only VMs ready for the lab (a checkpoint): one still being set up isn't a device yet
     $all = @(Get-LabVm | Where-Object { $_.Os -eq $Os -and $_.Name -ne $me.Name -and (Test-LabVmReady $_.Name) })
@@ -94,6 +99,105 @@ function Test-LabVmReady {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
     [bool](Get-LabBaseCheckpoint -Name $Name)
+}
+
+# What a scenario file needs, from its header (see Invoke-LabTests.ps1): its role, whether it uses other VMs (LabNeeds:
+# lane - found by itself when it calls Get-LabDevice) and of which kinds, the jump host, its time limit, and whether a
+# quick run still takes it on every kind (LabQuick: every kind).
+function Get-LabFileNeeds {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$File, [int]$DefaultLimitMin = 60)
+    $text = [IO.File]::ReadAllText($File)
+    $head = ($text -split "`n" | Select-Object -First 40) -join "`n"
+    $role = if ($head -match '(?m)^#\s*LabRole:\s*(console|device|any)') { $Matches[1] }
+            elseif ($text -match 'Install-LabClient|Start-LabClient') { 'console' } else { 'device' }
+    $limit = $DefaultLimitMin
+    if ($head -match '(?m)^#\s*TimeLimitMin:\s*(\d+)' -and [int]$Matches[1] -gt $limit) { $limit = [int]$Matches[1] }
+    [pscustomobject]@{
+        Role      = $role
+        Lane      = ($head -match '(?m)^#\s*LabNeeds:.*\blane\b') -or ($text -match 'Get-LabDevice|Where-Object Os -eq .Server.')
+        # the kinds of the other VMs it uses: Get-LabDevice -Os <kind> (Server when not given). None found (the kind is
+        # worked out at run time): the rest of its own lane
+        LaneOs    = @(@([regex]::Matches($text, 'Get-LabDevice[^\r\n]*?-Os\s+''?(\w+)') | ForEach-Object { $_.Groups[1].Value }) + @(if ($text -match 'Get-LabDevice(?![^\r\n]*-Os)' -or $text -match 'Where-Object Os -eq .Server.') { 'Server' }) | Select-Object -Unique)
+        JumpHost  = ($head -match '(?m)^#\s*LabNeeds:.*\bjumphost\b') -or ($text -match 'Move-LabVmBehindJump|Use-LabJump|Start-LabJumpHost')
+        Limit     = $limit
+        EveryKind = $head -match '(?m)^#\s*LabQuick:\s*every kind'
+    }
+}
+
+# How long each file took on each kind in the last -Runs runs (the "done" lines of results\<run>\console.log):
+# "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count.
+function Get-LabFileTimes {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 10)
+    $all = @{}
+    $dirs = @(Get-ChildItem $ResultsRoot -Directory -ErrorAction SilentlyContinue | Where-Object Name -match '^\d{8}-\d{6}$' |
+            Sort-Object Name -Descending | Select-Object -First $Runs)
+    foreach ($d in $dirs) {
+        $log = Join-Path $d.FullName 'console.log'
+        if (-not (Test-Path $log)) { continue }
+        foreach ($m in [regex]::Matches([IO.File]::ReadAllText($log), '(?m)^\d\d:\d\d:\d\d done\s+(\S+) on (\S+?): .*\((\d+) min\)')) {
+            # the kind: the VM's Id without its lane ("W11-26H2-en-US-2" -> "W11-26H2-en-US")
+            $key = "$($m.Groups[1].Value)|$($m.Groups[2].Value -replace '-\d+$', '')"
+            if (-not $all.ContainsKey($key)) { $all[$key] = [Collections.Generic.List[int]]::new() }
+            $all[$key].Add([int]$m.Groups[3].Value)
+        }
+    }
+    $times = @{}
+    foreach ($k in $all.Keys) {
+        $s = @($all[$k] | Sort-Object)
+        $times[$k] = [pscustomobject]@{ Median = $s[[int][math]::Floor(($s.Count - 1) / 2)]; Max = $s[-1]; Count = $s.Count }
+    }
+    $times
+}
+
+# A file's time limit in this run: twice the longest it took before (at least 20 min), so a file that hangs is ended
+# long before -FileTimeoutMin; never above its own limit, and that limit until it has run 3 times.
+function Get-LabFileLimit {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Needs, $Time)
+    if (-not $Time -or $Time.Count -lt 3) { return $Needs.Limit }
+    [math]::Min($Needs.Limit, [math]::Max(20, 2 * $Time.Max))
+}
+
+# The scheduler's next start: of the file runs in -Queue that can start now on a free VM of -Vms, the one expected to
+# take longest (-Times; a file never timed counts 10 min), so the long files don't end up in the tail of the run. A file
+# that uses other VMs takes free ones of the kinds it names from -LabVms - of its own lane first, else of another, so
+# one Console VM's file doesn't keep both Console VMs waiting for the same Server VM; with no kinds named, the rest of
+# its own lane. -Busy: the names of the VMs that run or are held for a file. $null when nothing can start.
+function Select-LabNextRun {
+    [CmdletBinding()]
+    param($Queue, $Vms, $LabVms, [string[]]$Busy = @(), [bool]$JumpBusy, [hashtable]$Times = @{})
+    $free = @($LabVms | Where-Object { $Busy -notcontains $_.Name })
+    $best = $null
+    foreach ($item in @($Queue)) {
+        if ($item.Needs.JumpHost -and $JumpBusy) { continue }
+        $t = $Times["$($item.Name)|$($item.Kind)"]
+        $min = if ($t) { $t.Median } else { 10 }
+        if ($best -and $min -le $best.Minutes) { continue }
+        foreach ($v in @($Vms | Where-Object { $_.BaseId -eq $item.Kind -and $Busy -notcontains $_.Name } | Sort-Object Lane)) {
+            $partners = @()
+            if ($item.Needs.Lane) {
+                if (@($item.Needs.LaneOs).Count) {
+                    foreach ($os in $item.Needs.LaneOs) {
+                        $taken = @($partners | ForEach-Object Name)
+                        $p = @($free | Where-Object { $_.Role -and $_.Os -eq $os -and $_.Name -ne $v.Name -and $taken -notcontains $_.Name } |
+                                Sort-Object @{ e = { $_.Lane -ne $v.Lane } }, Lane) | Select-Object -First 1
+                        if (-not $p) { $partners = $null; break }
+                        $partners += $p
+                    }
+                }
+                else {
+                    $partners = @($LabVms | Where-Object { $_.Role -and $_.Lane -eq $v.Lane -and $_.Name -ne $v.Name })
+                    if (@($partners | Where-Object { $Busy -contains $_.Name }).Count) { $partners = $null }
+                }
+                if ($null -eq $partners) { continue }
+            }
+            $best = [pscustomobject]@{ Item = $item; Vm = $v; Partners = @($partners); Minutes = $min }
+            break
+        }
+    }
+    $best
 }
 
 # Run checkpoints are named "RHLAB <run id> <state key>" (Initialize-LabVm takes them, Remove-LabRunCheckpoints removes
@@ -3446,6 +3550,208 @@ function Get-LabMockRequests {
     }
 }
 
+# Code run in the account's session (Invoke-LabInSession) that answers an object: -Code's output goes through a JSON file
+# in the guest (not the session's console text, which Out-String would wrap), $A in -Code is -Data (a JSON round trip).
+# Throws with the session's text when the code failed or answered nothing.
+function Invoke-LabInSessionJson {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Code,
+        [hashtable]$Data = @{},
+        [string]$Account = 'Console',
+        [int]$TimeoutSec = 300
+    )
+    $out = "C:\ProgramData\RemoteHubLab\session\json-$([guid]::NewGuid().ToString('N')).json"
+    # -Data as base64: no quoting of what it holds
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $Data -Depth 8 -Compress)))
+    $text = "`$ErrorActionPreference = 'Stop'`n`$A = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$b64')) | ConvertFrom-Json`n" +
+        "`$r = & {`n$Code`n}`n" +
+        "`$j = if (`$null -eq `$r) { 'null' } else { ConvertTo-Json -InputObject `$r -Depth 10 -Compress }`n" +
+        "[IO.File]::WriteAllText('$out', `$j, (New-Object Text.UTF8Encoding `$false))"
+    $raw = Invoke-LabInSession -Name $Name -Account $Account -TimeoutSec $TimeoutSec -ScriptBlock ([scriptblock]::Create($text))
+    $answer = Invoke-LabGuest -Name $Name -ArgumentList $out -ScriptBlock { param($f) if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllText($f); Remove-Item -LiteralPath $f } }
+    if (-not $answer) { throw "${Name} / ${Account}: the session code answered nothing: $("$raw".Trim())" }
+    $answer | ConvertFrom-Json
+}
+
+# RemoteHub's local database as RemoteHub opens it (LocalDb.Connect): the installed sqlite3mc.dll, cipher chacha20,
+# kdf_iter 1, the raw key from db.key (DPAPI of the account, entropy RemoteHub.Database.v1). Read in the account's own
+# session, so DPAPI works; a db.key sealed by the startup password (version 2) is refused. -Query: name = SELECT; answers
+# an object with one property per name, each an array of rows (BLOB columns as base64). Meant for SELECTs only.
+$script:LabSqlCs = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace RhLabSql
+{
+    public static class Db
+    {
+        const string L = "sqlite3mc.dll";
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryW(string path);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_open_v2(byte[] file, out IntPtr db, int flags, IntPtr vfs);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_close_v2(IntPtr db);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_key(IntPtr db, byte[] key, int n);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int n, out IntPtr stmt, IntPtr tail);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_step(IntPtr stmt);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_finalize(IntPtr stmt);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_column_count(IntPtr stmt);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern IntPtr sqlite3_column_name(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_column_type(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern long sqlite3_column_int64(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern double sqlite3_column_double(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern IntPtr sqlite3_column_blob(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern IntPtr sqlite3_column_text(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern int sqlite3_column_bytes(IntPtr stmt, int i);
+        [DllImport(L, CallingConvention = CallingConvention.Cdecl)] static extern IntPtr sqlite3_errmsg(IntPtr db);
+
+        static bool loaded;
+
+        public static void Load(string dll)
+        {
+            if (loaded) return;
+            if (LoadLibraryW(dll) == IntPtr.Zero) throw new Exception("LoadLibrary failed for " + dll + ": " + Marshal.GetLastWin32Error());
+            loaded = true;
+        }
+
+        static byte[] Z(string s) { return Encoding.UTF8.GetBytes(s + "\0"); }
+
+        static string Utf8Z(IntPtr p)
+        {
+            if (p == IntPtr.Zero) return null;
+            List<byte> bytes = new List<byte>();
+            for (int i = 0; ; i++) { byte b = Marshal.ReadByte(p, i); if (b == 0) break; bytes.Add(b); }
+            return Encoding.UTF8.GetString(bytes.ToArray());
+        }
+
+        static void Check(IntPtr db, int rc)
+        {
+            if (rc != 0 && rc != 100 && rc != 101) throw new Exception("SQLite " + rc + ": " + Utf8Z(sqlite3_errmsg(db)));
+        }
+
+        // db.key "RHDK" 1 + DPAPI: the first 32 of its 64 bytes are the database key
+        public static byte[] ReadKey(string path)
+        {
+            byte[] b = File.ReadAllBytes(path);
+            if (b.Length < 6 || b[0] != (byte)'R' || b[1] != (byte)'H' || b[2] != (byte)'D' || b[3] != (byte)'K') throw new InvalidDataException("not a RemoteHub db.key");
+            if (b[4] != 1) throw new InvalidOperationException("db.key is sealed with the startup protection (version " + b[4] + ")");
+            byte[] inner = new byte[b.Length - 5];
+            Array.Copy(b, 5, inner, 0, inner.Length);
+            byte[] plain = ProtectedData.Unprotect(inner, Encoding.UTF8.GetBytes("RemoteHub.Database.v1"), DataProtectionScope.CurrentUser);
+            if (plain.Length != 64) throw new InvalidDataException("db.key holds " + plain.Length + " bytes");
+            byte[] key = new byte[32];
+            Array.Copy(plain, key, 32);
+            Array.Clear(plain, 0, plain.Length);
+            return key;
+        }
+
+        public static IntPtr Open(string path, byte[] key)
+        {
+            IntPtr db;
+            int rc = sqlite3_open_v2(Z(path), out db, 2, IntPtr.Zero);
+            if (rc != 0) { string m = Utf8Z(sqlite3_errmsg(db)); sqlite3_close_v2(db); throw new Exception("SQLite " + rc + ": " + m); }
+            try
+            {
+                Query(db, "PRAGMA cipher = 'chacha20'");
+                Query(db, "PRAGMA kdf_iter = 1");
+                Check(db, sqlite3_key(db, key, key.Length));
+                Query(db, "SELECT count(*) FROM sqlite_master");
+                return db;
+            }
+            catch { sqlite3_close_v2(db); throw; }
+        }
+
+        public static void Close(IntPtr db) { if (db != IntPtr.Zero) sqlite3_close_v2(db); }
+
+        public static List<Dictionary<string, object>> Query(IntPtr db, string sql)
+        {
+            List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
+            byte[] s = Z(sql);
+            IntPtr st;
+            Check(db, sqlite3_prepare_v2(db, s, s.Length, out st, IntPtr.Zero));
+            try
+            {
+                while (true)
+                {
+                    int rc = sqlite3_step(st);
+                    if (rc == 101) break;
+                    if (rc != 100) Check(db, rc);
+                    Dictionary<string, object> row = new Dictionary<string, object>();
+                    int n = sqlite3_column_count(st);
+                    for (int i = 0; i < n; i++)
+                    {
+                        string name = Utf8Z(sqlite3_column_name(st, i));
+                        int t = sqlite3_column_type(st, i);
+                        object v = null;
+                        if (t == 1) v = sqlite3_column_int64(st, i);
+                        else if (t == 2) v = sqlite3_column_double(st, i);
+                        else if (t == 3 || t == 4)
+                        {
+                            IntPtr p = t == 3 ? sqlite3_column_text(st, i) : sqlite3_column_blob(st, i);
+                            int len = sqlite3_column_bytes(st, i);
+                            byte[] b = new byte[len];
+                            if (len > 0) Marshal.Copy(p, b, 0, len);
+                            v = t == 3 ? (object)Encoding.UTF8.GetString(b) : Convert.ToBase64String(b);
+                        }
+                        row[name] = v;
+                    }
+                    rows.Add(row);
+                }
+            }
+            finally { sqlite3_finalize(st); }
+            return rows;
+        }
+    }
+}
+'@
+
+function Invoke-LabClientSql {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][hashtable]$Query,
+        [string]$Account = 'Console',
+        [int]$TimeoutSec = 180
+    )
+    Invoke-LabGuest -Name $Name -ArgumentList $script:LabSqlCs -ScriptBlock {
+        param($cs)
+        $d = 'C:\ProgramData\RemoteHubLab'; $null = New-Item -ItemType Directory -Path $d -Force
+        [IO.File]::WriteAllText("$d\rhsql.cs", $cs)
+        icacls "$d\rhsql.cs" /grant '*S-1-5-32-545:RX' | Out-Null
+    }
+    $code = @'
+Add-Type -Path 'C:\ProgramData\RemoteHubLab\rhsql.cs' -ReferencedAssemblies System.Security
+$dll = Get-ChildItem 'C:\Program Files\RemoteHub' -Recurse -Filter 'sqlite3mc.dll' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+if (-not $dll) { throw 'sqlite3mc.dll not found under C:\Program Files\RemoteHub' }
+[RhLabSql.Db]::Load($dll)
+$dir = Join-Path $env:LOCALAPPDATA 'RemoteHub'
+$key = [RhLabSql.Db]::ReadKey((Join-Path $dir 'db.key'))
+$db = [RhLabSql.Db]::Open((Join-Path $dir 'remotehub.db'), $key)
+$sets = @{}
+try {
+    foreach ($p in $A.PSObject.Properties) {
+        $rows = @(foreach ($row in [RhLabSql.Db]::Query($db, [string]$p.Value)) {
+                $o = [ordered]@{}
+                foreach ($kv in $row.GetEnumerator()) { $o[$kv.Key] = $kv.Value }
+                [pscustomobject]$o
+            })
+        $sets[$p.Name] = $rows
+    }
+}
+finally { [RhLabSql.Db]::Close($db); [Array]::Clear($key, 0, $key.Length) }
+$sets
+'@
+    $r = Invoke-LabInSessionJson -Name $Name -Account $Account -Code $code -Data $Query -TimeoutSec $TimeoutSec
+    # each answer as an array, also with one row or none
+    $out = [ordered]@{}
+    foreach ($k in $Query.Keys) { $out[$k] = @($r.$k | Where-Object { $null -ne $_ }) }
+    [pscustomobject]$out
+}
+
 #endregion
 
 #region Network shares
@@ -3522,6 +3828,43 @@ function Invoke-LabShare {
     $cmd = if ($Conflict) { 'share-conflict' } else { 'share' }
     $password = if ($WrongPassword) { $WrongPassword } else { (Get-LabConfig).Password }
     Invoke-LabHarness (@($cmd) + $Arguments + @('--password', $password)) -TimeoutSec 600
+}
+
+#endregion
+
+#region Timing
+
+# Where a file's time goes (Invoke-LabTestFile.ps1 sets RHLAB_TIMING and writes <result>.timing.json): the slow helpers
+# are wrapped so each outermost call adds its time to $global:RhLabTiming - a helper's calls to another count once, for
+# the outer one. Global, as the test files import the module again (-Force) and the totals must survive that.
+if ($env:RHLAB_TIMING -eq '1') {
+    if (-not (Get-Variable RhLabTiming -Scope Global -ErrorAction SilentlyContinue)) {
+        $global:RhLabTiming = @{ Depth = 0; Calls = @{} }
+    }
+    foreach ($name in @('Reset-LabVm', 'Initialize-LabVm', 'Restart-LabVm', 'Wait-LabVm', 'Wait-LabDesktop', 'Set-LabAutoLogon',
+            'Invoke-LabGuest', 'Copy-LabFile', 'Get-LabScreenshot', 'Get-LabOcr', 'Invoke-LabInSession', 'Invoke-LabPerson',
+            'Invoke-LabDesktop', 'Start-LabDesktop', 'Receive-LabDesktop', 'Invoke-LabHarness', 'Install-LabAgent',
+            'Update-LabAgent', 'Uninstall-LabAgent', 'Restart-LabAgent', 'Wait-LabAgent', 'Install-LabClient', 'Start-LabClient',
+            'Stop-LabClient', 'Invoke-LabUi', 'Invoke-LabAutoSignIn')) {
+        $inner = (Get-Item "function:$name" -ErrorAction SilentlyContinue)
+        if (-not $inner) { continue }
+        $orig = $inner.ScriptBlock
+        $wrapper = {
+            $t = $global:RhLabTiming
+            $t.Depth++
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            try { & $orig @args }
+            finally {
+                $t.Depth--
+                if ($t.Depth -eq 0) {
+                    if (-not $t.Calls.ContainsKey($name)) { $t.Calls[$name] = @{ Count = 0; Seconds = 0.0 } }
+                    $t.Calls[$name].Count++
+                    $t.Calls[$name].Seconds += $sw.Elapsed.TotalSeconds
+                }
+            }
+        }.GetNewClosure()
+        Set-Item "function:script:$name" -Value $wrapper
+    }
 }
 
 #endregion

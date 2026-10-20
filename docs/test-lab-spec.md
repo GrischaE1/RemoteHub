@@ -291,15 +291,26 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
   `artifacts\lab\` by default, `-Root D:\RemoteHubLab\results` reads the lab's own copy. `Start-LabRun.ps1` runs it
   at the end of every run and keeps it as `artifacts\lab\<run>\failures.txt` – what an AI session reads instead of
   the XMLs and logs (`.github/instructions/lab.instructions.md`).
-- `LabConsole.cmd` (`LabConsole.ps1`, WPF, Windows PowerShell 5.1) is the same in a window: the tests as group >
-  file > case with check boxes and a search box, read from `lab\tests\` each time it opens (a new file or case
-  shows up by itself; the group is the first bare tag of the file's `Describe`), the VM kinds from Hyper-V, the
-  MSI under test and an optional build of new MSIs, *Start run* / *Stop* (`Stop-LabRun.ps1`), the progress from the
-  run's `console.log`, its output, and `failures.txt` when it ends. *Failed in last run* ticks just the cases that
-  failed in the newest run. What is ticked becomes `-Tag`: a group's tag when the whole group is ticked and no other
-  file carries it, else the case IDs; everything ticked is a full run. Each case has a dot for its latest lab
-  result – green passed, red failed (the tooltip names the run and the VMs), amber skipped, grey not run yet – and
-  files and groups the worst of theirs with the number failed; *Show* filters the tree by it.
+- **RemoteHub Lab** (`lab\LabConsole`, WPF like RemoteHub; `LabConsole.cmd` is the older PowerShell version of it):
+  `build\build-lab-tool.ps1` builds it into one file, `lab\RemoteHubLab.exe` (git-ignored; again after changes to
+  `lab\LabConsole`). Its tests and lab scripts always come from main: it keeps its own checkout of origin/main,
+  `C:\rh-lab-main` (a detached worktree, made the first time), and brings it to origin/main when it opens and before
+  every run, also each run of a repeat – nobody pulls. Before each run it also copies the newest agent build of any
+  worktree (with its RemoteHub package, the one before it for the update tests, the credential provider's lab build)
+  into that checkout's `artifacts\`, and the git-ignored `lab.local.json` / `lab-signing.cer` from the checkout it was
+  started from (the one the exe sits in, else the one from last time in `%LOCALAPPDATA%\RemoteHubLab\checkout.txt`, else
+  it asks). A branch's own tests run in the lab once merged, or with `Start-LabRun.ps1` from that branch. It shows the tests as group > file > case with check boxes and a search box, read from
+  `lab\tests\` (a new file or case shows up by itself; the group is the first bare tag of the file's `Describe`), the
+  VM kinds, the MSI under test and an optional build of new MSIs, *Start run* / *Stop* (`Stop-LabRun.ps1`), a
+  progress bar with the time left (from what each file took before), the file runs, the output, and `failures.txt`
+  when it ends. *Failed in last run* ticks just the cases that failed in the newest run; *Changed since full run*
+  ticks the files that what changed since the last full run can affect (git's changes from the commit that run
+  recorded – an area the app doesn't know selects everything). *Quick build check* and *Fail fast* are
+  `Start-LabRun.ps1 -Quick` / `-FailFast` (below); *Run again when it ends* repeats until stopped and picks up new
+  cases when everything is ticked. What is ticked becomes `-Tag`: a group's tag when the whole group is ticked and
+  no other file carries it, else the case IDs; everything ticked is a full run. Each case has a pill for its latest
+  lab result or its state in the run going on – passed, failed (the tooltip names the run and the VMs), skipped, not
+  run, pending, running – and files and groups the worst of theirs with the number failed; *Show* filters by it.
 - `Get-LabCaseStatus.ps1` gives that latest result per case, from every finished run in `LabRoot\results` (cached
   per run in `%LOCALAPPDATA%\RemoteHubLab`, so only new runs are read).
 - `Update-LabCaseStatus.ps1 [-WhatIf]` keeps the documents' status in step with the lab: a case with a lab test is
@@ -307,7 +318,25 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
   [test document](test-lab-test-document.md) once it has run, ◐ until then, and it regenerates the test document's
   "Written, not yet run in the lab" list. Cases without a lab test are left as they are. Run it before a PR that
   adds or changes lab tests.
-- Requests run one after another, and so do the VMs within a run. Only the VM under test is on (plus the jump host while a jump case runs): a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
+- Within a run every VM works through files in parallel with the others (lane 1 "… - en-US", lane 2 "… - 2", lane 3
+  "… - 3": VMs of the same kinds). Of what can start, the file expected to take longest starts first (its median in
+  the last 10 runs). A file that uses another VM (`LabNeeds: lane`, `Get-LabDevice`) gets a free one of that kind –
+  its own lane's first, else another lane's (`RHLAB_DEVICES` tells `Get-LabDevice` which). A file's time limit is
+  twice the longest it took before, at least 20 minutes and never above its own (`TimeLimitMin`, else 60), so a file
+  that hangs is ended early. Replaying the runs of 16 and 19 October shows the Server VMs are what bounds a full run
+  (their own files plus the time Console files hold them): a third lane takes a full run from 8.3 h to 5.6 h (6.1 to
+  4.0 h), the quick build check to 5.4 / 3.4 h with two lanes and 3.7 / 2.3 h with three.
+- `Start-LabRun.ps1 -Quick` is the build check: device files run on one device kind (a client Windows one, as the
+  Server VMs are the busiest), except files whose header says `# LabQuick: every kind` (they have parts for Server
+  only); Console files run as usual. `-FailFast`: a `Describe` block skips its other cases after its first failure
+  (Pester's `SkipRemainingOnFailure = Block`), and no more files start once 4 in a row passed nothing. Both reach the
+  run through `results\<run>\options.json` (the queue passes only `-Vm` and `-Tag`), which also records the commit
+  the run was started from; `run.json` repeats all three.
+- Each file run writes `pester-<file>.xml.timing.json`: the minutes in the module's slow helpers (VM resets and
+  installs, UI steps, guest calls – the outermost call counts) and the file's own time besides.
+  `Get-LabTimings.ps1 [-Run <id>]` sums a run up: per helper, then the longest files with their top helpers – where
+  to look before making tests faster.
+- Requests run one after another. Only the VM under test is on (plus the jump host while a jump case runs): a run first turns off every lab VM (`Stop-LabVm`, hard off - every scenario reverts anyway), then turns each VM off again after its scenarios, also when they fail. Only VMs matching the lab name pattern are touched.
 - Reuse between files: a file that needs "agent and/or RemoteHub installed, an account signed in" calls
   `Initialize-LabVm`, which keeps the VM when it is already in that state (`LabRoot\state\<Id>.json` plus a token in
   the guest, checked before reuse) and otherwise reverts and installs. The first time a VM is set up for a state in a

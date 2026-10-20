@@ -16,6 +16,7 @@
 # ($notServer / $notClient) - the 12 harness cases skipped on the admin PC and the 6 UI cases on the Server VM are
 # expected, and every case of the file is skipped on a W11 VM.
 # LabRole: any
+# LabQuick: every kind
 # LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,

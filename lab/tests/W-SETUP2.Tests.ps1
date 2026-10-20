@@ -3,6 +3,7 @@
 # the agent, S-AUTH-09), and HTTP with Kerberos by name (domain only). See docs/test-lab-cases.md section 8.
 # Every context starts from the checkpoint (Reset-LabVm): a device without WinRM set up.
 # LabRole: device
+# LabQuick: every kind
 # LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,

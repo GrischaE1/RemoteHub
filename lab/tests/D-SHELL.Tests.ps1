@@ -211,27 +211,27 @@ AfterAll {
 }
 
 Describe 'D-SHELL <VmName>' -Tag Desktop, 'D-SHELL' {
-    It 'D-SHELL-01 the helper has UIAccess only when switched on' {
+    It 'D-SHELL-01 the helper has UIAccess only when switched on' -Tag 'D-SHELL-01' {
         $r.on.uiAccess | Should -Be '1'
         $r.off.uiAccess | Should -Be '0'
     }
 
-    It 'D-SHELL-02 <_> with UIAccess: the console stays covered' -ForEach @('start', 'search', 'quicksettings', 'notifications', 'taskview', 'alttab', 'thumbnail', 'toast') {
+    It 'D-SHELL-02 <_> with UIAccess: the console stays covered' -Tag 'D-SHELL-02' -ForEach @('start', 'search', 'quicksettings', 'notifications', 'taskview', 'alttab', 'thumbnail', 'toast') {
         $r.on[$_].console | Should -BeLessThan 0.005
     }
 
     # Task View and Alt+Tab don't open while the privacy screen is up - SnipGuard drops their keys - so not here
-    It 'D-SHELL-06 <_> with UIAccess: the admin''s picture still shows it' -ForEach @('start', 'search', 'quicksettings', 'notifications', 'thumbnail', 'toast') {
+    It 'D-SHELL-06 <_> with UIAccess: the admin''s picture still shows it' -Tag 'D-SHELL-06' -ForEach @('start', 'search', 'quicksettings', 'notifications', 'thumbnail', 'toast') {
         $r.on[$_].picture | Should -BeGreaterThan 0.005
     }
 
-    It 'D-SHELL-03 the overlays keep WDA_EXCLUDEFROMCAPTURE (0x11) with UIAccess' {
+    It 'D-SHELL-03 the overlays keep WDA_EXCLUDEFROMCAPTURE (0x11) with UIAccess' -Tag 'D-SHELL-03' {
         $overlays = @($r.on.zBase | Where-Object { $_ -match 'Privacy screen' })
         $overlays.Count | Should -BeGreaterThan 0
         @($overlays | Where-Object { $_ -notmatch 'wda=0x11' }) | Should -BeNullOrEmpty
     }
 
-    It 'D-SHELL-04 the banner is above the overlays' {
+    It 'D-SHELL-04 the banner is above the overlays' -Tag 'D-SHELL-04' {
         $z = @($r.on.zBase | ForEach-Object { ($_ -split '\|')[0] })
         $banner = [array]::IndexOf($z, 'RemoteHub')
         $overlay = @(0..($z.Count - 1) | Where-Object { $z[$_] -match 'Privacy screen' })[0]
@@ -239,7 +239,7 @@ Describe 'D-SHELL <VmName>' -Tag Desktop, 'D-SHELL' {
         $banner | Should -BeLessThan $overlay
     }
 
-    It 'D-SHELL-05 the device''s user ends the session with Disconnect, with UIAccess' {
+    It 'D-SHELL-05 the device''s user ends the session with Disconnect, with UIAccess' -Tag 'D-SHELL-05' {
         $r.on.disconnect.clicked | Should -BeTrue
         $r.on.ended -join ' ' | Should -Match 'The user at the device ended the session'
     }

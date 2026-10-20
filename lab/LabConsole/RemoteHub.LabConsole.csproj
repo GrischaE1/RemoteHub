@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The lab's own desktop app (lab-only tool, not part of RemoteHub.sln or any release): choose tests and VMs, build,
+       start and follow lab runs. It reads lab\tests and the lab's results itself; runs go through Start-LabRun.ps1. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>RemoteHubLab</AssemblyName>
+    <RootNamespace>RemoteHub.Lab</RootNamespace>
+    <ApplicationIcon>..\..\src\RemoteHub\Assets\app.ico</ApplicationIcon>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
+
+  <!-- RemoteHub's look, linked rather than copied: its palette (AppChrome) and icon (AppIcon, app.ico) -->
+  <ItemGroup>
+    <Compile Include="..\..\src\RemoteHub\Views\AppChrome.cs" Link="Shared\AppChrome.cs" />
+    <Compile Include="..\..\src\RemoteHub\Views\AppIcon.cs" Link="Shared\AppIcon.cs" />
+    <Resource Include="..\..\src\RemoteHub\Assets\app.ico" Link="Assets\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="System" />
+    <Using Include="System.Collections.Generic" />
+    <Using Include="System.IO" />
+    <Using Include="System.Linq" />
+    <Using Include="System.Threading.Tasks" />
+  </ItemGroup>
+
+</Project>

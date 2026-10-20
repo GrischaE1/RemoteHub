@@ -705,9 +705,12 @@ same `[Collection]` as `LocalDbTests`, because both use a database in a temp fol
 - Performance (as in local-db-design.md §7, in the benchmark project): open a section of 1,000 pages < 50 ms; open a
   page of 1 MB < 100 ms; full-text search of 10,000 pages < 50 ms.
 
-**Lab:** no lab test is needed. Notes touch neither the agent nor the MSI nor sign-in. The view switch with running
-sessions (phase 1) is checked by hand against a lab VM with RDP and agent desktop sessions open and written into the
-phase's PR.
+**Lab:** Notes touch neither the agent nor the MSI nor sign-in, but the real app end to end is a lab case:
+C-NOTE-01 to C-NOTE-12 (`lab/tests/C-NOTES.Tests.ps1`, [test-lab-cases.md](test-lab-cases.md) §10.8) – the view
+rail, typing and pasting every element, the round trip through the database, script blocks never run, images, nothing
+in plain text at rest, delete / restore, search, the `AllowNotes` policy and backups. The view switch with running
+sessions (phase 1) needs a second VM and is still checked by hand against a lab VM with RDP and agent desktop
+sessions open and written into the phase's PR.
 
 ## 12. Decided
 

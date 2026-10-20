@@ -4,6 +4,7 @@
 # 3 MB and a small file (subfolder), checks the size, renames, downloads and compares SHA-256, and deletes again.
 # Only for Windows Server VMs (IIS FTP/WebDAV and the SMB shares are set up in the guest). See docs/network-shares.md.
 # LabRole: device
+# LabQuick: every kind
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
