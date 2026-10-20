@@ -723,6 +723,7 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 | Shared pieces | Moved into shared views, and connections get *Recently deleted* and undo too (§4.9). |
 | Import and export (v2 review) | Many scripts at once, as files or as a `.rhscripts` package with versions (§4.7). |
 | Versioning (v2 review) | Autosave writes a draft; *Ready to deploy* makes a version; 10 versions kept; any two compared like a Git diff, oldest against latest by default (§4.10). |
+| Running a draft before it is deployed | Yes: *Test draft on…*, one device at a time, marked as a draft everywhere, and `AllowScriptDraftRun` can turn it off (§6.4). |
 
 ## 14. Changes to other documents
 
