@@ -1,7 +1,7 @@
 # C-FAV / C-RAIL - RemoteHub's navigation on a Windows client: a connection in a folder pinned to the Favourites group
 # (a link: the connection stays in its folder), the link's menu and Edit, unpinning with Del, favourites kept after a
 # restart and gone when the folder is deleted; the rail's version opens About. The client VM only, RemoteHub driven by
-# UI Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.8.
+# UI Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.9.
 # LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,

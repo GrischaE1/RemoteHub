@@ -1,7 +1,7 @@
 # C-FIRST - RemoteHub's first start on a Windows client: the welcome tour after a new install (its pages, pages for
 # features IT policy turns off left out, shown once), What's new after an upgrade from the previous release (its
 # highlights, shown once), and both again from Settings - Help & about. The client VM only, RemoteHub driven by UI
-# Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.8.
+# Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.9.
 # LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,
