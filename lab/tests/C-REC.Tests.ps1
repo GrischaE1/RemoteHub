@@ -429,6 +429,12 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 Record $r1 'Remote desktop'
             }
             Step $r1 agent {
+                # The person's first call on the device (reverted by Reset-LabVm, so not warmed up as Initialize-LabVm
+                # does) starts its server, compiles its helper and loads the OCR - done here, not against the consent
+                # dialog's 30 s countdown. Lab run 20261019-193627: that first call was the Allow itself; the server
+                # wasn't up within 60 s, the question was refused after 30 s and the fallback task gave no result.
+                $r1.warm = @(Invoke-LabPerson -Name $device.Name -Account Console -Do windows -TimeoutSec 120).Count
+                $null = Invoke-LabPerson -Name $device.Name -Account Console -Do screen-read -TimeoutSec 120
                 Menu 'Connect'
                 $null = Ui 'Connect' -Optional -TimeoutSec 15
                 $r1.allow = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60

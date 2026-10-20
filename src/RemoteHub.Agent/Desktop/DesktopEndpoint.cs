@@ -760,7 +760,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
                 case DesktopMessage.Clipboard when _live && _clipboard >= DesktopClipboardLevel.Text:
                     Touch();
-                    await SendPipe(m, ct);
+                    if (!ClipboardClosed()) await SendPipe(m, ct);
                     break;
                 case DesktopMessage.TransferOffer when _live:
                     // Names and sizes only; the device's clipboard offers them until someone pastes (then: TransferRequest).
@@ -770,9 +770,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     else await SendPipe(m, ct);
                     break;
                 case DesktopMessage.TransferRequest when _live:
-                    // Pasted on the PC: the device sends what it offered.
+                    // Pasted on the PC: the device sends what it offered – not while its lock screen is up (the paste
+                    // there gets nothing at once instead of waiting).
                     Touch();
-                    await SendPipe(m, ct);
+                    if (!ClipboardClosed()) await SendPipe(m, ct);
+                    else if (TransferId(m) is { } asked)
+                        await SendWs(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(asked, false, ClipboardClosedReason), DesktopJson.Default.DesktopTransferEnd), ct);
                     break;
                 case DesktopMessage.TransferStart when _live:
                     var t = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer);
@@ -902,12 +905,33 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private static bool IsProtocolError(Exception e) =>
         e is System.Text.Json.JsonException or InvalidDataException or NullReferenceException or ArgumentException or FormatException or IndexOutOfRangeException;
 
+    internal const string ClipboardClosedReason = "Nothing is copied while the device shows its lock or sign-in screen – copy again once it is unlocked.";
+    private bool _clipboardClosedNoted;
+
+    /// <summary>
+    /// Windows' lock, sign-in or Ctrl+Alt+Del screen is up in the session: the clipboard stays closed both ways until it is
+    /// gone – nothing typed or copied at the admin's PC lands on the locked user's clipboard (and in a password field), and
+    /// nothing copied in the locked session goes out (UI-CP-08). Checked here, not only in RemoteHub; once per copy.
+    /// </summary>
+    private bool ClipboardClosed()
+    {
+        var closed = o.Desktop!.Sessions.IsLocked(_helperSession);
+        if (closed && !_clipboardClosedNoted) o.Log.Write($"Desktop: session {_helperSession}: clipboard closed while the lock or sign-in screen is up");
+        _clipboardClosedNoted = closed;
+        return closed;
+    }
+
+    /// <summary>The transfer id a TransferRequest names, or null when it isn't one.</summary>
+    private static int? TransferId(byte[] m) =>
+        int.TryParse(DesktopWire.ReadText(m), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) ? id : null;
+
     /// <summary>Null if this clipboard transfer may go through, else why not.</summary>
     private string? TransferAllowed(DesktopTransfer t)
     {
         var need = t.Kind switch { DesktopTransferKind.Image => DesktopClipboardLevel.Images, DesktopTransferKind.Files => DesktopClipboardLevel.Files, _ => int.MaxValue };
         if (_clipboard < need)
             return t.Kind == DesktopTransferKind.Files ? "Copying files isn't allowed on this device." : "Copying images isn't allowed on this device.";
+        if (ClipboardClosed()) return ClipboardClosedReason;
         if (t.Items is null || t.Items.Any(i => i is null || t.Kind == DesktopTransferKind.Files && string.IsNullOrEmpty(i.Path)))
             return "The copied items are incomplete.";
         if (t.Items.Length == 0 || t.Items.Length > DesktopProtocol.MaxTransferItems || t.Total < 0 || t.Total > DesktopProtocol.MaxTransferBytes ||
@@ -1039,7 +1063,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         await PrivacyReported(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopPrivacy), ct);
                         break;
                     case (byte)DesktopMessage.Clipboard when _live && helper == _helper && _clipboard >= DesktopClipboardLevel.Text:
-                        await SendWs(m, ct);
+                        if (!ClipboardClosed()) await SendWs(m, ct);
                         break;
                     case (byte)DesktopMessage.TransferStart when _live && helper == _helper:
                         var t = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer);
@@ -1054,8 +1078,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         // Copied on the device: names and sizes for RemoteHub's clipboard – the data follows when pasted there.
                         if (TransferAllowed(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)) is null) await SendWs(m, ct);
                         break;
-                    case (byte)DesktopMessage.TransferRequest when _live && helper == _helper:
+                    case (byte)DesktopMessage.TransferRequest when helper == _helper:
+                        // A paste on the device of what was copied in RemoteHub. Written down when it goes nowhere: in lab
+                        // run 20261019-193627 (UI-CP-15) the device logged the paste and RemoteHub never started the copy.
+                        if (!_live) { o.Log.Write($"Desktop: session {_helperSession}: clipboard: a paste on the device asked for copy {TransferId(m)?.ToString() ?? "?"} while the connection isn't live – not passed on"); break; }
                         Touch();
+                        if (ClipboardClosed())
+                        {
+                            if (TransferId(m) is { } asked)
+                                await SendPipe(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(asked, false, ClipboardClosedReason, ToDevice: true), DesktopJson.Default.DesktopTransferEnd), ct);
+                            break;
+                        }
                         await SendWs(m, ct);
                         break;
                     case (byte)DesktopMessage.TransferEnd when helper == _helper:

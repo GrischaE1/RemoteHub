@@ -390,7 +390,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-BAN-02 | Banner not in the picture | decoded frame has no banner (build ≥ 19041) | H C | 2 | ✅ | |
 | D-BAN-03 | Banner in the picture on 1809 | on W10-1809 the banner **is** in the frame, not black | H | 2 | ✅ | 1809 |
 | D-BAN-04 | Collapse to pill | after 8 s the banner is the small pill "Controlled by / Viewed by <account>"; hover expands it | S | 3 | ✅ | |
-| D-BAN-05 | Disconnect by the user | UIA clicks Disconnect → Ended "The user at the device ended the session.", resume token void | H S | 1 | ✅ | |
+| D-BAN-05 | Disconnect by the user | the user opens the banner (hover) and clicks Disconnect (console mouse) → Ended "The user at the device ended the session.", resume token void | H S | 1 | ✅ | |
 | D-BAN-06 | Can't be closed otherwise | Alt+F4 / taskkill by the user (no admin) → banner stays | S | 2 | ✅ | |
 | D-BAN-07 | View-only text | "viewed by" without "controlled" | S | 3 | ✅ | |
 | D-BAN-08 | Never collapsed while hiding | something hidden → the banner stays open with " · mouse and keyboard blocked" and 'Click "Disconnect" to end' | S C | 3 | ✅ | |
@@ -797,7 +797,7 @@ The mock (M) is a small HTTPS server on the host with a lab root certificate tru
 |---|---|---|---|---|---|---|
 | R-RDP-01 | Connect with saved credentials | session to the device VM reaches its desktop (device-side: new session for PSAdmin) | U PS | 1 | ✅ | 2VM |
 | R-RDP-02 | Local account `.\user` | signs in as the device's local account | U PS | 2 | ✅ | 2VM |
-| R-RDP-03 | NTLM saved-credential policy message | non-domain target without the delegation policy → Windows' message about saved credentials in the tab (RemoteHub adds no explanation of its own) | U | 3 | ✅ | 2VM |
+| R-RDP-03 | Saved credentials without the NTLM delegation policy | non-domain target without the delegation policy → the stored password still signs in (RemoteHub hands it to the RDP control, not through Credential Manager): the tab connects, a new session on the device, no Windows prompt or message about saved credentials | U PS | 3 | ✅ | 2VM |
 | R-RDP-04 | Password prompt helper | device with "Always prompt" → password on the clipboard, excluded from history, cleared after 30 s or after login | U PS | 2 | ✅ | 2VM |
 | R-RDP-05 | Clipboard / drive redirection | text both ways; drive redirection shows `\\tsclient\C` only when on | U PS | 2 | ✅ | 2VM |
 | R-RDP-06 | Dynamic resolution | resize the tab → device session resolution follows | U PS | 3 | ✅ | 2VM |
@@ -864,18 +864,18 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-CP-01 | Text admin → device (agent) | Ctrl+C in Notepad on the admin's PC, Ctrl+V in Notepad on the device through the tab → same text (Unicode, multi-line) | U S | 1 | ✅ |
 | UI-CP-02 | Text device → admin (agent) | copy on the device, paste on the admin's PC → same text | U S | 1 | ✅ |
 | UI-CP-03 | Image both ways (agent) | Paint / screenshot copied → pasted on the other side, pixels equal; from the device it is fetched on paste: "Pasted the image from the device." | U S | 2 | ✅ |
-| UI-CP-04 | Files admin → device (agent) | copy 3 files + a folder in Explorer, paste in Explorer on the device → arrive, hashes equal; "Copying <n> files to the device" for 1 MB or more; after the device's receipt "Copied <n> files to the device – paste it there." | U S | 1 | ✅ |
+| UI-CP-04 | Files admin → device (agent) | copy 3 files + a folder in Explorer, paste in Explorer on the device → arrive, hashes equal; "Copying <n> files to the device" for 1 MB or more (the admin's PC's link limited to 20 Mbit/s so the progress stays up – Hyper-V limits only what a VM sends); after the device's receipt "Copied <n> files to the device – paste it there." | U S | 1 | ✅ |
 | UI-CP-05 | Files device → admin (agent) | copy in Explorer on the device, paste in Explorer on the admin's PC → fetched on paste, "Pasted <n> files from the device.", hashes equal | U S | 1 | ✅ |
 | UI-CP-06 | Too much | 101 MiB (the limit is 100 MiB) copied while connected → RemoteHub says to use the file transfer, nothing offered, nothing partial | U S | 2 | ✅ |
 | UI-CP-07 | Policy text only | `DesktopClipboard=1` → text works, files refused with RemoteHub's notice "Copying images and files isn't allowed on this device – only text." | U S PS | 2 | ✅ |
-| UI-CP-08 | Copy on the lock screen | session locked → no clipboard to or from the device until unlocked and allowed | U S | 1 | ✅ |
+| UI-CP-08 | Copy on the lock screen | session locked → no clipboard to or from the device until unlocked and allowed (the agent's service closes it while the lock, sign-in or Ctrl+Alt+Del screen is up; a copy offered then: "Nothing is copied while the device shows its lock or sign-in screen – copy again once it is unlocked.") | U S | 1 | ✅ |
 | UI-CP-09 | Text both ways (RDP) | as UI-CP-01/02 through an RDP tab | U S | 1 | ✅ |
 | UI-CP-10 | Files both ways (RDP) | Explorer copy/paste through an RDP tab, hashes equal | U S | 2 | ✅ |
 | UI-CP-11 | Image both ways (RDP) | pixels equal | U S | 3 | ✅ |
 | UI-CP-12 | Across sessions | copy in an RDP tab, paste in an agent tab to another device → arrives | U S | 3 | ✅ |
 | UI-CP-13 | DesktopClipboard=2 (images) | an image reaches the device; a file copy is refused with "Copying files isn't allowed on this device." (the agent's wording; RemoteHub said "Copying images and files isn't allowed on this device – only text." up to 0.20.3) | U S PS | 3 | ✅ |
 | UI-CP-14 | Copies from before connecting are quiet | a too-big or refused copy already on the clipboard when the tab goes live → no notice; the same copy while connected → the notice | U S | 3 | ✅ |
-| UI-CP-15 | Cancel a copy to the device | 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived." | U S | 3 | ✅ |
+| UI-CP-15 | Cancel a copy to the device | 1 MB or more (99 MB, the admin's PC's link limited to 10 Mbit/s): "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived." | U S | 3 | ✅ |
 
 **Ctrl+Alt+Del**
 

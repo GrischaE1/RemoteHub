@@ -209,7 +209,7 @@ These are the places where the product code behaves differently from what the sh
 | C-POL-07 | only `SettingsFolder` is read from the legacy `Policies\RdpManager` key (`SettingsStore.PolicyFolder`). All other policies (`AppPolicy`: telemetry, updates, channel, recording, audit retention) read only `Policies\RemoteHub`, HKLM first, then HKCU. |
 | C-UPD-03 | only `remotehub.dev` (and subdomains) or release assets of `GrischaE1/RemoteHub` on `github.com` / `api.github.com` are allowed, over HTTPS. Other GitHub paths are refused too. After redirects the final host must be `github.com`, `githubusercontent.com` or `remotehub.dev`. |
 | C-CRASH-01 | RemoteHub has no built-in switch to force a crash; the lab needs its own trigger (e.g. a test build hook). An "unexpected error" that RemoteHub survives ("RemoteHub – unexpected error" message box) is recorded the same way, at most three per session. |
-| R-RDP-03 | RemoteHub shows Windows' own text (`GetErrorDescription`) in the tab. It has no extra explanation of the NTLM delegation policy in the app; that explanation is only in the README. |
+| R-RDP-03 | the sheet expected Windows to refuse the stored password without the NTLM delegation policy. It doesn't: RemoteHub hands the password to the RDP control (`ClearTextPassword`), which Windows doesn't treat as saved in Credential Manager, so the tab signs in. Were it refused, the tab would show Windows' own text (`GetErrorDescription`); the README explains the policy. |
 | R-RDP-08 | the password in the `.rdp` is DPAPI-protected for the exporting Windows user (like mstsc), so `normaluser` can't read it and Windows asks for it. The risks dialog is shown only when a `.rdp` file is opened (argument / file association) and creates a new entry, not for import through *New* or drag and drop. |
 | UI-AG-02 | *Test RemoteHub Agent* is only in the context menu's *Tools* group while the connection uses the agent and the last result isn't "available"; after a successful test the group shows the tools instead. |
 | UI-AD-07 | view-only is chosen on the connect page before connecting; there is no toggle while connected. |
@@ -258,7 +258,7 @@ These are the places where the product code behaves differently from what the sh
 | R-RDP-07 (full screen keeps the tab's size) | Seen in lab run 20261017-054704 (Console 26H2 admin PC, Server 2025 device, 0.18.15): after *Full screen* the RDP control's own full-screen window covered the 1024 × 768 screen, but the session stayed at the tab's 460 × 492 pixels, centred on black (`ui-rdp-fullscreen.png`, 2 s after the click). Dynamic resolution is switched off while the control is in full screen: `ApplyDynamicResolution` returns at once when `IsFullScreen` (`RdpSession.cs:301`) and `Fits` counts full screen as fitting (`:285`), so nothing asks the server for the screen's size, and leaving full screen doesn't start a fit either. Fix: on `OnEnterFullScreenMode` send the full-screen size (`UpdateSessionDisplaySettings` with the monitor's size) and fit again on `OnLeaveFullScreenMode`. R-RDP-07 doesn't check the size. To confirm, same run: right after leaving full screen with Ctrl+Alt+Break, *Detach into its own window / dock back* (UI Automation's Invoke) opened no window within 30 s, although it worked in earlier runs where full screen hadn't come up; nothing was recorded then, UI-RDP now keeps RemoteHub's state and tries a real click as well (`ui-rdp-detach-invoke.json`, `detClick` / `detRealClick` in `ui-rdp-tab.json`). |
 | C-REC-01/05 (duration) | Seen in lab run 20261016-135543 (W11, 0.18.14): recordings are written as fragmented MP4 (SessionRecorder.cs:349 Mp4Writer fragmented, :375 MFTranscodeContainerType_FMPEG4) without an mehd box and with about one fragment per 3 frames. The movie header and the frames agree with RemoteHub's "Recording saved" length (e.g. 15.8 s / 158 frames, 30.1 s), but Windows' media pipeline (MediaSource, as players use it, and MediaClip) reports whole multiples of 10 s less (10 s, 10 s). Players will likely show a wrong length and seek bar. Writing an mehd (fragment duration) or finalizing as a plain MP4 at stop would fix it. C-REC-05 now checks the frames' length (fragSeconds) as well. |
 | S-SMB-08 (folder ACL) | Minor, seen in lab run 20261016-135543 (Server device): a share whose folder ACL (not the share permission) allows only Administrators is connected without complaint, and the refusal comes at the first listing as the bare "Access to the path '\\ip\share' is denied." without the remote UAC hint. WindowsSmbShare's constructor explains it only when the share root can't be seen (WindowsSmbShare.cs:35-45); here Directory.Exists is true, and List() (:68) goes through Io() (:111-118) with the bare message. The share-permission variant gets the hint as designed. |
-| UI-CP-08 | Seen in lab run 20261016-135543 (W11 admin PC, Server device, 0.18.14): with the device's session locked, clipboard text still went both ways through the agent tab - the admin's text arrived on the device (its SHA-256 equal) and the device's text on the admin's PC. The agent passes clipboard messages gated only on the connection being live and the clipboard level (RemoteHub.Agent\Desktop\DesktopEndpoint.cs:677, :953; DesktopHelper.cs:165, :240); locking switches to the secure desktop and back within a second without restarting the helper. The case expects nothing to or from the device's clipboard while it is locked. Again in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15), both ways: the admin's "while locked …" text was on the device's clipboard and the device's "device locked …" text on the admin's PC. The agent log shows why the gate never closes: `Lock-LabSession` at 16:27:14 "switched to the secure desktop", 16:27:15 "switched to the user's desktop" – on Server 2025 / Windows 11 the lock screen runs on the Default desktop (D-LOCK-05), so the helper treats the locked session as the user's desktop until Ctrl+Alt+Del. A lock check has to look at the session's lock state (`WTSSESSION_LOCK` / `WTSQuerySessionInformation` `SessionFlags`), not only the input desktop. |
+| UI-CP-08 | Seen in lab run 20261016-135543 (W11 admin PC, Server device, 0.18.14): with the device's session locked, clipboard text still went both ways through the agent tab - the admin's text arrived on the device (its SHA-256 equal) and the device's text on the admin's PC. The agent passes clipboard messages gated only on the connection being live and the clipboard level (RemoteHub.Agent\Desktop\DesktopEndpoint.cs:677, :953; DesktopHelper.cs:165, :240); locking switches to the secure desktop and back within a second without restarting the helper. The case expects nothing to or from the device's clipboard while it is locked. Again in lab run 20261016-212514 (Console admin PC, Server 2025 device, 0.18.15), both ways: the admin's "while locked …" text was on the device's clipboard and the device's "device locked …" text on the admin's PC. The agent log shows why the gate never closes: `Lock-LabSession` at 16:27:14 "switched to the secure desktop", 16:27:15 "switched to the user's desktop" – on Server 2025 / Windows 11 the lock screen runs on the Default desktop (D-LOCK-05), so the helper treats the locked session as the user's desktop until Ctrl+Alt+Del. A lock check has to look at the session's lock state (`WTSSESSION_LOCK` / `WTSQuerySessionInformation` `SessionFlags`), not only the input desktop. Seen again in lab run 20261019-193627 (agent 0.20.3). **Fixed after that run:** the agent's service closes the clipboard both ways while LogonUI runs in the session (`WtsNative.IsLocked`, the check the session list uses – the WTS lock flag is unreliable): text is dropped, a copy offered or asked for is refused with "Nothing is copied while the device shows its lock or sign-in screen – copy again once it is unlocked." (`DesktopEndpoint.ClipboardClosed`; xUnit `Nothing_goes_through_the_clipboard_while_the_lock_screen_is_up`). |
 | C-AUTO-16 | Code review (0.18.11). `CheckInstallation` ignores the provider key's `Disabled` value: Hello offers automatic sign-in and the operator waits about 23 s for "The device's sign-in screen didn't load the RemoteHub credential provider." |
 | S-SMB-08 | Code review (0.18.11). The remote-UAC hint for local administrators is only added when listing the share fails; access denied by the share's own permissions fails earlier in `WindowsSmbShare.Acquire` (`WNetAddConnection2`, error 5) and shows "\\host\share: Access is denied." without the hint. |
 | UI-AG-12 | Code review (0.18.11). The notice "Automatic sign-in needs a stored password for this connection …" can't be reached: without a stored password RemoteHub asks for one first (`BuildTarget`, `PasswordDialog` refuses an empty one), and a typed password works as well – the text should not say "stored". A password over 256 characters can't sign in to the agent either. |
@@ -3141,7 +3141,7 @@ P1 · How: H S · Needs: – · Status: ✅ Automated – `D-BANNER.Tests.ps1`
 **Preconditions:** as D-BAN-01; harness keeps the `resume` token.
 
 **Steps:**
-1. Click "Disconnect" on the banner (right end, about 55 px from its right edge) with the console mouse.
+1. Click "Disconnect" on the banner with the console mouse: `Invoke-LabBannerClick` – hover first (by now the banner is the pill, which has no Disconnect), then the whole label found in the console picture (the banner is kept out of the session's captures); the picture is kept as `d-banner-control\disconnect-console.png`.
 2. Read Status and the Application log.
 3. Harness client opens a new connection: Start with `resume` = the token.
 
@@ -5259,19 +5259,20 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 **Expected:**
 - Signed in as `<DEVICE>\PSAdmin` (local account of the device).
 
-#### R-RDP-03 · NTLM saved-credential policy message
-P3 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
+#### R-RDP-03 · Saved credentials without the NTLM delegation policy
+P3 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 
 **Preconditions:** Non-domain device; on the client no "Allow delegating saved credentials with NTLM-only server authentication" policy; NLA on.
 
 **Steps:**
-1. FlaUI: connect with a saved credential.
-2. Read the tab's status text and any Windows dialog.
+1. FlaUI: connect with the connection's stored password.
+2. Read the tab's status text and any Windows dialog; list the sessions on the device.
 
 **Expected:**
-- Windows' message "… does not allow connection requests using saved credentials …" (from the RDP client).
+- The tab connects and the device has a new RDP session for the account; no *Windows Security* prompt and no message about saved credentials.
+- The evidence records CredSSP's built-in defaults on the client (`HKLM\SYSTEM\CurrentControlSet\Control\Lsa\Credssp\PolicyDefaults`).
 
-Note: RemoteHub shows Windows' own text (`GetErrorDescription`) in the tab. It has no extra explanation of the NTLM delegation policy in the app; that explanation is only in the README.
+Note: RemoteHub hands the password to the RDP control itself (`ClearTextPassword`). Windows doesn't treat it as a password saved in Credential Manager, so the policy mstsc needs for those isn't needed (lab runs 20261017-160133 and 20261019-193627, Windows 11 26H2 client). Should Windows refuse after all, the tab shows Windows' own text (`GetErrorDescription`); the README explains the policy.
 
 #### R-RDP-04 · Password prompt helper
 P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
@@ -5683,9 +5684,10 @@ P1 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
 
 **Steps:**
 1. In Explorer on the admin's PC select the 3 files and the folder, Ctrl+C.
-2. Through the tab: in Explorer on the device open a folder, Ctrl+V.
-3. Watch the tab for the transfer progress.
-4. PS Direct on the device: compute SHA-256 of all arrived files.
+2. Limit the admin's PC's network adapter to 20 Mbit/s (`Set-VMNetworkAdapter -MaximumBandwidth`; Hyper-V limits only what a VM sends, so the limit belongs on the side that sends the files) – otherwise the 20 MB are across before the progress can be seen.
+3. Through the tab: in Explorer on the device open a folder, Ctrl+V.
+4. Watch the tab for the transfer progress; remove the limit.
+5. PS Direct on the device: compute SHA-256 of all arrived files.
 
 **Expected:**
 - Progress "Copying <what> to the device" shows in the tab, then "Copied <what> to the device – paste it there." / done.
@@ -5739,14 +5741,14 @@ P1 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
 **Preconditions:** Agent desktop connected to `normaluser`'s session.
 
 **Steps:**
-1. Lock the device session (`Lock-LabSession`).
-2. Copy text on the admin's PC; try Ctrl+V into the lock screen's password field through the tab.
-3. Task on the device after unlock: check that the text didn't reach the clipboard.
-4. Unlock (console keyboard), let the user allow again; copy text again and paste on the device.
+1. Lock the device session (`Lock-LabSession`), Send Ctrl+Alt+Del for the password field.
+2. Copy text on the admin's PC; click into the picture (the keyboard focus leaves the toolbar's button) and try Ctrl+V into the password field through the tab.
+3. Task on the device: check that the text didn't reach the clipboard; copy text in the locked session and check it doesn't reach the admin's PC.
+4. Unlock through the tab; copy text again and paste on the device.
 
 **Expected:**
-- While locked: nothing reaches the device's clipboard and nothing comes back.
-- After unlock and consent: copy and paste works again.
+- While locked: nothing reaches the device's clipboard and nothing comes back. The agent's service closes the clipboard both ways while the lock, sign-in or Ctrl+Alt+Del screen is up (LogonUI runs in the session); a file or image copy offered then is refused with "Nothing is copied while the device shows its lock or sign-in screen – copy again once it is unlocked."
+- After unlock: copy and paste works again.
 
 #### UI-CP-09 · Text both ways (RDP)
 P1 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
@@ -5795,6 +5797,7 @@ P3 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 1. In the RDP tab copy a text in Notepad on device A.
 2. Switch to the agent tab; paste in Notepad on device B.
 3. Task on device B: read the text.
+4. When it didn't arrive: whether the text is on the admin's PC's clipboard (read by another program) and RemoteHub's log lines about the agent tab's clipboard ("text copied on this PC sent …" or "this PC's clipboard couldn't be read …"), so the evidence tells which half failed.
 
 **Expected:**
 - The text from device A arrives on device B.
@@ -5814,6 +5817,8 @@ P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
 **Expected:**
 - The security options screen (Lock, Switch user, Sign out, Task Manager) shows in the tab.
 - After Esc the desktop is back.
+
+Note: Windows frames the first option ("Lock") with the keyboard focus, and OCR may not read framed text – in lab run 20261019-193627 it read every option but "Lock" although `ui-desktop-sas-options-tab.png` shows it. When "Lock" isn't read, the test moves the focus down once (Down arrow through the tab) and reads the picture again (`ui-desktop-sas-options-moved-tab.png`).
 
 #### UI-SAS-02 · Agent tab, **lock screen**
 P1 · How: U S C · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
@@ -5841,12 +5846,14 @@ P1 · How: U C · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
 **Steps:**
 1. FlaUI: open the agent desktop, pick the console, connect.
 2. Click "Send Ctrl+Alt+Del"; screenshot.
-3. Type `PSAdmin` and the lab password through the tab, Enter.
+3. Click into the picture (the keyboard focus stays on the toolbar's button otherwise), type `PSAdmin` and the lab password through the tab, Enter.
 4. Wait for the desktop.
 
 **Expected:**
 - The sign-in screen shows in the tab; Ctrl+Alt+Del opens the credential fields.
 - `PSAdmin` signs in; the tab shows the desktop (own account – nobody asked).
+
+Note: in lab run 20261019-193627 the keys were typed right after the button click and went to RemoteHub's toolbar – Tab moved to the privacy screen button and Enter opened its menu (`ui-desktop-signin-desktop-client.png`); the device's sign-in screen timed out back to the clock. The test now clicks into the picture first.
 
 #### UI-SAS-04 · Agent tab, UAC
 P1 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1`
@@ -6036,7 +6043,7 @@ P2 · How: U PS · Needs: 2VM · Status: ✅ Automated – `C-REC.Tests.ps1`
 **Steps:**
 1. FlaUI: open an RDP tab; click "Record this tab to a video file"; accept "Record this tab" → *Start recording*.
 2. Wait 10 s; click the red *REC 00:10* button to stop; choose *Close*.
-3. Repeat for agent desktop, PowerShell, File transfer, Registry, Services and Processes tabs.
+3. Repeat for agent desktop, PowerShell, File transfer, Registry, Services and Processes tabs. Before the agent desktop tab the person at the device is warmed up (its first call starts its server and loads the OCR – not against the consent dialog's 30 s countdown); then it clicks *Allow*.
 4. PS Direct: list `C:\Users\Admin\Videos\RemoteHub`.
 5. Read each file's duration with Media Foundation.
 
@@ -7527,6 +7534,8 @@ P3 · How: U C · Needs: 2VM · Status: ✅ Automated – `UI-RDP2.Tests.ps1`
 #### R-RDP-13 · Additional RDP session
 P3 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-RDP2.Tests.ps1`
 
+**Preconditions:** On the device "Restrict each user to a single session" off – `fSingleSessionPerUser` = 0 both as the setting (`HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server`) and as the policy (`HKLM\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services`), Remote Desktop Services restarted. The device is a Windows Server VM (two administrative sessions); a client SKU allows only one session. Also for R-RDP-12 (Device and Device2 are two connections to the same device and account).
+
 **Expected:**
 - with an RDP tab open *Open additional session* (tree) / *Additional remote desktop session* (tab) → a second tab and a second session on the device
 
@@ -7636,6 +7645,8 @@ P3 · How: U S · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`
 
 **Expected:**
 - 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived."
+
+Note: the 99 MB go through the admin's PC's adapter limited to 10 Mbit/s. Until lab run 20261019-193627 the device's adapter was limited – Hyper-V limits only what a VM sends, so that never slowed a copy to the device; in that run the device logged the paste ("… comes now") but RemoteHub never showed "Copying 1 file to the device", and the agent noticed a dropped connection about 2.5 min later. Not explained by the evidence: RemoteHub's log now records each paste request from the device and what became of it, the agent's log a paste request that isn't passed on, and the test keeps RemoteHub's log lines (`cp15ClientLog`) when the progress doesn't come.
 
 #### UI-TL-07 · WinRM account refused
 P3 · How: U · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`

@@ -5,7 +5,7 @@
 #   R-RDP-11 password prompt "Do nothing", R-RDP-10 the password toast and "Clear now", R-RDP-12 the switch hotkey
 #   inside an RDP tab (and from full screen), R-RDP-13 an additional RDP session from the tree and from the tab bar.
 # Needs: 2VM (this Windows 11 client + the Server VM). The device: Remote Desktop on, "Restrict each user to a single
-# session" off (fSingleSessionPerUser = 0: two RDP sessions of PSAdmin at once), "Always prompt for password upon
+# session" off (fSingleSessionPerUser = 0 as setting and policy: two RDP sessions of PSAdmin at once), "Always prompt for password upon
 # connection" for the prompt cases. This PC: the NTLM delegation policy for TERMSRV/* (the lab isn't a domain - R-RDP-01).
 # The RDP control is an ActiveX host without UI Automation inside: what happens in the session is checked on the device
 # (quser), the selected tab by the main window's title ("<tab> . <kind> - RemoteHub").
@@ -107,8 +107,10 @@ BeforeAll {
             })
     }
     # waits until PSAdmin has at least $Count active RDP sessions on the device (a sign-in takes a while); answers them
-    # When fewer come, $script:quser holds what the device listed then and its single-session values, for the evidence
-    # (lab run 20261019-193627: one session where two were expected, nothing recorded to tell why).
+    # When fewer come, $script:quser holds what the device listed then, its single-session values and the session
+    # manager's events of the last 10 minutes, for the evidence (lab run 20261019-193627: one session where two were
+    # expected, nothing recorded to tell why). Event 25 "reconnection succeeded" for the first session when the second
+    # tab connected means Windows still restricts PSAdmin to one session; 40 gives the reason a session was disconnected.
     function Wait-DeviceRdp([int]$Count, [int]$TimeoutSec = 90) {
         $script:quser = $null
         $until = (Get-Date).AddSeconds($TimeoutSec)
@@ -120,7 +122,9 @@ BeforeAll {
         $script:quser = @(Invoke-LabGuest -Name $device.Name -ScriptBlock {
                 $p = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue
                 $t = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
-                @(quser 2>$null) + @("fSingleSessionPerUser: policy $(if ($p) { $p.fSingleSessionPerUser }), registry $(if ($t) { $t.fSingleSessionPerUser })")
+                $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 23, 24, 25, 39, 40; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction SilentlyContinue |
+                        Sort-Object TimeCreated | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) LSM $($_.Id): $(($_.Message -replace '\s+', ' ').Trim())" })
+                @(quser 2>$null) + @("fSingleSessionPerUser: policy $(if ($p) { $p.fSingleSessionPerUser }), registry $(if ($t) { $t.fSingleSessionPerUser })") + $ev
             } | ForEach-Object { "$_".Trim() })
         $ids
     }
@@ -194,8 +198,15 @@ BeforeAll {
         Invoke-LabGuest -Name $device.Name -ScriptBlock {
             $ts = 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server'
             Set-ItemProperty $ts -Name fDenyTSConnections -Value 0
-            # two sessions of the same account at once (an additional session must not take over the first one)
+            # two sessions of the same account at once (an additional session must not take over the first one). Also as
+            # the policy ("Restrict Remote Desktop Services users to a single Remote Desktop Services session" = Disabled),
+            # which wins over the setting: in run 20261019-193627 the registry value alone (with the service restarted)
+            # still put every second sign-in of PSAdmin into the first session - the second tab ended "Disconnected."
+            # while the first stayed connected, and quser listed one session.
             Set-ItemProperty $ts -Name fSingleSessionPerUser -Value 0
+            $tsp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+            $null = New-Item $tsp -Force
+            Set-ItemProperty $tsp -Name fSingleSessionPerUser -Value 0 -Type DWord
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
         Restart-LabRdpService -Name $device.Name

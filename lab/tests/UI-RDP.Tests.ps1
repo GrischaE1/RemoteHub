@@ -1,6 +1,6 @@
 # R-RDP / UI-CP (RDP) / UI-SAS (RDP) / UI-NET-02 / A-CLIP / J-11 / J-12 / UI-JUMP-01 - RemoteHub's RDP tabs on the
 # admin's PC (this client VM, the console account's session, driven by UI Automation) to the device (the Server VM):
-# saved credentials, the NTLM policy message, the password prompt helper, redirection (clipboard text / files / image,
+# saved credentials (with and without the NTLM delegation policy), the password prompt helper, redirection (clipboard text / files / image,
 # drives), dynamic resolution, Ctrl+Alt+Del and the lock screen, full screen, detach / dock, .rdp export / import (also
 # as normaluser), single instance, auto-reconnect after a network cut, the agent installed through the clipboard into
 # the RDP session, and the jump host (connections moved under it, an RDP tab through it, an older RemoteHub opening the
@@ -112,8 +112,9 @@ BeforeAll {
         }
         Start-Sleep -Seconds 5
     }
-    # "Allow delegating saved / fresh credentials with NTLM-only server authentication" for TERMSRV/* on this PC: the
-    # lab isn't a domain, so the RDP client sends saved credentials only with it (R-RDP-01 precondition)
+    # "Allow delegating saved / fresh credentials with NTLM-only server authentication" for TERMSRV/* on this PC (the lab
+    # isn't a domain). RemoteHub's tabs sign in without it too (R-RDP-03); the later contexts keep it so that a change in
+    # Windows' CredSSP defaults fails R-RDP-03 alone rather than every RDP case.
     function Allow-NtlmDelegation {
         Invoke-LabGuest -Name $VmName -ScriptBlock {
             $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
@@ -184,7 +185,7 @@ BeforeAll {
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
         $script:task = Start-LabClient -Name $VmName
     }
-    # A connected RDP tab of Device, whatever the contexts before left: the NTLM policy (saved credentials need it), the
+    # A connected RDP tab of Device, whatever the contexts before left: the NTLM policy (see Allow-NtlmDelegation), the
     # RDP tab selected if there is one, else a new one - "Remote desktop via RDP" once the agent is the connection's
     # way, "Connect" before.
     function Ensure-RdpTab([int]$TimeoutSec = 90) {
@@ -206,7 +207,9 @@ BeforeAll {
     # An agent desktop tab of Device, allowed by the person at the device
     function Ensure-AgentDesktop {
         $null = Ensure-Agent
-        if ((Ui 'Desktop (agent)' -Value exists -Optional -TimeoutSec 3).found) { return $true }
+        # (10 s: in lab run 20261019-193627 3 s missed the open, connected tab after a failed step, so Connect was used
+        # and the person waited 60 s for an "Allow" that never came - the device's session was the one already allowed)
+        if ((Ui 'Desktop (agent)' -Value exists -Optional -TimeoutSec 10).found) { return $true }
         Menu 'Connect'
         $null = Ui 'Connect' -Optional -TimeoutSec 15
         $null = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60
@@ -454,6 +457,11 @@ AfterAll {
 
 Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET', 'A-CLIP', 'J', 'UI-JUMP' -Skip:(-not $isClient) {
 
+    # R-RDP-03 used to expect Windows' refusal of saved credentials here. Lab runs 20261017-160133 and 20261019-193627
+    # (Windows 11 26H2 client from its checkpoint, no CredentialsDelegation key, Server 2025 device outside a domain)
+    # both signed in: RemoteHub hands the password to the RDP control itself (IMsRdpClientNonScriptable.ClearTextPassword),
+    # and Windows doesn't treat that as a password saved in Credential Manager. So the case checks that the stored
+    # password works without the policy - and records CredSSP's built-in defaults on this PC for the evidence.
     Context 'saved credentials without the NTLM delegation policy' {
         BeforeAll {
             $n = [ordered]@{}
@@ -463,9 +471,15 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                         $k = Get-Item 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation' -ErrorAction SilentlyContinue
                         if ($k) { @($k.Property | ForEach-Object { "$_=$($k.GetValue($_))" }) }
                     } | Where-Object { $_ } | ForEach-Object { [string]$_ })
+                # CredSSP's built-in lists (used when no policy is set): "<list>: <servers>"
+                $n.credsspDefaults = @(Invoke-LabGuest -Name $VmName -ScriptBlock {
+                        Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Credssp\PolicyDefaults' -ErrorAction SilentlyContinue |
+                            Where-Object { $_.PSChildName -like '*Saved*' -or $_.PSChildName -like '*Fresh*' } |
+                            ForEach-Object { $k = $_; "$($k.PSChildName): $(@($k.GetValueNames() | ForEach-Object { $k.GetValue($_) }) -join ', ')" }
+                    } | ForEach-Object { [string]$_ })
                 Clear-DeviceSessions
                 Menu 'Connect'
-                Start-Sleep -Seconds 25
+                $n.connected = Wait-RdpTab 90
                 # the tab's overlay (Windows' own text, RdpSession.OnDisconnected) and Windows' credential dialog, if any
                 $n.overlay = @((Ui '*' -Value list).items)
                 $n.promptShown = CredDialog 5
@@ -479,9 +493,13 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Save 'ntlm' $n
         }
 
-        It 'R-RDP-03 non-domain device, no "Allow delegating saved credentials with NTLM-only" policy: Windows'' message about saved credentials' -Tag 'R-RDP-03' {
+        It 'R-RDP-03 non-domain device, no "Allow delegating saved credentials with NTLM-only" policy: the stored password still signs in - no Windows prompt, no message about saved credentials' -Tag 'R-RDP-03' {
+            $n['connect-error'] | Should -BeNullOrEmpty
             @($n.policy) | Should -BeNullOrEmpty -Because 'the precondition: no NTLM delegation policy on this PC'
-            "$(@($n.overlay) -join "`n")`n$(@($n.prompt) -join "`n")`n$($n.screen)" | Should -Match 'saved credentials'
+            "$(@($n.overlay) -join "`n")`n$(@($n.prompt) -join "`n")`n$($n.screen)" | Should -Not -Match 'saved credentials'
+            $n.promptShown | Should -BeFalse -Because 'Windows doesn''t ask for the password'
+            $n.connected | Should -BeTrue -Because "the tab connects (CredSSP defaults: $(@($n.credsspDefaults) -join ' / '))"
+            @($n.device.Rdp).Count | Should -BeGreaterThan 0 -Because 'the device has an active RDP session for PSAdmin'
         }
     }
 
@@ -957,13 +975,23 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                     $u.atB = Invoke-LabPerson -Name $device.Name -Account Console -Do clip-get
                 } while ($u.atB.sha256 -ne (Sha $u.text) -and (Get-Date) -lt $until)
                 Shot 'across'
+                if ($u.atB.sha256 -ne (Sha $u.text)) {
+                    # Lab run 20261019-193627: the console session's clipboard stayed empty while the agent tab was live.
+                    # Which half failed: did the copy reach this PC's clipboard through the RDP tab (read by another
+                    # program, as Windows' own paste would), and did RemoteHub send it ("text copied on this PC sent" or
+                    # "clipboard couldn't be read" in its log)?
+                    $u.atPc = ((InSession $VmName Console $code.textGet @{ B64 = (B64 $u.text) }).b64 -eq (B64 $u.text))
+                    $u.diag = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                            param($a) @(Get-Content "C:\Users\$a\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 60 -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Agent desktop|clipboard' } | ForEach-Object { [string]$_ })
+                        } | ForEach-Object { [string]$_ })
+                }
             }
             Save 'across' $u
         }
 
         It 'UI-CP-12 a text copied in the RDP session arrives through the agent tab in the other session' -Tag 'UI-CP-12' {
             $u.connected | Should -BeTrue
-            $u.atB.sha256 | Should -Be (Sha $u.text)
+            $u.atB.sha256 | Should -Be (Sha $u.text) -Because "the text should come through the agent tab (on this PC's clipboard: $(if ($u.Contains('atPc')) { $u.atPc } else { 'not checked' }); RemoteHub's log: $(@($u['diag']) -join ' / '))"
         }
     }
 

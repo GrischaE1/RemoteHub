@@ -661,11 +661,13 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Start-Sleep -Seconds 4
                 # what the device's clipboard offers before the paste (no file reached either way in the run of 16.10.2026 13:55)
                 $R.cp04DeviceClip = ClipFormats $dn 'User'
-                # the device's adapter limited to 20 Mbit/s while the 20 MB go: unlimited they were across in well under
-                # a second and the notice watcher (every 400 ms) never saw "Copying ..." (lab run 20261019-193627)
-                Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 20000000
+                # This PC's adapter limited to 20 Mbit/s while the 20 MB go (about 8 s): unlimited they were across in well
+                # under a second and the notice watcher (every 400 ms) never saw "Copying ...". Hyper-V's MaximumBandwidth
+                # limits only what a VM sends - the device's adapter limited (lab run 20261019-193627) left this copy to the
+                # device as fast as before: the device asked at 12:48:07.7, "Copied 5 files" came 0.5 s later.
+                Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 20000000
                 try { $R.cp04Arrived = @(PasteAt $dn 'User' 'cp04' 5) }
-                finally { Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 0 }
+                finally { Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 0 }
                 Start-Sleep -Seconds 3
                 $R.cp04Notices = @(Notices $mark)
             }
@@ -735,6 +737,16 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Send Ctrl+Alt+Del'
                 Start-Sleep -Seconds 5
                 $R.sasOptions = Ocr (TabPicture 'sas-options')
+                # Windows frames the first option ("Lock") with the keyboard focus, and OCR reads framed text poorly: in
+                # lab run 20261019-193627 it read every option but "Lock" although the picture shows it. Then the focus is
+                # moved one down (Down arrow through the tab) and the picture read again - both readings count.
+                if ($R.sasOptions -notmatch 'Lock') {
+                    FocusTab 0.5 0.01
+                    Key 'Down'
+                    Start-Sleep -Seconds 2
+                    $R.sasOptionsFirst = $R.sasOptions
+                    $R.sasOptions = "$($R.sasOptions) $(Ocr (TabPicture 'sas-options-moved'))"
+                }
                 # Esc for the device: the tab has the focus (in the run of 16.10.2026 it went to another window and the
                 # security options stayed on the device through the Fit to window step)
                 FocusTab 0.5 0.01
@@ -829,6 +841,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.lockText = "while locked $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $R.lockText
                 Start-Sleep -Seconds 3
+                # the picture gets the keyboard focus back from the Send Ctrl+Alt+Del button, so Ctrl+V reaches the field
+                FocusTab 0.5 0.01
                 Combo 0x11, 0x56
                 Start-Sleep -Seconds 2
                 $R.lockDeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
@@ -1206,6 +1220,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Send Ctrl+Alt+Del'
                 Start-Sleep -Seconds 5
                 $R.signinFields = Ocr (TabPicture 'signin-fields')
+                # The keys go to the device only while the picture has the keyboard focus: after the toolbar's Send
+                # Ctrl+Alt+Del button it stays on the toolbar. In lab run 20261019-193627 "PSAdmin", Tab, password, Enter
+                # went to RemoteHub's toolbar (Tab to the privacy screen button, Enter opened its menu -
+                # ui-desktop-signin-desktop-client.png) and the device's sign-in screen timed out back to the clock.
+                FocusTab 0.5 0.01
                 TypeText $device.AdminAccount
                 Key 'Tab'
                 TypeText $password
