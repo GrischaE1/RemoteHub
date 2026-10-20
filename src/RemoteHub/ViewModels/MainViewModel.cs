@@ -366,6 +366,16 @@ public sealed partial class MainViewModel : ObservableObject
         RequestSave();
     }
 
+    /// <summary>
+    /// Adds an item the user has just created and writes it at once. Creating one is a single deliberate step, so it
+    /// doesn't wait for the save timer: RemoteHub ending within that time (a crash, a sign-out) would lose it.
+    /// </summary>
+    public void AddNow(NodeBase node, NodeBase? parent)
+    {
+        Add(node, parent);
+        SaveNow();
+    }
+
     public void Remove(NodeBase node)
     {
         ChildrenOf(node.Parent).Remove(node);

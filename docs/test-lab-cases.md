@@ -165,7 +165,7 @@ account is `PSAdmin`.
 | A-SAME-01 | Reinstall the same version | through the agent → reported updated, identity kept | H | 3 | ✅ |
 | A-SAME-02 | Same version with a new device certificate | "Install again with Create a new device certificate" (RemoteHub's advice on a pin mismatch) → new certificate answers, old one refused, one certificate left | H | 2 | ✅ |
 | A-DOWN-01 | Downgrade | older MSI over newer → refused: "A newer version of the RemoteHub Agent is already installed.", newer still running | PS | 2 | ✅ |
-| A-REPAIR-01 | `msiexec /fa <package>` | repair succeeds, identity kept, service running; the enrollment step doesn't run (`NOT Installed`). Run with the MSI as the source: RemoteHub deletes the folder it installed from, and the cached package has no files, so `/fa <product code>` alone ends with 1603 | PS | 3 | ✅ |
+| A-REPAIR-01 | Repair from the MSI | Programs and Features offers no Repair (`NoRepair` = 1, `ARPNOREPAIR`): RemoteHub deletes the folder it installed from and the cached package has no files, so `msiexec /fa` – by product code or with a copy of the MSI – only looks in the registered source list and ends with 1706 / 1603. `msiexec /i <package> REINSTALL=ALL REINSTALLMODE=amus` (the package under its registered name) repairs: 0/3010, identity kept, service running; the enrollment step doesn't run (no `ENROLLMENT` given) | PS | 3 | ✅ |
 | A-ROLLBACK-01 | First install fails after enrolling | forced failure after AgentEnroll → no rule, no certificate, no agent.json, no service | PS | 1 | ✅ |
 
 ### 5.4 Uninstall
@@ -187,7 +187,7 @@ account is `PSAdmin`.
 | A-UNINST-13 | Uninstall while a desktop session is open | session ends, helper gone, display restored, no banner left | H S | 2 | ✅ |
 | A-UNINST-14 | Reinstall after uninstall | new enrollment works, no duplicate certs or rules | H | 2 | ✅ |
 | A-UNINST-15 | Uninstall after automatic sign-in | after an `AUTOSIGNIN=1` install (`agent.json` `noUserBehavior` = AutoSignIn, `autoSignInGroups` with Administrators; policy key empty, no `autosignin.policy` – docs/admx-design.md §11.3): provider DLL and both keys gone, `agent.json` and with it the install's choice removed, the policy key still empty | PS | 1 | ✅ |
-| A-UNINST-16 | The install's choice, IT's policy values and an older version's values | after an `AUTOSIGNIN=1` install (its choice in `agent.json`, policy key empty) IT sets `Rights\AutoSignIn` → uninstall removes `agent.json`, IT's value stays; IT sets `NoUserBehavior=SignInScreen` → `AUTOSIGNIN=0` (update through the agent) clears `noUserBehavior` / `autoSignInGroups` in `agent.json`, IT's value stays. Migration (version-independent, planted): the policy key and `autosignin.policy` as a version before 0.18.12 leaves them – `NoUserBehavior` unchanged, `Rights\AutoSignIn` changed by IT – then a service restart → `NoUserBehavior` moved to `agent.json`, `Rights\AutoSignIn` stays in the policy key, the marker deleted, the log says "moved NoUserBehavior" and "Rights\AutoSignIn changed since the install – left in the policy key" | PS | 3 | ✅ |
+| A-UNINST-16 | The install's choice, IT's policy values and an older version's values | after an `AUTOSIGNIN=1` install (its choice in `agent.json`, policy key empty) IT sets `Rights\AutoSignIn` → uninstall removes `agent.json`, IT's value stays; IT sets `NoUserBehavior=SignInScreen` → `AUTOSIGNIN=0` (update through the agent) writes `noUserBehavior` = `SignInScreen` and clears `autoSignInGroups` in `agent.json` (not set would mean allowed – on by default), IT's value stays. Migration (version-independent, planted): the policy key and `autosignin.policy` as a version before 0.18.12 leaves them – `NoUserBehavior` unchanged, `Rights\AutoSignIn` changed by IT – then a service restart → `NoUserBehavior` moved to `agent.json`, `Rights\AutoSignIn` stays in the policy key, the marker deleted, the log says "moved NoUserBehavior" and "Rights\AutoSignIn changed since the install – left in the policy key" | PS | 3 | ✅ |
 
 ### 5.5 Configuration and service behaviour
 
@@ -241,7 +241,7 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 |---|---|---|---|---|---|
 | P-SES-01 | Session | runspace opens, `$PSVersionTable.PSVersion` 5.1, `whoami` = PSAdmin, event 1000 with PID | H E | 1 | ✅ |
 | P-SES-02 | Profile + environment | `$env:USERPROFILE` = PSAdmin's profile, HKCU writable | H | 2 | ✅ |
-| P-SES-03 | End kills the tree | start `notepad`/`ping -t` in the session, close it → powershell.exe and children gone within 5 s, event 1001 | H PS E | 1 | ✅ |
+| P-SES-03 | End kills the tree | start `cmd /k`/`ping -t` in the session, close it → powershell.exe and children gone within 5 s, event 1001 | H PS E | 1 | ✅ |
 | P-SES-04 | Large arguments | 2 MB argument and 10 MB output round-trip | H | 2 | ✅ |
 | P-SES-05 | Message > 16 MiB | session ends with "Message too large", agent stays healthy | H | 3 | ✅ |
 | P-SES-06 | Network drop | `Disconnect-VMNetworkAdapter` during a session → agent ends it within ~60 s (keep-alive 30+30), powershell.exe gone, 1001 "connection lost" | N PS E | 2 | ✅ |
@@ -414,7 +414,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-LOCK-01 | Connect to a locked session | lock screen in the picture without a question | H S | 1 | ✅ |
 | D-LOCK-02 | User unlocks while connected | picture holds at the desktop (`UserDesktop`), user asked (Ask), Allow → continues, event 1102 | H S C E | 1 | ✅ |
 | D-LOCK-03 | User unlocks and refuses | Denied, event 2101, session ends | H S C E | 1 | ✅ |
-| D-LOCK-04 | Lock while connected (Win+L by the user) | connection stays, lock screen shown | H S | 2 | ✅ |
+| D-LOCK-04 | Lock while connected (Win+L by the user) | connection stays, the switch passes through the secure desktop, the lock screen (not the user's desktop) shown | H S | 2 | ✅ |
 | D-LOCK-05 | Win11 lock screen on the Default desktop | held while waiting for Ctrl+Alt+Del; no user desktop leaked before consent | H C | 1 | ✅ |
 | D-SIGNIN-01 | Nobody signed in | sign-in screen shown | H C | 1 | ✅ |
 | D-SIGNIN-02 | Admin signs in through the picture | Ctrl+Alt+Del button + typed password through the desktop session → signed in, no consent for own account | H | 1 | ✅ |
@@ -583,7 +583,7 @@ The helper's token gets UIAccess (policy `HelperUIAccess`, DWORD, on unless 0), 
 | D-CADHIDE-03 | Unblocked while connected | input unblocked → put back; blocked again → hidden again | PS | 1 | ✅ |
 | D-CADHIDE-04 | Put back at the end | the connection ends → the values as before, no `sas-actions-*.txt` left | PS | 1 | ✅ |
 | D-CADHIDE-05 | Put back after a crash | service and helper killed while hidden → still hidden; the service's start puts them back, log "actions an earlier helper hid are back" | PS H | 1 | ✅ |
-| D-CADHIDE-06 | Automatic sign-in | in the admin's new session (input always blocked) → hidden, Ctrl+Alt+Del offers only Task Manager; put back when the connection ends | PS C H | 1 | ✅ |
+| D-CADHIDE-06 | Automatic sign-in | in the admin's new session (input always blocked) → hidden, Ctrl+Alt+Del offers only Task Manager; put back when the connection ends on purpose (the harness closes it) | PS C H | 1 | ✅ |
 
 ### 9.12 Automatic sign-in – credential provider (C-PROV)
 
@@ -629,7 +629,7 @@ Phase 4 – after the sign-in (lab/tests/C-END.Tests.ps1):
 | C-END-11 | Ctrl+Alt+Del at the device during the hold | after a drop Ctrl+Alt+Del at the console → the screen offers only Task Manager and Cancel (no Lock, privacy-mode-design §5.9); not signed out at once; signed out when the 2 min run out | H N C E | 3 | ✅ |
 | C-END-12 | Resume brings the cover back | an operator without `Rights\PrivacyScreen` resumes → the service's privacy screen is back. Fails today when the agent takes the drop for a close (D-RES-10) | H N C | 2 | ✅ |
 | C-END-13 | Failed sign-in removes the cover | wrong password → the service's privacy screen dropped, a later manual sign-in isn't covered | H C | 3 | ✅ |
-| C-END-14 | Who turned the cover on | 1104 for the service's cover reads "<admin> … turned the privacy screen on …" although the admin didn't – product finding | E | 3 | ✅ |
+| C-END-14 | Who turned the cover on | 1104 for the service's cover reads "the service (automatic sign-in of <admin> from <source>) turned the privacy screen on …", never "<admin> from <source> turned …" – the admin didn't ask for it | E | 3 | ✅ |
 | C-END-15 | The agent notices the drop first | cut ≥ 75 s, resumed within 2 min → same session, no lock; fails today (D-RES-10) | H N PS E | 1 | ✅ |
 
 More refusals and limits (lab/tests/C-AUTO2.Tests.ps1), decided by the agent before Windows is asked:
@@ -750,7 +750,7 @@ Data checks read the files and the database through RemoteHub's own `LocalDb` cl
 | C-AUD-04 | CSV export | formula-like values defused (`=cmd` → `'=cmd`) | U | 2 | ✅ | |
 | C-AUD-05 | Retention in Settings → Logs | choices 30 days … 10 years, default "1 year (default)", "Older entries are removed the next time RemoteHub starts."; audit "Audit log retention changed" "Entries kept for <x> (before: <y>)"; under the policy the box is off, "Set by your organisation." | U | 2 | ✅ | |
 | C-AUD-06 | Newest entries removed | Verify: "The newest entries were removed: the log ends at entry X, but entry Y was written."; intact → "All N entries are unchanged and complete since they were written." | PS U | 2 | ✅ | |
-| C-AUD-07 | More events | "Added", "Connection failed", "Startup protection changed" ("Startup password" / "… and Windows Hello" / "Off"), "Settings location changed", "Backup exported" ("<n> folders and connections, <m> saved credentials") | U | 3 | ✅ | |
+| C-AUD-07 | More events | "Added", "Connection failed", "Startup protection changed" ("Startup password" / "… and Windows Hello" / "Off"), "Settings location changed", "Backup exported" ("<n> folders and connections, <m> saved credentials, <p> pages") | U | 3 | ✅ | |
 | C-AUD-08 | Bulk save summary | more than 50 changes in one save → one "Changed" entry, target "<n> items", detail "<a> added, <c> changed, <d> deleted" | PS U | 3 | ✅ | |
 | C-BAK-01 | Backup round trip | export `.rhbackup` with password, import on a fresh profile (normaluser) as new folder and as replace → identical incl. credentials | U | 1 | ✅ | |
 | C-BAK-02 | Wrong backup password | refused, nothing imported | U | 2 | ✅ | |
@@ -873,7 +873,7 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-CP-10 | Files both ways (RDP) | Explorer copy/paste through an RDP tab, hashes equal | U S | 2 | ✅ |
 | UI-CP-11 | Image both ways (RDP) | pixels equal | U S | 3 | ✅ |
 | UI-CP-12 | Across sessions | copy in an RDP tab, paste in an agent tab to another device → arrives | U S | 3 | ✅ |
-| UI-CP-13 | DesktopClipboard=2 (images) | an image reaches the device; a file copy is refused – today with "Copying images and files isn't allowed on this device – only text.", which is wrong for level 2 (the agent says "Copying files isn't allowed on this device.") | U S PS | 3 | ✅ |
+| UI-CP-13 | DesktopClipboard=2 (images) | an image reaches the device; a file copy is refused with "Copying files isn't allowed on this device." (the agent's wording; RemoteHub said "Copying images and files isn't allowed on this device – only text." up to 0.20.3) | U S PS | 3 | ✅ |
 | UI-CP-14 | Copies from before connecting are quiet | a too-big or refused copy already on the clipboard when the tab goes live → no notice; the same copy while connected → the notice | U S | 3 | ✅ |
 | UI-CP-15 | Cancel a copy to the device | 1 MB or more: "Copying <what> to the device", cancel → "Cancelled – nothing was copied to the device."; no receipt within 30 s → "Failed – the device didn't confirm the copy of <what>; it may not have arrived." | U S | 3 | ✅ |
 
@@ -937,7 +937,7 @@ RemoteHub and the agent on the same VM (`POL-CLIENT.Tests.ps1`).
 | POL-03 | `RemoteHubAgent.exe policy` | with `MaxSessions` = 50, `PowerShellEnabled` = 0, `ConsentTimeoutSeconds` = 9999 set: `MaxSessions 50 [policy]`, `PowerShellEnabled Off [policy]`, `ListenPort 58732 [agent.json]`, `ConsentTimeoutSeconds 30 [default]` plus "INVALID in the policy: 9999 is outside 5–600 – ignored"; every agent value of the template is listed; the policy key unreadable for SYSTEM (deny ACE) → "THE POLICY KEY CAN'T BE READ" | PS | 2 | ✅ | |
 | POL-04 | New agent values apply without a restart | `MaxSessions` = 1: a second PowerShell session while one is held → 503 "limit of simultaneous sessions", and the log says "session limit (1)"; `MaxSessions` = 0 → ignored (default), "Policy MaxSessions: 0 is outside 1–200 – ignored" logged exactly once after two connections; `PrivacyScreenMessage` = "Contoso IT is working on this PC" → the device's screen (console screenshot, OCR) shows it on the privacy screen with message, and without the policy "Remote Support Session in Progress" | PS H C E | 2 | ✅ | |
 | POL-05 | `PowerShellEnabled` = 0 | health's features have no `powershell`; a PowerShell session through the agent is refused before any sign-in (404, no failed-logon event 4625 for the try), the error says "turned off … by a policy on the device (PowerShellEnabled)", the log says "Refused PowerShell from … (policy PowerShellEnabled)"; the remote desktop still connects; policy removed → PowerShell works again without a restart | PS H E | 1 | ✅ | |
-| POL-06 | `AllowedGroups` | `AllowedGroups` = a new local group with a new user in it: that user gets PowerShell and the desktop; PSAdmin (not in it) is refused (403) for both; `Rights\Desktop` = Administrators set as well → PSAdmin gets the desktop again but not PowerShell; `DesktopViewOnly`, `ConsentBypass`, `AutoSignIn` stay nobody | PS H | 1 | ✅ | |
+| POL-06 | `AllowedGroups` | `AllowedGroups` = a new local group with a new user in it: that user gets PowerShell and the desktop; PSAdmin (not in it) is refused (403) for both; `Rights\Desktop` = Administrators set as well → PSAdmin gets the desktop again but not PowerShell; `DesktopViewOnly`, `ConsentBypass` stay nobody; `AutoSignIn` follows the group like the other rights (automatic sign-in is on by default) | PS H | 1 | ✅ | |
 | POL-07 | `ListenPort` and the firewall rule | `ListenPort` = 58800, service restarted: the agent listens on 58800 only, health with the pin answers there, the rule *RemoteHub Agent* has local port 58800 and the same remote address scope as before, the log says "moved to port 58800"; policy removed and restarted → 58732 again, rule back; `ListenPort` = 0 → ignored, 58732 | PS H E | 1 | ✅ | |
 | POL-08 | Automatic sign-in moves out of the policy key on update | previous release installed with `AUTOSIGNIN=1` (it wrote `NoUserBehavior` and `Rights\AutoSignIn` into the policy key and `autosignin.policy`; once the previous release is 0.18.12 or later the test leaves those values and the marker itself), updated to the build under test: both values gone from the policy key, `agent.json` has `noUserBehavior` = AutoSignIn and `autoSignInGroups`, `autosignin.policy` gone, the log says "moved NoUserBehavior and Rights\AutoSignIn"; `policy` shows both as `[agent.json]`; automatic sign-in still works (harness `auto-sign-in`). Variant: `NoUserBehavior` set to SignInScreen by IT before the update → it stays in the policy key, the log says "left in the policy key", automatic sign-in is refused | PS H E | 1 | ✅ | |
 | POL-09 | What the device's policy decides, in health | `ListenPort`, `VirtualDisplay` and `NoUserBehavior` set: health's `managed` = `autoSignIn`, `virtualDisplay`, `port` – nothing else, no values; one invalid (`ListenPort` = 0) → not named; none set → no `managed` | PS H | 2 | ✅ | |

@@ -741,12 +741,13 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         var regionClock = Stopwatch.StartNew();
         var lastStats = Stopwatch.StartNew();
         H264Encoder? encoder = null;
-        var quality = _quality;
+        // The quality the viewer asked for last; the encoder's own may be lower while the network is slow.
+        var requested = _quality;
         var lastSync = Stopwatch.StartNew();
         var lastChange = Stopwatch.StartNew();
         var lastAdapt = Stopwatch.StartNew();
         var refinements = 0;
-        int blocked = 0, loops = 0;
+        long waitedTicks = 0;
         RemoteCursor lastCursor = default;
         var secure = false;
         var haveImage = false;
@@ -853,11 +854,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 // Flow control: no more than a few frames ahead of the viewer.
                 if (Volatile.Read(ref _inFlight) >= DesktopProtocol.MaxFramesInFlight)
                 {
-                    blocked++;
+                    var waitStart = Stopwatch.GetTimestamp();
                     if (!_acks.Wait(1000, ct)) Interlocked.Exchange(ref _inFlight, 0); // an ack got lost: don't stall forever
+                    waitedTicks += Stopwatch.GetTimestamp() - waitStart;
                     continue;
                 }
-                loops++;
 
                 var result = screen.Capture(monitor, haveImage ? Math.Max(1, interval / 2) : 100, frame);
                 if (screen.TakeLogNote() is { Length: > 0 } note) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, note));
@@ -977,15 +978,18 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         blurClock.Restart();
                     }
                     int w = picture.Width & ~1, h = picture.Height & ~1;
-                    if (encoder is null || encoder.Width != w || encoder.Height != h || quality != _quality && !encoder.TrySetQuality(_quality))
+                    // Only a new quality from the viewer is applied here – compared with what it asked for before, not
+                    // with the encoder's, which the slow-network step below may have lowered on purpose.
+                    var asked = _quality;
+                    if (encoder is null || encoder.Width != w || encoder.Height != h || requested != asked && !encoder.TrySetQuality(asked))
                     {
                         encoder?.Dispose();
                         // "Smooth" (above 30 fps): the GPU's encoder when there is one – it falls back to software by itself.
-                        encoder = new H264Encoder(w, h, Math.Max(1, _fps), _quality, preferHardware: _fps > 30);
+                        encoder = new H264Encoder(w, h, Math.Max(1, _fps), asked, preferHardware: _fps > 30);
                         _keyFrameRequested = true;
                         if ((w != (_layoutWidth & ~1) || h != (_layoutHeight & ~1)) && _scale == 1) SendLayout(out _);
                     }
-                    quality = encoder.Quality;
+                    requested = asked;
                     var key = _keyFrameRequested;
                     _keyFrameRequested = false;
                     byte[]? au;
@@ -1012,12 +1016,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 // Slow network: lower the quality step by step; raise it again when the acks keep up.
                 if (lastAdapt.ElapsedMilliseconds >= 2000)
                 {
+                    var window = lastAdapt.ElapsedMilliseconds;
                     lastAdapt.Restart();
-                    var target = _quality;
-                    if (blocked > loops && encoder is not null && encoder.Quality > 20) encoder.TrySetQuality(encoder.Quality - 10);
-                    else if (blocked == 0 && encoder is not null && encoder.Quality < target) encoder.TrySetQuality(Math.Min(target, encoder.Quality + 5));
-                    if (encoder is not null) quality = encoder.Quality;
-                    blocked = loops = 0;
+                    var waited = (long)Stopwatch.GetElapsedTime(0, waitedTicks).TotalMilliseconds;
+                    if (encoder is not null && AdaptedQuality(encoder.Quality, requested, waited, window) is var next && next != encoder.Quality) encoder.TrySetQuality(next);
+                    waitedTicks = 0;
                 }
 
                 var spent = (int)Stopwatch.GetElapsedTime(loopStart).TotalMilliseconds;
@@ -1094,6 +1097,21 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                 dst[p + 3] = 255;
             }
         }
+    }
+
+    /// <summary>
+    /// The encoder's quality after <paramref name="windowMs"/> in which the capture loop spent <paramref name="waitedMs"/>
+    /// waiting for the viewer's acks: a quarter of the time or more means the network can't keep up – 10 lower, not below
+    /// 20; no wait at all – 5 higher, up to what the viewer asked for. Counting waits rather than blocked loops matters:
+    /// on a saturated link every wait is followed by exactly one capture, so the counts stay equal while the time is
+    /// nearly all spent waiting.
+    /// </summary>
+    internal static int AdaptedQuality(int current, int requested, long waitedMs, long windowMs)
+    {
+        if (current > requested) return requested;
+        if (windowMs > 0 && waitedMs * 4 >= windowMs) return current > 20 ? Math.Max(20, current - 10) : current;
+        if (waitedMs <= 0 && current < requested) return Math.Min(requested, current + 5);
+        return current;
     }
 
     /// <summary>All of a 16×16 grid of samples is (nearly) black: a display that went dark, a blank screen saver.</summary>

@@ -228,6 +228,7 @@ public partial class AgentDesktopFlowTests
         public required Input Input;
         public required Apps Apps;
         public required ConcurrentQueue<A.AuditEvent> Audits;
+        public readonly ConcurrentQueue<(A.AuditEvent Id, string Text)> AuditTexts = new();
         public ValueTask DisposeAsync() => App.DisposeAsync();
     }
 
@@ -270,7 +271,9 @@ public partial class AgentDesktopFlowTests
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new Auth(), null!, log, IPAddress.Loopback,
             new A.DesktopServices(sessions, helpers, secureAttention ?? (() => null), autoSignIn), () => policy));
         await app.StartAsync();
-        return new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Apps = apps, Sessions = sessions, Audits = audits };
+        var device = new Device { App = app, Port = new Uri(app.Urls.First()).Port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Helpers = helpers, Input = input, Apps = apps, Sessions = sessions, Audits = audits };
+        log.Audited += (id, text) => device.AuditTexts.Enqueue((id, text));
+        return device;
     }
 
     private static PSCredential Cred(string user)
@@ -292,7 +295,10 @@ public partial class AgentDesktopFlowTests
         public readonly ConcurrentQueue<DesktopTransferEnd> TransferEnds = new();
         public readonly ConcurrentQueue<DesktopPrivacy> Privacy = new();
         public readonly MemoryStream TransferBytes = new();
+        public readonly ConcurrentQueue<int> Qualities = new();
         public int CursorShapes, CursorMoves, Pongs, Stats;
+        /// <summary>Above 0: frames are acknowledged this much later, as over a slow network.</summary>
+        public volatile int AckDelayMs;
 
         public Viewer(AgentDesktopClient client)
         {
@@ -306,13 +312,17 @@ public partial class AgentDesktopFlowTests
                     case DesktopMessage.Video:
                         var h = DesktopWire.ReadVideo(m);
                         Frames.Enqueue(h);
-                        client.Send(DesktopWire.Ack(h.FrameId));
+                        if (AckDelayMs > 0) _ = Task.Delay(AckDelayMs).ContinueWith(_ => client.Send(DesktopWire.Ack(h.FrameId)), TaskScheduler.Default);
+                        else client.Send(DesktopWire.Ack(h.FrameId));
                         break;
                     case DesktopMessage.CursorShape: Interlocked.Increment(ref CursorShapes); break;
                     case DesktopMessage.CursorPosition: Interlocked.Increment(ref CursorMoves); break;
                     case DesktopMessage.Clipboard: Clipboard.Enqueue(DesktopWire.ReadText(m)); break;
                     case DesktopMessage.Pong: Interlocked.Increment(ref Pongs); break;
-                    case DesktopMessage.Stats: Interlocked.Increment(ref Stats); break;
+                    case DesktopMessage.Stats:
+                        Qualities.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopStats).Quality);
+                        Interlocked.Increment(ref Stats);
+                        break;
                     case DesktopMessage.TransferStart: Transfers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); break;
                     case DesktopMessage.TransferData: lock (TransferBytes) TransferBytes.Write(m, DesktopWire.TransferHeaderSize, m.Length - DesktopWire.TransferHeaderSize); break;
                     case DesktopMessage.TransferEnd: TransferEnds.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd)); break;
@@ -1021,6 +1031,34 @@ public partial class AgentDesktopFlowTests
         WaitFor(() => v.Pongs == 1, "pong");
         WaitFor(() => v.Stats >= 1, "stats from the device");
     }
+
+    [Fact]
+    public async Task The_quality_steps_down_while_the_acks_come_late_and_stays_down()
+    {
+        // A picture that changes all the time and acks 300 ms late (a saturated link): the encoder's quality goes below
+        // what was asked for, and the next frame doesn't put it back (run 20261019-193627: 80 in every stat, D-VID-05)
+        await using var d = await StartDevice(screens: _ => new Screen(changing: int.MaxValue));
+        using var v = await Connect(d);
+        v.AckDelayMs = 300;
+        v.Start(ActiveUser.Id, DesktopConsent.None);
+        v.Next(DesktopStatusState.Connected);
+        // stats every 2 s, a step every 2 s: two stats below it within 20 s
+        Assert.True(SpinWait.SpinUntil(() => v.Qualities.Count(q => q < DesktopProtocol.DefaultQuality) >= 2, TimeSpan.FromSeconds(20)),
+            $"qualities: {string.Join(", ", v.Qualities)}");
+        Assert.True(v.Qualities.Last() < DesktopProtocol.DefaultQuality, $"qualities: {string.Join(", ", v.Qualities)}");
+    }
+
+    [Theory]
+    [InlineData(60, 60, 1500, 2000, 50)]   // most of the time waiting for acks: 10 lower
+    [InlineData(60, 60, 500, 2000, 50)]    // a quarter
+    [InlineData(25, 60, 2000, 2000, 20)]   // not below 20
+    [InlineData(20, 60, 2000, 2000, 20)]
+    [InlineData(50, 60, 499, 2000, 50)]    // some waiting: stays
+    [InlineData(50, 60, 0, 2000, 55)]      // the acks keep up: 5 higher
+    [InlineData(58, 60, 0, 2000, 60)]      // up to what was asked for
+    [InlineData(80, 60, 0, 2000, 60)]      // the viewer asked for less
+    public void The_quality_follows_the_time_spent_waiting_for_acks(int current, int requested, long waitedMs, long windowMs, int expected) =>
+        Assert.Equal(expected, A.DesktopHelperSession.AdaptedQuality(current, requested, waitedMs, windowMs));
 
     [Fact]
     public async Task All_monitors_are_shown_in_one_picture()
@@ -1903,6 +1941,20 @@ public partial class AgentDesktopFlowTests
         var ui = d.Helpers.Uis[helperInNewSession];
         WaitFor(() => ui.SignedInRemotely is not null, "the signed-in-remotely notice"); // shown on Begin, which can come after the privacy screen
         Assert.False(ui.Banner);
+    }
+
+    [Fact]
+    public async Task The_audit_names_the_service_not_the_admin_for_the_cover_after_an_automatic_sign_in()
+    {
+        if (!A.DesktopEndpoint.PrivacyScreenSupported) return; // Windows 10 2004 and later
+        var (d, v, _) = await SignedIn(AutoSignInPolicy());
+        await using var _d = d;
+        using var _v = v;
+        v.Next(DesktopStatusState.SignedIn);
+        WaitFor(() => d.AuditTexts.Any(a => a.Id == A.AuditEvent.DesktopPrivacyScreen), "the 1104 for the cover");
+        var text = d.AuditTexts.First(a => a.Id == A.AuditEvent.DesktopPrivacyScreen).Text;
+        Assert.Contains("the service (automatic sign-in of", text); // C-END-14: the admin never asked for it
+        Assert.Contains("turned the privacy screen on", text);
     }
 
     [Theory]

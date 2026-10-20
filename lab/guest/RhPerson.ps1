@@ -89,6 +89,14 @@ public static class RhNative
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint from, uint to, bool attach);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr h, out uint affinity);
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+
+    // The top-level window of a window (GA_ROOT), and the one at a screen point: a popup over a point (a tooltip,
+    // RemoteHub's expanded view rail) is a top-level window of its own.
+    public static IntPtr Root(IntPtr h) { return h == IntPtr.Zero ? h : GetAncestor(h, 2); }
+    public static IntPtr RootAt(int x, int y) { var p = new POINT(); p.X = x; p.Y = y; return Root(WindowFromPoint(p)); }
 
     // The agent keeps the banner and the privacy screen out of screen captures (WDA_EXCLUDEFROMCAPTURE): a capture
     // here shows what is below them, only the console picture shows them.
@@ -550,7 +558,31 @@ switch ($Do) {
         if (-not $found) { Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }; break }
         $pat = { param($p) $o = $null; if ($found.TryGetCurrentPattern($p, [ref]$o)) { $o } else { $null } }
         $result = @{ found = $true; name = $found.Current.Name; type = $found.Current.ControlType.ProgrammaticName; window = $win.Current.Name; enabled = $found.Current.IsEnabled }
-        $center = { $r = $found.Current.BoundingRectangle; @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+        # The element's centre for a real click. Something of the window's own drawn over that point (RemoteHub's view rail
+        # expands into a popup while the pointer rests on it and stays open while the pointer is over the popup; a tooltip)
+        # would take the click instead - lab run 20261019-193627: a right-click on a connection opened no menu under the
+        # expanded rail. Then the pointer is moved to the window's right edge first, until the point is the element's
+        # window again (hover popups close when the pointer leaves them), at most 3 s.
+        $center = {
+            $r = $found.Current.BoundingRectangle
+            $pt = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+            # the window the element is drawn in: its nearest ancestor with a window handle (a popup's own, else $win)
+            $own = [IntPtr]::Zero
+            $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+            $e = $found
+            while ($e -and -not [Windows.Automation.Automation]::Compare($e, $win)) {
+                if ($e.Current.NativeWindowHandle) { $own = [RhNative]::Root([IntPtr]$e.Current.NativeWindowHandle); break }
+                $e = $walker.GetParent($e)
+            }
+            if ($own -eq [IntPtr]::Zero -and $win.Current.NativeWindowHandle) { $own = [RhNative]::Root([IntPtr]$win.Current.NativeWindowHandle) }
+            if ($own -ne [IntPtr]::Zero -and [RhNative]::RootAt($pt[0], $pt[1]) -ne $own) {
+                $wr = $win.Current.BoundingRectangle
+                [void][RhNative]::SetCursorPos([int]($wr.Right - 6), [int]($wr.Top + $wr.Height / 2))
+                $coverUntil = (Get-Date).AddSeconds(3)
+                do { Start-Sleep -Milliseconds 100 } while ([RhNative]::RootAt($pt[0], $pt[1]) -ne $own -and (Get-Date) -lt $coverUntil)
+            }
+            $pt
+        }
         # SelectionItemPattern.Select (a RadioButton, a ListItem) can fail with a COM error ("Unrecognized error") while
         # the element is there: a real click on it instead. A switched-off element isn't clicked - the step says so
         # (answers $false then).

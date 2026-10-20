@@ -108,7 +108,7 @@ BeforeAll {
     # ---- 3. automatic sign-in: the admin's own new session starts covered, input blocked
     Disconnect-LabConsole -Name $VmName
     $harness = @('auto-sign-in', '--host', (Get-LabVmAddress -Name $VmName), '--port', '58732', '--pin', $pin,
-        '--user', $consoleAccount, '--password', (Get-LabConfig).Password, '--stay', '90')
+        '--user', $consoleAccount, '--password', (Get-LabConfig).Password, '--stay', '90', '--close', '1')
     $mod = Join-Path $PSScriptRoot '..\RemoteHub.TestLab\RemoteHub.TestLab.psd1'
     $auto = Start-Job -ArgumentList $mod, $harness, $VmName -ScriptBlock { param($mod, $a, $vm) $m = Import-Module $mod -PassThru; & $m { param($a, $vm) Invoke-LabHarness $a -TimeoutSec 300 -VmName $vm } $a $vm }
     $until = (Get-Date).AddSeconds(150)
@@ -120,9 +120,15 @@ BeforeAll {
     Start-Sleep -Seconds 10 # the helper in the new session, its overlay and the input block
     $r.autoBlocked = Get-Values $consoleAccount
     $r.cadAuto = Read-CadScreen (Join-Path (Out 'auto') 'cad-auto.png')
+    # ended on purpose (--close 1): the session is locked and the values go back. Run 20261019-193627 let the harness
+    # exit without a close - a dropped connection keeps the screen covered for 120 s, so 5 s later all five were still set
     $r.auto = Receive-Job $auto -Wait -AutoRemoveJob
-    Start-Sleep -Seconds 5
-    $r.autoEnded = Get-Values $consoleAccount
+    $until = (Get-Date).AddSeconds(60)
+    do {
+        $r.autoEnded = Get-Values $consoleAccount
+        if (-not @($r.autoEnded.records).Count) { break }
+        Start-Sleep -Seconds 2
+    } while ((Get-Date) -lt $until)
     $r.log = @(Get-LabAgentLog -Name $VmName | Where-Object { $_ -match 'Ctrl\+Alt\+Del screen' })
     Save 'result' $r
 }

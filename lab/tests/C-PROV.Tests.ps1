@@ -91,9 +91,26 @@ BeforeAll {
             $null = Register-ScheduledTask -TaskName 'RHLab-CpTestServer' -Action $action -User 'NT AUTHORITY\SYSTEM' -RunLevel Highest -Force
             Start-ScheduledTask -TaskName 'RHLab-CpTestServer'
         }
-        # Dismiss the lock-screen curtain (and satisfy "Press Ctrl+Alt+Delete" where it is required).
+        # waits in the guest until the test server's log has a line matching $Pattern; $true if it came in time
+        function Wait-ServerLog([string]$Pattern, [int]$TimeoutSec) {
+            Invoke-LabGuest -Name $VmName -ArgumentList $guestDir, $Pattern, $TimeoutSec -ScriptBlock {
+                param($dir, $p, $t)
+                $deadline = (Get-Date).AddSeconds($t)
+                do {
+                    if (Select-String -Path (Join-Path $dir 'server.log') -Pattern $p -Quiet -ErrorAction SilentlyContinue) { return $true }
+                    Start-Sleep -Seconds 1
+                } while ((Get-Date) -lt $deadline)
+                $false
+            }
+        }
+        # Dismiss the lock-screen curtain (and satisfy "Press Ctrl+Alt+Delete" where it is required) once the provider
+        # holds the ticket: LogonUI doesn't sign in automatically behind the curtain. Run 20261019-193627 (Server 2025,
+        # Ctrl+Alt+Del required) sent it before the ticket arrived and the curtain was still up 3 minutes later, no Result.
+        $ticketSent = Wait-ServerLog 'sent Ticket|error ' 90
         Send-LabCtrlAltDel -Name $VmName
-        try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 180 }
+        # no Result yet: the curtain may have come back (it returns after a while without input) - once more
+        if ($ticketSent -and -not (Wait-ServerLog 'result |error ' 45)) { Send-LabCtrlAltDel -Name $VmName }
+        try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 120 }
         catch { $signInError = "$_" }
         Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-prov-after-signin.png') | Out-Null
         $serverLog = Invoke-LabGuest -Name $VmName -ArgumentList $guestDir -ScriptBlock {

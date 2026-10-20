@@ -27,33 +27,39 @@ public sealed class SftpShare : ShareFileSystem
             foreach (var p in e.Prompts) if (p.Request.Contains("password", StringComparison.OrdinalIgnoreCase)) p.Response = password;
         };
         var info = new ConnectionInfo(forward?.Host ?? host, forward?.Port ?? port, user, new PasswordAuthenticationMethod(user, password), keyboard) { Timeout = TimeSpan.FromSeconds(20) };
-        // Without a limit a stalled server would hang the tab (SSH.NET waits forever by default).
-        _client = new SftpClient(info) { OperationTimeout = TimeSpan.FromSeconds(60) };
         var refused = false;
-        _client.HostKeyReceived += (_, e) =>
+        string? acceptedNow = null;
+        SftpClient Connect(string? known)
         {
-            var fp = "SHA256:" + e.FingerPrintSHA256;
-            if (fp == trusted) { e.CanTrust = true; return; }
-            e.CanTrust = trust(new TrustRequest(host, trusted is null ? "SSH host key" : "SSH host key (changed!)", fp,
-                $"{e.HostKeyName}, {e.KeyLength} bits"));
-            if (e.CanTrust) accepted(fp);
-            else refused = true;
-        };
+            // Without a limit a stalled server would hang the tab (SSH.NET waits forever by default).
+            var client = new SftpClient(info) { OperationTimeout = TimeSpan.FromSeconds(60) };
+            client.HostKeyReceived += (_, e) =>
+            {
+                var fp = "SHA256:" + e.FingerPrintSHA256;
+                if (fp == known) { e.CanTrust = true; return; }
+                e.CanTrust = trust(new TrustRequest(host, trusted is null ? "SSH host key" : "SSH host key (changed!)", fp,
+                    $"{e.HostKeyName}, {e.KeyLength} bits"));
+                if (e.CanTrust) { acceptedNow = fp; accepted(fp); }
+                else refused = true;
+            };
+            try { client.Connect(); return client; }
+            catch { client.Dispose(); throw; }
+        }
         try
         {
-            _client.Connect();
+            try { _client = Connect(trusted); }
+            // The question waits for the user while SSH.NET's connection timeout runs, so an answer after it ends this
+            // attempt ("Session operation has timed out"). The key is accepted by then: the second attempt doesn't ask.
+            catch (SshOperationTimeoutException) when (acceptedNow is not null) { _client = Connect(acceptedNow); }
         }
-        catch (SshConnectionException) when (refused)
+        catch (Exception ex) when (refused && ex is SshConnectionException or SshOperationTimeoutException)
         {
-            _client.Dispose();
             throw new ShareException("The server's key wasn't accepted – nothing was sent.");
         }
         catch (SshAuthenticationException)
         {
-            _client.Dispose();
             throw new ShareException("The user name or password is incorrect (or the server doesn't allow password sign-in).");
         }
-        catch { _client.Dispose(); throw; }
 
         var start = startFolder.Trim().Replace('\\', '/');
         Start = start.Length == 0 ? _client.WorkingDirectory : start.StartsWith('/') ? start : Join(_client.WorkingDirectory, start);

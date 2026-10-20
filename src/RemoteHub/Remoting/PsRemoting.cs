@@ -183,7 +183,8 @@ public static class PsRemoting
     private static string AgentExplain(Exception ex)
     {
         for (var e = ex; e is not null; e = e.InnerException)
-            if (e is PSRemotingTransportException te && te.Message.Contains("RemoteHub Agent", StringComparison.Ordinal)) return Trim(te.Message);
+            if (e is AgentTransportException || e is PSRemotingTransportException te && te.Message.Contains("RemoteHub Agent", StringComparison.Ordinal))
+                return Trim(e.Message);
         return Trim(ex.GetBaseException().Message);
     }
 

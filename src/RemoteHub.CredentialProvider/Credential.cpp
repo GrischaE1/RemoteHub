@@ -106,7 +106,9 @@ namespace rhcp
             if (_failed) return DuplicateString(L"Automatic sign-in failed", value);
             std::wstring account, sid;
             if (_channel && _channel->Account(account, sid))
-                return DuplicateString((L"Signing in " + account + L"…").c_str(), value);
+                // The ellipsis is an escape, not the character itself: the sources are UTF-8 without a BOM, which MSVC
+                // reads in the ANSI code page – the tile showed three wrong characters (lab run 20261019-193627).
+                return DuplicateString((L"Signing in " + account + L"\u2026").c_str(), value);
             return DuplicateString(L"", value);
         }
         return E_INVALIDARG;

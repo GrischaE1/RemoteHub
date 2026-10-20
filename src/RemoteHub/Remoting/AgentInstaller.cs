@@ -112,10 +112,11 @@ public static class AgentInstaller
         """;
 
     private const string InstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$VirtualDisplay, [string]$AutoSignIn)
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$VirtualDisplay, [string]$AutoSignIn, [string]$ProductCode)
         $a = @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$Log`"", "VIRTUALDISPLAY=$VirtualDisplay")
         if ($Enrollment) { $a += "ENROLLMENT=`"$Enrollment`"" }
         if ($AutoSignIn) { $a += "AUTOSIGNIN=$AutoSignIn" }
+        if ($ProductCode -and (Test-Path -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$ProductCode")) { $a += 'REINSTALL=ALL', 'REINSTALLMODE=vamus' }
         $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
         $p.ExitCode
         """;
@@ -145,16 +146,26 @@ public static class AgentInstaller
     /// only after msiexec has ended ("start /wait": msiexec is a GUI program, which cmd wouldn't wait for otherwise).
     /// </summary>
     private const string DetachedInstallScript = """
-        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir, [string]$VirtualDisplay, [string]$AutoSignIn)
+        param([string]$Msi, [string]$Enrollment, [string]$Log, [string]$Dir, [string]$VirtualDisplay, [string]$AutoSignIn, [string]$ProductCode)
         $m = "start `"`" /wait msiexec.exe /i `"$Msi`" /qn /norestart /l*v `"$Log`" VIRTUALDISPLAY=$VirtualDisplay"
         if ($Enrollment) { $m += " ENROLLMENT=`"$Enrollment`"" }
         if ($AutoSignIn) { $m += " AUTOSIGNIN=$AutoSignIn" }
+        if ($ProductCode -and (Test-Path -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$ProductCode")) { $m += " REINSTALL=ALL REINSTALLMODE=vamus" }
         $cmd = "cmd.exe /c `"$m & rd /s /q `"$Dir`"`""
         $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
         if ($r.ReturnValue -ne 0) { throw "Could not start the installer (WMI error $($r.ReturnValue))." }
         """;
 
     public sealed record Installed(string Fingerprint, int Port, string DeviceId, string ServiceStatus);
+
+    /// <summary>
+    /// The package's ProductCode for the install scripts (or ""). When the device already has that very product – the same
+    /// package installed again – msiexec /i alone would only open maintenance and change nothing, not even a new
+    /// enrollment (A-SAME-02); the scripts then reinstall it (REINSTALL=ALL), which restarts the service and enrolls an
+    /// enrollment that was passed (Package.wxs, AgentEnroll).
+    /// </summary>
+    internal static string ReinstallProductCode(string msi) =>
+        Guid.TryParseExact(PackageProductCode(msi), "B", out var code) ? code.ToString("B").ToUpperInvariant() : "";
 
     /// <summary>The AUTOSIGNIN value for msiexec: "1", "0", or "" (not passed: an update keeps what is installed).</summary>
     private static string AutoSignInValue(bool? autoSignIn) => autoSignIn switch { true => "1", false => "0", null => "" };
@@ -197,7 +208,7 @@ public static class AgentInstaller
             folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
             var log = Path.Combine(folder, "install.log");
             progress("Installing (silent)…");
-            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn))).Last().BaseObject);
+            var exit = Convert.ToInt32(RemoteFs.Invoke(rs, InstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn)), ("ProductCode", ReinstallProductCode(msi))).Last().BaseObject);
             if (exit is not (0 or 3010))
             {
                 var tail = string.Join("\n", RemoteFs.Invoke(rs, LogTailScript, ("Log", log)).Select(o => o.ToString().Trim()).Where(l => l.Length > 0));
@@ -220,10 +231,13 @@ public static class AgentInstaller
     /// <summary>Update through the running agent: upload, then start msiexec detached (the session ends when the agent restarts).</summary>
     public static void StartUpdateThroughAgent(Runspace rs, string msi, string? enrollment, Action<string> progress, bool virtualDisplay = true, bool? autoSignIn = null)
     {
+        // Without a version there is nothing to wait for: any answer of the old agent would read as "updated" (A-UPDFAIL-04).
+        if (PackageVersion(msi) is null)
+            throw new RemoteCommandException($"{Path.GetFileName(msi)} isn't a RemoteHub Agent package that can be read (no product version) – nothing was sent to the device.");
         var folder = Upload(rs, msi, enrollment, progress, out var remoteMsi, out var remoteEnrollment);
         var log = Path.Combine(Path.GetDirectoryName(folder)!, "RemoteHub-Agent-update.log");
         progress("Starting the installer on the device…");
-        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn)));
+        RemoteFs.Invoke(rs, DetachedInstallScript, ("Msi", remoteMsi), ("Enrollment", remoteEnrollment ?? ""), ("Log", log), ("Dir", folder), ("VirtualDisplay", virtualDisplay ? "1" : "0"), ("AutoSignIn", AutoSignInValue(autoSignIn)), ("ProductCode", ReinstallProductCode(msi)));
     }
 
     // ------------------------------------------------------------------ health

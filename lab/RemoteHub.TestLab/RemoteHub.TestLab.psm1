@@ -1878,6 +1878,15 @@ function Find-LabSignInTile {
     }
 }
 
+# After Switch user Server 2025 shows the lock screen ("Press Ctrl+Alt+Delete to unlock") where Windows 11 shows the
+# tiles. Answers 'cad' when a decoded frame asks for Ctrl+Alt+Delete, otherwise 'none' - written to the file of the
+# harness' {do = 'cad'; ifFile = ...} step, so the tiles come up on both before the test looks for one.
+function Get-LabCadAnswer {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Picture)
+    if ((Get-LabOcr -Path $Picture).text -match 'Ctrl\s*\+\s*Alt\s*\+\s*Del') { 'cad' } else { 'none' }
+}
+
 # The marker window (RhPerson -Do marker) in the account's session: full screen, magenta, records keys, mouse and
 # clipboard to a guest file. Returns the handle for Get-LabMarker / Stop-LabInSession.
 function Start-LabMarker {

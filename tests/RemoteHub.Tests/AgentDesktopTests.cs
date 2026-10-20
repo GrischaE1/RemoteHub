@@ -146,4 +146,14 @@ public class AgentDesktopTests(Xunit.Abstractions.ITestOutputHelper output)
         Assert.True(H264.ContainsIdr([0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x65, 9]));
         Assert.False(H264.ContainsIdr([0, 0, 0, 1, 0x41, 1, 2, 3]));
     }
+
+    [Fact]
+    public void A_refused_copy_names_only_what_the_level_refuses()
+    {
+        // UI-CP-13: with images allowed, a file copy said "images and files" were refused
+        Assert.Equal("Copying files isn't allowed on this device.",
+            RemoteHub.Remoting.AgentDesktopSession.RefusedCopyNotice(DesktopClipboardLevel.Images));
+        Assert.Equal("Copying images and files isn't allowed on this device – only text.",
+            RemoteHub.Remoting.AgentDesktopSession.RefusedCopyNotice(DesktopClipboardLevel.Text));
+    }
 }

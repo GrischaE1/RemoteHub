@@ -603,9 +603,9 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Save 'desktop' $R
         }
 
-        # Known product bug (docs/test-lab-test-document.md, findings: UI-CP-13): with DesktopClipboard=2 RemoteHub refuses
-        # a file copy with "Copying images and files isn't allowed on this device - only text." (AgentDesktopSession.cs
-        # 402-403); tested for the agent's correct text - fails until fixed.
+        # Product bug fixed after lab run 20261019-193627 (docs/test-lab-test-document.md, findings: UI-CP-13): with
+        # DesktopClipboard=2 RemoteHub refused a file copy with "Copying images and files isn't allowed on this device -
+        # only text."; now with the agent's text (AgentDesktopSession.RefusedCopyNotice).
         It 'UI-CP-13 DesktopClipboard=2: an image reaches the device; a file copy is refused with "Copying files isn''t allowed on this device."' -Tag 'UI-CP-13' {
             NoError 'cp13'
             $R.cp13Live | Should -BeTrue

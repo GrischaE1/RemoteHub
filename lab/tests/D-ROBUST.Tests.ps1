@@ -194,12 +194,16 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             $job = Begin 'res-user' @(
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options.png' }, (Mark $o 'options'), @{ do = 'click'; fromFile = (Join-Path $o 'switch-xy.txt') }
                 @{ do = 'sleep'; seconds = 8 }, @{ do = 'drop' }, @{ do = 'reconnect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; resume = 'last' }
-                @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'tiles.png' }
+                @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, @{ do = 'sleep'; seconds = 4 }
+                # Server 2025 shows "Press Ctrl+Alt+Delete to unlock" there (run 20261019-193627): Ctrl+Alt+Del then
+                @{ do = 'frame'; out = 'curtain.png' }, (Mark $o 'curtain'), @{ do = 'cad'; ifFile = (Join-Path $o 'cad.txt') }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'tiles.png' }
                 (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }
                 (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asked'), @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Ended'); timeout = 60 }, @{ do = 'close' })
             Reached $o 'options'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            Reached $o 'curtain'
+            Set-Content (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
             Reached $o 'tiles'
             # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
             # to the device's accounts, not as an exact word

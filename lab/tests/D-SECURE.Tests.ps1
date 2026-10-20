@@ -204,6 +204,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $l.heldPicture = Test-Path $held
             $l.heldMagenta = if ($l.heldPicture) { Get-LabColorShare -Path $held } else { 0 }
             $l.allowedMagenta = Get-LabColorShare -Path (Join-Path $o 'allowed.png')
+            $l.relockedMagenta = Get-LabColorShare -Path (Join-Path $o 'relocked.png')
             # the same, and the user refuses
             Lock-LabSession -Name $VmName
             Start-Sleep -Seconds 5
@@ -243,7 +244,12 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
 
         It 'D-LOCK-04 Win+L by the user while connected: the connection stays, the lock screen is shown' -Tag 'D-LOCK-04' {
             (Of $l.allow 'Ended').Count | Should -Be 0
-            @(Secure $l.allow)[-1] | Should -BeTrue
+            # Win+L passes through the secure desktop, then Windows 11 / Server 2025 show the lock screen on the Default
+            # desktop (as in D-LOCK-01): the last layout is not secure (run 20261019-193627), so the case checks the
+            # switch after Allow and that the picture is the lock screen, no longer the user's desktop (the marker)
+            $allowedAt = @(Of $l.allow 'Connected')[-1].ms
+            @($l.allow.layouts | Where-Object { $_.ms -gt $allowedAt -and $_.layout.secureDesktop }).Count | Should -BeGreaterThan 0
+            $l.relockedMagenta | Should -BeLessThan 0.05 -Because 'd-secure-lock\relocked.png shows the lock screen, not the marker'
         }
 
         It 'D-LOCK-05 while waiting for the answer the picture is held: no user desktop before consent' -Tag 'D-LOCK-05' {
@@ -270,7 +276,8 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
 
         It 'D-SAS-06 on the lock screen: Ctrl+Alt+Del shows the password field, the typed password unlocks, then normaluser is asked' -Tag 'D-SAS-06' {
             # the name is small on the wallpaper: OCR read "maluser ... normaluse(" in run 20261016-212514
-            $pwOcr.text | Should -Match 'Password|PIN'
+            # the caret in the empty field hides the P: OCR read "assword" in run 20261019-193627
+            $pwOcr.text | Should -Match 'assword|PIN'
             $pwOcr.text | Should -Match (NameLike $vm.UserAccount)
             $unlocked | Should -BeTrue
             (Of $r 'WaitingForUser').Count | Should -BeGreaterThan 0
@@ -356,12 +363,16 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 90 }
                 # Switch user through the picture, then Admin's tile and password
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options.png' }, (Mark $o 'options'), @{ do = 'click'; fromFile = (Join-Path $o 'switch-xy.txt') }
-                @{ do = 'sleep'; seconds = 8 }, @{ do = 'frame'; out = 'tiles.png' }, (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }
+                # Server 2025 shows "Press Ctrl+Alt+Delete to unlock" first (run 20261019-193627): Ctrl+Alt+Del then
+                @{ do = 'sleep'; seconds = 8 }, @{ do = 'frame'; out = 'curtain.png' }, (Mark $o 'curtain'), @{ do = 'cad'; ifFile = (Join-Path $o 'cad.txt') }
+                @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'tiles.png' }, (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }
                 @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }, (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }, @{ do = 'close' })
             $null = Allow $o @('type')
             Reached $o 'options'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            Reached $o 'curtain'
+            Set-Content (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
             Reached $o 'tiles'
             # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
             # to the device's accounts, not as an exact word (an exact "Admin" clicked 0,0 in D-ROBUST)

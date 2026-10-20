@@ -45,11 +45,17 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'close' })
             $sasMarker = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\ProgramData\RemoteHub\Agent\sas.agent' }
-            # repair: msiexec /fa with the package as its source. RemoteHub deletes the folder it installed from, and the
-            # cached package in C:\Windows\Installer has no files (the cabinet is embedded), so /fa by product code alone
-            # finds no source and ends with 1603 after the service was stopped - as an admin would, the MSI is given
+            # repair: RemoteHub deletes the folder it installed from, and the cached package in C:\Windows\Installer has
+            # no files (the cabinet is embedded), so msiexec /fa - by product code or with a copy of the MSI - only looks
+            # in the registered source list and ends with 1706 / 1603 (runs 20261017-054704 to 20261019-193627). The
+            # package offers no Repair (ARPNOREPAIR); the repair an admin with the MSI can run is a maintenance install
+            # from it, REINSTALL=ALL with /fa's mode - the launched package is a valid source then (as in A-HAND-07)
             $msiName = Split-Path (Get-LabAgentMsi) -Leaf
             Copy-LabFile -Name $VmName -Path (Get-LabAgentMsi) -Destination 'C:\LabRepair'
+            $noRepair = Invoke-LabGuest -Name $VmName -ArgumentList $state.Product.Code -ScriptBlock {
+                param($c)
+                (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$c" -ErrorAction SilentlyContinue).NoRepair
+            }
             # Windows Installer only takes a source package with the name it was registered under (RemoteHub uploads it
             # as RemoteHub-Agent-x64.msi): run 20261017-054704 got error 1706 with the copy under its build name
             $repair = Invoke-LabGuest -Name $VmName -ArgumentList "C:\LabRepair\$msiName" -ScriptBlock {
@@ -63,14 +69,14 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
                     Copy-Item $msi $target -Force
                     $msi = $target
                 }
-                $p = Start-Process msiexec.exe -ArgumentList '/fa', "`"$msi`"", '/qn', '/norestart', '/l*v', 'C:\Windows\Temp\rh-repair.log' -Wait -PassThru
+                $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msi`"", 'REINSTALL=ALL', 'REINSTALLMODE=amus', '/qn', '/norestart', '/l*v', 'C:\Windows\Temp\rh-repair.log' -Wait -PassThru
                 $p.ExitCode
             }
             # the verbose log, to trace a failed repair
             try { Get-LabFile -Name $VmName -Path 'C:\Windows\Temp\rh-repair.log' -Destination (Out 'repair') } catch { }
             $afterRepair = Get-LabAgentState -Name $VmName
             $health = Wait-LabAgent -Name $VmName -Pin $install.pin
-            Save 'sas-repair' @{ State = $state; Cad = $cad; Repair = $repair; After = $afterRepair }
+            Save 'sas-repair' @{ State = $state; Cad = $cad; NoRepair = $noRepair; Repair = $repair; After = $afterRepair }
         }
 
         It 'A-INST-23 SoftwareSASGeneration=0 set by a policy before the install stays 0; Ctrl+Alt+Del in the desktop tab explains it' -Tag 'A-INST-23' {
@@ -79,7 +85,8 @@ Describe 'A-MORE <VmName>' -Tag Agent, 'A-INST', 'A-REPAIR', 'A-HAND', 'A-UPD', 
             @($cad.statuses | Where-Object message -match 'turned off by a policy').Count | Should -BeGreaterThan 0
         }
 
-        It 'A-REPAIR-01 msiexec /fa repairs: identity kept, the service running, no new enrollment' -Tag 'A-REPAIR-01' {
+        It 'A-REPAIR-01 no Repair offered that can''t work; a repair from the MSI (REINSTALL=ALL): identity kept, the service running, no new enrollment' -Tag 'A-REPAIR-01' {
+            $noRepair | Should -Be 1 -Because 'ARPNOREPAIR: a repair by product code finds no source'
             $repair | Should -BeIn 0, 3010
             $afterRepair.Config.deviceId | Should -Be $install.deviceId
             $afterRepair.Service.State | Should -Be 'Running'

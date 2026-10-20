@@ -472,4 +472,20 @@ public class LocalDbTests : IDisposable
         Assert.Contains("\"a,b\"", line);
         Assert.StartsWith("2026-10-10 12:00:00,Changed,data.changed,", line);
     }
+
+    [Fact]
+    public void A_new_item_is_written_at_once_without_waiting_for_the_save_timer()
+    {
+        // lab run 20261019-193627: RemoteHub ended right after a connection was added and the connection was gone
+        var vm = new ViewModels.MainViewModel(new AppData());
+        vm.SaveNow();
+        var folder = new Folder { Name = "Fresh folder" };
+        vm.AddNow(folder, null);
+        vm.AddNow(new Connection { Name = "fresh01", Host = "fresh01.contoso.test" }, folder);
+        Assert.False(vm.HasPendingSave);
+        LocalDb.Close();
+        var back = SettingsStore.Load();
+        var f = Assert.IsType<Folder>(Assert.Single(back.Items));
+        Assert.Equal("fresh01", Assert.Single(f.Children).Name);
+    }
 }

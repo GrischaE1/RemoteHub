@@ -37,7 +37,7 @@ using RemoteHub.Remoting;
 //       script's output as strings.
 //   credential-provider --host .. --port .. --pin .. --user .. --password .. --msi <path> --install 1|0
 //       AgentInstaller.ChangeCredentialProvider over the agent's PowerShell (RemoteHub's "Install / Remove credential provider").
-//   auto-sign-in --host .. --port .. --pin .. --user .. --password .. [--view-only 1] [--no-request 1] [--password-for-sign-in ..] [--stay s]
+//   auto-sign-in --host .. --port .. --pin .. --user .. --password .. [--view-only 1] [--no-request 1] [--password-for-sign-in ..] [--stay s] [--close 1]
 //       Automatic sign-in on the console's sign-in screen through the agent desktop, as RemoteHub's desktop tab does it.
 //   share ... [--windows-user <COMPUTER\user>] [--safety 1] / share-conflict ... / share-lifetime ... / share-session ...
 //       network shares: copy scenario, transfer safety, Windows SMB connection lifetime, the share tab's connection (see ShareHarness.cs)
@@ -255,6 +255,9 @@ static async Task<object> AutoSignIn(Dictionary<string, string> o)
     while (!statuses.Any(s => s.State is DesktopStatusState.SignedIn or DesktopStatusState.SignInFailed or DesktopStatusState.Failed or DesktopStatusState.Ended))
         await Task.Delay(200, cts.Token);
     await Task.Delay(TimeSpan.FromSeconds(int.TryParse(o.GetValueOrDefault("stay"), out var stay) ? stay : 8), cts.Token); // the picture follows into the new session
+    // --close 1: ended on purpose, as RemoteHub's tab does when closed (the end action runs); without it the connection
+    // just drops when the harness exits (the session stays covered for a resume, then is signed out)
+    var closed = o.GetValueOrDefault("close") == "1" ? await client.CloseAsync(TimeSpan.FromSeconds(10)) : (bool?)null;
     return new
     {
         rights = client.Hello.Rights,
@@ -262,6 +265,7 @@ static async Task<object> AutoSignIn(Dictionary<string, string> o)
         session = console,
         statuses = statuses.Select(s => $"{s.State}: {s.Message}").ToList(),
         frames,
+        closed,
     };
 }
 

@@ -124,8 +124,8 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         {
             var status = ws.HttpStatusCode;
             ws.Dispose();
-            if (JumpError(ex) is { } jump) throw new PSRemotingTransportException(jump.Message, jump);
-            throw new PSRemotingTransportException(AgentErrors.Explain(ex, status, seen, expected, info, path), ex);
+            if (JumpError(ex) is { } jump) throw new AgentTransportException(jump.Message, jump);
+            throw new AgentTransportException(AgentErrors.Explain(ex, status, seen, expected, info, path), ex);
         }
     }
 
@@ -252,6 +252,12 @@ internal sealed class WebSocketLineWriter(WebSocket ws, CancellationToken ct) : 
         ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct).GetAwaiter().GetResult();
     }
 }
+
+/// <summary>
+/// A refused or failed connection whose message is already RemoteHub's readable text (AgentErrors), so it is shown as
+/// it is – also when it doesn't name the agent, like PowerShellEnabled = 0.
+/// </summary>
+internal sealed class AgentTransportException(string message, Exception inner) : PSRemotingTransportException(message, inner);
 
 internal static class AgentErrors
 {

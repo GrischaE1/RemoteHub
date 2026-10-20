@@ -35,7 +35,13 @@ Describe 'D-AUD <VmName>' -Tag Desktop, 'D-AUD' {
         if (Get-ChildItem $dirs -Directory -Filter 'c-end*' -ErrorAction SilentlyContinue) { $expected += 1107 }
         $missing = @($expected | Where-Object { -not $byId.ContainsKey($_) })
         $missing | Should -BeNullOrEmpty -Because "IDs never written: $($missing -join ', ')"
-        foreach ($m in @($byId[1100])) { $m.Message | Should -Match 'from \S+.*session \d+.*(control|view-only).*consent' }
+        # '... from <address> - control, session 3 (sign-in screen), consent None ...': each part, not their order
+        foreach ($m in @($byId[1100])) {
+            $m.Message | Should -Match 'from \S+'
+            $m.Message | Should -Match 'session \d+'
+            $m.Message | Should -Match '\b(control|view-only)\b'
+            $m.Message | Should -Match 'consent'
+        }
         foreach ($m in @($byId[1101])) { $m.Message | Should -Match '\d{2}:\d{2}:\d{2}' }
         # 'Refused <account> from <address> ...', or the throttle's 'Refused <address>: too many failed sign-ins'
         foreach ($m in @($byId[2000])) { $m.Message | Should -Match 'Refused .+ from \S+|Refused \S+: too many failed sign-ins' }
@@ -43,7 +49,7 @@ Describe 'D-AUD <VmName>' -Tag Desktop, 'D-AUD' {
 
     It 'D-AUD-02 no screen content, keystrokes or clipboard text in logs or events' -Tag 'D-AUD-02' {
         if ($events.Count -eq 0) { Set-ItResult -Skipped -Because 'no other scenario ran on this VM in this run'; return }
-        foreach ($marker in 'The quick brown fox', 'after the flood', 'copied at the device', 'text at level', 'from RemoteHub in view-only', 'RHLABSECRETAPPTEXT', 'viewonly', '0123456789012345') {
+        foreach ($marker in 'The quick brown fox', 'after the flood', 'RHLABDEVICECLIP', 'text at level', 'from RemoteHub in view-only', 'RHLABSECRETAPPTEXT', 'viewonly', '0123456789012345') {
             $logText | Should -Not -Match ([regex]::Escape($marker)) -Because "'$marker' was typed or copied in a session"
         }
         $logText | Should -Not -Match ([regex]::Escape((Get-LabConfig).Password))

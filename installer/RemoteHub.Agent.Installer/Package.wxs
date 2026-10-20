@@ -18,13 +18,21 @@
            Scope="perMachine"
            Compressed="yes">
 
-    <!-- Same version allowed too: a rebuilt agent replaces the installed one (test builds, re-deploys). -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of the RemoteHub Agent is already installed." />
+    <!-- Same version allowed too: a rebuilt agent replaces the installed one (test builds, re-deploys).
+         afterInstallInitialize: the old version is removed inside the upgrade's transaction, so an upgrade that fails
+         later (e.g. in the enrollment) rolls back to the old agent. Removed before it (WiX's default afterInstallValidate),
+         the removal was already committed and a failed upgrade left the device without an agent (A-UPDFAIL-02). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of the RemoteHub Agent is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
     <Icon Id="AgentIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="AgentIcon.ico" />
     <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- No Repair in Programs and Features: the cached package has no files (embedded cabinet) and its registered source is
+         the folder RemoteHub installed from and then deleted, so a repair by product code always ends with 1706 / 1603.
+         RemoteHub's install again repairs (A-SAME-01), or an admin runs the MSI with REINSTALL=ALL (A-REPAIR-01). -->
+    <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ENROLLMENT" Secure="yes" />
     <!-- Virtual monitor for devices without one: 1 install, 0 don't (removes it), empty = the device keeps its setting (default on). -->
     <Property Id="VIRTUALDISPLAY" Secure="yes" />
@@ -58,6 +66,9 @@
 
     <!-- Enrollment: deferred, as LocalSystem, after the files are in place and before the service starts.
          It also sets "Automatic (Delayed Start)" – MSI's own ServiceConfig table is unreliable for that. -->
+    <!-- An enrollment passed on the command line, before the default below fills ENROLLMENT in: with it, a reinstall of
+         the very same package (REINSTALL=ALL, "Install again with Create a new device certificate") enrolls too. -->
+    <SetProperty Id="ENROLLMENTGIVEN" Value="1" Before="SetENROLLMENT" Sequence="execute" Condition="ENROLLMENT" />
     <!-- No ENROLLMENT given: the agent looks for the .rhagent file in the MSI's folder. -->
     <SetProperty Id="ENROLLMENT" Value="[OriginalDatabase]" Before="SetAgentEnroll" Sequence="execute" Condition="NOT ENROLLMENT" />
     <!-- auto-sign-in=[AUTOSIGNIN]: 1 allows automatic sign-in for the allowed groups in agent.json, 0 turns it off there,
@@ -80,9 +91,10 @@
 
     <InstallExecuteSequence>
       <Custom Action="AgentEnrollRollback" Before="AgentEnroll" Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED AND NOT (REMOVE~=&quot;ALL&quot;)" />
-      <!-- Only when this product is installed (first install or upgrade) – not when an installed agent only adds or
-           removes a feature (credential provider), which leaves the service and its enrollment alone. -->
-      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT Installed" />
+      <!-- Only when this product is installed (first install or upgrade), or the same package is reinstalled with a new
+           enrollment (A-SAME-02: same product code, so no upgrade) – not when an installed agent only adds or removes a
+           feature (credential provider) or is repaired, which leaves the service's enrollment alone. -->
+      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT Installed OR (REINSTALL AND ENROLLMENTGIVEN)" />
       <Custom Action="AgentCleanup" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>

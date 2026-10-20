@@ -139,12 +139,15 @@ public static class RhTok {
         @{ n = 'taskview'; open = @(@{ do = 'combo'; scans = @($win, '0x0F') }); close = $esc }
         @{ n = 'alttab'; open = @(@{ do = 'key'; scan = '0x38' }, @{ do = 'key'; scan = '0x0F' }, @{ do = 'key'; scan = '0x0F'; flags = @('Up') })
             close = @(@{ do = 'key'; scan = '0x38'; flags = @('Up') }) + $esc }
-        @{ n = 'thumbnail'; open = @(@{ do = 'combo'; scans = @($win, '0x14') }, @{ do = 'sleep'; seconds = 1 }) + $right; close = $esc }
+        @{ n = 'thumbnail'; open = @(@{ do = 'combo'; scans = @($win, '0x14') }, @{ do = 'sleep'; seconds = 1 }) + $right; close = $esc + @(@{ do = 'sleep'; seconds = 1 }) + $esc }
         @{ n = 'toast'; open = @(); close = @(); host = $toast }
     )
     # the surfaces close before the next one is opened; Alt+Tab is still held while its pictures are taken
     $r = [ordered]@{ taskbar = $taskbar }
     foreach ($mode in 'off', 'on') {
+        # Notepad to the front: the taskbar loses the keyboard and a thumbnail the last mode left open goes (run
+        # 20261019-193627: the 'on' base already showed the thumbnail, so opening it changed nothing in the picture)
+        $null = Invoke-LabInSession -Name $VmName -ScriptBlock { $null = (New-Object -ComObject WScript.Shell).AppActivate('Untitled - Notepad') }
         Set-LabAgentPolicy -Name $VmName -Clear -Values @{ PrivacyScreen = 2; HelperUIAccess = $(if ($mode -eq 'on') { 1 } else { 0 }) }
         $o = Out $mode
         $steps = @(@{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }
