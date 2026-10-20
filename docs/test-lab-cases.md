@@ -949,6 +949,22 @@ RemoteHub and the agent on the same VM (`POL-CLIENT.Tests.ps1`).
 | POL-15 | Settings and connection settings by policy (admx-design.md §6, §7, phase 4) | HKLM `Connections\RedirectDrives` = 0 with a connection that has *Local drives* on: the RDP session has no drives, and *Local drives* shows *No*, greyed out with "Set by your organisation", in the connection's editor, its folder's and the global defaults; saving the connection keeps its own *Yes* in the settings file. `Theme` = Light: Settings → General shows *Light* greyed out and the window is light. `DisableTelemetry` = 0 with usage data off: the switch is on and greyed out. `AgentDesktopViewOnly` = 1: the start panel's *View only* is ticked and greyed out, and the session can't be controlled. `AgentInstall\Methods` = Clipboard, SaveFiles: *Install silently over PowerShell remoting* is greyed out. `Connections\RemoteDesktopVia` = Agent with `AllowAgentDesktop` = 0: Settings → Policies shows the conflict in amber, and *Connect* says the agent desktop is turned off | U | 1 | ○ | |
 | POL-16 | New console behaviour by policy (admx-design.md §5.4, §5.6, §6.3–§6.5, phase 5) | `AllowConnectionEditing` = 0: no *Edit*, *Duplicate*, *Delete*, *Move under* or *New* in the tree menu, no *New* button, F2 and Del say "Changing folders, connections and shares is turned off by your organisation", a drag onto a folder is refused, connecting still works. `AllowSavedPasswords` = 0 with a connection that has a stored password: at start "… 1 were removed", the password box is greyed out, the RDP sign-in asks for the password. `StartupProtection` = Required without protection: at start only *Startup protection* opens; closing it ends RemoteHub; with a password set, *Turn off* is greyed out. `AllowWindowsHello` = 0: the unlock window has no *Windows Hello*. `DiagnosticLog` = 0: `remotehub.log` gets no new lines; Settings → Logs says "Turned off by your organisation" | U | 1 | ○ | |
 
+### 10.8 Notes (NOTE)
+
+The Notes view ([notes-view-design.md](notes-view-design.md)) in RemoteHub's window on a client VM, driven by UI
+Automation in the console account's session; the clipboard is set and read in that session (`clip-set`, `clip-get`).
+One VM, no device. The cases build on each other in `UI-NOTES.Tests.ps1`.
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| UI-NOTE-01 | View rail | *Notes* on the rail shows the Notes view (*Add page*), *Remote Control* the connection list again, *Notes* the notebooks again | U | 2 | ◐ | – |
+| UI-NOTE-02 | New page | *Add page* in the first section (*Quick Notes*), the title typed into *Page title* → the page is in the section's list | U | 2 | ◐ | – |
+| UI-NOTE-03 | Paste into a script block | *Script block* from the format bar, a PowerShell line on the clipboard, Ctrl+V in the block → the block has the line (the page's own paste handling leaves it alone) | U | 2 | ◐ | – |
+| UI-NOTE-04 | View Markdown | *View Markdown* on → the *Markdown* text has the page as Markdown, the script in a ```` ``` ```` fence; *Bold* is greyed out; the toggle reads On | U | 2 | ◐ | – |
+| UI-NOTE-05 | Edit in View Markdown | `## Lab heading` added to the *Markdown* text, *View Markdown* off → the formatted page has "Lab heading" as text (no `##`); the toggle reads Off | U | 2 | ◐ | – |
+| UI-NOTE-06 | Copy page as Markdown | *Copy page as Markdown* → the clipboard holds Markdown text starting `# <title>`, with the script | U | 3 | ◐ | – |
+| UI-NOTE-07 | Kept after a restart | RemoteHub closed and started → Notes shows again (the last view), the page is listed, *Search notes* "Spooler" finds it, the script block still has the script, View Markdown is off | U | 2 | ◐ | – |
+
 ## 11. Report in the PR
 
 `lab\New-LabReport.ps1` reads `run.json` (packages with SHA-256, each VM's checkpoint) and every `pester.xml` of a
