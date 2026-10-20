@@ -342,8 +342,17 @@ $out = @(foreach ($p in @(__FILES__)) {
                 $comp = New-Object Windows.Media.Editing.MediaComposition
                 # (Clips is a WinRT IVector: Windows PowerShell gives it no Add - through the .NET interface)
                 $null = [System.Collections.Generic.ICollection[Windows.Media.Editing.MediaClip]].GetMethod('Add').Invoke($comp.Clips, @(, $clip))
-                $at = [TimeSpan]::FromSeconds([math]::Max(0, $o.seconds - 0.3))
-                $img = Await ($comp.GetThumbnailAsync($at, 0, 0, [Windows.Media.Editing.VideoFramePrecision]::NearestFrame)) ([Windows.Graphics.Imaging.ImageStream])
+                # the last frame the editing API can reach; near the end of its (too short, see C-REC-05) duration it
+                # has refused one ("timeFromStart is outside of the composition bounds", lab run 20261019-193627):
+                # then a little earlier. thumbAt says which one it is.
+                $img = $null; $why = $null
+                foreach ($back in 0.3, 1, 2, 4) {
+                    $at = [TimeSpan]::FromSeconds([math]::Max(0, $o.seconds - $back))
+                    try { $img = Await ($comp.GetThumbnailAsync($at, 0, 0, [Windows.Media.Editing.VideoFramePrecision]::NearestFrame)) ([Windows.Graphics.Imaging.ImageStream]); $o.thumbAt = $at.TotalSeconds; break }
+                    catch { $why = $_ }
+                    if ($at.TotalSeconds -eq 0) { break }
+                }
+                if (-not $img) { throw $why }
                 $s = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($img)
                 $fs = [IO.File]::Create($thumb)
                 try { $s.CopyTo($fs) } finally { $fs.Close() }

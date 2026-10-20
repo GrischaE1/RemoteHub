@@ -2,7 +2,7 @@
 #   A-INST-27   a folder a user made before the install is taken over (owner Administrators, inherited ACEs only)
 #   A-INST-28   AUTOSIGNIN=1 on a package without the credential provider (needs such a package - see Find-NoProviderMsi)
 #   A-HAND-07   the credential provider added / removed on an installed agent (ADDLOCAL / REMOVE=CredentialProvider)
-#   A-UNINST-16 the install's choice (agent.json) goes with uninstall and AUTOSIGNIN=0, policy values IT set stay; values
+#   A-UNINST-16 the install's choice (agent.json) goes with uninstall, AUTOSIGNIN=0 writes SignInScreen there, policy values IT set stay; values
 #               a version before 0.18.12 wrote into the policy key move to agent.json at service start unless IT changed them
 #   S-THR-06    what counts toward the sign-in block (403 counts, 500 doesn't)
 #   S-THR-07    the shared sign-in slots (skipped: needs 2 source addresses and Windows sign-ins slower than 30 s)
@@ -339,7 +339,7 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
     }
 
     # Since 0.18.12 the install keeps its choice in agent.json and never writes the policy key (docs/admx-design.md 11.3):
-    # uninstall and AUTOSIGNIN=0 remove the install's choice, policy values IT set stay. What a version before 0.18.12 wrote
+    # uninstall removes the install's choice, AUTOSIGNIN=0 turns it off explicitly (SignInScreen), policy values IT set stay. What a version before 0.18.12 wrote
     # into the policy key (recorded in autosignin.policy) moves to agent.json once, at service start, unless IT changed it.
     Context 'the install''s choice, policy values IT set, and values an older version wrote' {
         BeforeAll {
@@ -381,7 +381,7 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             }
         }
 
-        It 'A-UNINST-16 uninstall and AUTOSIGNIN=0 remove the install''s choice from agent.json and leave policy values IT set; an older version''s values move to agent.json unless IT changed them' -Tag 'A-UNINST-16' {
+        It 'A-UNINST-16 uninstall removes the install''s choice with agent.json, AUTOSIGNIN=0 writes SignInScreen there, policy values IT set stay; an older version''s values move to agent.json unless IT changed them' -Tag 'A-UNINST-16' {
             if (-not $hasProvider) { Set-ItResult -Skipped -Because 'the agent MSI under test has no CredentialProvider feature (AUTOSIGNIN needs build-installer.ps1 -CredentialProvider)'; return }
             # the install's choice is in agent.json, the policy key stays empty
             $u.written.ConfigBehavior | Should -Be 'AutoSignIn'
@@ -395,11 +395,12 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             $u.afterUninstall.Right | Should -Be $u.edited.Right -Because 'IT set Rights\AutoSignIn - it stays'
             $u.afterUninstall.Behavior | Should -BeNullOrEmpty
             $u.afterUninstall.Marker | Should -BeFalse
-            # AUTOSIGNIN=0: the install's choice cleared, IT's value stays
+            # AUTOSIGNIN=0: the install's choice turned off, IT's value stays. Since automatic sign-in is on by default,
+            # "off" is written explicitly - noUserBehavior not set would mean allowed (credential-provider-design.md 5)
             $u.update.verdict | Should -Be 'updated' -Because $u.update.message
             $u.edited0.ConfigBehavior | Should -Be 'AutoSignIn'
             $u.afterOff.Config | Should -BeTrue
-            $u.afterOff.ConfigBehavior | Should -BeNullOrEmpty -Because 'AUTOSIGNIN=0 clears noUserBehavior in agent.json'
+            $u.afterOff.ConfigBehavior | Should -Be 'SignInScreen' -Because 'AUTOSIGNIN=0 writes noUserBehavior = SignInScreen to agent.json'
             $u.afterOff.ConfigGroups | Should -BeNullOrEmpty -Because 'AUTOSIGNIN=0 clears autoSignInGroups in agent.json'
             $u.afterOff.Behavior | Should -Be 'SignInScreen' -Because 'IT set NoUserBehavior - it stays'
             $u.afterOff.Marker | Should -BeFalse

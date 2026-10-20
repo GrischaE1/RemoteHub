@@ -4,7 +4,10 @@ using System.Net.WebSockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Transport.Sockets;
 
 namespace RemoteHub.Agent;
 
@@ -31,11 +34,24 @@ public static class AgentHost
     public static string AgentVersion =>
         typeof(AgentHost).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0.0.0";
 
+    /// <summary>Whether any program listens on TCP <paramref name="port"/>, on any address and either IP version.</summary>
+    internal static bool PortInUse(int port) =>
+        IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(l => l.Port == port);
+
     public static WebApplication Build(AgentHostOptions o, string[]? args = null)
     {
         var builder = WebApplication.CreateSlimBuilder(args ?? []);
         builder.Logging.ClearProviders();
         builder.Services.AddWindowsService(w => w.ServiceName = "RemoteHubAgent"); // no effect when run from a console
+        // Windows lets the agent's dual-mode socket bind next to another program's ordinary IPv4 listener on the same port,
+        // and connections then go to either of the two (A-INST-25). A port someone listens on fails the start instead
+        // (Kestrel reports it as "address already in use"; Program logs "could not start").
+        builder.WebHost.UseSockets(s => s.CreateBoundListenSocket = endpoint =>
+        {
+            if (endpoint is IPEndPoint { Port: > 0 } ip && PortInUse(ip.Port))
+                throw new SocketException((int)SocketError.AddressAlreadyInUse);
+            return SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint);
+        });
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.AddServerHeader = false;

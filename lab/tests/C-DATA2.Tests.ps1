@@ -734,16 +734,20 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 }
                 finally { $null = Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock { param($l) if (Test-Path 'C:\lab\db.key.keep') { Move-Item 'C:\lab\db.key.keep' "$l\db.key" -Force } } }
             }
-            # C-DB-09: schema 2 (user_version), set back afterwards
+            # C-DB-09: one schema above the database's own (user_version), set back afterwards. The current schema is
+            # read rather than assumed: setting back a fixed older number made the next start migrate tables that were
+            # already there (lab run 20261019-193627, after Notes brought schema 2).
             Step $d 'db09' {
-                $d.v2 = @(Sql @('PRAGMA user_version = 2', 'PRAGMA user_version') | ForEach-Object user_version)
+                $d.vOwn = [int]@(Sql 'PRAGMA user_version' | ForEach-Object user_version)[0]
+                $d.vNext = $d.vOwn + 1
+                $d.v2 = @(Sql @("PRAGMA user_version = $($d.vNext)", 'PRAGMA user_version') | ForEach-Object user_version)
                 try {
                     Start-Rh
                     $d.db09msg = Box -Titles 'RemoteHub' -Button 'Cancel' -TimeoutSec 90
                     $d.db09gone = Wait-Gone
                     $null = Close-Rh
                 }
-                finally { $d.v1 = @(Sql @('PRAGMA user_version = 1', 'PRAGMA user_version') | ForEach-Object user_version) }
+                finally { $d.v1 = @(Sql @("PRAGMA user_version = $($d.vOwn)", 'PRAGMA user_version') | ForEach-Object user_version) }
             }
             Save 'db08-09' @{ db08 = $d.db08msg; gone08 = $d.db08gone; after08 = $d.db08after; base = $d.base; v2 = $d.v2; db09 = $d.db09msg; gone09 = $d.db09gone; v1 = $d.v1 }
 
@@ -867,10 +871,11 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             @($d.db08after.names | Where-Object { $_ -like '*damaged*' }) | Should -BeNullOrEmpty
         }
 
-        It 'C-DB-09 a database of a newer version: reason "The database was created by a newer version of RemoteHub (schema 2)."' -Tag 'C-DB-09' {
+        It 'C-DB-09 a database of a newer version: reason "The database was created by a newer version of RemoteHub (schema N)."' -Tag 'C-DB-09' {
             $d['db09-error'] | Should -BeNullOrEmpty
-            @($d.v2) | Should -Contain 2
-            $d.db09msg | Should -Match "RemoteHub's database can't be opened:\s*The database was created by a newer version of RemoteHub \(schema 2\)\."
+            @($d.v2) | Should -Contain $d.vNext
+            @($d.v1) | Should -Contain $d.vOwn -Because 'the database is set back to its own schema for the next steps'
+            $d.db09msg | Should -Match "RemoteHub's database can't be opened:\s*The database was created by a newer version of RemoteHub \(schema $($d.vNext)\)\."
             $d.db09gone | Should -BeTrue
         }
 
@@ -1458,7 +1463,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $exp = @($audit | Where-Object event -eq 'backup.exported')
             $exp.Count | Should -Be 1
             $exp[0].target | Should -Be 'aud07.rhbackup'
-            $exp[0].detail | Should -Match '^\d+ folders and connections, \d+ saved credentials$'
+            $exp[0].detail | Should -Match '^\d+ folders and connections, \d+ saved credentials, \d+ pages$'
             # the viewer's labels, as the CSV export writes them next to the event code
             $s['csv-error'] | Should -BeNullOrEmpty
             foreach ($pair in 'Added,data.added', 'Connection failed,session.failed', 'Startup protection changed,app.protection_changed', 'Settings location changed,storage.location_changed', 'Backup exported,backup.exported') {

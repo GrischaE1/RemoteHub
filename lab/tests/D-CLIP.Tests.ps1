@@ -107,7 +107,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
                 @{ do = 'requestFiles'; timeout = 30 }, @{ do = 'sleep'; seconds = 2 })
             Reached $o 'sent'
             $t.atDevice = Invoke-LabPerson -Name $VmName -Do clip-get
-            $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value 'copied at the device'
+            $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value 'RHLABDEVICECLIP text'
             Release $o 'copied'
             Reached $o 'big'
             # 1,000,000 characters copied at the device
@@ -131,7 +131,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
         }
 
         It 'D-CLIP-02 text copied at the device arrives, also 1,000,000 characters' -Tag 'D-CLIP-02' {
-            @($t.r.clipboard | Where-Object { $_.head -eq 'copied at the device' }).Count | Should -Be 1
+            @($t.r.clipboard | Where-Object { $_.head -eq 'RHLABDEVICECLIP text' }).Count | Should -Be 1
             @($t.r.clipboard | Where-Object length -eq 1000000).Count | Should -Be 1
         }
 
@@ -353,6 +353,9 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             $big50 = "$data\big50.bin"; $fs = [IO.File]::Create($big50); $rng = [Security.Cryptography.RandomNumberGenerator]::Create(); $buf = New-Object byte[] (1MB); for ($k = 0; $k -lt 50; $k++) { $rng.GetBytes($buf); $fs.Write($buf, 0, $buf.Length) }; $fs.Dispose()
             # D-CLIP-16 as the sheet has it: copied at the device without paste-on-demand (the data goes at once), a 90 MB
             # file, then a small one while the first is still on its way. The first copy to the device removes the old folder.
+            # The person's Allow came after 21 s on W11 and not within the 30 s countdown on Server 2025 for 'abort' (run
+            # 20261019-193627, OCR read nothing): a longer countdown for this context's questions
+            Set-LabAgentPolicy -Name $VmName -Values @{ ConsentTimeoutSeconds = 90 }
             $o = Out 'newer'
             $job = Begin 'newer' @(
                 @{ do = 'files'; paths = @("$data\file2.txt"); offer = $false; waitReceipt = 20 }
@@ -370,6 +373,9 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
                 for ($k = 0; $k -lt 90; $k++) { $rng.GetBytes($buf); $fs.Write($buf, 0, $buf.Length) }; $fs.Dispose()
                 Set-Content "$d\small.txt" 'the newer copy' -Encoding ASCII
             }
+            # 90 MB crossed the virtual switch before the second copy was made (run 20261019-193627 on W11: big90.bin
+            # arrived whole): the device's link is held to 20 Mbit/s (~36 s for big90.bin) until the copies are made
+            Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 20000000
             $copier = Start-LabInSession -Name $VmName -ScriptBlock {
                 $d = 'C:\ProgramData\RemoteHubLab\newer'
                 Set-Clipboard -Path "$d\big90.bin"
@@ -393,7 +399,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
                 }
             }
             catch { $n.deviceSet = "big90.bin never started: $($_.Exception.Message)" }
-            finally { Stop-LabInSession -Name $VmName -Task $copier }
+            finally { Stop-LabInSession -Name $VmName -Task $copier; Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 0 }
             Release $o 'copied'
             $n.newer = Receive-LabDesktop $job
             $n.oldGone = -not (Invoke-LabGuest -Name $VmName -ArgumentList $old -ScriptBlock { param($d) Test-Path $d })
@@ -409,6 +415,11 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
                 param($c, $u) @(Get-ChildItem $c, "C:\Users\$u\Desktop\Aborted" -Recurse -File -ErrorAction SilentlyContinue | Where-Object Length -lt 50MB | Where-Object Name -like 'big50*' | ForEach-Object FullName)
             }
             Save 'newer' $n
+        }
+
+        AfterAll {
+            Set-VMNetworkAdapter -VMName $vm.Name -MaximumBandwidth 0
+            Set-LabAgentPolicy -Name $VmName -Clear
         }
 
         It 'D-CLIP-16 a second copy at the device while the first transfers cancels it: "A newer copy replaced it."; the second arrives' -Tag 'D-CLIP-16' {

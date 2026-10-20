@@ -2008,8 +2008,8 @@ public partial class MainWindow : FluentWindow
         var c = new Connection { Parent = parent };
         if (new EditorWindow(c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
         {
-            _vm.Add(c, parent);
-            c.IsSelected = true;
+            _vm.AddNow(c, parent);
+            RevealInTree(c);
         }
     }
 
@@ -2020,8 +2020,8 @@ public partial class MainWindow : FluentWindow
         var f = new Folder { Parent = parent };
         if (new EditorWindow(f, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
         {
-            _vm.Add(f, parent);
-            f.IsSelected = true;
+            _vm.AddNow(f, parent);
+            RevealInTree(f);
         }
     }
 

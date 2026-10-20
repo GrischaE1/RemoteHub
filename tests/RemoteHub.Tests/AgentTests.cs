@@ -88,13 +88,14 @@ public class AgentTests
         return X509CertificateLoader.LoadPkcs12(cert.Export(X509ContentType.Pfx), null); // SChannel needs a persisted key
     }
 
-    private static async Task<Agent> StartAgent()
+    private static async Task<Agent> StartAgent(Func<A.AgentConfig, A.AgentPolicy>? policy = null)
     {
         var cert = SelfSigned();
         var auth = new FakeAuth();
         var launcher = new CurrentUserLauncher();
         var config = new A.AgentConfig { DeviceId = "dev-1", ListenPort = 0, MaxSessions = 3 };
-        var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, auth, launcher, A.AgentLog.Null, IPAddress.Loopback));
+        var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, auth, launcher, A.AgentLog.Null, IPAddress.Loopback,
+            Policy: policy is null ? null : () => policy(config)));
         await app.StartAsync();
         var port = new Uri(app.Urls.First()).Port;
         return new Agent { App = app, Port = port, Fingerprint = AgentProtocol.Fingerprint(cert.RawData), Auth = auth, Launcher = launcher };
@@ -173,6 +174,36 @@ public class AgentTests
         var noDc = Target(a, user: "nodc");
         ex = await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(noDc)));
         Assert.Contains("could not check the sign-in with Windows", PsRemoting.Explain(ex, noDc));
+        Assert.Empty(a.Launcher.Started);
+    }
+
+    [Fact]
+    public async Task The_agent_does_not_start_on_a_port_another_program_listens_on()
+    {
+        // An ordinary listener (shared use allowed) on IPv4 any - Windows would let the agent bind next to it (A-INST-25).
+        var other = new System.Net.Sockets.TcpListener(IPAddress.Any, 0);
+        other.Start();
+        try
+        {
+            var port = ((IPEndPoint)other.LocalEndpoint).Port;
+            var config = new A.AgentConfig { DeviceId = "dev-1", ListenPort = port };
+            await using var app = A.AgentHost.Build(new A.AgentHostOptions(config, SelfSigned(), new FakeAuth(), new CurrentUserLauncher(), A.AgentLog.Null));
+            await Assert.ThrowsAnyAsync<IOException>(() => app.StartAsync());
+        }
+        finally { other.Stop(); }
+    }
+
+    [Fact]
+    public async Task PowerShell_turned_off_by_policy_is_explained_and_nothing_is_signed_in()
+    {
+        // The 404's text doesn't name the agent; it must still reach the user instead of "status code '404'" (POL-05).
+        await using var a = await StartAgent(c => A.AgentPolicy.Defaults(c) with { PowerShellEnabled = false });
+        var target = Target(a);
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(target)));
+        var text = PsRemoting.Explain(ex, target);
+        Assert.Contains("(PowerShellEnabled)", text);
+        Assert.DoesNotContain("status code", text);
+        Assert.Equal(0, a.Auth.Calls);
         Assert.Empty(a.Launcher.Started);
     }
 
@@ -391,6 +422,21 @@ public class AgentTests
             Assert.Equal(e.DeviceId, AgentEnrollment.Parse(File.ReadAllBytes(enrollment!)).DeviceId);
             Assert.StartsWith(AgentInstaller.TempRoot, folder);
             Directory.Delete(folder, true);
+        }
+        finally { File.Delete(package); }
+    }
+
+    [Fact]
+    public void An_update_with_a_file_that_is_not_a_package_is_refused_before_anything_is_sent()
+    {
+        // No version to wait for: the old agent's next answer would read as "updated" (A-UPDFAIL-04).
+        var package = Path.Combine(Path.GetTempPath(), "rh-pkg-" + Guid.NewGuid().ToString("N") + ".msi");
+        File.WriteAllBytes(package, [0xD0, 0xCF, 0x11, 0xE0, 1, 2, 3]);
+        try
+        {
+            Assert.Null(AgentInstaller.PackageVersion(package));
+            var ex = Assert.Throws<RemoteCommandException>(() => AgentInstaller.StartUpdateThroughAgent(null!, package, null, _ => { }));
+            Assert.Contains("nothing was sent", ex.Message);
         }
         finally { File.Delete(package); }
     }

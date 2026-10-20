@@ -459,6 +459,10 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             Clear-LabAutoLogon -Name $VmName
             Reset-LabVm -Name $VmName
             $script:ownPin = (Install-LabAgent -Name $VmName).pin
+            # the person's first call in the session after the revert is slow (server start, helper compile, OCR): done
+            # here, not against the dialog's 30 s (run 20261019-193627: the Ask dialog wasn't read within 60 s, Denied)
+            $null = Invoke-LabPerson -Name $VmName -Account Console -Do windows
+            $null = Invoke-LabPerson -Name $VmName -Account Console -Do screen-read
             $n = [ordered]@{}
             foreach ($mode in 'Ask', 'Pin') {
                 $job = Start-LabDesktop -Name $VmName -Pin $script:ownPin -Account Console -Out (Out "own-$mode") -Steps @(

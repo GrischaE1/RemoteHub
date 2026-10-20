@@ -391,11 +391,13 @@ internal static class DesktopHarness
                     int x = Int(s, "x", 0), y = Int(s, "y", 0);
                     if (Str(s, "fromFile") is { } file)
                     {
-                        var until = DateTime.UtcNow.AddSeconds(Int(s, "timeout", 120));
-                        while (!File.Exists(file) && DateTime.UtcNow < until) await Task.Delay(250, ct);
-                        if (!File.Exists(file)) return (false, new D { ["timedOut"] = true, ["file"] = file });
-                        var xy = File.ReadAllText(file).Trim().Split(',');
-                        x = int.Parse(xy[0], CultureInfo.InvariantCulture); y = int.Parse(xy[1], CultureInfo.InvariantCulture);
+                        // The test writes the file with Set-Content while this step polls: it can exist and still be
+                        // open or empty (run 20261019-193627: "being used by another process" lost the click), so the
+                        // step waits until it reads as "x,y"
+                        (int X, int Y)? read = null;
+                        var ok = await Until(() => { read = ReadXy(file); return read is not null; }, Dbl(s, "timeout", 120), ct);
+                        if (!ok || read is not { } got) return (false, new D { ["timedOut"] = true, ["file"] = file });
+                        (x, y) = got;
                     }
                     c.Client.Send(DesktopWire.Mouse(new RemoteMouse(RemoteMouseAction.Move, RemoteMouseButton.None, x, y, 0)));
                     await Task.Delay(100, ct);
@@ -419,8 +421,20 @@ internal static class DesktopHarness
                 }
 
                 case "cad":
-                    Need().Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
-                    return (true, new D());
+                {
+                    // {} or {ifFile: path, timeout (120)}: with ifFile only when the test wrote "cad" there after reading
+                    // a frame - Server 2025 shows "Press Ctrl+Alt+Delete" after Switch user, Windows 11 the tiles
+                    var c = Need();
+                    if (Str(s, "ifFile") is { } file)
+                    {
+                        string? answer = null;
+                        var ok = await Until(() => (answer = ReadAnswer(file)) is not null, Dbl(s, "timeout", 120), ct);
+                        if (!ok) return (false, new D { ["timedOut"] = true, ["file"] = file });
+                        if (!string.Equals(answer, "cad", StringComparison.OrdinalIgnoreCase)) return (true, new D { ["sent"] = false, ["answer"] = answer });
+                    }
+                    c.Client.Send(DesktopWire.Empty(DesktopMessage.SecureAttention));
+                    return (true, new D { ["sent"] = true });
+                }
 
                 case "keyframe":
                     Need().Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
@@ -1099,7 +1113,31 @@ internal static class DesktopHarness
         return true;
     }
 
-    private static string Sha256(ReadOnlySpan<byte> data) => Convert.ToHexStringLower(SHA256.HashData(data));
+    /// <summary>The "x,y" a test wrote to <paramref name="path"/>, or null while it is missing, open, empty or partial.</summary>
+    private static (int X, int Y)? ReadXy(string path)
+    {
+        string text;
+        try
+        {
+            if (!File.Exists(path)) return null;
+            text = File.ReadAllText(path);
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        var xy = text.Trim().Split(',');
+        return xy.Length == 2 && int.TryParse(xy[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var x) && int.TryParse(xy[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var y)
+            ? (x, y) : null;
+    }
+
+    /// <summary>The trimmed text a test wrote to <paramref name="path"/>, or null while it is missing, open or empty.</summary>
+    private static string? ReadAnswer(string path)
+    {
+        try { return File.Exists(path) && File.ReadAllText(path).Trim() is { Length: > 0 } t ? t : null; }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+    }
+
+    private static string Sha256(ReadOnlySpan<byte> data) =>Convert.ToHexStringLower(SHA256.HashData(data));
 
     private static string Sha256File(string path)
     {

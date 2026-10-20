@@ -41,8 +41,8 @@ public partial class MainWindow
         var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew());
         share.Parent = parent;
         if (new ShareEditorWindow(share, null, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
-        _vm.Add(share, parent);
-        share.IsSelected = true;
+        _vm.AddNow(share, parent);
+        RevealInTree(share);
         DiagLog.Write($"Network share added on its own: {share.ProtocolLabel}");
     }
 
@@ -54,7 +54,7 @@ public partial class MainWindow
         if (new ShareEditorWindow(share, c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         c.Shares.Add(share);
         c.IsExpanded = true;
-        _vm.RequestSave();
+        _vm.SaveNow(); // a new item is written at once, as AddNow does
         DiagLog.Write($"Network share added to a server: {share.ProtocolLabel}");
     }
 

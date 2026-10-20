@@ -276,8 +276,15 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $until = (Get-Date).AddMinutes(5)
             do { Start-Sleep -Seconds 5; $v = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Item 'C:\Program Files\RemoteHub\RemoteHub.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion } } while ($v -notlike "$currentVersion*" -and (Get-Date) -lt $until)
             $u.installed = $v
-            Start-Sleep -Seconds 20
-            $u.restarted = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $_.MainModule.FileVersionInfo.ProductVersion }) }
+            # the helper starts RemoteHub once msiexec has returned, which can be well after the new RemoteHub.exe is in
+            # place (lab run 20261019-193627: not running yet 20 s later) - waited for, up to 3 minutes
+            $until = (Get-Date).AddMinutes(3)
+            do {
+                $u.restarted = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $_.MainModule.FileVersionInfo.ProductVersion }) }
+                if (@($u.restarted | Where-Object { $_ -like "$currentVersion*" }).Count) { break }
+                Start-Sleep -Seconds 3
+            } while ((Get-Date) -lt $until)
+            $u.msiexecLeft = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process msiexec -ErrorAction SilentlyContinue).Count }
             Save 'update' $u
         }
 
@@ -299,7 +306,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
 
         It 'C-UPD-04 Download and install: UAC approved, the package installs, RemoteHub restarts with the new version' -Tag 'C-UPD-04' {
             $u.installed | Should -BeLike "$currentVersion*" -Because "UAC prompt seen: $($u.uacShown), keys sent: $($u.uacKeys -join ', ')"
-            @($u.restarted | Where-Object { $_ -like "$currentVersion*" }).Count | Should -BeGreaterThan 0
+            @($u.restarted | Where-Object { $_ -like "$currentVersion*" }).Count | Should -BeGreaterThan 0 -Because "RemoteHub runs again within 3 minutes of the install (running: $(@($u.restarted) -join ', '); msiexec processes left: $($u.msiexecLeft))"
         }
 
         It 'C-UPD-05 a skipped version stays hidden; a mandatory one can''t be skipped' -Tag 'C-UPD-05' {

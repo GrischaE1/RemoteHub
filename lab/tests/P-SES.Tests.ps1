@@ -60,12 +60,20 @@ Describe 'P-SES <VmName>' -Tag Agent, 'P-SES' {
     Context 'ending the session' {
         BeforeAll {
             $since = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Date }
-            $s = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PID; (Start-Process ping.exe -ArgumentList ''-t'', ''127.0.0.1'' -PassThru -WindowStyle Hidden).Id; (Start-Process notepad.exe -PassThru).Id' }
+            # a hidden console child and a windowed one. Not notepad.exe: on Windows 11 it hands over to the packaged
+            # Notepad, which the app activation starts outside the session's process tree (run 20261019-193627 left
+            # "Notepad" running - not a process the session started)
+            $s = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PID; (Start-Process ping.exe -ArgumentList ''-t'', ''127.0.0.1'' -PassThru -WindowStyle Hidden).Id; (Start-Process cmd.exe -ArgumentList ''/k'', ''title RHLAB-PSES'' -PassThru).Id' }
             $ids = @($s.result.output | ForEach-Object { [int]$_ })
-            # the harness closed the session when the call returned; the agent must end the whole tree
-            Start-Sleep -Seconds 5
-            $left = Invoke-LabGuest -Name $VmName -ArgumentList (, $ids) -ScriptBlock { param($ids) @(Get-Process -Id $ids -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)[$($_.Id)]" }) }
-            $ended = Get-AgentEvents 1001 $since
+            # the harness closed the session when the call returned; the agent must end the whole tree within 5 s
+            $until = (Get-Date).AddSeconds(5)
+            do {
+                $left = Invoke-LabGuest -Name $VmName -ArgumentList (, $ids) -ScriptBlock { param($ids) @(Get-Process -Id $ids -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)[$($_.Id)]" }) }
+                if (-not @($left).Count) { break }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $until)
+            $until = (Get-Date).AddSeconds(10)
+            do { $ended = Get-AgentEvents 1001 $since } while (-not @($ended | Where-Object { $_ -match 'Session ended' }).Count -and (Get-Date) -lt $until)
             Save 'end' @{ Session = $s; Left = $left; Ended = $ended }
         }
 

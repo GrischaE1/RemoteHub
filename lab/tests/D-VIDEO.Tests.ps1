@@ -14,9 +14,9 @@
 #   /enable-device answers 1167 "not connected" (VirtualDisplay.cs:170, 205-209). The virtual display context powers
 #   the VM off and on (Set-VMVideo needs it off), so D-VD-01, D-VD-03 and D-VD-04 fail until it's fixed; the
 #   -Because shows the agent's "virtual monitor ..." log line.
-# - D-VID-05 (suspected, code review) - the quality steps down only when "blocked > loops" in 2 s
-#   (DesktopHelper.cs:966), but on a saturated link every wait for an ack is followed by exactly one capture, so
-#   blocked == loops and the quality stays where it is. Fails until fixed if the link is really saturated.
+# D-VID-05 failed in run 20261019-193627 (quality 80 in every stat): the step down counted blocked loops (equal to the
+# captures on a saturated link) and the next frame put the viewer's quality back. Fixed: the agent steps down when a
+# quarter of the time goes to waiting for acks and keeps the lowered quality (DesktopHelperSession.AdaptedQuality).
 # LabRole: device
 param(
     [Parameter(Mandatory)][string]$VmName,
@@ -162,7 +162,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             $q = @($slow.stats | ForEach-Object { $_.stats.quality })
             $kbits = [math]::Round($slow.frames.bytes * 8 / 1000 / 30)
             $slowChange.perSecond | Should -BeGreaterThan 10 -Because "the noise window must keep changing (it changed $($slowChange.perSecond) times a second)"
-            ($q | Measure-Object -Minimum).Minimum | Should -BeLessThan 80 -Because "the link was loaded (~$kbits kbit/s of video arrived, $($slow.frames.count) frames; stats fps: $((Fps $slow) -join ', '); quality: $($q -join ', ')) - see 'Known product bugs' in the header"
+            ($q | Measure-Object -Minimum).Minimum | Should -BeLessThan 80 -Because "the link was loaded (~$kbits kbit/s of video arrived, $($slow.frames.count) frames; stats fps: $((Fps $slow) -join ', '); quality: $($q -join ', ')) - see the D-VID-05 note in the header"
             $slow.frames.count | Should -BeGreaterThan 20
         }
     }

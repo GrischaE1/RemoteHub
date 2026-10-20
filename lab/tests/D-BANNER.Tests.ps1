@@ -108,7 +108,8 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
 
         It 'D-BAN-01 a topmost banner "Your screen is being viewed and controlled by PSAdmin" with Disconnect, on the console' -Tag 'D-BAN-01' {
             $b.read.found | Should -BeTrue
-            $b.read.text | Should -Match "(being viewed and controlled|Controlled) by .*$([regex]::Escape($vm.AdminAccount))"   # full text or the pill
+            # full text or the pill; OCR splits the account over lines and reads the title in between ("DESKTOP-\nRemoteHub\nOUNPN53\PSAdmin", run 20261019-193627)
+            $b.read.text | Should -Match "(?s)(being viewed and controlled|Controlled) by .*$([regex]::Escape($vm.AdminAccount))"
             $b.read.text | Should -Match 'Disconnect'
             $b.consoleOcr.text | Should -Match 'viewed and controlled|Controlled by'
         }
@@ -154,7 +155,15 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $res = Get-LabResolution -Name $VmName
             # a fit to a size the console isn't at: else an ignored fit and an obeyed one look the same
             $size = if ($res -eq '1024x768') { @(1280, 720) } else { @(1024, 768) }
-            $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
+            # the marker records the test's own clip-set too: counted once that is in (run 20261019-193627 counted
+            # before it and took it for the clipboard reaching the device in view-only)
+            $until = (Get-Date).AddSeconds(15)
+            do {
+                $before = @(Get-LabMarker -Name $VmName -Marker $marker)
+                if (@($before | Where-Object { $_.e -eq 'clipboard' -and "$($_.start)" -eq 'device clipboard before' }).Count) { break }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $until)
+            $count = $before.Count
             $job = Connect-Allowed 'view' -ViewOnly $true -Before @(
                 @{ do = 'keys'; text = 'viewonly' }, @{ do = 'mouse'; action = 'Down'; button = 'Left'; x = 200; y = 200 }, @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 200; y = 200 }
                 @{ do = 'cad' }, @{ do = 'clipboardText'; text = 'from RemoteHub in view-only' }, @{ do = 'settings'; fitWidth = $size[0]; fitHeight = $size[1] }, @{ do = 'sleep'; seconds = 5 })

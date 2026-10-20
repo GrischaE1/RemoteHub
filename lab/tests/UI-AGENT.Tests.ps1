@@ -27,11 +27,30 @@ BeforeAll {
     # the connection's context menu entry
     # (right-click and the entry in one step: the menu closes when another process takes the focus; "A>B" = submenu)
     function Menu([string]$Entry, [int]$TimeoutSec = 30) { $m = Ui 'Device' -Value "menu:$Entry" -TimeoutSec $TimeoutSec; if ($m.PSObject.Properties['error']) { throw "menu: $($m.error) - entries: $(@($m.entries) -join ', ')" } }
-    # the text of the last message box (title like -Title; '?*' = RemoteHub's own dialogs first, as UIA lists them inside
+    # RemoteHub's message boxes are named after their text in UI Automation, not after their title (lab run
+    # 20261019-193627: no window 'PowerShell remoting' while the box "PowerShell remoting is not available ..." was
+    # open). The first box whose name is like one of -Like within -TimeoutSec, or $null; its .window names it for the
+    # buttons ([WildcardPattern]::Escape).
+    function Answer([string[]]$Like, [int]$TimeoutSec) {
+        $until = (Get-Date).AddSeconds($TimeoutSec)
+        do {
+            foreach ($t in $Like) {
+                $m = Ui '*' -Title $t -Value list -Optional -TimeoutSec 2
+                if ($m.found) { return $m }
+            }
+        } while ((Get-Date) -lt $until)
+        $null
+    }
+    # what the boxes of the connection test start with: PowerShell remoting ("... works (", "... is not available for",
+    # "... answers on"; "<name> answers over HTTPS, but ..." for a certificate not trusted yet) and the agent
+    $psTitles = @('PowerShell remoting*', '*answers over HTTPS*')
+    $agentTitles = @('The RemoteHub Agent*', 'RemoteHub Agent')
+    # the text of the last message box (named like -Title; '?*' = RemoteHub's own dialogs first, as UIA lists them inside
     # the main window), closed with -Button
-    function Message([string]$Title = '?*', [string]$Button = 'OK', [int]$TimeoutSec = 120) {
-        $m = Ui '*' -Title $Title -Value list -TimeoutSec $TimeoutSec
-        $null = Ui $Button -Title $Title -Optional
+    function Message([string[]]$Title = @('?*'), [string]$Button = 'OK', [int]$TimeoutSec = 120) {
+        $m = Answer $Title $TimeoutSec
+        if (-not $m) { throw "no message box like '$($Title -join "' / '")' within $TimeoutSec s" }
+        $null = Ui $Button -Title ([WildcardPattern]::Escape($m.window)) -Optional
         ($m.items -join "`n")
     }
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-agent-$name.png") }
@@ -44,8 +63,10 @@ BeforeAll {
     # question about the certificate, then Windows' question about the root certificate. Answers what each step showed.
     function SetUpRemoting {
         $s = [ordered]@{}
-        $s.test1 = @((Ui '*' -Title 'PowerShell remoting' -Value list -TimeoutSec 90).items) -join "`n"
-        $null = Ui 'Set up on the target*' -Title 'PowerShell remoting'
+        $box = Answer $psTitles 90
+        if (-not $box) { throw "Test PowerShell remoting: no answer within 90 s (no box like '$($psTitles -join "' / '")')." }
+        $s.test1 = @($box.items) -join "`n"
+        $null = Ui 'Set up on the target*' -Title ([WildcardPattern]::Escape($box.window))
         $null = Ui 'Copy script' -Title 'Set up PowerShell remoting' -TimeoutSec 60
         $script = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { Get-Clipboard -Raw }
         $null = New-Item -ItemType Directory -Path (Join-Path $EvidenceDir 'ui-agent-script') -Force
@@ -77,9 +98,10 @@ BeforeAll {
             $err = if ($m.PSObject.Properties['error']) { "$($m.error)" } else { '' }
             if ($m.found -and -not $err) {
                 # the test started: its answer in RemoteHub's own dialog, "... works (...)" with OK, else a question
-                $title = if ("$($m.value)" -like '*RemoteHub Agent*') { 'RemoteHub Agent' } else { 'PowerShell remoting' }
-                $box = Ui '*' -Title $title -Value list -TimeoutSec 180 -Optional
-                if (-not $box.found) { throw "Tools: '$($m.value)' gave no answer within 180 s (no '$title' dialog)." }
+                $titles = if ("$($m.value)" -like '*RemoteHub Agent*') { $agentTitles } else { $psTitles }
+                $box = Answer $titles 180
+                if (-not $box) { throw "Tools: '$($m.value)' gave no answer within 180 s (no box like '$($titles -join "' / '")')." }
+                $title = [WildcardPattern]::Escape($box.window)
                 $answer = @($box.items) -join "`n"
                 if ($answer -match 'works \(') { $null = Ui 'OK' -Title $title -Optional -TimeoutSec 10 }
                 elseif ($SetUp -and -not $setUpDone -and $answer -match 'Set up on the target') { $setUpDone = $true; $null = SetUpRemoting }
@@ -219,7 +241,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # Test RemoteHub Agent: only in the menu while the connection isn't known to work - after the install from
             # the menu it already is, and the menu offers the tools instead (documented)
             $m = Ui 'Device' -Value 'menu:Tools>Test RemoteHub Agent*' -Optional
-            if ($m.PSObject.Properties['error']) { $a.entries = @($m.entries); Esc } else { $a.test = Message -Title 'RemoteHub Agent' -TimeoutSec 60 }
+            if ($m.PSObject.Properties['error']) { $a.entries = @($m.entries); Esc } else { $a.test = Message -Title $agentTitles -TimeoutSec 60 }
             Save 'install' $a
         }
 
@@ -397,7 +419,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             else {
                 if ($m.found) { Esc }
                 $null = Ui 'Device' -Value 'menu:Tools>Test RemoteHub Agent*' -TimeoutSec 15
-                $f.pinMessage = Message -Title 'RemoteHub Agent' -Button 'Cancel' -TimeoutSec 90
+                $f.pinMessage = Message -Title $agentTitles -Button 'Cancel' -TimeoutSec 90
             }
             Shot 'pin'
             $f.pinFailedLogons = @(Get-LabFailedLogon -Name $device.Name -Since $since)

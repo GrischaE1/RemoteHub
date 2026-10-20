@@ -13,8 +13,8 @@
 #  - after a drop the old helper holds the cover for 2 minutes; Ctrl+Alt+Del at the device offers only Task Manager and
 #    Cancel then (privacy-mode-design 5.9 - no Lock) and the 2 minutes run out as usual (C-END-11); a resume restores the service's cover without the PrivacyScreen right
 #    (ScreenByService, C-END-12); a failed sign-in drops it (C-END-13);
-#  - KNOWN PRODUCT FINDINGS, tested for the correct behaviour (they fail until fixed): C-END-14 (1104 names the admin
-#    for the service's cover, DesktopEndpoint.cs:768-771) and C-END-15 (a drop the agent notices first counts as
+#  - the 1104 for the service's cover names the service, not the admin (C-END-14);
+#  - KNOWN PRODUCT FINDING, tested for the correct behaviour (fails until fixed): C-END-15 (a drop the agent notices first counts as
 #    "closed by RemoteHub", DesktopEndpoint.cs:220-230 - the session is locked at once, no resume). The same finding
 #    hits the harness' "drop" (C-END-11, C-END-12) whenever the agent sees the aborted socket as a cancelled read.
 # Every sign-in starts from the sign-in screen with a restarted agent (the rate limit is 3 per account in 15 minutes).
@@ -220,8 +220,8 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             @($l1.LocalKeys).Count | Should -Be 0 -Because 'the device''s keyboard is blocked in a session automatic sign-in created, at level 1 too'
         }
 
-        # Product finding (credential-provider-design 9.1, DesktopEndpoint.cs:768-771): today the helper's report of the
-        # service's cover is audited as "<admin> from <source> turned the privacy screen on" - fails until fixed.
+        # Was a product finding (credential-provider-design 9.1): the helper's report of the service's cover was audited as
+        # "<admin> from <source> turned the privacy screen on". It now reads "the service (automatic sign-in of ...)".
         It 'C-END-14 the 1104 for the service''s cover doesn''t say the admin turned it on' -Tag 'C-END-14' {
             Text $l1.R | Should -Match 'SignedIn: Signed in as'
             @($l1.R.steps | Where-Object do -eq 'privacy') | Should -BeNullOrEmpty -Because 'the admin never asked for a privacy screen'
@@ -369,7 +369,9 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             # password provider first)
             $s1 = Join-Path $EvidenceDir 'c-end2-byhand-1-after-ok.png'
             $null = Get-LabScreenshot -Name $VmName -Path $s1
-            $f.OptionsAt = Find-LabPictureText -Path $s1 -Text 'options'
+            # OCR may read trailing dots ("options..", run 20261019-193627 W11): the word only has to start with it
+            $f.OptionsAt = @((Get-LabOcr -Path $s1).words | Where-Object { $_.text -match '^options' } |
+                    ForEach-Object { "$([int]($_.x + $_.w / 2)),$([int]($_.y + $_.h / 2))" }) | Select-Object -First 1
             if ($f.OptionsAt) {
                 $ox, $oy = [int[]]("$($f.OptionsAt)" -split ',')
                 Send-LabMouse -Name $VmName -X $ox -Y $oy

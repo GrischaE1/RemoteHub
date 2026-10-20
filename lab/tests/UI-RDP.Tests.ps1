@@ -723,11 +723,13 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             }
             Step $x image {
                 $x.imgOut = (InSession $VmName Console $code.imageSet @{ SEED = 1 }).hash
-                $r = InSession $device.Name Admin $code.imageGet @{ WANT = $x.imgOut; SEED = 1 }
-                $x.imgIn = $r.hash; $x.imgInInfo = $r.info
+                # (not $r: that is Step's $R - names ignore case, and it only takes a dictionary; lab run 20261019-193627:
+                # "Cannot convert ... to type System.Collections.IDictionary", the pictures were never compared)
+                $got = InSession $device.Name Admin $code.imageGet @{ WANT = $x.imgOut; SEED = 1 }
+                $x.imgIn = $got.hash; $x.imgInInfo = $got.info
                 $x.imgBack = (InSession $device.Name Admin $code.imageSet @{ SEED = 77 }).hash
-                $r = InSession $VmName Console $code.imageGet @{ WANT = $x.imgBack; SEED = 77 }
-                $x.imgBackIn = $r.hash; $x.imgBackInfo = $r.info
+                $got = InSession $VmName Console $code.imageGet @{ WANT = $x.imgBack; SEED = 77 }
+                $x.imgBackIn = $got.hash; $x.imgBackInfo = $got.info
             }
             Step $x drives {
                 $x.drivesOff = (InSession $device.Name Admin $code.tsclient @{ WAIT = 5 }).present

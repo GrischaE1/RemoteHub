@@ -93,7 +93,8 @@ BeforeAll {
     }
     function Lines($text) { @("$text" -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
     function Sha([string]$s) { [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($s))).Replace('-', '') }
-    function Norm([string]$s) { ("$s" -replace "`r`n", "`n").TrimEnd("`n") }
+    # line ends as "`n" (a rich edit control answers WM_GETTEXT with a bare "`r" per line)
+    function Norm([string]$s) { ("$s" -replace "`r`n", "`n" -replace "`r", "`n").TrimEnd("`n") }
     function WaitFor([scriptblock]$Cond, [int]$TimeoutSec = 60, [int]$Every = 3) {
         $until = (Get-Date).AddSeconds($TimeoutSec)
         do { if (& $Cond) { return $true }; Start-Sleep -Seconds $Every } while ((Get-Date) -lt $until)
@@ -162,11 +163,19 @@ Add-Type -TypeDefinition 'using System; using System.Text; using System.Collecti
 'FG=' + [RhW]::Title([RhW]::GetForegroundWindow())
 'ALL=' + ([RhW]::Titles() -join '|')
 '@
-    # Notepad's text by WM_GETTEXT (when UI Automation doesn't answer)
+    # Notepad's text by WM_GETTEXT (when UI Automation doesn't answer): the classic Notepad's Edit control, or the text
+    # box (RichEditD2DPT) of the Store Notepad, which also has empty Edit controls of its own - in lab run
+    # 20261019-193627 the first Edit answered '' while the typed text was on the screen. The text of the first edit
+    # control that has any, else ''.
     $npCode = @'
-Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.InteropServices; public static class RhN { [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowExW(IntPtr p, IntPtr a, string c, string t); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, int m, IntPtr w, StringBuilder l); }'
-$h = [RhN]::FindWindowW('Notepad', $null); $e = if ($h -ne [IntPtr]::Zero) { [RhN]::FindWindowExW($h, [IntPtr]::Zero, 'Edit', $null) } else { [IntPtr]::Zero }
-if ($e -eq [IntPtr]::Zero) { 'NP-NONE' } else { $sb = New-Object Text.StringBuilder 65536; [void][RhN]::SendMessageW($e, 0x0D, [IntPtr]65536, $sb); 'NP<' + $sb.ToString() + '>NP' }
+Add-Type -TypeDefinition 'using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices; public static class RhN { public delegate bool P(IntPtr h, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t); [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, P f, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, int m, IntPtr w, StringBuilder l); public static List<IntPtr> Edits(IntPtr p) { var l = new List<IntPtr>(); EnumChildWindows(p, (h, x) => { var c = new StringBuilder(256); GetClassNameW(h, c, 256); var n = c.ToString(); if (n == "Edit" || n.StartsWith("RichEdit")) l.Add(h); return true; }, IntPtr.Zero); return l; } }'
+$h = [RhN]::FindWindowW('Notepad', $null)
+$edits = if ($h -ne [IntPtr]::Zero) { @([RhN]::Edits($h)) } else { @() }
+if (-not $edits.Count) { 'NP-NONE' } else {
+    $text = ''
+    foreach ($e in $edits) { $sb = New-Object Text.StringBuilder 65536; [void][RhN]::SendMessageW($e, 0x0D, [IntPtr]65536, $sb); if ($sb.Length) { $text = $sb.ToString(); break } }
+    'NP<' + $text + '>NP'
+}
 '@
     # a 200x200 test picture (pattern @@K@@) on the clipboard, or the clipboard's picture compared with it ("0" = equal)
     $patCode = @'
@@ -652,7 +661,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Start-Sleep -Seconds 4
                 # what the device's clipboard offers before the paste (no file reached either way in the run of 16.10.2026 13:55)
                 $R.cp04DeviceClip = ClipFormats $dn 'User'
-                $R.cp04Arrived = @(PasteAt $dn 'User' 'cp04' 5)
+                # the device's adapter limited to 20 Mbit/s while the 20 MB go: unlimited they were across in well under
+                # a second and the notice watcher (every 400 ms) never saw "Copying ..." (lab run 20261019-193627)
+                Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 20000000
+                try { $R.cp04Arrived = @(PasteAt $dn 'User' 'cp04' 5) }
+                finally { Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 0 }
                 Start-Sleep -Seconds 3
                 $R.cp04Notices = @(Notices $mark)
             }

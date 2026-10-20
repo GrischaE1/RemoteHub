@@ -475,10 +475,18 @@ public sealed partial class AgentDesktopSession : SessionBase
                     }, TaskScheduler.FromCurrentSynchronizationContext());
             }
             else if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList())
-                Notice("Copying images and files isn't allowed on this device – only text.");
+                Notice(RefusedCopyNotice(ClipboardLevel));
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException or IOException) { /* clipboard busy */ }
     }
+
+    /// <summary>
+    /// Why a copy that isn't text stays on this PC: with images allowed only files are refused (the agent's own wording
+    /// for that case), below that images and files.
+    /// </summary>
+    internal static string RefusedCopyNotice(int level) => level >= DesktopClipboardLevel.Images
+        ? "Copying files isn't allowed on this device."
+        : "Copying images and files isn't allowed on this device – only text.";
 
     private uint _clipboardHandled;
     private bool _clipboardSyncedSinceLive;

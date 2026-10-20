@@ -107,13 +107,21 @@ BeforeAll {
             })
     }
     # waits until PSAdmin has at least $Count active RDP sessions on the device (a sign-in takes a while); answers them
+    # When fewer come, $script:quser holds what the device listed then and its single-session values, for the evidence
+    # (lab run 20261019-193627: one session where two were expected, nothing recorded to tell why).
     function Wait-DeviceRdp([int]$Count, [int]$TimeoutSec = 90) {
+        $script:quser = $null
         $until = (Get-Date).AddSeconds($TimeoutSec)
         do {
             $ids = @(DeviceRdp)
             if ($ids.Count -ge $Count) { return $ids }
             Start-Sleep -Seconds 3
         } while ((Get-Date) -lt $until)
+        $script:quser = @(Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                $p = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -ErrorAction SilentlyContinue
+                $t = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
+                @(quser 2>$null) + @("fSingleSessionPerUser: policy $(if ($p) { $p.fSingleSessionPerUser }), registry $(if ($t) { $t.fSingleSessionPerUser })")
+            } | ForEach-Object { "$_".Trim() })
         $ids
     }
     function Clear-DeviceSessions {
@@ -337,7 +345,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $s.device2 = Wait-RdpTab 90
                 Menu 'Connect' -Node 'Ghost'
                 Start-Sleep -Seconds 3
-                $s.sessions = Wait-DeviceRdp 2
+                $s.sessions = Wait-DeviceRdp 2; $s.quser = $script:quser
             }
             Step $s next {
                 # back on Device's tab, a click into its session, then Ctrl+Alt+< (left Alt; VK_OEM_102 = the "<" key).
@@ -381,7 +389,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             foreach ($k in 'setup', 'next', 'previous', 'fullscreen') { $s["$k-error"] | Should -BeNullOrEmpty -Because "the steps of '$k' ran" }
             $s.device | Should -BeTrue
             $s.device2 | Should -BeTrue
-            @($s.sessions).Count | Should -Be 2 -Because 'Device and Device2 each have their own session'
+            @($s.sessions).Count | Should -Be 2 -Because "Device and Device2 each have their own session (device: $(@($s.quser) -join ' / '))"
             $s.before | Should -Be 'Device'
             $s.afterNext | Should -Be 'Device2'
             $s.afterPrevious | Should -Be 'Device'
@@ -407,7 +415,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Open additional session'
                 $a.tabs2 = Wait-RdpTabCount 2 60
                 $a.second = Wait-RdpTab 90
-                $a.sessions2 = Wait-DeviceRdp 2
+                $a.sessions2 = Wait-DeviceRdp 2; $a.quser2 = $script:quser
                 Shot 'additional-tree'
             }
             Step $a tab {
@@ -421,7 +429,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Ui 'Open another tab for this connection' -Value 'pick:Additional remote desktop session'
                 $a.tabTabs2 = Wait-RdpTabCount 2 60
                 $a.tabSecond = Wait-RdpTab 90
-                $a.tabSessions2 = Wait-DeviceRdp 2
+                $a.tabSessions2 = Wait-DeviceRdp 2; $a.tabQuser2 = $script:quser
                 Shot 'additional-tab'
                 CloseAll
             }
@@ -435,10 +443,10 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             @($a.sessions1).Count | Should -Be 1
             $a.tabs1 | Should -Be 1
             $a.tabs2 | Should -Be 2
-            @($a.sessions2).Count | Should -Be 2
+            @($a.sessions2).Count | Should -Be 2 -Because "the device: $(@($a.quser2) -join ' / ')"
             $a.tabTabs1 | Should -Be 1
             $a.tabTabs2 | Should -Be 2
-            @($a.tabSessions2).Count | Should -Be 2
+            @($a.tabSessions2).Count | Should -Be 2 -Because "the device: $(@($a.tabQuser2) -join ' / ')"
         }
     }
 }

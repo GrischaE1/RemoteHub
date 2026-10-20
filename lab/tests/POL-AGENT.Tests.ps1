@@ -201,7 +201,7 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             $g.psAgain.error | Should -BeNullOrEmpty
         }
 
-        It 'POL-06 AllowedGroups gives every right not set on its own to its groups, never view-only, ConsentBypass or AutoSignIn' -Tag 'POL-06' {
+        It 'POL-06 AllowedGroups gives every right not set on its own to its groups (AutoSignIn too, on by default), never view-only or ConsentBypass' -Tag 'POL-06' {
             $g.memberPs.error | Should -BeNullOrEmpty
             $g.adminPs.error | Should -Match 'not allowed'
             $g.adminDesktop.error | Should -Match 'may not use the remote desktop|403'
@@ -209,7 +209,9 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             $g.adminPsRight.error | Should -Match 'not allowed'
             $g.report | Should -Match 'Rights\\DesktopViewOnly\s+nobody'
             $g.report | Should -Match 'Rights\\ConsentBypass\s+nobody'
-            $g.report | Should -Match 'Rights\\AutoSignIn\s+nobody'
+            # since automatic sign-in is on by default, its right follows the allowed groups like the others
+            # (credential-provider-design.md 5; the install wrote no autoSignInGroups of its own here)
+            $g.report | Should -Match ('Rights\\AutoSignIn\s+' + [regex]::Escape($groupSid))
         }
     }
 

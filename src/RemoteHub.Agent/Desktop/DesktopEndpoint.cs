@@ -852,10 +852,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             o.Log.Audit(AuditEvent.DesktopUserHid, now.User == DesktopScreenHide.None
                 ? $"Desktop: the user in session {_helperSession} shows their screen to {identity.Account} from {source} again"
                 : $"Desktop: the user in session {_helperSession} {(now.User == DesktopScreenHide.Blur ? "blurred" : "hid")} their screen for {identity.Account} from {source}");
+        // The cover over a session automatic sign-in created is the service's (§9.1): the admin didn't turn it on (C-END-14).
+        var who = _screenByService ? $"the service (automatic sign-in of {identity.Account} from {source})" : $"{identity.Account} from {source}";
         if (now.Reason.Length == 0 && (now.Screen != before.Screen || now.LocalInputBlocked != before.LocalInputBlocked))
             o.Log.Audit(AuditEvent.DesktopPrivacyScreen, now.Screen == DesktopPrivacyStyle.Off
-                ? $"Desktop: {identity.Account} from {source} turned the privacy screen off in session {_helperSession}"
-                : $"Desktop: {identity.Account} from {source} turned the privacy screen on in session {_helperSession} ({now.Screen.ToLowerInvariant()}{(now.LocalInputBlocked ? ", mouse and keyboard at the device blocked" : "")})");
+                ? $"Desktop: {who} turned the privacy screen off in session {_helperSession}"
+                : $"Desktop: {who} turned the privacy screen on in session {_helperSession} ({now.Screen.ToLowerInvariant()}{(now.LocalInputBlocked ? ", mouse and keyboard at the device blocked" : "")})");
         if (now.Reason.Length > 0)
         {
             _screen = null; // it couldn't be shown (or had to come down): a new helper doesn't try again on its own
