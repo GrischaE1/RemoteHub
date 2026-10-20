@@ -1082,7 +1082,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey = InSession 'try { $k = Get-RhKeys "C:\lab\db.key.old"; Test-RhSql (Join-Path $env:LOCALAPPDATA "RemoteHub\remotehub.db") $k.Db "SELECT count(*) FROM nodes" } catch { [pscustomobject]@{ ok = $false; code = -2; error = "$_" } }'
             Save 'lock01' @{ l = $l; audit = $l.dump1.audit }
 
-            # C-LOCK-02: lock after 1 minute (5 on builds without that option), an RDP tab connected, no input until due
+            # C-LOCK-02: lock after 1 minute, an RDP tab connected, no input until due
             Start-Rh
             $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw" -TimeoutSec 90
             $null = Ui 'Unlock' -Title 'RemoteHub*locked'
@@ -1091,12 +1091,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 Settings-Page 'Security & storage'
                 $null = Ui 'Startup protection?' -Title 'Settings'
                 $null = Ui 'type:Edit#1' -Title 'Startup protection' -Value "set:$lockPw"
-                # the shortest time the build offers: 1 minute (since the option was added), else 5 minutes
-                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 1 minute' -Optional
-                if (-not $l.choose -or $l.choose.value -ne 'After 1 minute') {
-                    $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 5 minutes'
-                }
-                $l.lockMinutes = $(if ($l.choose.value -eq 'After 1 minute') { 1 } else { 5 })
+                # the shortest time offered: 1 minute
+                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 1 minute'
+                $l.lockMinutes = 1
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
                 $l.sessionBefore = Connect-Device
@@ -1216,9 +1213,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey.code | Should -BeIn 11, 26 -Because "the old key itself is readable and the database refuses it ($($l.oldKey.error))"
         }
 
-        It 'C-LOCK-02 auto-lock after 1 (or 5) min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
+        It 'C-LOCK-02 auto-lock after 1 min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
             $l['autolock-error'] | Should -BeNullOrEmpty
-            $l.choose.value | Should -BeIn 'After 1 minute', 'After 5 minutes'
+            $l.choose.value | Should -Be 'After 1 minute'
             $l.sessionBefore | Should -BeTrue
             $l.lockedText2 | Should -Match 'Locked after a while without input . your sessions keep running\.'
             $l.lockedText2 | Should -Match 'Exit RemoteHub'
