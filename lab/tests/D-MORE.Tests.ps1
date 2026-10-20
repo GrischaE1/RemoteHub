@@ -1,6 +1,6 @@
 # D-MORE - more cases of the agent's remote desktop: connect / consent / banner / sign-in / Ctrl+Alt+Del / input.
 # Covers: D-CON-11, D-ASK-08, D-ASK-09, D-PIN-06, D-NONE-05, D-MODES-03, D-MODES-04, D-BAN-08, D-BAN-09, D-BAN-10,
-#         D-SIGNIN-05, D-SAS-12, D-IN-08, D-IN-09 (docs/test-lab-cases.md section 9).
+#         D-BAN-11, D-SIGNIN-05, D-SAS-12, D-IN-08, D-IN-09 (docs/test-lab-cases.md section 9).
 # Needs: one VM as the device (any OS, like the other D-* files); the desktop harness (DesktopHarness.cs) on the host;
 #        the person at the device (RhPerson.ps1: OCR + console mouse) and the marker app. D-BAN-10 needs the agent MSI
 #        built with the credential provider and signed (build-installer.ps1 -LabSigning -CredentialProvider), as
@@ -39,6 +39,41 @@ BeforeAll {
             Start-Sleep -Seconds 2
         }
         $null
+    }
+    # A program in normaluser's session that moves the cursor itself, as a full-screen RDP client does (RhPerson
+    # -Do cursor-mover): started waiting; Set-Mover go / halt / end controls it, Get-Mover reads its counts.
+    function Start-Mover {
+        $prefix = "C:\ProgramData\RemoteHubLab\session\mover-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+        $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do cursor-mover -Value '$prefix' -Out '$prefix.json'"))
+        $mover = [pscustomobject]@{ Task = $task; Prefix = $prefix }
+        # the first status comes after Add-Type compiled the mover (a few seconds)
+        $until = (Get-Date).AddSeconds(90)
+        while (-not (Get-Mover $mover)) {
+            if ((Get-Date) -gt $until) { throw "The cursor mover in normaluser's session wrote no status within 90 s ($prefix.json)" }
+            Start-Sleep -Seconds 1
+        }
+        $mover
+    }
+    function Get-Mover($Mover) {
+        Invoke-LabGuest -Name $VmName -ArgumentList "$($Mover.Prefix).json" -ScriptBlock {
+            param($f)
+            if (Test-Path $f) { try { [IO.File]::ReadAllText($f) | ConvertFrom-Json } catch { $null } } else { $null }
+        }
+    }
+    function Set-Mover($Mover, [string]$What, [string]$Text = 'x') {
+        Invoke-LabGuest -Name $VmName -ArgumentList "$($Mover.Prefix).$What", $Text -ScriptBlock {
+            param($f, $t) [IO.File]::WriteAllText($f, $t)
+        }
+    }
+    # waits for the mover's status to pass a test (scriptblock on the status as $args[0]); the last status, or throws
+    function Wait-Mover($Mover, [scriptblock]$Until, [int]$TimeoutSec, [string]$What) {
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ($true) {
+            $st = Get-Mover $Mover
+            if ($st -and (& $Until $st)) { return $st }
+            if ((Get-Date) -gt $deadline) { throw "The cursor mover: $What - not within $TimeoutSec s (last status: $($st | ConvertTo-Json -Depth 4 -Compress))" }
+            Start-Sleep -Seconds 1
+        }
     }
     # a context starts on normaluser's desktop: a security screen left by an earlier context (Ctrl+Alt+Del that got
     # through) is closed with Esc - the person's steps capture the screen, which fails on the secure desktop
@@ -301,6 +336,56 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             $b.blocked = Receive-LabDesktop $job
             Set-LabAgentPolicy -Name $VmName -Clear
             Save 'banner' $b
+
+            # A program at the device moves the cursor itself (as a full-screen RDP / Hyper-V client does) while the
+            # admin's pointer is over the banner: synthetic moves are not the user's mouse, the banner stays
+            # click-through and the admin's next click still reaches the marker below; then the console mouse (real
+            # input) takes the banner back for the user. Its own try: a failure here leaves D-BAN-09 / D-BAN-08 alone.
+            $m = [ordered]@{}
+            $marker = $null; $mover = $null; $job = $null
+            $o = Out 'banner-mover'
+            try {
+                $marker = Start-LabMarker -Name $VmName
+                $mover = Start-Mover
+                $job = Begin 'banner-mover' @(
+                    @{ do = 'sleep'; seconds = 12 }, (Mark $o 'pill'), @{ do = 'click'; fromFile = (Join-Path $o 'xy.txt'); timeout = 120 }
+                    @{ do = 'sleep'; seconds = 2 }, (Mark $o 'over'), (Park $o 'moving')
+                    @{ do = 'click'; fromFile = (Join-Path $o 'xy.txt'); timeout = 30 }, @{ do = 'sleep'; seconds = 3 }, (Mark $o 'clicked')
+                    (Park $o 'end'), @{ do = 'close' })
+                Reached $o 'pill'
+                $m.banner = Banner
+                if (-not $m.banner) { throw 'no banner to click on' }
+                $m.x = $m.banner.X + [int]($m.banner.Width / 2); $m.y = $m.banner.Y + [int]($m.banner.Height / 2)
+                Set-Content (Join-Path $o 'xy.txt') "$($m.x),$($m.y)" -Encoding ASCII
+                # the admin's first click went through and their pointer rests on the banner: the mover starts placing
+                # the cursor on exactly that spot and 3 px beside it, in turns, for 5 s before the next click
+                Reached $o 'over'
+                Set-Mover $mover 'go' "$($m.x),$($m.y),$($m.banner.Handle)"
+                $m.moving = Wait-Mover $mover { $s = $args[0]; $s.phase -eq 'moving' -and $s.phases[1].samples -gt 0 } 30 'moving and reading the banner'
+                Start-Sleep -Seconds 5
+                $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
+                Release $o 'moving'
+                Reached $o 'clicked' 60
+                Start-Sleep -Seconds 1
+                $m.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
+                # the moves stop; the banner still lets the admin's clicks through (nothing of the user's has moved)
+                Set-Mover $mover 'halt'
+                $m.during = Wait-Mover $mover { $s = $args[0]; $s.phase -eq 'stopped' -and $s.phases[2].samples -ge 20 } 30 'stopped, banner read 20 times'
+                # the console mouse (Hyper-V synthetic mouse: real input) moves well below the banner: the user's own mouse
+                Send-LabMouse -Name $VmName -X $m.x -Y ($m.banner.Y + $m.banner.Height + 120) -Action Move
+                $m.local = $null
+                try { $m.local = Wait-Mover $mover { -not $args[0].transparent } 15 'the banner clickable again after the console mouse moved' }
+                catch { $m.localError = $_.Exception.Message; $m.local = Get-Mover $mover }
+            }
+            catch { $m.error = $_.Exception.Message }
+            finally {
+                Release $o 'moving'
+                Release $o 'end'
+                if ($job) { $m.r = Receive-LabDesktop $job }
+                if ($mover) { try { Set-Mover $mover 'end' } catch { }; Stop-LabInSession -Name $VmName -Task $mover.Task }
+                if ($marker) { Stop-LabInSession -Name $VmName -Task $marker.Task }
+                Save 'banner-mover' $m
+            }
         }
 
         It 'D-BAN-09 the admin''s click on the banner''s area reaches the window below it (WS_EX_TRANSPARENT)' -Tag 'D-BAN-09' {
@@ -309,6 +394,29 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             $down.Count | Should -BeGreaterThan 0 -Because 'the marker below the banner got the click'
             $b.after | Should -Not -BeNullOrEmpty -Because 'the banner is still there'
             (Of $b.click 'Ended').Count | Should -Be 0
+        }
+
+        It 'D-BAN-11 a program at the device moving the cursor (SetCursorPos / SendInput) doesn''t take back the click-through: the admin''s click still reaches the window below; the console mouse does take it back' -Tag 'D-BAN-11' {
+            $m.error | Should -BeNullOrEmpty -Because 'the steps ran through'
+            $m.banner | Should -Not -BeNullOrEmpty
+            $moving = $m.during.phases[1]
+            # the mover really moved the cursor, and Windows flagged its SendInput moves as injected (what the fix goes by)
+            $m.during.setCursor | Should -BeGreaterThan 100 -Because 'SetCursorPos to the admin''s spot, about 30 times a second for 5 s and more'
+            $m.during.sent | Should -BeGreaterThan 100 -Because 'relative SendInput moves, as often'
+            $moving.tagged | Should -BeGreaterThan 0 -Because 'the mover''s SendInput moves reached a low-level mouse hook'
+            $moving.taggedInjected | Should -Be $moving.tagged -Because 'every one of them flagged LLMHF_INJECTED'
+            # no sample of the banner while the cursor was moved by program shows it clickable (before the fix: from the
+            # first move on, until the admin's next event)
+            $moving.samples | Should -BeGreaterThan 100
+            $moving.clickThrough | Should -Be $moving.samples -Because 'the banner stayed WS_EX_TRANSPARENT while the cursor was moved by program'
+            $down = @($m.seen | Where-Object { $_.e -eq 'mdown' -and [math]::Abs($_.x - $m.x) -le 4 -and [math]::Abs($_.y - $m.y) -le 4 })
+            $down.Count | Should -BeGreaterThan 0 -Because 'the admin''s click during the moves reached the marker below the banner'
+            (Of $m.r 'Ended').Count | Should -Be 0 -Because 'the click didn''t land on the banner''s Disconnect'
+            # counterpart: still click-through once the moves stopped, until the console mouse (real input) moved
+            $m.during.transparent | Should -BeTrue -Because 'nothing of the user''s had moved yet'
+            $m.localError | Should -BeNullOrEmpty
+            $m.local.phases[2].notInjected | Should -BeGreaterThan 0 -Because 'the console mouse''s move came as real (not injected) input'
+            $m.local.transparent | Should -BeFalse -Because 'the device''s own mouse takes the banner back for the user'
         }
 
         It 'D-BAN-08 something hidden: the banner doesn''t collapse, with " . mouse and keyboard blocked" and ''Click "Disconnect" to end''' -Tag 'D-BAN-08' {

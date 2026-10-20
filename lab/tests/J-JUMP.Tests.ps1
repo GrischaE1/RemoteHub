@@ -5,6 +5,7 @@
 # agent health, PowerShell and tools, the remote desktop, WinRM, RDP's certificate, the local forwarder, installs and
 # updates, shares, the jump host's policy and audit, a dropped tunnel. The jump VM is turned off at the end.
 # LabRole: device
+# LabQuick: every kind
 # LabNeeds: jumphost
 param(
     [Parameter(Mandatory)][string]$VmName,

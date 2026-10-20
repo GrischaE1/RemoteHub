@@ -13,6 +13,7 @@
     RhPerson.ps1 -Do click -Text Allow            # clicks the word "Allow" in the agent's dialog (or banner)
     RhPerson.ps1 -Do pin                          # the 6-digit code the PIN dialog shows
     RhPerson.ps1 -Do marker -Out C:\x\marker.jsonl  # a full-screen window recording keys, mouse and clipboard (runs until killed)
+    RhPerson.ps1 -Do cursor-mover -Value C:\x\mover -Out C:\x\mover.json  # moves the cursor by program, as a full-screen RDP client does
     RhPerson.ps1 -Do clip-get | clip-set -Value 'text'
     RhPerson.ps1 -Do screen-read                  # OCR of the whole screen
     RhPerson.ps1 -Do close-window -Title RemoteHub  # WM_CLOSE to the agent window (what Alt+F4 sends)
@@ -22,7 +23,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('windows', 'read', 'click', 'pin', 'marker', 'clip-get', 'clip-set', 'screen-read', 'key', 'close-window', 'hover', 'ocr-file', 'uia', 'serve')][string]$Do,
+    [Parameter(Mandatory)][ValidateSet('windows', 'read', 'click', 'pin', 'marker', 'cursor-mover', 'clip-get', 'clip-set', 'screen-read', 'key', 'close-window', 'hover', 'ocr-file', 'uia', 'serve')][string]$Do,
     [string]$Title = '*',
     [string]$Text,
     [string]$Value,
@@ -849,5 +850,147 @@ switch ($Do) {
             })
         $t.Start()
         [Windows.Forms.Application]::Run($f)
+    }
+    'cursor-mover' {
+        # A program in the user's session that places the cursor itself, as a full-screen RDP client (Hyper-V's VM
+        # connection, mstsc) does after each of the admin's moves: SetCursorPos to exactly the admin's spot, then a
+        # relative SendInput move of 3 px, taking turns every 10 ms (the timer's 15.6 ms in practice) - synthetic
+        # moves, not the device's own mouse (the agent's LocalPointerWatch must not take them for the user's,
+        # InputBlocker.cs). Meanwhile it reads the banner's WS_EX_TRANSPARENT at each step, and a low-level mouse hook of its own counts which events Windows flagged as
+        # injected. Controlled by files next to -Value: "<Value>.go" with "x,y,bannerHandle" starts the moves,
+        # "<Value>.halt" stops them (the banner is still read), "<Value>.end" ends the process. -Out: the counts as JSON,
+        # rewritten every 200 ms, per phase (0 waiting, 1 moving, 2 stopped).
+        $moverSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public static class RhMover
+{
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential)] public struct MSLLHOOKSTRUCT { public POINT pt; public uint mouseData, flags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+    [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public MOUSEINPUT mi; }
+    [StructLayout(LayoutKind.Sequential)] public struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public POINT pt; public uint lPrivate; }
+    public delegate IntPtr HookProc(int code, IntPtr w, IntPtr l);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetWindowsHookExW(int id, HookProc proc, IntPtr mod, uint thread);
+    [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern int GetMessageW(out MSG m, IntPtr h, uint min, uint max);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll", SetLastError = true)] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int index);
+
+    // dwExtraInfo of this mover's SendInput events, and of the agent's own (InputNative.Tag)
+    public static readonly IntPtr Tag = new IntPtr(0x52484D56), AgentTag = new IntPtr(0x52484131);
+    public static volatile int Phase, X, Y;
+    public static volatile bool Hooked, Transparent;
+    public static IntPtr Banner;
+    public static long SetCursor, SetCursorFailed, Sent, SendFailed;
+    // per phase: banner samples and how many were click-through; hook events by kind (with the injected flag or not)
+    public static readonly long[] Samples = new long[3], ClickThrough = new long[3];
+    public static readonly long[] Tagged = new long[3], TaggedInjected = new long[3], AtTarget = new long[3], AtTargetInjected = new long[3];
+    public static readonly long[] Agent = new long[3], NotInjected = new long[3], OtherInjected = new long[3];
+    static HookProc _proc;
+
+    public static void Start()
+    {
+        _proc = Proc;   // kept: the hook calls it for as long as the process runs
+        var ready = new ManualResetEvent(false);
+        var hookThread = new Thread(() =>
+        {
+            var hook = SetWindowsHookExW(14, _proc, GetModuleHandleW(null), 0);   // WH_MOUSE_LL
+            Hooked = hook != IntPtr.Zero;
+            ready.Set();
+            MSG m;
+            while (GetMessageW(out m, IntPtr.Zero, 0, 0) > 0) { }
+            if (hook != IntPtr.Zero) UnhookWindowsHookEx(hook);
+        });
+        hookThread.IsBackground = true;
+        hookThread.Start();
+        ready.WaitOne(5000);
+        var work = new Thread(Work);
+        work.IsBackground = true;
+        work.Start();
+    }
+
+    static IntPtr Proc(int code, IntPtr w, IntPtr l)
+    {
+        if (code >= 0)
+        {
+            var p = Phase;
+            var m = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(l, typeof(MSLLHOOKSTRUCT));
+            var injected = (m.flags & 3) != 0;   // LLMHF_INJECTED | LLMHF_LOWER_IL_INJECTED
+            if (m.dwExtraInfo == Tag) { Interlocked.Increment(ref Tagged[p]); if (injected) Interlocked.Increment(ref TaggedInjected[p]); }
+            else if (m.dwExtraInfo == AgentTag) Interlocked.Increment(ref Agent[p]);
+            else if (w.ToInt64() == 0x200 && m.pt.X == X && m.pt.Y == Y) { Interlocked.Increment(ref AtTarget[p]); if (injected) Interlocked.Increment(ref AtTargetInjected[p]); }
+            else if (!injected) Interlocked.Increment(ref NotInjected[p]);
+            else Interlocked.Increment(ref OtherInjected[p]);
+        }
+        return CallNextHookEx(IntPtr.Zero, code, w, l);
+    }
+
+    static void Work()
+    {
+        var input = new INPUT[1];
+        input[0].type = 0;   // INPUT_MOUSE
+        input[0].mi.dx = 3;
+        input[0].mi.dwFlags = 0x0001;   // MOUSEEVENTF_MOVE, relative
+        input[0].mi.dwExtraInfo = Tag;
+        var size = Marshal.SizeOf(typeof(INPUT));
+        var step = 0;
+        while (true)
+        {
+            var p = Phase;
+            if (p == 1)
+            {
+                if ((step++ & 1) == 0) { if (SetCursorPos(X, Y)) Interlocked.Increment(ref SetCursor); else Interlocked.Increment(ref SetCursorFailed); }
+                else if (SendInput(1, input, size) == 1) Interlocked.Increment(ref Sent);
+                else Interlocked.Increment(ref SendFailed);
+            }
+            var b = Banner;
+            if (b != IntPtr.Zero)
+            {
+                var through = (GetWindowLongPtr(b, -20).ToInt64() & 0x20) != 0;   // GWL_EXSTYLE, WS_EX_TRANSPARENT
+                Transparent = through;
+                Interlocked.Increment(ref Samples[p]);
+                if (through) Interlocked.Increment(ref ClickThrough[p]);
+            }
+            Thread.Sleep(10);
+        }
+    }
+}
+'@
+        Add-Type -TypeDefinition $moverSource
+        [RhMover]::Start()
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $names = 'waiting', 'moving', 'stopped'
+        # ends on "<Value>.end", or after 20 minutes in any case
+        while (-not (Test-Path "$Value.end") -and $sw.Elapsed.TotalMinutes -lt 20) {
+            if ([RhMover]::Phase -eq 0 -and (Test-Path "$Value.go")) {
+                $xy = ([IO.File]::ReadAllText("$Value.go")).Trim().Split(',')
+                if ($xy.Count -ge 3) {
+                    [RhMover]::X = [int]$xy[0]; [RhMover]::Y = [int]$xy[1]; [RhMover]::Banner = [IntPtr][long]$xy[2]
+                    [RhMover]::Phase = 1
+                }
+            }
+            if ([RhMover]::Phase -eq 1 -and (Test-Path "$Value.halt")) { [RhMover]::Phase = 2 }
+            $phases = foreach ($p in 0..2) {
+                [ordered]@{
+                    phase = $names[$p]; samples = [RhMover]::Samples[$p]; clickThrough = [RhMover]::ClickThrough[$p]
+                    tagged = [RhMover]::Tagged[$p]; taggedInjected = [RhMover]::TaggedInjected[$p]
+                    atTarget = [RhMover]::AtTarget[$p]; atTargetInjected = [RhMover]::AtTargetInjected[$p]
+                    agent = [RhMover]::Agent[$p]; notInjected = [RhMover]::NotInjected[$p]; otherInjected = [RhMover]::OtherInjected[$p]
+                }
+            }
+            Out-Json ([ordered]@{
+                    hooked = [RhMover]::Hooked; phase = $names[[RhMover]::Phase]; x = [RhMover]::X; y = [RhMover]::Y
+                    banner = [RhMover]::Banner.ToInt64(); transparent = [RhMover]::Transparent
+                    setCursor = [RhMover]::SetCursor; setCursorFailed = [RhMover]::SetCursorFailed; sent = [RhMover]::Sent; sendFailed = [RhMover]::SendFailed
+                    ms = $sw.ElapsedMilliseconds; phases = @($phases)
+                })
+            Start-Sleep -Milliseconds 200
+        }
     }
 }

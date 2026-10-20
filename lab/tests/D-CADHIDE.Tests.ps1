@@ -140,36 +140,36 @@ AfterAll {
 }
 
 Describe 'D-CADHIDE <VmName>' -Tag Desktop, 'D-CADHIDE' {
-    It 'D-CADHIDE-01 before: the values are not set, the Ctrl+Alt+Del screen offers Lock and Task Manager (control)' {
+    It 'D-CADHIDE-01 before: the values are not set, the Ctrl+Alt+Del screen offers Lock and Task Manager (control)' -Tag 'D-CADHIDE-01' {
         foreach ($n in $names) { $r.before.$n | Should -BeNullOrEmpty -Because $n }
         $r.cadBefore.shown | Should -Contain 'Lock'
         $r.cadBefore.shown | Should -Contain 'Task Manager'
     }
 
-    It 'D-CADHIDE-02 privacy screen with input blocked: the five set, Task Manager not; the Ctrl+Alt+Del screen offers only Task Manager' {
+    It 'D-CADHIDE-02 privacy screen with input blocked: the five set, Task Manager not; the Ctrl+Alt+Del screen offers only Task Manager' -Tag 'D-CADHIDE-02' {
         foreach ($n in $names) { $r.blocked.$n | Should -Be 1 -Because $n }
         $r.blocked.DisableTaskMgr | Should -BeNullOrEmpty
         @($r.cadBlocked.shown) | Should -Be @('Task Manager')
     }
 
-    It 'D-CADHIDE-03 input unblocked while still connected: put back; blocked again: hidden again' {
+    It 'D-CADHIDE-03 input unblocked while still connected: put back; blocked again: hidden again' -Tag 'D-CADHIDE-03' {
         foreach ($n in $names) { $r.free.$n | Should -BeNullOrEmpty -Because $n }
         foreach ($n in $names) { $r.again.$n | Should -Be 1 -Because $n }
     }
 
-    It 'D-CADHIDE-04 the connection ends: put back as they were, no record left' {
+    It 'D-CADHIDE-04 the connection ends: put back as they were, no record left' -Tag 'D-CADHIDE-04' {
         foreach ($n in $names) { $r.ended.$n | Should -BeNullOrEmpty -Because $n }
         @($r.ended.records) | Should -BeNullOrEmpty
     }
 
-    It 'D-CADHIDE-05 the helper is killed: still hidden; the service puts them back when it starts' {
+    It 'D-CADHIDE-05 the helper is killed: still hidden; the service puts them back when it starts' -Tag 'D-CADHIDE-05' {
         foreach ($n in $names) { $r.killed.$n | Should -Be 1 -Because $n }
         foreach ($n in $names) { $r.afterRestart.$n | Should -BeNullOrEmpty -Because $n }
         @($r.afterRestart.records) | Should -BeNullOrEmpty
         @($r.restartLog | Where-Object { $_ -match 'earlier helper hid are back' }).Count | Should -BeGreaterThan 0
     }
 
-    It 'D-CADHIDE-06 automatic sign-in: hidden in the admin''s new session, the Ctrl+Alt+Del screen offers only Task Manager; put back after' {
+    It 'D-CADHIDE-06 automatic sign-in: hidden in the admin''s new session, the Ctrl+Alt+Del screen offers only Task Manager; put back after' -Tag 'D-CADHIDE-06' {
         $r.autoUser | Should -Match ([regex]::Escape(($consoleAccount -split '\\')[-1]))
         foreach ($n in $names) { $r.autoBlocked.$n | Should -Be 1 -Because $n }
         $r.autoBlocked.DisableTaskMgr | Should -BeNullOrEmpty

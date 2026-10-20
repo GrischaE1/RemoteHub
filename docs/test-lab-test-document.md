@@ -6637,6 +6637,24 @@ P1 · How: H C · Needs: – · Status: ✅ Automated – `D-MORE.Tests.ps1`
 **Expected:**
 - a session automatic sign-in created shows only the cover, no banner
 
+#### D-BAN-11 · Click-through kept against programmatic cursor moves
+P2 · How: H S C · Needs: – · Status: ◐ Written, not yet run in the lab – `D-MORE.Tests.ps1`
+
+**Preconditions:** normaluser signed in on the console and allows PSAdmin; the marker window (`Start-LabMarker`) full screen below the banner; the cursor mover (`RhPerson.ps1 -Do cursor-mover`) started in normaluser's session, waiting.
+
+**Steps:**
+1. Harness client connects (Allow), waits 12 s for the pill, and clicks the banner's centre – the admin's pointer now rests on the banner.
+2. The cursor mover starts: in turns, `SetCursorPos` to exactly the admin's spot and a relative `SendInput` move of 3 px (synthetic moves, as a full-screen RDP / Hyper-V client makes), reading the banner's `WS_EX_TRANSPARENT` at each step; it runs 5 s.
+3. While it keeps moving, the harness clicks the same spot again.
+4. The mover stops; the banner is read 20 more times.
+5. The console mouse (`Send-LabMouse`, real input) moves to 120 px below the banner.
+
+**Expected:**
+- The mover's `SendInput` moves reached a low-level hook, all flagged `LLMHF_INJECTED`.
+- While the cursor was moved by program, every reading of the banner is `WS_EX_TRANSPARENT` – before the fix of #29 the first synthetic move made it clickable.
+- The marker records the second click (`mdown` within 4 px); the session doesn't end.
+- After the moves stopped the banner is still click-through; within 15 s of the console mouse's move it is clickable again (the device's own mouse takes it back).
+
 ### 9.5 Secure desktop, sign-in, lock, user switch
 
 #### D-SIGNIN-05 · Own account by SID
@@ -7603,6 +7621,53 @@ P3 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD2.Tests.ps
 **Expected:**
 - at most the newest 5 reports sent; reports older than 30 days deleted; a report the server refuses stays in `crash\` and goes at the next start; a handled "RemoteHub – unexpected error" recorded at most 3 times per session
 
+#### POL-14 · Console features: hidden and refused
+P1 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `POL-CLIENT.Tests.ps1`
+
+**Preconditions:** RemoteHub and the RemoteHub Agent on the same client VM, RemoteHub running in the console account's session. WinRM on the VM (`Enable-PSRemoting`, `127.0.0.1` in TrustedHosts). In RemoteHub: *PolLocal* (the VM by its name, the console account) with an agent RemoteHub installed itself through its clipboard install (the lab's own agent removed first) and *Test RemoteHub Agent* passed; *PolWinRm* (`127.0.0.1`, the console account, remoting check on) with *Test PowerShell remoting* passed; *PolRdp* (`192.0.2.10`, with an account); *PolOffline* (`192.0.2.11`, no account). No console policy set; the values below are set while RemoteHub runs.
+
+**Steps:**
+1. Without policies: read the menus of PolLocal (the menu, *RemoteHub Agent*, *Tools*), PolWinRm (*Tools*) and PolOffline (the menu, *Tools*), the *New* menu, and Settings → *Security & storage*.
+2. Open a PowerShell tab of PolLocal (through the agent) and read the tab bar's *+* menu.
+3. HKLM `AllowAgent` = 0 and `AllowAgentDesktop` = 1: read PolLocal's menus and the *+* menu with its *Tools*; open PolLocal's editor → *PowerShell remoting*; open Settings → *Policies*. Remove both, close the tabs.
+4. `AllowPowerShellRemoting` = 0: read PolWinRm's menus and PolLocal's *Tools*. Remove it.
+5. `AllowAgentFileTransfer` = 0: read the *Tools* of PolLocal and PolWinRm. Remove it.
+6. *Connect* on PolRdp; wait until its own attempt has failed. Set `AllowRdp`, `AllowNetworkShares`, `AllowRdpFileImport` and `AllowBackupExport` = 0; *Reconnect* in the toolbar; read the tab and close it. Read PolOffline's menus, the *New* menu and Settings → *Security & storage*. Remove the four.
+7. `AllowQuickConnect` = 0: type `pol14-quick.invalid` in the search box and press Enter. Remove it.
+
+**Expected:**
+- Without policies: PolLocal offers *Update RemoteHub Agent…* and its tools through the agent, PolWinRm its tools over WinRM, PolOffline *Connect* and *Add network share…*; *New* has *New network share* and *Import .rdp files…*; Settings has *Export backup…*.
+- `AllowAgent` = 0: no *Remote desktop via RemoteHub Agent*, *Install / Update RemoteHub Agent…* or credential provider entry in the tree menu or the *+* menu; *Tools* offers *Test PowerShell remoting*, not *Test RemoteHub Agent* (the tools go over WinRM); in the editor *Connect through* and *Remote desktop through* are greyed out with "Turned off by your organisation"; Settings → Policies marks `AllowAgentDesktop` with *Off because "Allow the RemoteHub Agent" is off*.
+- `AllowPowerShellRemoting` = 0: PolWinRm has no *PowerShell*, *File transfer*, *Registry*, *Test PowerShell remoting* or *Set up PowerShell remoting on the target…*; PolLocal still offers *PowerShell* and *File transfer*.
+- `AllowAgentFileTransfer` = 0: *File transfer* gone for PolLocal (*PowerShell* stays), still there for PolWinRm.
+- The RDP tab's *Reconnect* fails in the tab: "Remote desktop over RDP is turned off by your organisation – see Settings → Policies."; PolOffline has no *Connect* or *Open additional session* and no *Add network share…*; *New* has neither *New network share* nor *Import .rdp files…*; Settings has no *Export backup…*, *Import backup…* stays.
+- Quick connect: "Quick connect is turned off by your organisation – see Settings → Policies."; no tab opens.
+- Not checked: the tab's own context menu, the detached window and the toolbar's *File transfer* (they use the same checks as the *+* menu).
+
+#### POL-15 · Settings and connection settings by policy
+P1 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `POL-CLIENT.Tests.ps1`
+
+**Preconditions:** as POL-14 (PolLocal paired with the agent on the VM, PolWinRm with the remoting check on, PolOffline, the folder *PolFolder*). No console policy set.
+
+**Steps:**
+1. PolOffline's editor → *Local resources & keyboard* → *Local drives* On, Save; *More → Save as .rdp file…* to `C:\lab\pol15-before.rdp`.
+2. HKLM `Connections\RedirectDrives` = 0, restart RemoteHub. Read *Local drives* in PolOffline's editor (then Save it unchanged), PolFolder's editor and Settings → *Local resources & keyboard*; save PolOffline as `pol15-with.rdp`.
+3. Remove the value, restart RemoteHub; read *Local drives* in PolOffline's editor; save as `pol15-after.rdp`.
+4. Settings → *Updates & privacy*: usage data off, Save. `DisableTelemetry` = 0; read the switch.
+5. *Install RemoteHub Agent…* for PolWinRm: read the WinRM method, close. `AgentInstall\Methods` = Clipboard, SaveFiles (MULTI_SZ); open it again and read the methods.
+6. `AgentDesktopViewOnly` = 1: *Connect* on PolLocal (agent desktop of the VM's own console); read *View only* on the start panel; *Connect*, *Allow* at the console; read the tab.
+7. `AllowAgentDesktop` = 0 and `Connections\RemoteDesktopVia` = Agent, restart RemoteHub; read Settings → *Policies*; *Connect* on PolOffline.
+8. Settings → General: theme Dark, Save, restart; screenshot. `Theme` = Light, restart; screenshot; read *Theme*.
+
+**Expected:**
+- With `RedirectDrives` = 0, *Local drives* shows *Off*, greyed out with "Set by your organisation – see Settings → Policies.", at the connection, the folder and the global defaults; `pol15-with.rdp` has `drivestoredirect:s:` empty, `pol15-before.rdp` and `pol15-after.rdp` `drivestoredirect:s:*`; after the policy is removed the editor shows *On* again (the save with the policy kept the stored value).
+- *Send anonymous usage data and crash reports* is on and greyed out, with "Turned on by your organisation".
+- Without `Methods` the silent install over PowerShell remoting can be chosen; with it, it is there but greyed out, the clipboard method can still be chosen.
+- *View only – no mouse and keyboard* is ticked and greyed out; the session shows the *View only* badge and no *Send Ctrl+Alt+Del*.
+- Settings → Policies: "Remote desktop through the RemoteHub Agent is turned off by your organisation, so there is no remote desktop."; *Connect* shows "Remote desktop through the RemoteHub Agent is turned off by your organisation – see Settings → Policies." (title *RemoteHub Agent*) and opens no tab.
+- *Theme* shows *Light*, greyed out; the main window is light (mean brightness above 0.5 and at least 0.2 above the run with the user's own Dark).
+- Not checked: the RDP session's drives themselves (one VM has no RDP target – the `.rdp` file uses the same resolved settings) and the amber colour of the conflict.
+
 ### 10.4 RDP through RemoteHub (2VM)
 
 #### R-RDP-10 · Password toast *Clear now*
@@ -7881,6 +7946,208 @@ P2 · How: U · Needs: – · Status: ◐ Written – `UI-NOTES.Tests.ps1`
 
 **Expected:**
 - after closing and starting RemoteHub: Notes shows again, the page is listed, *Search notes* "Spooler" finds it, the script block still has the script, View Markdown is off
+
+End to end, with what is stored (C-NOTE, `C-NOTES.Tests.ps1`):
+
+#### C-NOTE-01 · View rail
+P1 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** RemoteHub freshly installed from the checkpoint, no RemoteHub data for the console account.
+
+**Steps:**
+1. Start RemoteHub as the console account; note which view it shows.
+2. Look for the rail items Remote Control, Notes and Settings.
+3. Click *Notes* on the rail.
+4. Press Ctrl+1, then Ctrl+2.
+5. Close RemoteHub and start it again.
+
+**Expected:**
+- The first start shows Remote Control; the rail has Remote Control, Notes and Settings.
+- Notes shows "Notebooks and sections" with the notebook "Notes" and the section "Quick Notes"; Remote Control is hidden.
+- Ctrl+1 shows Remote Control (Notes hidden); Ctrl+2 shows Notes.
+- After the restart RemoteHub opens in Notes.
+
+#### C-NOTE-02 · Notebook, section and page
+P1 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-01; Notes shown.
+
+**Steps:**
+1. *New notebook*, name "Lab Notebook C2", OK.
+2. *+ New section* in it (a real click), name "Lab Section<n>", OK.
+3. *Add page*, set the title "Lab page Title<n>".
+4. Read the notebooks, sections and pages from the database (session of the console account).
+5. Restart RemoteHub (C-NOTE-04).
+
+**Expected:**
+- The notebook, the section and the page are shown; the page is listed under its title.
+- In the database the section belongs to the notebook and the page to the section; the page is saved without a Save button.
+- The audit log has `note.added` with the page's id.
+- After the restart the notebook, section and page are listed again.
+
+#### C-NOTE-03 · Typed formats and autosave
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02.
+
+**Steps:**
+1. *Add page* "Typed C3".
+2. In the page (SendKeys in the session): `- alpha item` Enter `beta item` Enter Ctrl+. ; Ctrl+B `Body<n>` Ctrl+B ` and plain` Enter `# Typed heading`.
+3. Wait for the page in the database.
+4. *Copy page as Markdown* and read the clipboard.
+
+**Expected:**
+- Stored as `- alpha item`, `- beta item`, `**Body<n>** and plain` and `# Typed heading`, without any Save action.
+- The search text (`body_text`) has the word but no `**` or `#`.
+- The copied Markdown is `# Typed C3`, a blank line and the stored Markdown.
+
+#### C-NOTE-04 · Round trip of every element
+P1 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02.
+
+**Steps:**
+1. *Add page* "Round trip C4"; put Markdown with a heading, bold, italic, strikethrough, inline code, a link, a check list, a quote, a table with a right-aligned column, an SQL block and a numbered list on the clipboard; page context menu → *Paste Markdown*.
+2. Ctrl+End, then paste HTML as a browser copies it (CF_HTML): bold text, a red Comic Sans span, a `<script>`, a table and an `<img>` from `http://198.51.100.7` with alt text.
+3. Read every page from the database; close RemoteHub (C-NOTE-07), start it again.
+4. Open "Round trip C4": read the page's text (UI Automation) and *Copy page as Markdown*; open "Script C5", "Typed C3" and the C-NOTE-02 page, each longer than the autosave delay.
+5. Read every page from the database again.
+
+**Expected:**
+- Every element is stored in its Markdown form (table row `| srv-c4-01 | 3389 | **main** |`, alignment `---:`, `- [ ]` / `- [x]`, `> `, a `sql` fence, `1.`).
+- From the HTML: the bold word and the table; no `alert`, `<script`, colour or font; no link to `198.51.100.7`, its alt text instead.
+- After the restart the Markdown is byte-identical; the page shows the table's cells; *Copy page as Markdown* gives `# Round trip C4` and the same Markdown.
+- No page's Markdown, `modified_utc` or `version` changed by the restart or by opening it.
+
+#### C-NOTE-05 · Script block, documentation only
+P2 · How: U S PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02; `C:\ProgramData\RemoteHubLab\c-notes-ran.txt` doesn't exist.
+
+**Steps:**
+1. *Add page* "Script C5"; put two lines of PowerShell on the clipboard (the first would create `c-notes-ran.txt`, the second is `Get-Service … | Where-Object …`); Ctrl+V into the empty page.
+2. Read the block (UI Automation); *Copy script block* and read the clipboard.
+3. Open the block's *More actions* menu and the page's context menu and list their entries.
+4. Restart RemoteHub (C-NOTE-04), read the block again; look for `c-notes-ran.txt`.
+
+**Expected:**
+- A script block "Language: PowerShell"; stored as a `powershell` fence with the two lines exactly.
+- *Copy script block* and the block's value give the text exactly, also after the restart.
+- The menus have *Copy* and *Save as file…*, but no *Run*, *Execute* or *Send to …*.
+- `c-notes-ran.txt` never exists.
+
+#### C-NOTE-06 · Images
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02.
+
+**Steps:**
+1. *Add page* "Image C6"; put a 64 × 48 picture on the clipboard; Ctrl+V.
+2. Write `C:\Users\Public\c-notes\photo-c6.jpg` (120 × 90, a JPEG comment segment with a marker) and put it on the clipboard as a copied file; Ctrl+End, Ctrl+V.
+3. Read `note_files` for the page (mime, size, first 8 bytes, the marker's position).
+4. Restart RemoteHub (C-NOTE-04).
+
+**Expected:**
+- Two images, both `image/png` starting `89 50 4E 47 0D 0A 1A 0A`, 64 × 48 and 120 × 90; the marker is not in either.
+- The page's Markdown refers to both ids: `![Pasted image](note-file:…)`, `![photo-c6](note-file:…)`.
+- After the restart the page opens again with both images shown.
+
+#### C-NOTE-07 · Notes at rest
+P1 · How: PS S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02 to C-NOTE-06 (pages with unique words in the title, section name, text, table cell, script block and pasted HTML).
+
+**Steps:**
+1. While RemoteHub runs: search every file under `%LOCALAPPDATA%\RemoteHub`, `%APPDATA%\RemoteHub` and `%TEMP%` of the console account for the words as UTF-8 and UTF-16 (files read with full sharing).
+2. Close RemoteHub; search again and read the first 16 bytes of `remotehub.db`.
+3. Read the pages, sections and audit log from the database.
+
+**Expected:**
+- The words are in the database (control) and in no file, while running (the WAL included) and after closing.
+- `remotehub.db` doesn't start with `SQLite format 3`.
+- No audit entry contains any of the words; the `note.*` entries are there.
+
+#### C-NOTE-08 · Delete, Undo, Recently deleted
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02.
+
+**Steps:**
+1. *Add page* "Undo C8"; page context menu → *Delete*.
+2. Click *Undo* on the toast.
+3. Delete it again; wait until the toast goes.
+4. *Recently deleted*: select "Undo C8", *Restore*, *Close*.
+
+**Expected:**
+- "Page deleted" with *Undo*; the page has `deleted_utc` set, and *Undo* clears it and lists the page again.
+- The toast goes after about 8 seconds.
+- *Recently deleted* lists the page; *Restore* brings it back.
+- `note.deleted` and `note.restored` twice each, with the page's id.
+
+#### C-NOTE-09 · A page deleted before its section
+P2 · How: U S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02.
+
+**Steps:**
+1. New section "Doomed C9" with the pages "C9 early" and "C9 late".
+2. Delete "C9 early"; then the section (context menu → *Delete…*, confirm).
+3. *Recently deleted*: select "Doomed C9", *Delete now*, confirm.
+4. Select "C9 early", *Restore*.
+
+**Expected:**
+- "Delete the section "Doomed C9" and its 1 pages?…"
+- "C9 early" has an earlier stamp than the section; "C9 late" has the section's.
+- After *Delete now* the section and "C9 late" are gone from the database; "C9 early" is still there (deleted) and still listed.
+- *Restore* puts "C9 early" into a live section.
+
+#### C-NOTE-10 · Search
+P3 · How: U · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-04, C-NOTE-05; a page "Gone Zulu<n>" made and deleted.
+
+**Steps:**
+1. Type into *Search notes*: the table cell's word; its prefix; the script block's word; "Zulu<n>"; `"Zulu<n>`.
+2. Esc.
+
+**Expected:**
+- The cell's word and its prefix: "1 page found", "Round trip C4" listed; the script's word: "1 page found", "Script C5".
+- The deleted page's word and the word after a quote: "No pages found", no error.
+
+#### C-NOTE-11 · `AllowNotes` policy
+P2 · How: U PS · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** Notes shown, pages from C-NOTE-02.
+
+**Steps:**
+1. `HKLM\SOFTWARE\Policies\RemoteHub` `AllowNotes` = 0 while RemoteHub runs; open and cancel Settings (the window is activated again).
+2. Ctrl+2.
+3. Restart RemoteHub; count the pages in the database.
+4. Remove the value; restart RemoteHub.
+
+**Expected:**
+- Remote Control is shown, the Notes rail item is gone, Ctrl+2 does nothing.
+- After the restart: Remote Control, no Notes item; the pages are all kept.
+- Without the policy RemoteHub opens in Notes again (the saved last view) with the pages listed.
+
+#### C-NOTE-12 · Notes in a backup
+P2 · How: U C S · Needs: – · Status: ◐ Written, not yet run in the lab – `C-NOTES.Tests.ps1`
+
+**Preconditions:** C-NOTE-02 to C-NOTE-09 (pages with images).
+
+**Steps:**
+1. *Settings → Security & storage → Export backup*, save `C:\lab\c-notes.rhbackup`, a test password twice.
+2. Search the file for the note words.
+3. Close RemoteHub, delete its data, start it (fresh profile).
+4. *Import backup*, the file, the password, *Add as folder*; show Notes.
+
+**Expected:**
+- "Backup saved to C:\lab\c-notes.rhbackup …"; "Backup exported" ends "…, N pages" (N = the pages not deleted).
+- The backup file holds none of the words.
+- The fresh profile starts in Remote Control; after the import the notebooks are there as "<name> (c-notes)" (no own "Notes" is made: it is made only when Notes first opens with no notebook).
+- Every page is there with the same Markdown (image ids new) and every image with the same SHA-256.
+- "Backup imported": "Added as a folder, and N pages".
+
 ### 10.9 First start and navigation
 
 RemoteHub alone in the client VM, driven by UI Automation in `Admin`'s session. Test files: `C-FIRST.Tests.ps1`, `C-FAV.Tests.ps1`. Every other console test closes the welcome tour (or What's new) as a user would: `Start-LabClient` and the files' own start helpers call `Close-LabFirstStart`.

@@ -10,7 +10,8 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
 - Each `lab/tests/<ID>.Tests.ps1` starts with a comment naming the case ID, what it covers and the section of
   `docs/test-lab-cases.md` it implements, and takes `-VmName` and `-EvidenceDir` parameters. A new or changed test
   should update that section of the cases document (and the test document) in the same PR; the status column
-  follows from the lab results with `lab\Update-LabCaseStatus.ps1`.
+  follows from the lab results with `lab\Update-LabCaseStatus.ps1`. A device file with parts for Server only says
+  `# LabQuick: every kind` in its header, or the quick build check (`-Quick`, W11 only) never runs those parts.
 - Shared helpers belong in `lab/RemoteHub.TestLab/RemoteHub.TestLab.psm1` (exported through the `.psd1`), not copied
   between test files. The module uses `Set-StrictMode -Version Latest` and `$ErrorActionPreference = 'Stop'`.
 - Tests must not need elevation or an interactive sign-in on the host, and must not depend on state from an earlier
@@ -33,8 +34,9 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
 A lab run takes from minutes to hours and runs by itself (the scheduled task); reading its raw output costs far more
 tokens than it is worth. In a Claude Code or similar session:
 
-- Let the person start runs – `lab\LabConsole.cmd` (choose tests and VMs, build, start, follow, see the failures) or
-  `lab\Start-LabRun.ps1 -Tag …` in their own terminal – and say when one has finished. If the session starts one,
+- Let the person start runs – `lab\RemoteHubLab.exe` (built by `build\build-lab-tool.ps1`; choose tests and VMs, build, start, follow, see the failures;
+  *Quick build check* for a new build, *Changed since full run* for what a branch touches) or
+  `lab\Start-LabRun.ps1 -Tag … [-Quick] [-FailFast]` in their own terminal – and say when one has finished. If the session starts one,
   run it in the background and wait for it to end – no monitors, no polling, no reading the queue or the logs while
   it runs.
 - Every run ends with `artifacts\lab\<run>\failures.txt` (`Get-LabFailures.ps1`): one line per VM, one per failed
@@ -44,5 +46,7 @@ tokens than it is worth. In a Claude Code or similar session:
 - Open evidence only for the failure being diagnosed, and only the fields that matter (`Select-Object`, a JSON
   property, `-Tail`), never whole files of tens of KB. Look at a screenshot only when the text can't answer it.
 - Re-run only what failed (`-Tag <case IDs>`), not the whole suite or whole files.
+- To make runs faster, start from `lab\Get-LabTimings.ps1 [-Run <id>]` (where each file's time went, about 2 KB), not
+  from the logs.
 - Diagnose a few failures in the session itself; a subagent per area only when several unrelated failures need deep
   code reading (each costs about 100k tokens).
