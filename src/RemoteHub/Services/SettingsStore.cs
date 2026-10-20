@@ -802,10 +802,14 @@ public static class Backup
         public string? NotesNonce { get; set; }
         public string? NotesTag { get; set; }
         public string? NotesData { get; set; }
+        /// <summary>The scripts with their drafts and versions (version 3, docs/scripts-view-design.md §4.7); null when there are none.</summary>
+        public string? ScriptsNonce { get; set; }
+        public string? ScriptsTag { get; set; }
+        public string? ScriptsData { get; set; }
         public DateTime CreatedUtc { get; set; }
     }
 
-    public static void Export(AppData data, string path, string password, NotesExport? notes = null)
+    public static void Export(AppData data, string path, string password, NotesExport? notes = null, ScriptsExport? scripts = null)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, Iterations, HashAlgorithmName.SHA256, 32);
@@ -818,6 +822,11 @@ public static class Backup
                 env.Version = 2;
                 (env.NotesNonce, env.NotesTag, env.NotesData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(notes));
             }
+            if (scripts is { IsEmpty: false })
+            {
+                env.Version = 3;
+                (env.ScriptsNonce, env.ScriptsTag, env.ScriptsData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(scripts));
+            }
             File.WriteAllText(path, JsonSerializer.Serialize(env, new JsonSerializerOptions { WriteIndented = true }));
         }
         finally { CryptographicOperations.ZeroMemory(key); }
@@ -826,8 +835,12 @@ public static class Backup
     public static AppData Import(string path, string password) => Import(path, password, out _);
 
     /// <summary>Reads a backup; <paramref name="notes"/> is null for a backup without notes (older ones, RdpManager's).</summary>
-    public static AppData Import(string path, string password, out NotesExport? notes)
+    public static AppData Import(string path, string password, out NotesExport? notes) => Import(path, password, out notes, out _);
+
+    /// <summary>Reads a backup; <paramref name="scripts"/> is null for a backup without scripts (older ones).</summary>
+    public static AppData Import(string path, string password, out NotesExport? notes, out ScriptsExport? scripts)
     {
+        scripts = null;
         var env = JsonSerializer.Deserialize<Envelope>(File.ReadAllText(path))
                   ?? throw new InvalidDataException("Empty backup file.");
         if (env.Format is not ("remotehub-backup" or "rdpmanager-backup")) throw new InvalidDataException("Not a RemoteHub backup file.");
@@ -848,6 +861,12 @@ public static class Backup
                     try { notes = JsonSerializer.Deserialize<NotesExport>(notesPlain); }
                     finally { CryptographicOperations.ZeroMemory(notesPlain); }
                 }
+                if (env.ScriptsData is not null && env.ScriptsNonce is not null && env.ScriptsTag is not null)
+                {
+                    var scriptsPlain = Open(key, env.ScriptsNonce, env.ScriptsTag, env.ScriptsData);
+                    try { scripts = JsonSerializer.Deserialize<ScriptsExport>(scriptsPlain); }
+                    finally { CryptographicOperations.ZeroMemory(scriptsPlain); }
+                }
                 return data;
             }
             finally { CryptographicOperations.ZeroMemory(plain); }
@@ -855,7 +874,14 @@ public static class Backup
         finally { CryptographicOperations.ZeroMemory(key); }
     }
 
-    private static (string Nonce, string Tag, string Data) Seal(byte[] key, byte[] plain)
+    /// <summary>The key for a password, as backups and script packages derive it.</summary>
+    internal static byte[] DeriveKey(string password, byte[] salt, int iterations) =>
+        Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, iterations, HashAlgorithmName.SHA256, 32);
+
+    internal const int KeyIterations = Iterations;
+
+    /// <summary>AES-256-GCM; <paramref name="plain"/> is wiped afterwards.</summary>
+    internal static (string Nonce, string Tag, string Data) Seal(byte[] key, byte[] plain)
     {
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[plain.Length];
@@ -869,7 +895,7 @@ public static class Backup
         return (Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher));
     }
 
-    private static byte[] Open(byte[] key, string nonce, string tag, string data)
+    internal static byte[] Open(byte[] key, string nonce, string tag, string data)
     {
         var cipher = Convert.FromBase64String(data);
         var plain = new byte[cipher.Length];

@@ -123,7 +123,9 @@ conflicts         (id INTEGER PK, kind TEXT, item_id TEXT, data BLOB, from_devic
 - Indexes: `connections(folder_id)`, `connections(name)`, `notes(connection_id)`, `audit(time_utc)`,
   `audit(connection_id, time_utc)`, `connection_history(connection_id, start_utc)`.
 - UI state stays in `local.json` (it is per device and holds no secrets).
-- Scripts: no table yet – see the script design.
+- Scripts (schema version 3, [scripts-view-design.md](scripts-view-design.md) §7.1): `script_folders`, `scripts` (the
+  drafts), `script_versions` (deployed, at most 10 per script), `script_runs` (the run history), `scripts_fts`, and
+  `deleted_nodes` – the connection tree's "Recently deleted", one sealed record per deleted folder or connection.
 
 ## 7. Performance
 
@@ -234,7 +236,8 @@ Events (`AuditEvents`, grouped as in the viewer's filter):
 | Backups and storage | Backup exported / imported (`backup.exported` / `backup.imported`), Settings moved to the database (`storage.migrated`), Database check failed (`storage.check_failed`), Database restored (`storage.restored`), Settings location changed (`storage.location_changed`) |
 
 Not built: "password shown" (RemoteHub logs copying a password, there is no separate show event), sync conflict
-(phase 4), script run (phase 5).
+(phase 4). Scripts (phase 5) brought `script.run`, `script.deployed` and the other script events
+(scripts-view-design.md §10), and `node.restored` / `node.purged` for the connection tree's "Recently deleted".
 
 - Append-only in the database: triggers reject every UPDATE ("The audit log is append-only.") and every DELETE of an
   entry inside the retention period ("Only audit entries past the retention period can be deleted.").
@@ -257,7 +260,7 @@ Not built: "password shown" (RemoteHub logs copying a password, there is no sepa
 | 2 | Audit log + connection history (+ "unused connections" filter on real history) | **Done** (0.14.0) – see section 15 |
 | 3 | Notes: notebooks, sections and pages (Markdown), images, links to folders and connections, full-text search | **Built** on `notes-view` (schema version 2) – see [notes-view-design.md](notes-view-design.md) |
 | 4 | Device sync with item files; migrating the sync file; audit log sync; sync-conflict audit event; recovery from the sync folder | Two-device tests pass |
-| 5 | Scripts | Own design |
+| 5 | Scripts | **Built** on `scripts-view-design` (schema version 3) – see [scripts-view-design.md](scripts-view-design.md) |
 
 Tests: wrong key fails, tampered page fails, AAD swap fails, migration round-trip, kill during write, two simulated
 devices with one folder (conflict, delete, OneDrive conflict copy, offline device), performance benchmarks.
@@ -357,7 +360,8 @@ database can't be opened); the audit log is tamper-evident, not tamper-proof (se
 ## 16. Not done yet
 
 - Device sync, audit sync, sync conflicts and recovery from the sync
-  folder (phase 4); scripts (phase 5).
+  folder (phase 4).
 - Passwords decrypted only when used (today: when loading – section 15).
-- Audit events planned but not built: "password shown", "sync conflict", "script run" (section 11).
+- Audit events planned but not built: "password shown", "sync conflict" (section 11).
+- (Done with schema version 3: the Scripts tables and "Recently deleted" for connections, scripts-view-design.md §7.)
 - (Done with schema version 2: numbered migration steps, each in its own transaction, with a backup before the first one.)

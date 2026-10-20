@@ -24,6 +24,11 @@ public static class AuditEvents
     // Notes: page and section ids only, never titles or text (docs/notes-view-design.md §9).
     public const string NoteAdded = "note.added", NoteChanged = "note.changed", NoteDeleted = "note.deleted", NoteRestored = "note.restored",
         NotesExported = "notes.exported", NotesImported = "notes.imported";
+    // Scripts: script ids, version numbers and hashes only, never names, text or output (docs/scripts-view-design.md §10).
+    public const string ScriptAdded = "script.added", ScriptDeleted = "script.deleted", ScriptRestored = "script.restored",
+        ScriptDeployed = "script.deployed", ScriptRun = "script.run", ScriptsExported = "scripts.exported", ScriptsImported = "scripts.imported";
+    // Folders and connections in Recently deleted (docs/scripts-view-design.md §4.9).
+    public const string NodeRestored = "node.restored", NodePurged = "node.purged";
 
     public static string Label(string e) => e switch
     {
@@ -58,6 +63,15 @@ public static class AuditEvents
         NoteRestored => "Note restored",
         NotesExported => "Notes exported",
         NotesImported => "Notes imported",
+        ScriptAdded => "Script added",
+        ScriptDeleted => "Script deleted",
+        ScriptRestored => "Script restored",
+        ScriptDeployed => "Script deployed",
+        ScriptRun => "Script run",
+        ScriptsExported => "Scripts exported",
+        ScriptsImported => "Scripts imported",
+        NodeRestored => "Restored",
+        NodePurged => "Deleted for good",
         _ => e,
     };
 
@@ -65,11 +79,12 @@ public static class AuditEvents
     public static readonly (string Name, string[] Events)[] Categories =
     [
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
-        ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted]),
+        ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted, NodeRestored, NodePurged]),
         ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
         ("Files, recordings and agents", [FilesTransferred, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
         ("Notes", [NoteAdded, NoteChanged, NoteDeleted, NoteRestored, NotesExported, NotesImported]),
+        ("Scripts", [ScriptAdded, ScriptDeleted, ScriptRestored, ScriptDeployed, ScriptRun, ScriptsExported, ScriptsImported]),
     ];
 }
 

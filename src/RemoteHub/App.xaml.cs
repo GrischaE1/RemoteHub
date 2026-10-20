@@ -110,6 +110,11 @@ public partial class App : Application
                 AuditLog.ApplyRetention(AuditLog.RetentionDays);
                 if (LocalDb.IsOpen && NoteStore.PurgeDeleted() is > 0 and var purged)
                     DiagLog.Write($"Notes: removed {purged} pages deleted more than {NoteStore.KeepDeletedDays} days ago");
+                if (LocalDb.IsOpen && ScriptStore.PurgeDeleted() is > 0 and var scripts)
+                    DiagLog.Write($"Scripts: removed {scripts} scripts deleted more than {ScriptStore.KeepDeletedDays} days ago");
+                if (LocalDb.IsOpen && DeletedNodeStore.Purge() is > 0 and var nodes)
+                    DiagLog.Write($"Recently deleted: removed {nodes} items deleted more than {DeletedNodeStore.KeepDays} days ago");
+                if (LocalDb.IsOpen) ScriptStore.PruneRunOutputs();
             }
             catch (Exception ex) { DiagLog.Write("Database maintenance failed: " + ex.Message); }
         });

@@ -45,9 +45,7 @@ public sealed class NotesView : Grid
     private readonly WrapPanel _links = new() { Margin = new Thickness(0, 6, 0, 8) };
     private readonly NoteEditor _editor = new();
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextTrimming = TextTrimming.CharacterEllipsis };
-    private readonly Border _undoBar = new() { CornerRadius = new CornerRadius(8), Padding = new Thickness(14, 8, 8, 8), Margin = new Thickness(0, 0, 0, 16), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, BorderThickness = new Thickness(1), Visibility = Visibility.Collapsed };
-    private readonly TextBlock _undoText = new() { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
-    private readonly Button _undoButton = new() { Content = "Undo", MinWidth = 0, Padding = new Thickness(12, 4, 12, 4) };
+    private readonly UndoBar _undoBar = new();
     private readonly Grid _pageCard = new();
     private readonly FrameworkElement _emptyPage;
     private readonly ColumnDefinition _booksColumn;
@@ -55,7 +53,6 @@ public sealed class NotesView : Grid
     private readonly DispatcherTimer _saveTimer = new() { Interval = SaveDelay };
     private readonly DispatcherTimer _retryTimer = new() { Interval = TimeSpan.FromSeconds(5) };
     private readonly DispatcherTimer _searchTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
-    private readonly DispatcherTimer _undoTimer = new() { Interval = TimeSpan.FromSeconds(8) };
     private readonly Dictionary<string, Dictionary<string, (string Title, string Body)>> _unsaved = [];
     private readonly HashSet<string> _changeAudited = [];
 
@@ -69,7 +66,6 @@ public sealed class NotesView : Grid
     private bool _loading;
     private bool _locked;
     private (IReadOnlyList<string> NodeIds, string Label)? _linkFilter;
-    private Action? _undo;
 
     public NotesView(NotesHost host)
     {
@@ -97,7 +93,6 @@ public sealed class NotesView : Grid
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); _ = Save(sync: false); };
         _retryTimer.Tick += (_, _) => { _retryTimer.Stop(); RetryUnsaved(); };
         _searchTimer.Tick += (_, _) => { _searchTimer.Stop(); RunSearch(); };
-        _undoTimer.Tick += (_, _) => HideUndo();
         _editor.Changed += OnEdited;
         _editor.Message += ShowError;
         _editor.NoteLinkRequested += id => OpenPage(id, null);
@@ -268,13 +263,6 @@ public sealed class NotesView : Grid
 
     private void BuildUndoBar()
     {
-        _undoBar.SetResourceReference(Border.BackgroundProperty, "SessionHeaderBrush");
-        _undoBar.SetResourceReference(Border.BorderBrushProperty, "ChromeStrokeBrush");
-        var row = new StackPanel { Orientation = Orientation.Horizontal };
-        row.Children.Add(_undoText);
-        row.Children.Add(_undoButton);
-        _undoBar.Child = row;
-        _undoButton.Click += (_, _) => { var u = _undo; HideUndo(); u?.Invoke(); };
         SetColumnSpan(_undoBar, 5);
         Children.Add(_undoBar);
     }
@@ -727,21 +715,7 @@ public sealed class NotesView : Grid
         });
     }
 
-    private void ShowUndo(string text, Action undo)
-    {
-        _undo = undo;
-        _undoText.Text = text;
-        _undoBar.Visibility = Visibility.Visible;
-        _undoTimer.Stop();
-        _undoTimer.Start();
-    }
-
-    private void HideUndo()
-    {
-        _undoTimer.Stop();
-        _undo = null;
-        _undoBar.Visibility = Visibility.Collapsed;
-    }
+    private void ShowUndo(string text, Action undo) => _undoBar.Show(text, undo);
 
     private void NewNotebook()
     {
@@ -825,7 +799,7 @@ public sealed class NotesView : Grid
     private void ShowRecentlyDeleted()
     {
         _ = Save(sync: true);
-        var w = new RecentlyDeletedWindow { Owner = _host.Owner };
+        var w = new RecentlyDeletedWindow(new NotesDeletedSource()) { Owner = _host.Owner };
         w.ShowDialog();
         if (w.Changed) Reload();
     }
@@ -858,16 +832,7 @@ public sealed class NotesView : Grid
     {
         var m = new ContextMenu();
         m.Items.Add(RemoteToolChrome.Item("Rename…", SymbolRegular.Rename24, () => RenameSection(s), gesture: "F2"));
-        var colour = new MenuItem { Header = "Colour", Icon = new SymbolIcon(SymbolRegular.Color24) };
-        foreach (var tag in ColorTags.All)
-        {
-            var id = tag.Id;
-            var swatch = new Border { Width = 12, Height = 12, CornerRadius = new CornerRadius(2), Background = ColorTags.Frozen(tag.Color) };
-            var item = new MenuItem { Header = tag.Label, Icon = swatch, IsCheckable = true, IsChecked = s.Color == id };
-            item.Click += (_, _) => { NoteStore.SetSectionColor(s.Id, id); Reload(); };
-            colour.Items.Add(item);
-        }
-        m.Items.Add(colour);
+        m.Items.Add(ColorMenu.Build(_host.Owner, s.Color, c => { NoteStore.SetSectionColor(s.Id, c); Reload(); }));
         var siblings = _sections.Where(x => x.NotebookId == s.NotebookId).Select(x => x.Id).ToList();
         m.Items.Add(RemoteToolChrome.Item("Move up", SymbolRegular.ArrowUp24, () => Move(NoteStore.SectionKind, siblings, s.Id, -1), siblings.FirstOrDefault() != s.Id));
         m.Items.Add(RemoteToolChrome.Item("Move down", SymbolRegular.ArrowDown24, () => Move(NoteStore.SectionKind, siblings, s.Id, 1), siblings.LastOrDefault() != s.Id));

@@ -306,6 +306,27 @@ RemoteHub's `ShareConnector` + `ShareTransfer` (harness "share") against shares 
 | S-SHR-05 | Browse actions | deleting the share root → "The share itself can't be deleted."; renaming onto an existing name → "\"<n>\" already exists." | H U | 3 | ✅ | Server |
 | S-SHR-06 | Shares on their own | New → Network share: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed | U | 2 | ✅ | Server |
 
+### 7.2 Running scripts (S-SCRIPT)
+
+The Scripts view's runs ([scripts-view-design.md](scripts-view-design.md) §6) through RemoteHub's `ScriptRunner` in the
+harness (`tool --op script-run`, `script-info`): once over the agent with the standard user signed in on the console
+(`-AutoLogon User`), once over WinRM HTTPS with nobody signed in. What a run leaves on the device – scheduled tasks
+under `\RemoteHub\`, folders under `%ProgramData%\RemoteHub\Runs` – is read over PowerShell Direct. A non-administrator
+account isn't covered here: the agent admits only administrators by default (the message is a unit test).
+`S-SCRIPT.Tests.ps1`.
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| S-SCRIPT-01 | System run (agent) | `whoami` prints `nt authority\system` from a 64-bit process, *Succeeded*, exit code 0; no task and no run folder left | H PS | 1 | ◐ |
+| S-SCRIPT-02 | User run (agent) | `script-info` lists the signed-in standard user as the console user; a User run prints that user, writes to their own HKCU (read under `HKEY_USERS\<SID>`), not SYSTEM; no task left | H PS | 1 | ◐ |
+| S-SCRIPT-03 | As me (agent) | prints the connection's account (PSAdmin) | H | 2 | ◐ |
+| S-SCRIPT-04 | Exit codes and parameters | `exit 3010` → *Succeeded – restart needed*; `throw` → *Failed*, exit code 1, the error in the output; `-Name`, `-Days`, `-Apply` from the form arrive as typed | H | 2 | ◐ |
+| S-SCRIPT-05 | Cancel | *Cancel* 5 s after the first output → *Cancelled* within 2 min; no task, no run folder, no powershell.exe from the run left | H PS | 1 | ◐ |
+| S-SCRIPT-06 | Large output | 2.4 MB of output → the run ends *Succeeded*, the output is cut with "Output cut off after 1 MB" | H | 3 | ◐ |
+| S-SCRIPT-07 | System run (WinRM) | as S-SCRIPT-01 over WinRM HTTPS, nothing left behind | H PS | 1 | ◐ |
+| S-SCRIPT-08 | User run with nobody signed in | refused: "No user is signed in on the device." | H | 2 | ◐ |
+| S-SCRIPT-09 | GPO-set execution policy | `AllSigned` set by policy (HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell) → refused: "The device's group policy only allows signed scripts."; no task created | H PS | 1 | ◐ |
+
 ## 8. WinRM setup script (W)
 
 The script RemoteHub generates, run in the guest by PS Direct (`Invoke-LabSetupScript`), then RemoteHub's own

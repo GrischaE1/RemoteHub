@@ -15,6 +15,7 @@ public enum Feature
     Recording, SavedPasswords, PasswordCopy,
     RdpFileImport, RdpFileExport, BackupExport, BackupImport, SharedSettings,
     Notes,
+    Scripts, ScriptRun, ScriptRunSystem, ScriptRunUser, ScriptRunAsMe, ScriptDraftRun, ScriptLibrary, ScriptImport, ScriptExport,
 }
 
 /// <summary>The tabs that work through the agent or WinRM; which switch applies depends on the connection's transport.</summary>
@@ -72,6 +73,15 @@ public static class Features
         [Feature.BackupImport] = new(PolicyCatalog.AllowBackupImport, "Importing a backup"),
         [Feature.SharedSettings] = new(PolicyCatalog.AllowSharedSettings, "A shared settings folder"),
         [Feature.Notes] = new(PolicyCatalog.AllowNotes, "Notes", Plural: true),
+        [Feature.Scripts] = new(PolicyCatalog.AllowScripts, "Scripts", Plural: true),
+        [Feature.ScriptRun] = new(PolicyCatalog.AllowScriptRun, "Running scripts on devices", Feature.Scripts),
+        [Feature.ScriptRunSystem] = new(PolicyCatalog.AllowScriptRunSystem, "Running scripts as System", Feature.ScriptRun),
+        [Feature.ScriptRunUser] = new(PolicyCatalog.AllowScriptRunUser, "Running scripts as the signed-in user", Feature.ScriptRun),
+        [Feature.ScriptRunAsMe] = new(PolicyCatalog.AllowScriptRunAsMe, "Running scripts as the connection's account", Feature.ScriptRun),
+        [Feature.ScriptDraftRun] = new(PolicyCatalog.AllowScriptDraftRun, "Testing a draft on a device", Feature.ScriptRun),
+        [Feature.ScriptLibrary] = new(PolicyCatalog.AllowScriptLibrary, "The built-in script library", Feature.Scripts),
+        [Feature.ScriptImport] = new(PolicyCatalog.AllowScriptImport, "Importing scripts", Feature.Scripts),
+        [Feature.ScriptExport] = new(PolicyCatalog.AllowScriptExport, "Exporting scripts", Feature.Scripts),
     };
 
     /// <summary>The title of a refusal dialog: the topic, as the neighbouring dialogs name it ("Jump host", "Network share").</summary>
@@ -85,6 +95,8 @@ public static class Features
         Feature.SavedPasswords or Feature.PasswordCopy => "Passwords",
         Feature.RdpFileImport or Feature.RdpFileExport or Feature.BackupExport or Feature.BackupImport => "Import and export",
         Feature.SharedSettings => "Settings location",
+        Feature.Scripts or Feature.ScriptRun or Feature.ScriptRunSystem or Feature.ScriptRunUser or Feature.ScriptRunAsMe
+            or Feature.ScriptDraftRun or Feature.ScriptLibrary or Feature.ScriptImport or Feature.ScriptExport => "Scripts",
         _ => Switches[feature].Entry.Group, // "RemoteHub Agent", "PowerShell remoting", "Import and export", "Recordings"
     };
 

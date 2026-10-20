@@ -352,6 +352,11 @@
                     <TextBlock x:Name="AuditRetentionText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,10" />
                     <ui:Button x:Name="AuditButton" Content="Open audit log…" Icon="{ui:SymbolIcon DocumentBulletList24}" />
 
+                    <TextBlock Text="Script runs" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                               Text="Each run of a script is in the run history. Its output can hold personal data and details of the device: it is kept for the last 10 runs of each script, for at most 30 days, in the encrypted database." />
+                    <ui:ToggleSwitch x:Name="KeepRunOutputToggle" Content="Keep the output of runs" />
+
                     <TextBlock Text="Diagnostic log" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
                                Text="For troubleshooting: connection and password-prompt events – no passwords, usernames or host names. A text file on this PC." />

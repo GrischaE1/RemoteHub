@@ -17,6 +17,7 @@
       <definition name="SUPPORTED_RemoteHub_0_18_12" displayName="$(string.SUPPORTED_RemoteHub_0_18_12)" />
       <definition name="SUPPORTED_RemoteHub_0_19_0" displayName="$(string.SUPPORTED_RemoteHub_0_19_0)" />
       <definition name="SUPPORTED_RemoteHub_0_20_2" displayName="$(string.SUPPORTED_RemoteHub_0_20_2)" />
+      <definition name="SUPPORTED_RemoteHub_0_21_0" displayName="$(string.SUPPORTED_RemoteHub_0_21_0)" />
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
       <definition name="SUPPORTED_Agent_0_19_0" displayName="$(string.SUPPORTED_Agent_0_19_0)" />
@@ -51,6 +52,7 @@
     <category name="Console_Shares" displayName="$(string.Cat_Console_Shares)"><parentCategory ref="Console_Features" /></category>
     <category name="Console_ImportExport" displayName="$(string.Cat_Console_ImportExport)"><parentCategory ref="Console_Features" /></category>
     <category name="Console_Notes" displayName="$(string.Cat_Console_Notes)"><parentCategory ref="Console_Features" /></category>
+    <category name="Console_Scripts" displayName="$(string.Cat_Console_Scripts)"><parentCategory ref="Console_Features" /></category>
 
     <category name="Agent" displayName="$(string.Cat_Agent)" explainText="$(string.Cat_Agent_Help)">
       <parentCategory ref="RemoteHub" />
@@ -347,6 +349,78 @@
             key="Software\Policies\RemoteHub" valueName="AllowNotes">
       <parentCategory ref="Console_Notes" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_19_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScripts" class="Both" displayName="$(string.Console_AllowScripts)" explainText="$(string.Console_AllowScripts_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScripts">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptRun" class="Both" displayName="$(string.Console_AllowScriptRun)" explainText="$(string.Console_AllowScriptRun_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptRun">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptRunSystem" class="Both" displayName="$(string.Console_AllowScriptRunSystem)" explainText="$(string.Console_AllowScriptRunSystem_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptRunSystem">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptRunUser" class="Both" displayName="$(string.Console_AllowScriptRunUser)" explainText="$(string.Console_AllowScriptRunUser_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptRunUser">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptRunAsMe" class="Both" displayName="$(string.Console_AllowScriptRunAsMe)" explainText="$(string.Console_AllowScriptRunAsMe_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptRunAsMe">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptDraftRun" class="Both" displayName="$(string.Console_AllowScriptDraftRun)" explainText="$(string.Console_AllowScriptDraftRun_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptDraftRun">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptLibrary" class="Both" displayName="$(string.Console_AllowScriptLibrary)" explainText="$(string.Console_AllowScriptLibrary_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptLibrary">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptImport" class="Both" displayName="$(string.Console_AllowScriptImport)" explainText="$(string.Console_AllowScriptImport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptImport">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Console_AllowScriptExport" class="Both" displayName="$(string.Console_AllowScriptExport)" explainText="$(string.Console_AllowScriptExport_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowScriptExport">
+      <parentCategory ref="Console_Scripts" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

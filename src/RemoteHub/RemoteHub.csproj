@@ -45,6 +45,9 @@
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
+    <!-- Scripts view (docs/scripts-view-design.md): the built-in library and the script that runs a script on a device -->
+    <EmbeddedResource Include="Assets\ScriptLibrary\**\*.ps1" LogicalName="ScriptLibrary/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets\Scripts\RunScript.ps1" LogicalName="Scripts/RunScript.ps1" />
     <!-- RemoteHub's own license (AGPL-3.0) and those of the libraries shipped with it (installed next to RemoteHub.exe) -->
     <None Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

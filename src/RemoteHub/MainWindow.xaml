@@ -49,6 +49,9 @@
         <!-- Notes view (§4); created when first shown -->
         <Border x:Name="NotesHost" Grid.Column="1" Visibility="Hidden" />
 
+        <!-- Scripts view (scripts-view-design.md §4); created when first shown -->
+        <Border x:Name="ScriptsHostBorder" Grid.Column="1" Visibility="Hidden" />
+
         <!-- Remote Control view. Hidden, not collapsed, while another view is shown: the RDP controls keep their size. -->
         <Grid x:Name="RemoteView" Grid.Column="1">
             <Grid.ColumnDefinitions>
@@ -137,7 +140,7 @@
                                 PreviewKeyDown="SearchBox_PreviewKeyDown" />
                 </DockPanel>
 
-                <Grid Grid.Row="2">
+                <Grid x:Name="TreeArea" Grid.Row="2">
                     <TreeView x:Name="Tree" AllowDrop="True"
                               Background="Transparent" BorderThickness="0"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
@@ -151,100 +154,6 @@
                               KeyDown="Tree_KeyDown"
                               DragOver="Tree_DragOver" Drop="Tree_Drop" DragLeave="Tree_DragLeave">
                         <TreeView.Resources>
-                            <!-- Folders: a frame in the folder's colour around the folder and everything in it (same parts as
-                                 WPF-UI's tree item, plus the frame). Folders without a colour get a neutral frame. -->
-                            <ControlTemplate x:Key="FolderItemTemplate" TargetType="TreeViewItem">
-                                <Border x:Name="Frame" Margin="0,3,2,3" CornerRadius="7" BorderThickness="1.5" Padding="0,0,0,3"
-                                        Background="{Binding TagBrush, Converter={StaticResource BrushTint}, ConverterParameter=0.07}">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="BorderBrush" Value="{Binding TagBrush}" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding TagBrush}" Value="{x:Null}">
-                                                    <Setter Property="BorderBrush" Value="{DynamicResource ChromeStrokeBrush}" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <Border x:Name="Border" CornerRadius="{TemplateBinding Border.CornerRadius}">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" MinWidth="19" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <Rectangle x:Name="ActiveRectangle" RadiusX="2" RadiusY="2" Width="3" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
-                                                           Fill="{DynamicResource TreeViewItemSelectionIndicatorForeground}" Visibility="Collapsed" />
-                                                <ToggleButton x:Name="Expander" Margin="8,0,8,0" ClickMode="Press" Focusable="False"
-                                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
-                                                    <ToggleButton.Template>
-                                                        <ControlTemplate TargetType="ToggleButton">
-                                                            <Grid x:Name="ChevronContainer" Width="15" Height="15" Background="Transparent" RenderTransformOrigin="0.5,0.5">
-                                                                <Grid.RenderTransform>
-                                                                    <RotateTransform Angle="0" />
-                                                                </Grid.RenderTransform>
-                                                                <ui:SymbolIcon Symbol="ChevronRight28" FontSize="10" VerticalAlignment="Center" />
-                                                            </Grid>
-                                                            <ControlTemplate.Triggers>
-                                                                <Trigger Property="IsChecked" Value="True">
-                                                                    <Trigger.EnterActions>
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard>
-                                                                                <DoubleAnimation To="90" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
-                                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </Trigger.EnterActions>
-                                                                    <Trigger.ExitActions>
-                                                                        <BeginStoryboard>
-                                                                            <Storyboard>
-                                                                                <DoubleAnimation To="0" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
-                                                                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
-                                                                            </Storyboard>
-                                                                        </BeginStoryboard>
-                                                                    </Trigger.ExitActions>
-                                                                </Trigger>
-                                                            </ControlTemplate.Triggers>
-                                                        </ControlTemplate>
-                                                    </ToggleButton.Template>
-                                                </ToggleButton>
-                                                <ContentPresenter x:Name="PART_Header" Grid.Column="1" ContentSource="Header" Margin="{TemplateBinding Padding}"
-                                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
-                                            </Grid>
-                                        </Border>
-                                        <Grid Grid.Row="1">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" MinWidth="19" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <ItemsPresenter x:Name="ItemsHost" Grid.Column="1" Visibility="Collapsed" />
-                                        </Grid>
-                                    </Grid>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="HasItems" Value="False">
-                                        <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
-                                    </Trigger>
-                                    <Trigger Property="IsExpanded" Value="True">
-                                        <Setter TargetName="ItemsHost" Property="Visibility" Value="Visible" />
-                                    </Trigger>
-                                    <!-- A jump host: what is reached through it sits a step further in than a folder's items -->
-                                    <DataTrigger Binding="{Binding IsJumpHost}" Value="True">
-                                        <Setter TargetName="ItemsHost" Property="Margin" Value="12,0,0,0" />
-                                    </DataTrigger>
-                                    <Trigger Property="IsMouseOver" SourceName="Border" Value="True">
-                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource TreeViewItemBackgroundPointerOver}" />
-                                    </Trigger>
-                                    <Trigger Property="IsSelected" Value="True">
-                                        <Setter TargetName="Border" Property="Background" Value="{DynamicResource TreeViewItemBackgroundSelected}" />
-                                        <Setter TargetName="ActiveRectangle" Property="Visibility" Value="Visible" />
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
                             <HierarchicalDataTemplate DataType="{x:Type m:Folder}" ItemsSource="{Binding Children}">
                                 <StackPanel Orientation="Horizontal" Margin="0,3" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
                                     <Grid Margin="0,0,8,0" VerticalAlignment="Center">
@@ -504,6 +413,8 @@
                                 <!-- Groups open on hover: tools for the device, setting it up, and the rarer actions (more, new). -->
                                 <MenuItem x:Name="CmTools" Header="Tools" Icon="{ui:SymbolIcon Toolbox24}">
                                     <MenuItem x:Name="CmPs" Header="PowerShell" Click="CmPs_Click" Icon="{ui:SymbolIcon WindowConsole20}" />
+                                    <MenuItem x:Name="CmRunScript" Header="Run script…" Click="CmRunScript_Click" Icon="{ui:SymbolIcon Play24}"
+                                              ToolTip="Run a deployed PowerShell script from the Scripts view on this device" />
                                     <MenuItem x:Name="CmSendFiles" Header="File transfer" Click="CmSendFiles_Click" Icon="{ui:SymbolIcon FolderSwap24}" />
                                     <MenuItem x:Name="CmRegistry" Header="Registry" Click="CmRegistry_Click" Icon="{ui:SymbolIcon CubeTree24}" />
                                     <MenuItem x:Name="CmServices" Header="Services" Click="CmServices_Click" Icon="{ui:SymbolIcon WrenchScrewdriver24}" />
@@ -527,6 +438,8 @@
                                 <Separator x:Name="CmSep1" />
                                 <MenuItem x:Name="CmEdit" Header="Edit…" InputGestureText="F2" Click="CmEdit_Click" Icon="{ui:SymbolIcon Edit24}" />
                                 <MenuItem x:Name="CmDuplicate" Header="Duplicate" Click="CmDuplicate_Click" Icon="{ui:SymbolIcon Copy24}" />
+                                <!-- Filled when the menu opens (Views/ColorMenu.cs), as in Notes and Scripts -->
+                                <MenuItem x:Name="CmColour" Header="Colour" Icon="{ui:SymbolIcon Color24}" />
                                 <MenuItem x:Name="CmMoveUnder" Header="Move under" Icon="{ui:SymbolIcon Router24}"
                                           ToolTip="Reach it through another connection's RemoteHub Agent (a jump host) – or directly again" />
                                 <MenuItem x:Name="CmDelete" Header="Delete" InputGestureText="Del" Click="CmDelete_Click" Icon="{ui:SymbolIcon Delete24}" />
@@ -534,6 +447,10 @@
                                     <MenuItem x:Name="CmHistory" Header="Audit log…" Click="CmHistory_Click" Icon="{ui:SymbolIcon DocumentBulletList24}"
                                               ToolTip="The audit log of this connection: its sessions, changes and file transfers" />
                                     <MenuItem x:Name="CmSaveRdp" Header="Save as .rdp file…" Click="CmSaveRdp_Click" Icon="{ui:SymbolIcon ArrowExport24}" />
+                                    <MenuItem x:Name="CmScriptRuns" Header="Run history…" Click="CmScriptRuns_Click" Icon="{ui:SymbolIcon History24}"
+                                              ToolTip="The scripts run on this device from this PC, with their output" />
+                                    <MenuItem x:Name="CmRecentlyDeleted" Header="Recently deleted…" Click="CmRecentlyDeleted_Click" Icon="{ui:SymbolIcon Delete24}"
+                                              ToolTip="Deleted folders and connections, kept for 30 days" />
                                 </MenuItem>
                                 <Separator x:Name="CmNewSep" />
                                 <MenuItem x:Name="CmNew" Header="New" Icon="{ui:SymbolIcon Add24}">

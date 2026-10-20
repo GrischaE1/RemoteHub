@@ -167,15 +167,42 @@ public class ConsoleFeatureTests
     public void Blocked_notes_leave_the_rail_and_a_saved_Notes_view_opens_Remote_Control()
     {
         var blocked = Set(("AllowNotes", 0));
-        Assert.Equal([MainWindow.RemoteViewId], MainWindow.RailViews(blocked).Select(v => v.Id));
+        Assert.Equal([MainWindow.RemoteViewId, MainWindow.ScriptsViewId], MainWindow.RailViews(blocked).Select(v => v.Id));
         Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor(MainWindow.NotesViewId, blocked));
         Assert.Equal("Notes are turned off by your organisation – see Settings → Policies.", Features.WhyNot(Feature.Notes, blocked));
 
         foreach (var allowed in new[] { Set(), Set(("AllowNotes", 1)) })
         {
-            Assert.Equal([MainWindow.RemoteViewId, MainWindow.NotesViewId], MainWindow.RailViews(allowed).Select(v => v.Id));
+            Assert.Equal([MainWindow.RemoteViewId, MainWindow.NotesViewId, MainWindow.ScriptsViewId], MainWindow.RailViews(allowed).Select(v => v.Id));
             Assert.Equal(MainWindow.NotesViewId, MainWindow.ViewFor(MainWindow.NotesViewId, allowed));
         }
-        Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor("Scripts", Set()));
+        Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor("Logs", Set()));
+    }
+
+    [Fact]
+    public void Blocked_scripts_leave_the_rail_and_a_saved_Scripts_view_opens_Remote_Control()
+    {
+        var blocked = Set(("AllowScripts", 0));
+        Assert.Equal([MainWindow.RemoteViewId, MainWindow.NotesViewId], MainWindow.RailViews(blocked).Select(v => v.Id));
+        Assert.Equal(MainWindow.RemoteViewId, MainWindow.ViewFor(MainWindow.ScriptsViewId, blocked));
+        Assert.Equal("Scripts are turned off by your organisation – see Settings → Policies.", Features.WhyNot(Feature.Scripts, blocked));
+        Assert.Equal(MainWindow.ScriptsViewId, MainWindow.ViewFor(MainWindow.ScriptsViewId, Set()));
+    }
+
+    [Fact]
+    public void Running_scripts_follows_its_main_switches()
+    {
+        // The view off: nothing below it either. Running off: each context and drafts with it.
+        Assert.False(Features.IsAllowed(Feature.ScriptRun, Set(("AllowScripts", 0))));
+        Assert.False(Features.IsAllowed(Feature.ScriptLibrary, Set(("AllowScripts", 0))));
+        foreach (var f in new[] { Feature.ScriptRunSystem, Feature.ScriptRunUser, Feature.ScriptRunAsMe, Feature.ScriptDraftRun })
+        {
+            Assert.False(Features.IsAllowed(f, Set(("AllowScriptRun", 0))));
+            Assert.True(Features.IsAllowed(f, Set()));
+        }
+        Assert.Equal("Running scripts on devices is turned off by your organisation – see Settings → Policies.",
+            Features.WhyNot(Feature.ScriptRunSystem, Set(("AllowScriptRun", 0))));
+        Assert.True(Features.IsAllowed(Feature.ScriptRunUser, Set(("AllowScriptRunSystem", 0))));
+        Assert.True(Features.IsAllowed(Feature.ScriptImport, Set(("AllowScriptExport", 0))));
     }
 }

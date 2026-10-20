@@ -2587,6 +2587,53 @@ function Invoke-LabTool {
     Invoke-LabHarness $a -TimeoutSec $TimeoutSec -VmName $Name
 }
 
+# One script run on the device through RemoteHub's ScriptRunner (harness "tool --op script-run", see LabTools.cs),
+# over the agent (-Pin) or WinRM HTTPS (-Cert): System, User (the console user unless -RunUser) or AsMe. The script
+# text goes to the harness as a file on the host, removed afterwards. Returns the harness answer (.result.state,
+# .exitCode, .message, .output, .runId). docs/test-lab-cases.md section 7.2.
+function Invoke-LabScriptRun {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [ValidateSet('Agent', 'WinRM')][string]$Via = 'Agent',
+        [string]$Pin,
+        [string]$Cert,
+        [Parameter(Mandatory)][ValidateSet('System', 'User', 'AsMe')][string]$Context,
+        [Parameter(Mandatory)][string]$Body,
+        [string]$RunUser,
+        [int]$ScriptTimeoutSec = 0,
+        [int]$CancelAfterSec = 0,
+        [string]$ParamsJson,
+        [int]$TimeoutSec = 900
+    )
+    $file = Join-Path ([IO.Path]::GetTempPath()) ("rhlab-script-" + [guid]::NewGuid().ToString('N') + '.ps1')
+    try {
+        # UTF-8 with a BOM, as RemoteHub writes it on the device
+        [IO.File]::WriteAllText($file, $Body, (New-Object Text.UTF8Encoding($true)))
+        $p = @{ context = $Context; body = $file }
+        if ($RunUser) { $p['run-user'] = $RunUser }
+        if ($ScriptTimeoutSec -gt 0) { $p['timeout'] = "$ScriptTimeoutSec" }
+        if ($CancelAfterSec -gt 0) { $p['cancel-after'] = "$CancelAfterSec" }
+        if ($ParamsJson) { $p['params-json'] = $ParamsJson }
+        if ($Via -eq 'WinRM' -and $Cert) { $p['cert'] = $Cert }
+        Invoke-LabTool -Name $Name -Op 'script-run' -Via $Via -Pin $Pin -Params $p -TimeoutSec $TimeoutSec
+    }
+    finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+}
+
+# What a script run leaves on the device: RemoteHub's scheduled tasks and run folders (expected: none).
+function Get-LabScriptLeftovers {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-LabGuest -Name $Name -ScriptBlock {
+        $tasks = @(Get-ScheduledTask -TaskPath '\RemoteHub\' -ErrorAction SilentlyContinue | ForEach-Object TaskName)
+        $root = Join-Path $env:ProgramData 'RemoteHub\Runs'
+        $folders = @()
+        if (Test-Path -LiteralPath $root) { $folders = @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | ForEach-Object Name) }
+        [pscustomobject]@{ Tasks = $tasks; Folders = $folders }
+    }
+}
+
 # A raw check of the agent's listener (harness "probe", see LabProbes.cs). -Params as for Invoke-LabTool.
 function Invoke-LabProbe {
     [CmdletBinding()]
