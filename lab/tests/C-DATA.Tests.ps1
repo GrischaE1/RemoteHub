@@ -99,7 +99,8 @@ if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
     }
     function Wait-Main([string]$Account = 'Console', [string]$On = $VmName, [int]$TimeoutSec = 90) {
         $r = Ui 'SearchBox' -Value exists -Optional -TimeoutSec $TimeoutSec -Account $Account -On $On
-        if ($r.found) { $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
+        # the welcome tour of a new profile (or What's new after an upgrade) closed as a user would - it is modal
+        if ($r.found) { $null = Close-LabFirstStart -Name $On -Account $Account; $null = Ui 'NewButton' -Value fit -Optional -TimeoutSec 10 -Account $Account -On $On }
         [bool]$r.found
     }
     # closed like the user does (so the audit log and the database are written to the end); a connected session asks
@@ -897,7 +898,7 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
                 $null = Ui 'Add' -Title 'Add network share to Device'
                 Start-Sleep -Seconds 3
                 $null = Ui 'labshare' -Value doubleclick -TimeoutSec 20
-                $null = Ui 'type:Edit#1' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
+                $null = Ui 'Path This PC' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
                 Start-Sleep -Seconds 3
                 $null = Ui 'UpFolder' -Value realclick
                 $null = Ui 'Upload selected files'
@@ -1081,7 +1082,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey = InSession 'try { $k = Get-RhKeys "C:\lab\db.key.old"; Test-RhSql (Join-Path $env:LOCALAPPDATA "RemoteHub\remotehub.db") $k.Db "SELECT count(*) FROM nodes" } catch { [pscustomobject]@{ ok = $false; code = -2; error = "$_" } }'
             Save 'lock01' @{ l = $l; audit = $l.dump1.audit }
 
-            # C-LOCK-02: lock after 1 minute (5 on builds without that option), an RDP tab connected, no input until due
+            # C-LOCK-02: lock after 1 minute, an RDP tab connected, no input until due
             Start-Rh
             $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw" -TimeoutSec 90
             $null = Ui 'Unlock' -Title 'RemoteHub*locked'
@@ -1090,12 +1091,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 Settings-Page 'Security & storage'
                 $null = Ui 'Startup protection?' -Title 'Settings'
                 $null = Ui 'type:Edit#1' -Title 'Startup protection' -Value "set:$lockPw"
-                # the shortest time the build offers: 1 minute (since the option was added), else 5 minutes
-                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 1 minute' -Optional
-                if (-not $l.choose -or $l.choose.value -ne 'After 1 minute') {
-                    $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 5 minutes'
-                }
-                $l.lockMinutes = $(if ($l.choose.value -eq 'After 1 minute') { 1 } else { 5 })
+                # the shortest time offered: 1 minute
+                $l.choose = Ui "Lock when you?re away" -Title 'Startup protection' -Value 'choose:After 1 minute'
+                $l.lockMinutes = 1
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
                 $l.sessionBefore = Connect-Device
@@ -1215,9 +1213,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.oldKey.code | Should -BeIn 11, 26 -Because "the old key itself is readable and the database refuses it ($($l.oldKey.error))"
         }
 
-        It 'C-LOCK-02 auto-lock after 1 (or 5) min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
+        It 'C-LOCK-02 auto-lock after 1 min without input: windows hidden, password asked, the session keeps running' -Tag 'C-LOCK-02' {
             $l['autolock-error'] | Should -BeNullOrEmpty
-            $l.choose.value | Should -BeIn 'After 1 minute', 'After 5 minutes'
+            $l.choose.value | Should -Be 'After 1 minute'
             $l.sessionBefore | Should -BeTrue
             $l.lockedText2 | Should -Match 'Locked after a while without input . your sessions keep running\.'
             $l.lockedText2 | Should -Match 'Exit RemoteHub'

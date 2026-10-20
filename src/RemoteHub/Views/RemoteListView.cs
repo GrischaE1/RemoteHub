@@ -79,6 +79,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         DockPanel.SetDock(_tools, Dock.Left);
         bar.Children.Add(_tools);
         _filter.Margin = new Thickness(0);
+        System.Windows.Automation.AutomationProperties.SetName(_filter, "Filter");
         _filter.MaxWidth = 420;
         _filter.HorizontalAlignment = HorizontalAlignment.Right;
         _filter.Width = 320;
@@ -86,7 +87,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         _filter.TextChanged += (_, _) =>
         {
             View!.Refresh();
-            if (_filter.Text.Trim().Length > 0 && View.Cast<TRow>().FirstOrDefault() is { } first) { List.SelectedItems.Clear(); List.SelectedItem = first; List.ScrollIntoView(first); }
+            if (_filter.Text.Trim().Length > 0) SelectFirstMatch();
             UpdateStatus();
         };
         bar.Children.Add(_filter);
@@ -101,6 +102,9 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         // ---- list
         View = new ListCollectionView(Rows) { IsLiveSorting = true, Filter = o => o is TRow r && (_filter.Text.Trim() is not { Length: > 0 } f || Matches(r, f)) };
         List.ItemsSource = View;
+        // Rows that arrive after the filter was typed (the first load, a refresh): the first match is selected when nothing
+        // is, as if the text had just been typed.
+        Rows.CollectionChanged += (_, _) => { if (_filter.Text.Trim().Length > 0 && List.SelectedItem is null) SelectFirstMatch(); };
         List.View = _grid;
         VirtualizingPanel.SetIsVirtualizing(List, true);
         VirtualizingPanel.SetVirtualizationMode(List, VirtualizationMode.Recycling);
@@ -112,7 +116,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         List.PreviewMouseRightButtonDown += (_, e) =>
         {
             var r = RowAt(e.OriginalSource);
-            if (r is not null && !List.SelectedItems.Contains(r)) { List.SelectedItems.Clear(); List.SelectedItem = r; }
+            if (r is not null && !List.SelectedItems.Contains(r)) List.SelectedItem = r; // just this row; SelectedItems can't be cleared in single selection mode
         };
         List.ContextMenuOpening += (_, e) =>
         {
@@ -164,6 +168,13 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     protected List<TRow> Selected => List.SelectedItems.Cast<TRow>().ToList();
 
     public void FocusFilter() { _filter.Focus(); _filter.SelectAll(); }
+
+    /// <summary>Selects the first row the filter shows. Setting SelectedItem selects just that row, in single and in multiple selection mode alike.</summary>
+    private void SelectFirstMatch()
+    {
+        List.SelectedItem = View.Cast<TRow>().FirstOrDefault();
+        if (List.SelectedItem is { } first) List.ScrollIntoView(first);
+    }
     protected Window? Owner => Window.GetWindow(this);
     protected string Where => Session.Connection.Name;
 

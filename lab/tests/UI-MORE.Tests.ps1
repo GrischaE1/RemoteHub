@@ -292,6 +292,7 @@ AfterAll {
         if ($device) { Set-LabVmDirty -Name $dn }
         Shot 'end'
         try { Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 0 } catch { }
+        try { Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 0 } catch { }
         try { [IO.File]::WriteAllLines((Join-Path $EvidenceDir 'ui-more-texts.log'), [string[]]@(Notices)) } catch { }
         if ($watch) { try { Stop-LabInSession -Name $VmName -Task $watch } catch { } }
         Save 'results' $R
@@ -543,9 +544,12 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $R.cp14While = @(Notices $mark)
             }
             Step 'cp15' {
-                # 99 MB through a slow link (10 Mbit/s on the device's adapter), pasted on the device, cancelled here
+                # 99 MB through a slow link, pasted on the device, cancelled here. The limit (10 Mbit/s, about 85 s for the
+                # copy) is on this PC's adapter: Hyper-V's MaximumBandwidth limits only what a VM sends, so the device's
+                # adapter limited (until lab run 20261019-193627) never slowed a copy to the device - it slowed only the
+                # device's picture and its paste request (which never started the copy in that run, see the diagnostics below).
                 $null = LiveDesktop
-                Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 10000000
+                Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 10000000
                 $paste = $null
                 try {
                     $null = Invoke-LabGuest -Name $dn -ScriptBlock { Get-ChildItem 'C:\Users\*\cp15' -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
@@ -554,7 +558,15 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     Start-Sleep -Seconds 4
                     $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create((PasteCode 'cp15')))
                     $R.cp15Progress = WaitFor -TimeoutSec 90 -Every 1 { @(Notices $mark | Where-Object { $_ -match 'Copying 1 file to the device' }).Count -gt 0 }
-                    if (-not $R.cp15Progress) { $R.cp15Notices = @(Notices $mark); throw 'no "Copying 1 file to the device" within 90 s' }
+                    if (-not $R.cp15Progress) {
+                        $R.cp15Notices = @(Notices $mark)
+                        # Where the paste stopped: the device's log (ui-more-device-logs) says the paste asked ("... comes
+                        # now") or went nowhere ("not passed on"); RemoteHub's log says whether the request arrived ("the
+                        # device pastes copy <n>") and what became of it ("goes to the device now" / "the copy offered
+                        # is ..." / "from an earlier connection"), and which copy was offered.
+                        $R.cp15ClientLog = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock { param($u) Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 25 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Agent desktop' } })
+                        throw 'no "Copying 1 file to the device" within 90 s'
+                    }
                     Start-Sleep -Seconds 3
                     Shot 'cp15-progress'
                     $R.cp15Cancel = Ui 'Cancel' -TimeoutSec 10
@@ -564,7 +576,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     $R.cp15Arrived = @(Invoke-LabGuest -Name $dn -ScriptBlock { @(Get-ChildItem 'C:\Users\*\cp15' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Length)" }) })
                 }
                 finally {
-                    Set-VMNetworkAdapter -VMName $dn -MaximumBandwidth 0
+                    Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 0
                     if ($paste) { try { Stop-LabInSession -Name $dn -Task $paste } catch { } }
                 }
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value 'cp15 done'

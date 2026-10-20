@@ -124,6 +124,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $script:task = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' }
             $p.folderWarning = Ui '*could not be opened*' -Title '*' -Value read -Optional -TimeoutSec 90
             $null = Ui 'OK' -Title '*' -Optional -TimeoutSec 10
+            $null = Close-LabFirstStart -Name $VmName
             $null = Ui 'NewButton' -Value fit -TimeoutSec 90
             Settings-Page 'Security & storage'
             $p.changeLocation = Ui 'Change location*' -Title 'Settings' -Value exists -Optional

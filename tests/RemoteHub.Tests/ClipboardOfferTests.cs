@@ -43,7 +43,14 @@ public class ClipboardOfferTests
         var fetches = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var offer = new RemoteHub.Agent.DesktopTransfer(6, RemoteHub.Agent.DesktopTransferKind.Image, [new RemoteHub.Agent.DesktopTransferItem("image.png", 1)], 1);
         var png = Png();
-        ClipboardOffer.Instance.Offer(offer, paster => { fetches.Enqueue(paster); return new OfferedContent(Image: png, Png: true); });
+        // like AgentDesktopSession's fetch: programs that read every copy (clipboard sync, history, an agent's helper on this PC)
+        // get nothing and aren't a paste
+        ClipboardOffer.Instance.Offer(offer, paster =>
+        {
+            if (ClipboardOffer.BackgroundReader(paster)) return null;
+            fetches.Enqueue(paster);
+            return new OfferedContent(Image: png, Png: true);
+        });
         Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
         Thread.Sleep(500);
         Assert.Empty(fetches);
@@ -76,6 +83,7 @@ public class ClipboardOfferTests
     [Theory]
     [InlineData("rdpclip (812)", true)]
     [InlineData("svchost (1312)", true)]
+    [InlineData("RemoteHubAgent (12156)", true)] // the desktop helper of an agent on this PC
     [InlineData("explorer (4321)", false)]
     [InlineData("unknown", false)]
     public void Background_readers_are_not_pastes(string paster, bool background) =>

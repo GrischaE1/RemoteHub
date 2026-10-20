@@ -449,6 +449,9 @@ public sealed partial class AgentDesktopSession : SessionBase
                 if (text == _lastClipboardSent || text.Length > 1_000_000) return;
                 _lastClipboardSent = text;
                 _client?.Send(DesktopWire.Text(DesktopMessage.Clipboard, text));
+                // only the length: lab run 20261019-193627 (UI-CP-12, a text copied in an RDP tab) couldn't tell whether
+                // a copy left this PC at all
+                Services.DiagLog.Write($"Agent desktop: text copied on this PC sent to the device ({text.Length} characters)");
                 return;
             }
             if (!Supports(DesktopFeatures.Transfer)) return;
@@ -477,7 +480,12 @@ public sealed partial class AgentDesktopSession : SessionBase
             else if (Clipboard.ContainsImage() || Clipboard.ContainsFileDropList())
                 Notice(RefusedCopyNotice(ClipboardLevel));
         }
-        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException or IOException) { /* clipboard busy */ }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException or IOException)
+        {
+            // clipboard busy, or a program's delayed data that didn't come (an RDP tab's copy is rendered by the RDP
+            // control on this very thread): written down, since the copy then never reaches the device
+            Services.DiagLog.Write($"Agent desktop: this PC's clipboard couldn't be read to send it ({ex.GetType().Name}: {ex.Message})");
+        }
     }
 
     /// <summary>
@@ -641,13 +649,19 @@ public sealed partial class AgentDesktopSession : SessionBase
         if (!Supports(DesktopFeatures.TransferOnPaste)) { SendTransfer(o); return; }
         if (_client is not { } client) return;
         _offered = o;
+        Services.DiagLog.Write($"Agent desktop: copy {o.Transfer.Id} offered to the device ({o.Transfer.Items.Length} item(s), {o.Transfer.Total} bytes)");
         client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, o.Transfer, DesktopJson.Default.DesktopTransfer));
     }
 
     /// <summary>Pasted on the device: the offered copy goes now.</summary>
     private void OnTransferRequest(int id)
     {
-        if (_offered is { } o && o.Transfer.Id == id) SendTransfer(o);
+        if (_offered is { } o && o.Transfer.Id == id)
+        {
+            Services.DiagLog.Write($"Agent desktop: copy {id} ({o.Transfer.Total} bytes) goes to the device now");
+            SendTransfer(o);
+        }
+        else Services.DiagLog.Write($"Agent desktop: the device pastes copy {id}, but the copy offered is {(_offered is { } other ? other.Transfer.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) : "none")} – nothing sent");
     }
 
     /// <summary>The device's answer about a copy to it: on its clipboard, or why not.</summary>
@@ -902,7 +916,15 @@ public sealed partial class AgentDesktopSession : SessionBase
                 break;
             case DesktopMessage.TransferRequest:
                 if (int.TryParse(DesktopWire.ReadText(m), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var requested))
-                    _ui.BeginInvoke(() => { if (gen == _generation) OnTransferRequest(requested); });
+                {
+                    // Each step written down: in lab run 20261019-193627 (UI-CP-15) the device asked and no copy started.
+                    Services.DiagLog.Write($"Agent desktop: the device pastes copy {requested}");
+                    _ui.BeginInvoke(() =>
+                    {
+                        if (gen == _generation) OnTransferRequest(requested);
+                        else Services.DiagLog.Write($"Agent desktop: the paste of copy {requested} came from an earlier connection – nothing sent");
+                    });
+                }
                 break;
             case DesktopMessage.TransferEnd:
                 var end = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd);
