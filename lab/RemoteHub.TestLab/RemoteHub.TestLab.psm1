@@ -136,7 +136,14 @@ function Get-LabFileTimes {
     foreach ($d in $dirs) {
         $log = Join-Path $d.FullName 'console.log'
         if (-not (Test-Path $log)) { continue }
-        foreach ($m in [regex]::Matches([IO.File]::ReadAllText($log), '(?m)^\d\d:\d\d:\d\d done\s+(\S+) on (\S+?): .*\((\d+) min\)')) {
+        # The run's own console.log is open for writing (Invoke-LabQueue's "*>"): ReadAllText's FileShare.Read refused it
+        # and the run ended there with exit 1 and nothing in its log (runs 20261020-185111 and -185422).
+        $text = try {
+            $fs = [IO.FileStream]::new($log, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+            try { [IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+        }
+        catch { continue }
+        foreach ($m in [regex]::Matches($text,'(?m)^\d\d:\d\d:\d\d done\s+(\S+) on (\S+?): .*\((\d+) min\)')) {
             # the kind: the VM's Id without its lane ("W11-26H2-en-US-2" -> "W11-26H2-en-US")
             $key = "$($m.Groups[1].Value)|$($m.Groups[2].Value -replace '-\d+$', '')"
             if (-not $all.ContainsKey($key)) { $all[$key] = [Collections.Generic.List[int]]::new() }
@@ -3848,21 +3855,28 @@ if ($env:RHLAB_TIMING -eq '1') {
             'Stop-LabClient', 'Invoke-LabUi', 'Invoke-LabAutoSignIn')) {
         $inner = (Get-Item "function:$name" -ErrorAction SilentlyContinue)
         if (-not $inner) { continue }
-        $orig = $inner.ScriptBlock
-        $wrapper = {
-            $t = $global:RhLabTiming
-            $t.Depth++
-            $sw = [Diagnostics.Stopwatch]::StartNew()
-            try { & $orig @args }
-            finally {
-                $t.Depth--
-                if ($t.Depth -eq 0) {
-                    if (-not $t.Calls.ContainsKey($name)) { $t.Calls[$name] = @{ Count = 0; Seconds = 0.0 } }
-                    $t.Calls[$name].Count++
-                    $t.Calls[$name].Seconds += $sw.Elapsed.TotalSeconds
+        # The wrapper has the helper's own parameters and passes on what was bound. "& $orig @args" lost the colon of
+        # "-Optional:$false": the switch came through as set and $false bound to the next free parameter by position
+        # (the tests' Ui wrappers then ran in "False's session" - lab run 20261020-185549). The closure's variables
+        # have names no helper uses as a parameter (-Name would hide $name).
+        $rhTimedOrig = $inner.ScriptBlock
+        $rhTimedName = $name
+        $meta = New-Object System.Management.Automation.CommandMetadata $inner
+        $wrapper = [scriptblock]::Create([System.Management.Automation.ProxyCommand]::GetCmdletBindingAttribute($meta) +
+            "`nparam(" + [System.Management.Automation.ProxyCommand]::GetParamBlock($meta) + ")`n" + {
+                $rhTimed = $global:RhLabTiming
+                $rhTimed.Depth++
+                $rhTimedWatch = [Diagnostics.Stopwatch]::StartNew()
+                try { & $rhTimedOrig @PSBoundParameters }
+                finally {
+                    $rhTimed.Depth--
+                    if ($rhTimed.Depth -eq 0) {
+                        if (-not $rhTimed.Calls.ContainsKey($rhTimedName)) { $rhTimed.Calls[$rhTimedName] = @{ Count = 0; Seconds = 0.0 } }
+                        $rhTimed.Calls[$rhTimedName].Count++
+                        $rhTimed.Calls[$rhTimedName].Seconds += $rhTimedWatch.Elapsed.TotalSeconds
+                    }
                 }
-            }
-        }.GetNewClosure()
+            }.ToString()).GetNewClosure()
         Set-Item "function:script:$name" -Value $wrapper
     }
 }
