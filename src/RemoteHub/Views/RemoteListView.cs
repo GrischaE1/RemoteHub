@@ -21,7 +21,7 @@ namespace RemoteHub.Views;
 /// Tab content for a list of remote items (processes, services): filter box, sortable columns, a status line and an
 /// automatic refresh while the tab is visible. Rows are updated in place so selection, sorting and scroll position stay.
 /// </summary>
-public abstract class RemoteListView<TRow> : Border, IRecordableView where TRow : class
+public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterableView where TRow : class
 {
     public FrameworkElement RecordingArea { get; }
 
@@ -82,7 +82,13 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView where TRow 
         _filter.MaxWidth = 420;
         _filter.HorizontalAlignment = HorizontalAlignment.Right;
         _filter.Width = 320;
-        _filter.TextChanged += (_, _) => { View!.Refresh(); UpdateStatus(); };
+        // Filtering selects the first match, so Enter opens it and the item actions apply to it.
+        _filter.TextChanged += (_, _) =>
+        {
+            View!.Refresh();
+            if (_filter.Text.Trim().Length > 0 && View.Cast<TRow>().FirstOrDefault() is { } first) { List.SelectedItems.Clear(); List.SelectedItem = first; List.ScrollIntoView(first); }
+            UpdateStatus();
+        };
         bar.Children.Add(_filter);
         DockPanel.SetDock(bar, Dock.Top);
         body.Children.Add(bar);
@@ -130,6 +136,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView where TRow 
         {
             if (e.Key == Key.Escape) { _filter.Text = ""; List.Focus(); e.Handled = true; }
             else if (e.Key == Key.Down) { List.Focus(); e.Handled = true; }
+            else if (e.Key == Key.Enter && Selected is [var match]) { Activate(match); e.Handled = true; }
         };
         body.Children.Add(List);
 
@@ -155,6 +162,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView where TRow 
     protected virtual void SelectionChanged() { }
 
     protected List<TRow> Selected => List.SelectedItems.Cast<TRow>().ToList();
+
+    public void FocusFilter() { _filter.Focus(); _filter.SelectAll(); }
     protected Window? Owner => Window.GetWindow(this);
     protected string Where => Session.Connection.Name;
 

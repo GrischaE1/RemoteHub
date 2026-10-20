@@ -280,6 +280,71 @@ public static class AgentInstaller
         return last;
     }
 
+    // ------------------------------------------------------------------ uninstall
+
+    /// <summary>
+    /// msiexec /x of the installed agent, outside the agent session (via WMI) like an update: removing the agent ends the
+    /// session that started it. The MSI's own cleanup removes the firewall rule, certificate, configuration and the
+    /// credential provider. Answers "started", "notInstalled" or "failed:&lt;WMI error&gt;".
+    /// </summary>
+    private const string DetachedUninstallScript = """
+        $product = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -eq 'RemoteHub Agent' }) | Select-Object -First 1
+        if (-not $product) { 'notInstalled'; return }
+        $log = Join-Path $env:SystemRoot 'Temp\RemoteHub-Agent-uninstall.log'
+        $cmd = "cmd.exe /c start `"`" /wait msiexec.exe /x $($product.PSChildName) /qn /norestart /l*v `"$log`""
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
+        if ($r.ReturnValue -ne 0) { "failed:$($r.ReturnValue)"; return }
+        'started'
+        """;
+
+    /// <summary>Where the uninstall writes its msiexec log on the device.</summary>
+    public const string UninstallLog = @"%SystemRoot%\Temp\RemoteHub-Agent-uninstall.log";
+
+    /// <summary>
+    /// Starts the uninstall over a runspace with admin rights (the agent's own PowerShell or WinRM). Throws
+    /// <see cref="RemoteCommandException"/> when the device has no agent installed from the MSI or msiexec couldn't
+    /// start. Any other exception means the connection failed – possibly because the uninstall already stopped the agent.
+    /// </summary>
+    public static void StartUninstall(Runspace rs, Action<string> progress)
+    {
+        progress("Starting the uninstall on the device…");
+        var answer = RemoteFs.Invoke(rs, DetachedUninstallScript).Select(o => o.ToString()).LastOrDefault() ?? "";
+        if (answer == "started") return;
+        throw new RemoteCommandException(answer == "notInstalled"
+            ? "The device has no RemoteHub Agent installed from its installer, so it can't be uninstalled from here. Uninstall it on the device."
+            : $"The uninstall couldn't be started ({answer}).");
+    }
+
+    /// <summary>
+    /// Waits until the agent has stopped answering for <paramref name="quiet"/> in a row – a dropped answer or an
+    /// installer that rolls back and starts the service again doesn't count. False if it still answers after
+    /// <paramref name="timeout"/>.
+    /// </summary>
+    public static async Task<bool> WaitForStopAsync(string host, AgentEndpoint endpoint, TimeSpan timeout, TimeSpan quiet, Action<string> progress, CancellationToken ct)
+    {
+        progress("Waiting for the agent to stop…");
+        var until = DateTime.UtcNow + timeout;
+        DateTime? silentSince = null;
+        while (DateTime.UtcNow < until)
+        {
+            try
+            {
+                using var once = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                once.CancelAfter(TimeSpan.FromSeconds(endpoint.Via is null ? 5 : 20));
+                await HealthAsync(host, endpoint, once.Token);
+                silentSince = null;
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                silentSince ??= DateTime.UtcNow;
+                if (DateTime.UtcNow - silentSince >= quiet) return true;
+            }
+            await Task.Delay(2000, ct);
+        }
+        return false;
+    }
+
     /// <summary>The ProductVersion of an MSI (e.g. "0.14.3" – the agent reports the same three numbers), or null.</summary>
     public static string? PackageVersion(string msi) =>
         Version.TryParse(PackageQuery(msi, "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'"), out var v)

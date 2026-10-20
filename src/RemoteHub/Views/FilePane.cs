@@ -6,6 +6,7 @@ using System.Windows.Media;
 using RemoteHub.Remoting;
 using Wpf.Ui.Controls;
 using Button = Wpf.Ui.Controls.Button;
+using GridViewColumn = System.Windows.Controls.GridViewColumn;
 using ListView = Wpf.Ui.Controls.ListView;
 using ListViewItem = System.Windows.Controls.ListViewItem;
 using TextBlock = System.Windows.Controls.TextBlock;
@@ -17,7 +18,7 @@ namespace RemoteHub.Views;
 /// One side of the file transfer tab: address bar, folder listing (only the shown folder is loaded) and drag &amp; drop.
 /// The same control is used for this PC and the remote computer; listing and folder creation are passed in.
 /// </summary>
-public sealed class FilePane : DockPanel
+public sealed class FilePane : DockPanel, IFilterableView
 {
     private readonly Func<string, Task<Listing>> _list;
     private readonly Func<string, Task<string>> _mkdir;
@@ -25,6 +26,11 @@ public sealed class FilePane : DockPanel
     private readonly Func<string, string, string> _join;
     private readonly TextBox _address = new() { PlaceholderText = "Path, e.g. C:\\Temp or %TEMP% – Enter opens it", ClearButtonEnabled = false };
     private readonly ListView _listView = new() { SelectionMode = SelectionMode.Extended, AllowDrop = true, BorderThickness = new Thickness(0) };
+    private readonly TextBox _filter = new() { PlaceholderText = "Filter (Ctrl+F)", ClearButtonEnabled = true, Icon = new SymbolIcon(SymbolRegular.Search24) };
+    private readonly Dictionary<GridViewColumn, (string Header, FileSortColumn Sort)> _columns = [];
+    private ListCollectionView? _view;
+    private FileSortColumn _sortBy = FileSortColumn.Name;
+    private bool _descending;
     private readonly TextBlock _status = new() { FontSize = 12, Margin = new Thickness(4, 6, 4, 0), TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly System.Windows.Controls.ProgressBar _busy = new() { IsIndeterminate = true, Height = 2, Visibility = Visibility.Hidden };
     private int _navToken;
@@ -71,6 +77,20 @@ public sealed class FilePane : DockPanel
         DockPanel.SetDock(head, Dock.Top);
         Children.Add(head);
 
+        // ---- filter: narrows the shown folder and selects the first match, so Enter opens it
+        _filter.Margin = new Thickness(0, 0, 0, 6);
+        _filter.TextChanged += (_, _) => ApplyFilter();
+        _filter.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape) { _filter.Text = ""; FocusList(); e.Handled = true; }
+            else if (e.Key == Key.Down) { FocusList(); e.Handled = true; }
+            else if (e.Key == Key.Enter && SelectedEntries is [{ IsContainer: true } f]) { _ = Navigate(f.FullPath); e.Handled = true; }
+        };
+        DockPanel.SetDock(_filter, Dock.Top);
+        Children.Add(_filter);
+        // In a detached window (no main window around it) the pane handles Ctrl+F itself.
+        PreviewKeyDown += (_, e) => { if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control) { FocusFilter(); e.Handled = true; } };
+
         DockPanel.SetDock(_busy, Dock.Top);
         Children.Add(_busy);
         _status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
@@ -79,10 +99,21 @@ public sealed class FilePane : DockPanel
 
         // ---- listing
         var gv = new Wpf.Ui.Controls.GridView();
-        gv.Columns.Add(new Wpf.Ui.Controls.GridViewColumn { Header = "Name", Width = 260, CellTemplate = NameTemplate() });
-        gv.Columns.Add(new Wpf.Ui.Controls.GridViewColumn { Header = "Size", Width = 90, DisplayMemberBinding = new Binding(nameof(FileEntry.SizeText)) });
-        gv.Columns.Add(new Wpf.Ui.Controls.GridViewColumn { Header = "Modified", Width = 140, DisplayMemberBinding = new Binding(nameof(FileEntry.ModifiedText)) });
+        void Column(GridViewColumn c, string header, FileSortColumn sort) { c.Header = header; _columns[c] = (header, sort); gv.Columns.Add(c); }
+        Column(new Wpf.Ui.Controls.GridViewColumn { Width = 260, CellTemplate = NameTemplate() }, "Name", FileSortColumn.Name);
+        Column(new Wpf.Ui.Controls.GridViewColumn { Width = 90, DisplayMemberBinding = new Binding(nameof(FileEntry.SizeText)) }, "Size", FileSortColumn.Size);
+        Column(new Wpf.Ui.Controls.GridViewColumn { Width = 140, DisplayMemberBinding = new Binding(nameof(FileEntry.ModifiedText)) }, "Modified", FileSortColumn.Modified);
         _listView.View = gv;
+        // Clicking a header sorts by it; clicking it again reverses the order. Folders stay above files.
+        _listView.AddHandler(GridViewColumnHeader.ClickEvent, new RoutedEventHandler((_, e) =>
+        {
+            if (e.OriginalSource is not GridViewColumnHeader { Column: { } col } || !_columns.TryGetValue(col, out var c)) return;
+            _descending = c.Sort == _sortBy && !_descending;
+            _sortBy = c.Sort;
+            ShowSort();
+            if (_view is not null) _view.CustomSort = new EntryOrder(_sortBy, _descending);
+        }));
+        ShowSort();
         VirtualizingPanel.SetIsVirtualizing(_listView, true);
         VirtualizingPanel.SetVirtualizationMode(_listView, VirtualizationMode.Recycling);
         _listView.MouseDoubleClick += (_, e) => { if (ItemAt(e.OriginalSource) is { IsContainer: true } f) _ = Navigate(f.FullPath); };
@@ -133,6 +164,8 @@ public sealed class FilePane : DockPanel
 
     public void FocusList() => Dispatcher.BeginInvoke(() => _listView.Focus(), System.Windows.Threading.DispatcherPriority.Input);
 
+    public void FocusFilter() { _filter.Focus(); _filter.SelectAll(); }
+
     private static Button Tool(SymbolRegular icon, string tip, Action a)
     {
         var b = new Button { Icon = new SymbolIcon(icon), ToolTip = tip, Padding = new Thickness(8, 5, 8, 5), MinWidth = 0 };
@@ -173,7 +206,10 @@ public sealed class FilePane : DockPanel
             var keep = same ? SelectedEntries.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
             CurrentPath = listing.Path;
             Entries = listing.Entries;
-            _listView.ItemsSource = listing.Entries;
+            // Another folder starts unfiltered; a refresh of the same one keeps the filter.
+            if (!same && _filter.Text.Length > 0) _filter.Text = "";
+            _view = new ListCollectionView(listing.Entries) { CustomSort = new EntryOrder(_sortBy, _descending), Filter = o => o is FileEntry f && Shown(f) };
+            _listView.ItemsSource = _view;
             if (keep is { Count: > 0 })
                 foreach (var e in listing.Entries.Where(e => keep.Contains(e.Name))) _listView.SelectedItems.Add(e);
             ShowPath();
@@ -193,6 +229,33 @@ public sealed class FilePane : DockPanel
 
     public Task<bool> Refresh() => Navigate(CurrentPath);
 
+    private bool Shown(FileEntry f) => _filter.Text.Trim().Length == 0 || FileEntry.Matches(f, _filter.Text);
+
+    /// <summary>Narrows the list to the filter and selects the first match, so Enter (or a drag) can use it at once.</summary>
+    private void ApplyFilter()
+    {
+        if (_view is null) return;
+        _view.Refresh();
+        if (_filter.Text.Trim().Length > 0)
+        {
+            _listView.SelectedItems.Clear();
+            if (_view.Cast<FileEntry>().FirstOrDefault() is { } first) { _listView.SelectedItem = first; _listView.ScrollIntoView(first); }
+        }
+        UpdateStatus();
+    }
+
+    /// <summary>The sorted column's header carries an arrow for its direction.</summary>
+    private void ShowSort()
+    {
+        foreach (var (col, (header, sort)) in _columns)
+            col.Header = sort == _sortBy ? header + (_descending ? "  ▼" : "  ▲") : header;
+    }
+
+    private sealed class EntryOrder(FileSortColumn by, bool descending) : System.Collections.IComparer
+    {
+        public int Compare(object? x, object? y) => x is FileEntry a && y is FileEntry b ? FileEntry.Compare(a, b, by, descending) : 0;
+    }
+
     private void ShowPath() => _address.Text = CurrentPath.Length == 0 ? "This PC" : CurrentPath;
 
     private void UpdateStatus()
@@ -200,7 +263,8 @@ public sealed class FilePane : DockPanel
         _status.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         var sel = _listView.SelectedItems.Count;
         var files = Entries.Count(e => e.Kind == EntryKind.File);
-        _status.Text = $"{Entries.Count - files} folders, {files} files" +
+        var shown = _view is not null && _filter.Text.Trim().Length > 0 ? _view.Count : -1;
+        _status.Text = $"{Entries.Count - files} folders, {files} files" + (shown >= 0 ? $"  ·  {shown} shown" : "") +
                        (sel > 0 ? $"  ·  {sel} selected ({TransferItem.Size(SelectedEntries.Sum(e => e.Kind == EntryKind.File ? e.Size : 0))})" : "");
     }
 

@@ -19,6 +19,14 @@ public sealed partial class MainViewModel : ObservableObject
         RefreshTags();
         _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
         _saveTimer.Tick += (_, _) => SaveNow();
+        RefreshFavorites();
+        _favorites.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(FavoritesGroup.IsExpanded) || Data.Ui.FavoritesCollapsed == !_favorites.IsExpanded) return;
+            Data.Ui.FavoritesCollapsed = !_favorites.IsExpanded;
+            _saveTimer.Stop();
+            _saveTimer.Start();
+        };
         Sessions.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasSessions));
         // "today 15:42" becomes "yesterday 15:42": the navigation's last-connection labels are refreshed now and then.
         var labels = new DispatcherTimer { Interval = TimeSpan.FromMinutes(5) };
@@ -42,6 +50,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     public AppData Data { get; private set; }
     public ObservableCollection<NodeBase> Items => Data.Items;
+    /// <summary>The Favourites group while anything is pinned (shown above <see cref="Items"/>), else empty.</summary>
+    public ObservableCollection<FavoritesGroup> FavoriteRoots { get; } = [];
+    private readonly FavoritesGroup _favorites = new();
     public ObservableCollection<SessionBase> Sessions { get; } = new();
     /// <summary>Open tabs grouped by connection (top tab row); each group's tabs form the second row.</summary>
     public ObservableCollection<SessionGroup> Groups { get; } = new();
@@ -259,6 +270,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public void RequestSave()
     {
+        RefreshFavorites();
         RefreshTags();
         _saveTimer.Stop();
         _saveTimer.Start();
@@ -289,10 +301,34 @@ public sealed partial class MainViewModel : ObservableObject
         Data = data;
         OnPropertyChanged(nameof(Data));
         OnPropertyChanged(nameof(Items));
+        RefreshFavorites();
         RefreshTags();
         if (save) SaveNow();
         OnPropertyChanged(nameof(ConnectionCount));
         RefreshStorageInfo();
+    }
+
+    // ------------------------------------------------------------------ favourites
+
+    public bool IsFavorite(Connection c) => Data.Ui.FavoriteConnections.Contains(c.Id);
+
+    /// <summary>Pins or unpins a connection. A link only: the connection stays where it is and keeps what it inherits.</summary>
+    public void SetFavorite(Connection c, bool pinned)
+    {
+        var ids = Data.Ui.FavoriteConnections;
+        if (pinned == ids.Contains(c.Id)) return;
+        if (pinned) ids.Add(c.Id); else ids.Remove(c.Id);
+        RequestSave();
+    }
+
+    /// <summary>Builds the Favourites group from the pinned ids: after a load and every change.</summary>
+    public void RefreshFavorites()
+    {
+        var pinned = Favorites.Resolve(AllNodes().OfType<Connection>(), Data.Ui.FavoriteConnections);
+        Favorites.Sync(_favorites.Children, pinned);
+        _favorites.IsExpanded = !Data.Ui.FavoritesCollapsed;
+        if (pinned.Count > 0 && FavoriteRoots.Count == 0) FavoriteRoots.Add(_favorites);
+        else if (pinned.Count == 0 && FavoriteRoots.Count > 0) FavoriteRoots.Clear();
     }
 
     /// <summary>Writes the current data even though the file changed elsewhere ("keep mine").</summary>
@@ -333,6 +369,8 @@ public sealed partial class MainViewModel : ObservableObject
     public void Remove(NodeBase node)
     {
         ChildrenOf(node.Parent).Remove(node);
+        // A deleted connection (or a deleted folder's) is unpinned; only deleting does that, see Favorites.Resolve.
+        Favorites.Forget(Data.Ui.FavoriteConnections, node.Descendants().Prepend(node).OfType<Connection>());
         RequestSave();
     }
 
