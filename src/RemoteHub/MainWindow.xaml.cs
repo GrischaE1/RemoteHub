@@ -1437,11 +1437,7 @@ public partial class MainWindow : FluentWindow
     private void ForgetAgent(Connection c, string auditDetail)
     {
         Data.AuditLog.Write(Data.AuditEvents.AgentUninstalled, c, auditDetail);
-        c.Agent = null;
-        if (c.Options.UseAgent == true) c.Options.UseAgent = null;
-        c.PsRemoting = null;
-        c.RefreshLabels();
-        _vm.RequestSave();
+        _vm.ForgetAgent(c);
         DiagLog.Write("RemoteHub Agent removed from a connection");
     }
 

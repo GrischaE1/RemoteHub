@@ -321,6 +321,19 @@ public sealed partial class MainViewModel : ObservableObject
         RequestSave();
     }
 
+    /// <summary>
+    /// The connection no longer has an agent (uninstalled, or removed here only): it goes back to RDP and WinRM. A
+    /// connection that was set to use the agent falls back to what its folders say.
+    /// </summary>
+    public void ForgetAgent(Connection c)
+    {
+        c.Agent = null;
+        if (c.Options.UseAgent == true) c.Options.UseAgent = null;
+        c.PsRemoting = null;
+        c.RefreshLabels();
+        RequestSave();
+    }
+
     /// <summary>Builds the Favourites group from the pinned ids: after a load and every change.</summary>
     public void RefreshFavorites()
     {

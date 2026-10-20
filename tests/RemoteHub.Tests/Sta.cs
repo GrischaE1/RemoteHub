@@ -21,9 +21,8 @@ internal static class Sta
                 Width = 900, Height = 600, Left = -4000, Top = 0, ShowInTaskbar = false, ShowActivated = false,
                 WindowStartupLocation = WindowStartupLocation.Manual, WindowStyle = WindowStyle.None,
             };
-            // The app's Fluent theme, so WPF-UI controls get their templates (rows in the visual tree, headers, …).
-            window.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ThemesDictionary { Theme = Wpf.Ui.Appearance.ApplicationTheme.Dark });
-            window.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ControlsDictionary());
+
+            Theme(window);
             try
             {
                 window.Show();
@@ -36,6 +35,14 @@ internal static class Sta
         thread.Start();
         Assert.True(thread.Join(TimeSpan.FromSeconds(timeoutSeconds)), "the view test didn't finish");
         if (failure is not null) throw new Xunit.Sdk.XunitException(failure.ToString());
+    }
+
+    /// <summary>The app's Fluent theme on a window, so WPF-UI controls get their templates (rows in the visual tree, headers, …).</summary>
+    public static T Theme<T>(T window) where T : Window
+    {
+        window.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ThemesDictionary { Theme = Wpf.Ui.Appearance.ApplicationTheme.Dark });
+        window.Resources.MergedDictionaries.Add(new Wpf.Ui.Markup.ControlsDictionary());
+        return window;
     }
 
     /// <summary>Lets the dispatcher run what is queued (layout, bindings, continuations).</summary>
