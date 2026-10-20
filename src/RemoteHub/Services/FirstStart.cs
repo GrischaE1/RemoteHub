@@ -27,6 +27,7 @@ public static class FirstStart
             "Favourites – pin connections to the top of the navigation; they stay in their folders and keep what they inherit.",
             "Filter and sort in both file panes, the registry, services and processes – the first match is selected, so Enter opens it.",
             "Uninstall the RemoteHub Agent from a device: right-click the connection → Uninstall RemoteHub Agent…",
+            "Lock when you're away can now lock after 1 minute without input.",
             "Welcome tour – a short introduction on the first start. Settings → Help & about shows it again.",
             "What's new – after an update, RemoteHub shows what changed, like this.",
             "Updates on the Beta channel also offer a GA release when it's newer than the last pre-release.",

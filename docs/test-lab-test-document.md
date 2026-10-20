@@ -4774,8 +4774,8 @@ P2 · How: U · Needs: – · Status: ✅ Automated – `C-DATA.Tests.ps1`
 **Preconditions:** C-LOCK-01 done. An RDP or PowerShell tab is open and connected.
 
 **Steps:**
-1. FlaUI: *Startup protection…* → enter the current password → *Lock when you're away* → *After 1 minute* (*After 5 minutes* on builds without that option).
-2. Don't send any input to the VM for the chosen time + 30 s (RemoteHub checks every 15 s).
+1. FlaUI: *Startup protection…* → enter the current password → *Lock when you're away* → *After 1 minute* (offered after *Never*, before 5, 15, 30 minutes and 1 hour).
+2. Don't send any input to the VM for 1 minute + 30 s (RemoteHub checks every 15 s).
 3. Look for RemoteHub windows.
 4. Device side: check the session is still connected (PS Direct `query session` on the device).
 5. Type the password in the unlock window.

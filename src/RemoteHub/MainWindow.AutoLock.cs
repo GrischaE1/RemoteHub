@@ -27,9 +27,12 @@ public partial class MainWindow
 
     private bool AutoLockDue() =>
         // Policy AutoLockMinutes wins over the user's choice; without startup protection there is nothing to lock (§6.3).
-        !_locked && AppLock.IsEnabled && (AppPolicy.AutoLockMinutes ?? _vm.Data.Ui.AutoLockMinutes) is > 0 and var minutes && IdleTime() >= TimeSpan.FromMinutes(minutes)
+        !_locked && AppLock.IsEnabled && LockDue(AppPolicy.AutoLockMinutes ?? _vm.Data.Ui.AutoLockMinutes, IdleTime())
         // A dialog is open (e.g. editing a connection): hiding it would end it. Locks when it's closed.
         && !ComponentDispatcher.IsThreadModal;
+
+    /// <summary>The lock is due: a time is set (0 = never) and there was no input for that long (checked every 15 s).</summary>
+    internal static bool LockDue(int minutes, TimeSpan idle) => minutes > 0 && idle >= TimeSpan.FromMinutes(minutes);
 
     /// <summary>Hides RemoteHub until it's unlocked again.</summary>
     private void LockNow()
