@@ -3,6 +3,8 @@
 Status: v2 (2026-10-20) – solution design, nothing built yet. v2 takes in the answers to the open questions of v1
 (§13): a fourth run context *As me*, favourites as links like the connection tree's (0.21.0), the console user for
 *User* runs, no script signing, and shared undo, *Recently deleted* and colour pieces that connections get too.
+v3 (2026-10-20): autosave writes a **draft**, *Ready to deploy* makes it a **version**, the last 10 versions are kept
+and can be **compared** like a Git diff (§4.10), and many scripts can be **imported and exported** at once (§4.7).
 Owner: Grischa Ernst
 
 This is phase 5 ("Scripts") of [local-db-design.md](local-db-design.md) §12. It is the third view on the view rail
@@ -16,6 +18,8 @@ wins, and §14 lists what changes in them. It builds on main as of 0.21.0 (conne
 | **Scripts view** | A view on the rail, next to Notes. It has three panes: a tree of folders, the scripts of the selected folder, and the script in a code editor with syntax colouring and IntelliSense. Scripts are either **PowerShell** (`.ps1`) or **SQL** (`.sql`). Folders and scripts have a **colour**, and scripts can be pinned to **Favourites**, both the way connections have them in Remote Control. |
 | **Run context** | Every PowerShell script says how it runs on the device: **System** (`NT AUTHORITY\SYSTEM`), **User** (the user signed in on the device), **Both** (System first, then User) or **As me** (the account RemoteHub signs in with). |
 | **Run a script** | *Run script…* in a connection's *Tools* menu, offered where PowerShell remoting (WinRM) or the agent's PowerShell is available. It opens a window to search and filter the scripts, then runs the chosen one on that device and shows the result. Only PowerShell scripts can be run. SQL scripts are kept, coloured and copied, but never run. |
+| **Versions** | Typing is saved automatically as a **draft**. *Ready to deploy* turns the draft into a numbered **version**, and only versions are run on devices. The last 10 versions are kept, and any two can be compared side by side with the changes marked, like a Git diff. |
+| **Import and export** | Many scripts at once: files, whole folders, or a RemoteHub script package that keeps folders, settings, colours and versions. |
 | **Script library** | The scripts of the *PowerShell Script Catalog for Windows Administrators* (97 entries, INV/SEC/SRV/DSC/FIX) are added during implementation as a built-in, read-only library (§8). |
 | **Shared pieces** | The undo bar, *Recently deleted* and the colour swatches become shared views, used by Notes, Scripts and – new – the connection tree (§4.9). |
 
@@ -31,6 +35,8 @@ wins, and §14 lists what changes in them. It builds on main as of 0.21.0 (conne
    fails or is cancelled. A later run removes what an interrupted run left behind (§6.3).
 5. **Built like Notes and the connection tree.** Panes, autosave, *Recently deleted* and policy work as in Notes;
    favourites and colours work as in the connection tree. A user who knows them doesn't need to learn anything new.
+6. **Only what an admin declared ready runs.** Typing never changes what runs on devices: autosave writes a draft, and
+   devices get the latest version that was marked *Ready to deploy* (§4.10).
 
 ## 2. Non-goals (v1)
 
@@ -73,7 +79,8 @@ The view is three cards, like Notes: the same `Card`, `GridSplitter` and `EmptyH
 │   ▸ Fixes      ●  ││   System · INV-07        ││ │ ...                                             │ │
 │ ▾ Library 🔒      ││ ● User environment       ││ └─────────────────────────────────────────────────┘ │
 │   ▸ INV           ││   User · INV-16          ││ [▶ Run on…]  [⧉ Copy]  [⋯]                         │
-│ + New folder      ││                          ││ Saved                                               │
+│ + New folder      ││                          ││ Draft saved · changes since version 3               │
+│                   ││                          ││ [✓ Ready to deploy]  [⇆ Compare]  [Discard draft]   │
 │ 🗑 Recently deleted││                          ││                                                     │
 └───────────────────┘└──────────────────────────┘└─────────────────────────────────────────────────────┘
 ```
@@ -107,7 +114,9 @@ The view is three cards, like Notes: the same `Card`, `GridSplitter` and `EmptyH
 - A colour filter (*All colours*, then each colour in use) narrows the list, next to the search as in the tree.
 - Each row shows the colour dot, the name and one caption line: the language for SQL, the run context for PowerShell,
   and the catalog ID where there is one (`System · INV-05`). A pinned script shows the favourite mark used in the
-  connection tree.
+  connection tree. A script with an undeployed draft shows *Draft* in its caption; one that was never deployed shows
+  *Not deployed yet*.
+- **Several scripts can be selected** (Ctrl+click, Shift+click, Ctrl+A) to move, delete, pin or export them together.
 
 ### 4.4 The script
 
@@ -121,9 +130,10 @@ The view is three cards, like Notes: the same `Card`, `GridSplitter` and `EmptyH
 - **Description:** one plain text field under the header. For a PowerShell script it can be taken from the
   comment-based help (`.SYNOPSIS`) with *Use the script's synopsis*.
 - **Editor** (§5), then the action bar: *Run on…* (PowerShell only, §6.5), *Copy*, and a ⋯ menu with *Save as
-  file…*, *Duplicate*, *Move to…*, *Add to favourites*, *Run history* (§6.6) and *Delete*.
-- **Autosave** a second after typing stops and when the script, folder or view changes, as for notes
-  (notes-view-design.md §6.1). The status line says *Saved*, or the error and a retry.
+  file…*, *Duplicate*, *Move to…*, *Add to favourites*, *Versions…* (§4.10), *Run history* (§6.6) and *Delete*.
+- **Autosave** writes the **draft** a second after typing stops and when the script, folder or view changes, as for
+  notes (notes-view-design.md §6.1). The status line says *Draft saved*, or the error and a retry, and under it the
+  version bar of §4.10: *Ready to deploy*, *Compare* and *Discard draft*.
 
 ### 4.5 SQL scripts
 
@@ -138,19 +148,54 @@ undo bar offers *Undo* for eight seconds, and *Recently deleted* restores or del
 
 ### 4.7 Import and export
 
-- **Import:** drop `.ps1` or `.sql` files (up to 1 MB each) onto a folder, or use *Import files…* in a folder's menu.
-  The name comes from the file name. A `.ps1` file's RemoteHub header (§8.2) fills in the run context, risk and OS.
-- **Export:** *Save as file…* for one script; *Export folder…* writes the folder's scripts, with subfolders, to a
-  chosen folder. The export dialog says the files aren't encrypted, as Notes' export does.
+Many scripts can be moved in and out at once, in two formats:
+
+| Format | What it holds | For |
+|---|---|---|
+| **Files** – `.ps1` and `.sql` in a folder tree | One file per script, subfolders for folders. The settings go into a header in the file: the `.NOTES` block of §8.2 for PowerShell, a `-- RemoteHub: …` comment line for SQL. | Git repositories, editors, other tools |
+| **Script package** – `.rhscripts` | Folders, scripts, settings, colours, descriptions, the draft and all kept versions with their notes and dates (§4.10). Encrypted with a password like `.rhbackup` (same code, same format of key derivation), unless *Protect with a password* is turned off. | Moving scripts to another PC or admin, keeping the history |
+
+**Export**
+
+- *Export…* acts on what is selected: one or more scripts in the list, a folder (with its subfolders) from the
+  folder's menu, or *Export all scripts…* from *My scripts*. Library scripts can be exported too.
+- The dialog asks for the format and, for files, **which text** to write: the **deployed version** (the default; a
+  script that was never deployed is written from its draft and listed as such) or the **draft**.
+- It says what isn't protected: files are plain text, and a package without a password isn't encrypted (as Notes'
+  export does).
+- Audit: `scripts.exported` with the number of scripts and the format – no names.
+
+**Import**
+
+- *Import…* in a folder's menu, or dropping onto a folder: any number of `.ps1` and `.sql` files, whole folders
+  (with subfolders, which become folders), or a `.rhscripts` package. Other files are skipped and counted.
+- A **preview** lists what will come in, as a tree with check boxes, and what each script's settings are. Scripts
+  whose name already exists in the target folder show a choice: *Keep both* (the new one gets "(2)"), *Replace* (the
+  imported text becomes a **new draft** of the existing script, so nothing is lost: its versions stay and can be
+  compared), or *Skip*. One choice can be applied to all.
+- **Imported text arrives as a draft**, never as a deployed version: plain files come from outside, so an admin
+  reviews them and marks them *Ready to deploy*. A package keeps its version history for comparison, and its latest
+  deployed version becomes the draft. *Import as deployed* (off by default) is offered for packages only, where the
+  versions were deployed by an admin before.
+- **Limits** (the input is untrusted): 1 MB per script, 5,000 scripts and 50 MB of text per import, folder depth 20.
+  Package entries are checked before anything is written: no absolute paths, no `..`, no names leaving the package,
+  sizes taken from the content, not the ZIP header, and the total uncompressed size limited. A package that fails a
+  check is refused as a whole, with what failed.
+- **Encoding:** files with a BOM are read as UTF-8 or UTF-16; others as UTF-8, and as Windows-1252 if that isn't
+  valid UTF-8 (what Windows PowerShell 5.1 does with BOM-less files).
+- The headers fill in the run context, risk, OS and timeout. Without a header, PowerShell scripts get the defaults
+  (§4.4).
+- Audit: `scripts.imported` with the number of scripts and the format.
 - **From a note:** a PowerShell or SQL script block's ⋯ menu gets *Save as script…*, which creates a script in the
   chosen folder. The script block still can't run (notes-view-design.md §4.5.5).
-- **Backup:** `.rhbackup` gains the folders and scripts (not the run history's output, §6.6). Older backups still
-  import.
+- **Backup:** `.rhbackup` gains the folders and scripts with their drafts and versions (not the run history's output,
+  §6.6). Older backups still import.
 
 ### 4.8 Accessibility and keyboard
 
 The panes, tree, list and editor have automation names. Ctrl+N new script, Ctrl+F search, F2 rename, Del delete,
-F5 *Run on…* (PowerShell only).
+F5 *Run on…* (PowerShell only), Ctrl+Shift+D *Ready to deploy*, Ctrl+Shift+C *Compare*. Each key is shown in its
+tooltip.
 
 ### 4.9 How the view is built, and the shared pieces
 
@@ -192,6 +237,73 @@ Notes (unchanged behaviour), Scripts and the connection tree:
   shared file at once, and its copy is kept in this PC's database, so only the person who deleted it can restore it.
 - **A tree IT provides read-only** has no delete and so no *Recently deleted*.
 - Audit: `node.deleted`, `node.restored`, `node.purged` with the node id.
+
+### 4.10 Drafts, versions and comparing
+
+**Draft and versions.** A PowerShell or SQL script has one **draft** – what the editor shows, saved automatically –
+and up to **10 versions**, numbered 1, 2, 3 … A version is a frozen copy of everything that decides what runs: the
+text, *Runs as*, risk, OS, timeout and description. The name, colour, folder and favourite pin aren't versioned: they
+organise, they don't change what runs.
+
+| State | Shown as | What runs on a device |
+|---|---|---|
+| New script, never deployed | *Not deployed yet* | Nothing: it isn't offered in the run window (§6.5) |
+| Draft equal to the latest version | *Version 4 · deployed 20 Oct 2026* | Version 4 |
+| Draft with changes | *Draft saved · changes since version 4* | Version 4, until the draft is deployed |
+
+**Ready to deploy** (the primary button of the version bar, Ctrl+Shift+D):
+
+1. Opens a dialog with the comparison of the draft against the latest version (below), so the admin sees exactly what
+   they deploy, and an optional **note** ("Also checks the WU policy key"), up to 500 characters.
+2. A PowerShell script with syntax errors (§5.3) can't be deployed: the dialog names the first error and its line.
+   The editor's secret warning (§5.5), if any, is repeated here.
+3. *Deploy* stores the draft as the next version, with the time, the note and the Windows account of the admin. The
+   audit log gets `script.deployed` with the script id, the version number and the SHA-256 of the text.
+4. When this makes 11 versions, the oldest is removed for good (`secure_delete`). Run history keeps its own hash of
+   what ran, so a removed version still shows as "version 2 (no longer kept)".
+
+**Discard draft** puts the draft back to the latest version, after a question. **Restore** (in the version list)
+copies an older version into the draft – it is deployed only through *Ready to deploy*, as a new version, so the
+history only ever grows forward, as with `git revert`.
+
+**Versions…** (in the ⋯ menu) lists the versions, newest first, with number, date, admin, note and how often each
+ran, and the draft at the top if it has changes. From there: *Compare with…*, *Restore to draft*, *Export this
+version…*.
+
+**Library scripts** have no drafts. Their version is the RemoteHub release they came with. *Duplicate to My scripts*
+creates a script whose version 1 is the library text, already deployed (the library is part of the signed app).
+Imports arrive as drafts (§4.7).
+
+**Compare** (Ctrl+Shift+C, the version bar, the version list, the *Ready to deploy* dialog) opens a comparison window,
+like a Git diff:
+
+```
+┌ Compare – Get-PendingReboot ─────────────────────────────────────────────────────────────────┐
+│ [Version 1 · 02 Oct ▾]  ⇄  [Version 4 · 20 Oct ▾]     Side by side | Inline     ↑ ↓  3 changes │
+│ Runs as: System → Both     Timeout: 10 → 15 min                                               │
+├──────────────────────────────────────────┬───────────────────────────────────────────────────┤
+│ 12   $reasons = @()                      │ 12   $reasons = @()                               │
+│ 13 - if (Test-Path $cbs) {               │ 13 + if (Test-Path -LiteralPath $cbs) {           │
+│      ⋯ 24 unchanged lines                │      ⋯ 24 unchanged lines                         │
+│                                          │ 38 + $reasons += 'Rename pending'                 │
+└──────────────────────────────────────────┴───────────────────────────────────────────────────┘
+```
+
+- **Any two of** the kept versions and the draft can be compared. It opens with the **oldest kept version on the
+  left and the latest on the right**; from the editor with a changed draft, it opens with the latest version against
+  the draft. ⇄ swaps the sides.
+- **Side by side** (the default) or **Inline** (one column, like `git diff`), remembered in `UiState`.
+- Removed lines are marked on the left, added lines on the right, and a changed line shows the changed words inside
+  it. Unchanged stretches longer than 6 lines fold to "⋯ N unchanged lines" and open on click. Both sides keep the
+  syntax colouring and line numbers, and scroll together.
+- ↑ ↓ (F7, Shift+F7) jump between changes; the count says how many there are. Changes to *Runs as*, risk, OS,
+  timeout and description are listed above the text.
+- The marks use theme brushes added for this (`DiffAddedBrush`, `DiffRemovedBrush`, and stronger variants for the
+  changed words), each with a dark and a light value, and a + / − in the margin so they don't depend on colour.
+- *Copy* on either side copies that version's text. The window is read-only.
+- **Diff code:** our own line diff (Myers' algorithm) with a word diff inside changed lines, in `Services/TextDiff.cs`,
+  a few hundred lines with its own tests. No third-party library. Scripts are at most 1 MB, so the diff runs on a
+  background thread and shows "Comparing…" only if it takes longer than 200 ms.
 
 ## 5. The editor
 
@@ -328,13 +440,21 @@ RemoteHub (this PC)                       Device (in the remote runspace, as the
 
 ### 6.4 Confirming a run
 
-- Every run shows a summary before it starts: the script, the device, the context (and for *User*, which users), the
-  risk class and the transport. *Run* starts it.
+- **What runs is the latest deployed version** (§4.10), with that version's *Runs as*, risk, OS and timeout – never
+  the draft, whatever the editor shows.
+- Every run shows a summary before it starts: the script and its version ("version 4, deployed 20 Oct 2026"), the
+  device, the context (and for *User*, which users), the risk class and the transport. If the script has an undeployed
+  draft, the summary says "The draft has changes that aren't deployed – version 4 runs". *Run* starts it.
+- **Testing a draft:** the editor's ⋯ menu has *Test draft on…* for PowerShell scripts with a draft. It runs the
+  draft once, on one device, after the same confirmation with "This is a draft, not a deployed version" at the top.
+  Test runs are marked *Draft* in the run window, the run history and the audit log (`script.run` with version
+  `draft` and the hash). They are never offered in the run window from the connection menus. The policy
+  `AllowScriptDraftRun` (§9) turns them off.
 - **R2** scripts also need the device name typed in, and the summary says "This script can restart the device, stop
   services or delete data". This mirrors the catalog's R2 controls (§2 there).
 - A script whose OS scope doesn't match the device's (when RemoteHub knows the OS) gets a warning in the summary, not
   a block.
-- A script with syntax errors (§5.3) asks "Run anyway?".
+- A deployed version can't have syntax errors (§4.10). A draft under test that has them asks "Run anyway?".
 
 ### 6.5 Where *Run* is offered
 
@@ -352,8 +472,8 @@ The **run window** (`RunScriptWindow : FluentWindow`, resizable, 720 × 560, rem
 
 1. **Pick:** the device name in the title ("Run script on SRV-UEM01"), the search box ("Search scripts"), filter chips
    *Favourites* and *Recently run*, a colour drop-down and a folder drop-down, and the list. It lists **PowerShell
-   scripts only**, from *My scripts* and the library. Each row has the colour dot, the name, the favourite mark, the
-   folder path, the context and the risk; its context menu has *Add to favourites* / *Remove from favourites*. Enter
+   scripts with a deployed version only**, from *My scripts* and the library. Each row has the colour dot, the name,
+   the favourite mark, the folder path, the version, the context and the risk; its context menu has *Add to favourites* / *Remove from favourites*. Enter
    or double-click chooses, and the confirmation (§6.4) follows on the same page.
 2. **Run:** one tab per result (System, User, As me, or one per user), each with its state (*Running…* with the
    elapsed time, *Succeeded*, *Failed*, *Timed out*, *Cancelled*), the exit code and the output in a read-only editor
@@ -365,12 +485,14 @@ whether to cancel the run.
 
 ### 6.6 Run history
 
-- Each run stores, in the encrypted database: the script id and a SHA-256 of the text that ran, the connection id, the
-  context and user, the start, duration, state and exit code, and the output (up to 1 MB).
+- Each run stores, in the encrypted database: the script id, the version number (or *draft*) and a SHA-256 of the text
+  that ran, the connection id, the context and user, the start, duration, state and exit code, and the output (up to
+  1 MB).
 - Output can contain personal data and machine details, so it is kept for the last 10 runs of each script, at most
   30 days, and a setting can turn off storing output (*Settings → Scripts → Keep the output of runs*).
-- *Run history* (in a script's ⋯ menu, and for a connection in *More → Audit log…*) lists the runs. It shows whether
-  the script has changed since that run (the hash).
+- *Run history* (in a script's ⋯ menu, and for a connection in *More → Audit log…*) lists the runs with their version.
+  *Compare with latest* opens the comparison (§4.10) of the version that ran against the latest one, while that
+  version is still kept.
 - Run history isn't in backups.
 
 ## 7. Data model
@@ -391,14 +513,26 @@ CREATE INDEX ix_script_folders ON script_folders(parent_id, sort);
 
 CREATE TABLE scripts (rid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, folder_id TEXT NOT NULL, name TEXT NOT NULL,
                       language TEXT NOT NULL,       -- 'powershell' or a SQL fence id (notes-view-design.md §4.5.5a)
+                      -- The draft: what the editor shows and autosave writes.
                       body TEXT NOT NULL, description TEXT NOT NULL,
                       run_context TEXT,             -- 'System' | 'User' | 'Both' | 'AsMe'; NULL for SQL
-                      risk TEXT, os_scope TEXT, timeout_sec INTEGER, color TEXT,
+                      risk TEXT, os_scope TEXT, timeout_sec INTEGER,
+                      deployed_version INTEGER,     -- the latest version number; NULL = never deployed
+                      color TEXT,
                       library_id TEXT,              -- catalog ID (INV-05) when copied from the library
                       sort INTEGER NOT NULL, created_utc INTEGER NOT NULL, deleted_utc INTEGER, {NoteColumns});
 CREATE INDEX ix_scripts_folder ON scripts(folder_id, sort);
 
-CREATE TABLE script_runs (id TEXT PRIMARY KEY, script_id TEXT NOT NULL, body_sha256 BLOB NOT NULL,
+-- Deployed versions, at most 10 per script (the oldest is removed when an 11th is deployed).
+CREATE TABLE script_versions (script_id TEXT NOT NULL, version INTEGER NOT NULL,
+                              body TEXT NOT NULL, description TEXT NOT NULL, run_context TEXT, risk TEXT,
+                              os_scope TEXT, timeout_sec INTEGER, body_sha256 BLOB NOT NULL,
+                              note TEXT NOT NULL, deployed_by TEXT NOT NULL, deployed_utc INTEGER NOT NULL,
+                              {NoteColumns}, PRIMARY KEY (script_id, version));
+
+CREATE TABLE script_runs (id TEXT PRIMARY KEY, script_id TEXT NOT NULL,
+                          version INTEGER,                -- NULL = a draft under test (§6.4)
+                          body_sha256 BLOB NOT NULL,
                           node_id TEXT NOT NULL, context TEXT NOT NULL, run_user TEXT, transport TEXT NOT NULL,
                           started_utc INTEGER NOT NULL, duration_ms INTEGER, state TEXT NOT NULL, exit_code INTEGER,
                           output TEXT);
@@ -408,13 +542,18 @@ CREATE INDEX ix_script_runs_node ON script_runs(node_id, started_utc);
 CREATE VIRTUAL TABLE scripts_fts USING fts5(name, description, body, tokenize = 'unicode61 remove_diacritics 2');
 ```
 
+- Version numbers only grow: after versions 1–12 the kept ones are 3–12, and the next is 13. A version's text and
+  settings never change once written.
+- Searching (`scripts_fts`) covers the draft. Older versions aren't searched.
 - Favourites aren't in the database: they are `UiState.FavoriteScripts`, as connection favourites are (§4.2).
 - Library scripts have no rows: they come from the app (§8). Their colour is their area's, fixed.
 - The colour is a `ColorTags` id or `#RRGGBB`, as for connections.
 
 ### 7.2 Code
 
-- `Data/ScriptStore.cs` – folders, scripts, search, deleted items, run history (like `NoteStore`).
+- `Data/ScriptStore.cs` – folders, scripts, drafts and versions, search, deleted items, run history (like `NoteStore`).
+- `Services/TextDiff.cs` – the line and word diff (§4.10); `Views/CompareWindow.cs` – the comparison window.
+- `Services/ScriptTransfer.cs` – import and export of files and `.rhscripts` packages (§4.7), with the checks.
 - `Services/ScriptLibrary.cs` – loads the built-in library (§8).
 - `Services/ScriptRunner.cs` – the run (§6.2), on a background thread, reporting to the UI through the dispatcher.
   The device-side part is one PowerShell script (`Assets/Scripts/RunScript.ps1`, our own code, ASCII-only like the lab
@@ -492,7 +631,10 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 | `AllowScriptRunSystem` | The *System* context (and so *Both*). |
 | `AllowScriptRunUser` | The *User* context (and so *Both*). |
 | `AllowScriptRunAsMe` | The *As me* context. |
+| `AllowScriptDraftRun` | *Test draft on…*: only deployed versions can run (§6.4). |
 | `AllowScriptLibrary` | The built-in library. The organisation's own scripts are still allowed. |
+| `AllowScriptImport` | Importing files, folders and packages (§4.7). |
+| `AllowScriptExport` | Exporting files and packages, and *Save as file…* (§4.7). |
 
 - `AllowScriptRun` also depends on the transport's PowerShell switch: `AllowAgentPowerShell` for the agent and
   `AllowRemotingPowerShell` for WinRM. A run is the PowerShell tool used in another way.
@@ -507,14 +649,18 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 |---|---|
 | Scripts or output on a stolen disk | The encrypted database, like notes. The FTS index is inside it too. |
 | Script text, names, host names or output in `DiagLog` | Never. Only ids, counts, states and durations ("Scripts: run finished, state Failed, 2.1 s"). Exceptions from the run are logged with `ex.GetType().Name` where the message can quote the script (parser errors). |
-| Audit log | `script.added`, `script.changed`, `script.deleted`, `script.restored` with the script id. `script.run` with the script id, the SHA-256 of the text, the connection id, the context, the transport, the state and the exit code – never the text or the output. This builds the "script run" event that local-db-design.md §11 plans. |
+| Audit log | `script.added`, `script.deleted`, `script.restored` with the script id. `script.deployed` with the script id, the version and the SHA-256 of the text (autosaving a draft isn't audited – it changes nothing that runs). `scripts.imported` and `scripts.exported` with a count and the format. `script.run` with the script id, the version (or `draft`), the SHA-256 of the text, the connection id, the context, the transport, the state and the exit code – never the text or the output. This builds the "script run" event that local-db-design.md §11 plans. |
 | A run doing more than the account may | No: the run uses the account's own PowerShell session (§1.1, 3). SYSTEM is reachable only for an administrator, who could create the same task in the console. |
 | Script text on the device | In a folder with an ACL for SYSTEM, Administrators and the account the script runs as, for as long as the run lasts. Never on a command line (§6.2). |
 | A user tampering with a *User* run | The user can read and change their own run's files while it runs, but the task runs only as them, so they gain nothing. SYSTEM runs use a folder the user can't read or write. |
 | Bypassing the organisation's execution policy | `-ExecutionPolicy Bypass` only where no GPO sets the policy. A GPO-set policy wins and the run fails (§6.2). |
 | Output with personal data | Kept only for the last 10 runs and 30 days, and can be turned off (§6.6). *Copy output* uses the normal clipboard (not `SecureClipboard`: output isn't a password). |
 | Deleted connections with saved passwords | In *Recently deleted* their `secrets` rows stay encrypted as before, and are removed with `secure_delete` when the item is deleted for good or after 30 days (§4.9). |
-| Malicious imported scripts | Imported files are text up to 1 MB. Nothing is run on import, in the editor or by completion (§5.3). |
+| A half-finished edit reaching devices | Autosave writes only the draft. Devices get the latest version an admin deployed after seeing the comparison (§4.10). Draft tests are explicit, marked and can be turned off (§6.4). |
+| Who changed what | Each version records the Windows account that deployed it, the time and the note, and versions can't be changed afterwards (§7.1). |
+| Malicious imported scripts | Imported files are text up to 1 MB and arrive as drafts, so an admin reviews them before they can run. Nothing is run on import, in the editor or by completion (§5.3). |
+| Malicious packages | Every entry is checked before anything is written: paths (no absolute paths, no `..`), counts and sizes from the content with a total limit, so a ZIP bomb or a path that leaves the package is refused as a whole (§4.7). The package's JSON is read with size limits and unknown fields ignored. |
+| Exported scripts | Files are plain text and the dialog says so. Packages are encrypted with a password by default, like backups. |
 | Library integrity | Embedded in the signed app. A test checks every library header and the standards (§8.3). |
 | Prompts hanging a run | `-NonInteractive` and the timeout (§6.2). |
 
@@ -522,8 +668,8 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 
 | Phase | Content | Done when |
 |---|---|---|
-| 1 | **Shared pieces and the view:** `UndoBar`, `RecentlyDeletedWindow`, `ColorSwatches` moved out and used by Notes and the connection editor; *Recently deleted* for connections; rail entry, schema 3, `ScriptStore`, folders, scripts, colours, favourites, search, the editor with colouring, parse errors and PowerShell completion, import and export, `AllowScripts` | The unit and view tests in §12 pass; Notes behaves as before; 5,000 scripts load and search within the local-db-design.md §7 targets |
-| 2 | **Running:** `ScriptRunner`, the run window, *Run script…* in both menus, *Run on…*, the four contexts, confirmation, cancel, cleanup, run history, audit, the run policies | Lab: a script runs as SYSTEM, as the signed-in user and as the admin over WinRM and over the agent, and leaves no task or folder behind |
+| 1 | **Shared pieces and the view:** `UndoBar`, `RecentlyDeletedWindow`, `ColorSwatches` moved out and used by Notes and the connection editor; *Recently deleted* for connections; rail entry, schema 3, `ScriptStore`, folders, scripts, colours, favourites, search, the editor with colouring, parse errors and PowerShell completion, drafts and versions with *Ready to deploy*, the comparison window, import and export of files and packages, `AllowScripts`, `AllowScriptImport`, `AllowScriptExport` | The unit and view tests in §12 pass; Notes behaves as before; 5,000 scripts load and search within the local-db-design.md §7 targets; comparing two 1 MB versions takes under a second |
+| 2 | **Running:** `ScriptRunner`, the run window, *Run script…* in both menus, *Run on…*, *Test draft on…*, the four contexts, confirmation, cancel, cleanup, run history, audit, the run policies | Lab: a script runs as SYSTEM, as the signed-in user and as the admin over WinRM and over the agent, and leaves no task or folder behind |
 | 3 | **Library:** the catalog scripts, the header, the standards test, `AllowScriptLibrary` | Every library script passes the standards test; the starter set runs in the lab on Windows 11 and Server 2025 |
 | 4 | Completion against a connection, script parameters as a form in the run window (from the `param()` block) | – |
 | Later | A native agent endpoint `/v1/script` (device-side policy `ScriptsEnabled`, `AgentLog` event for runs, no scheduled task), runs on several devices with rings, SQL against a database server, signing | Own design |
@@ -537,10 +683,23 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
   §8.2), the run script's parameters (no text is put into a command string; quotes, `$`, backticks and non-ASCII
   survive), output truncation at 1 MB, exit code mapping, the console-user choice, policies and their dependencies,
   and that `DiagLog` and the audit entries never contain a script's text, name or output.
+- **Unit – versions:** autosave changes only the draft; *Ready to deploy* writes the next number and refuses syntax
+  errors; the 11th version removes the oldest and numbers keep growing; *Discard draft* and *Restore* never change a
+  version; a run takes the latest deployed version and its settings, not the draft; run history keeps the version and
+  hash after the version is removed.
+- **Unit – diff (`TextDiff`):** identical texts, empty texts, only additions, only removals, moved blocks, changed
+  words inside a line, CRLF against LF, a trailing newline, non-ASCII, and two 1 MB texts within the time limit.
+- **Unit – import and export:** files with and without headers, BOMs and encodings, folders with subfolders, name
+  conflicts (keep both, replace as a new draft, skip), a package round trip with versions, notes, colours and
+  settings, with and without a password, a wrong password; refused packages – `..` and absolute paths, more than
+  the limits, a ZIP whose header understates its size – leave nothing written.
 - **View (STA):** the view builds and restores its widths; the shared undo bar, *Recently deleted* and swatches work
   in Notes, Scripts and the connection tree; the run window lists only PowerShell scripts, filters by favourite,
   colour and folder, preselects only the console user, and shows the confirmation for R2 with the typed name; *Run
-  script…* is hidden without PowerShell or under the policies.
+  script…* is hidden without PowerShell or under the policies; the run window leaves out scripts that were never
+  deployed; the version bar shows the three states of §4.10; the comparison window opens oldest against latest,
+  switches side by side and inline, folds unchanged lines and jumps between changes; the import preview shows
+  conflicts and applies one choice to all.
 - **Library:** every library script parses under PowerShell, has a valid header, is ASCII-only with a BOM, and meets
   §8.3 (checked with the AST: `SupportsShouldProcess` for R1/R2, no `Get-WmiObject`, no `Win32_Product`, no 7-only
   syntax).
@@ -549,7 +708,8 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
   prints that user and reads their HKCU; *Both* gives two results; *As me* prints the connection's account; a User run
   with nobody signed in reports it; a run that sleeps past its timeout is stopped; *Cancel* removes the task and the
   folder; after a dropped connection, the next run cleans up; a GPO-set `AllSigned` policy fails with the message from
-  §6.2; an account without admin rights gets the message from §6.2 for System and still runs *As me*.
+  §6.2; an account without admin rights gets the message from §6.2 for System and still runs *As me*; with a changed
+  draft, a run prints the deployed version's output, and *Test draft on…* prints the draft's.
 - **Lab (connections):** delete a connection with saved credentials, restore it from *Recently deleted*, and connect.
 
 ## 13. Decided
@@ -561,6 +721,8 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 | *User* runs on multi-session servers | The **console user** only; the others can be ticked (§6.1). |
 | Signing scripts | Not in scope: `-ExecutionPolicy Bypass`, no signing, a GPO-set policy is respected (§2, §6.2). |
 | Shared pieces | Moved into shared views, and connections get *Recently deleted* and undo too (§4.9). |
+| Import and export (v2 review) | Many scripts at once, as files or as a `.rhscripts` package with versions (§4.7). |
+| Versioning (v2 review) | Autosave writes a draft; *Ready to deploy* makes a version; 10 versions kept; any two compared like a Git diff, oldest against latest by default (§4.10). |
 
 ## 14. Changes to other documents
 
@@ -575,4 +737,8 @@ ADMX/ADML and *Settings → Policies*, under *RemoteHub Console → Features →
 - **New copy for review:** "Search scripts (Ctrl+F)", "Run script…", "Run on…", "Runs as: System / User / Both / As
   me", "No user is signed in on the device", "Running as System or User needs an administrator account on the device",
   "The device's group policy only allows signed scripts", "Connection lost – the script may still be running on the
-  device", "Output cut off after 1 MB", "PowerShell 7 isn't installed on the device".
+  device", "Output cut off after 1 MB", "PowerShell 7 isn't installed on the device", "Ready to deploy", "Draft saved ·
+  changes since version N", "Not deployed yet", "Discard draft", "Compare", "N unchanged lines", "Test draft on…",
+  "This is a draft, not a deployed version", "The draft has changes that aren't deployed – version N runs", "Keep
+  both", "Replace", "Skip", "Protect with a password".
+- **Theme:** `DiffAddedBrush`, `DiffRemovedBrush` and their strong variants, dark and light (§4.10).
