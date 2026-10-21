@@ -420,7 +420,8 @@ namespace rhcp
             n = WriteNotOffered(message, out, sizeof(out));
         }
         else n = WriteResult(result, out, sizeof(out));
-        ClearTicket(false); // §8.2: the ticket is gone after ReportResult, whatever the outcome
+        // §8.2: the ticket is gone after ReportResult, whatever the outcome - and after a failure the tile with it
+        ClearTicket(TileGoesAfterResult(notOffered, result.Status));
         const bool written = n != 0 && WriteMessage(pipe, nullptr, out, n);
         if (notOffered) Trace("provider %ld: not offered sent to the agent: %s", _id, written ? "yes" : "write failed");
         else Trace("provider %ld: result 0x%08lX sent to the agent: %s", _id, static_cast<unsigned long>(result.Status), written ? "yes" : "write failed");

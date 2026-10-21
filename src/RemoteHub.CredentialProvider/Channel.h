@@ -88,6 +88,11 @@ namespace rhcp
         }
     }
 
+    // Whether LogonUI is told to enumerate again (CredentialsChanged) once a used ticket is cleared after its result was
+    // sent: after a failed sign-in, or a ticket LogonUI didn't take, so the tile goes instead of staying selected with
+    // "Signing in ..." (lab C-END-13). Not after a success: LogonUI releases the provider then.
+    inline bool TileGoesAfterResult(bool notOffered, NTSTATUS status) { return notOffered || status != 0; }
+
     // The module handle of this DLL (set in DllMain); used to find the agent's folder.
     extern HMODULE Module;
 }

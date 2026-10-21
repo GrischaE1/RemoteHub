@@ -151,6 +151,9 @@ internal sealed unsafe class WindowsScreen : IScreenSource
                     _dxgi = DxgiDuplication.TryCreate(monitor);
                     _dxgiDevice = monitor.Name;
                     _initialFromGdi = false;
+                    // a new duplication gets its own quiet second and reference copy (StoodStill)
+                    _dxgiQuiet.Restart();
+                    _probePrimed = false;
                     if (_dxgi is null) _dxgiFailed = true;
                 }
                 if (_dxgi is not null)
@@ -164,7 +167,10 @@ internal sealed unsafe class WindowsScreen : IScreenSource
                         _gdi ??= new GdiScreen();
                         return _gdi.Capture(monitor, target);
                     }
-                    if (r == CaptureResult.Changed) _dxgiQuiet.Restart();
+                    // A change the GPU reported makes GDI's reference copy stale: it is taken again after the next quiet
+                    // second, so only a change during a second the GPU stayed quiet counts as standing still (lab D-VID-03:
+                    // changes reported before the quiet second were counted, and 15-60 fps runs fell to GDI's 4 fps).
+                    if (r == CaptureResult.Changed) { _dxgiQuiet.Restart(); _probePrimed = false; }
                     else if (r == CaptureResult.Unchanged && StoodStill(monitor, target)) return CaptureResult.Changed;
                     if (r != CaptureResult.Failed) return r;
                     ResetDxgi(); // access lost (desktop switch, resolution change): new duplication next time
@@ -185,8 +191,9 @@ internal sealed unsafe class WindowsScreen : IScreenSource
     }
 
     // ---- GPU picture that stands still (seen on servers without a monitor): Desktop Duplication reports "unchanged"
-    // while the screen changes. After a second without a GPU frame GDI takes a reference copy; if a second later GDI
-    // sees a change the GPU didn't report, GDI is used for the rest of the connection (this helper).
+    // while the screen changes. After a second without a GPU frame GDI takes a reference copy; if after another second
+    // still without one GDI sees a change, GDI is used for the rest of the connection (this helper). Any GPU frame in
+    // between drops the reference copy.
     private readonly System.Diagnostics.Stopwatch _dxgiQuiet = System.Diagnostics.Stopwatch.StartNew();
     private FrameBuffer? _probe;
     private bool _probePrimed;
