@@ -1,0 +1,55 @@
+name: Code scanning
+
+# Analysis next to CodeQL, with the results under Security > Code scanning too. CodeQL itself runs as the
+# repository's default setup (Settings > Code security), not from a workflow: GitHub rejects CodeQL results from a
+# workflow while default setup is on.
+# - MSVC Code Analysis (/analyze) for the credential provider: SAL, COM and HRESULT checks CodeQL doesn't make.
+# - On pull requests, dependency review: a new or updated package with a known vulnerability fails the check.
+# Weekly as well, so a newer compiler's checks reach code that hasn't changed.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  msvc-code-analysis:
+    name: MSVC Code Analysis (credential provider)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write   # upload the results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Spectre-mitigated libraries
+        shell: pwsh
+        run: ./build/Install-SpectreLibraries.ps1
+
+      - name: Build with code analysis
+        shell: pwsh
+        run: ./build/build-credential-provider.ps1 -Configuration Release -SkipTests -CodeAnalysis
+
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: artifacts/credential-provider-analysis.sarif
+          category: msvc-code-analysis
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Moderate and above; Dependabot reports what is already on main.
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
