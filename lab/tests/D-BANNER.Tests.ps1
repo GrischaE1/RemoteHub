@@ -69,7 +69,9 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
                 # asked again: the connection stays until the question is answered (the test clicks Deny), else it would
                 # end at once and take the question with it before it is read
                 @{ do = 'wait'; anyOf = @('Denied', 'Connected', 'Ended', 'Failed'); timeout = 90 })
-            $b.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'
+            # read until the banner has its text (run 20261021-062735 caught it half drawn), at most 20 s
+            $readUntil = (Get-Date).AddSeconds(20)
+            do { $b.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'; if ("$($b.read.text)" -match '(being viewed and controlled|Controlled) by') { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $readUntil)
             $b.wide = @(Invoke-LabPerson -Name $VmName -Do windows)
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path (Out 'control') 'console.png')
             $b.consoleOcr = Get-LabOcr -Path (Join-Path (Out 'control') 'console.png')
@@ -171,7 +173,9 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $job = Connect-Allowed 'view' -ViewOnly $true -Before @(
                 @{ do = 'keys'; text = 'viewonly' }, @{ do = 'mouse'; action = 'Down'; button = 'Left'; x = 200; y = 200 }, @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 200; y = 200 }
                 @{ do = 'cad' }, @{ do = 'clipboardText'; text = 'from RemoteHub in view-only' }, @{ do = 'settings'; fitWidth = $size[0]; fitHeight = $size[1] }, @{ do = 'sleep'; seconds = 5 })
-            $v.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'
+            # read until the banner has its text (run 20261021-062735 caught it half drawn), at most 20 s
+            $readUntil = (Get-Date).AddSeconds(20)
+            do { $v.read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'; if ("$($v.read.text)" -match '(being viewed|Viewed) by') { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $readUntil)
             $v.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -in 'down', 'char', 'mdown', 'mup', 'clipboard')
             $v.clip = Invoke-LabPerson -Name $VmName -Do clip-get
             $v.res = Get-LabResolution -Name $VmName
@@ -201,7 +205,9 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $null = New-LabGuestUser -Name $VmName -User 'viewer' -Group 'RH Viewers'
             Set-LabAgentPolicy -Name $VmName -Clear -Rights @{ DesktopViewOnly = @('RH Viewers') }
             $job = Connect-Allowed 'viewer' -Account 'viewer'
-            $read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'
+            # read until the banner has its text (run 20261021-062735 caught it half drawn), at most 20 s
+            $readUntil = (Get-Date).AddSeconds(20)
+            do { $read = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub'; if ("$($read.text)" -match '(being viewed|Viewed) by') { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $readUntil)
             Go 'viewer'
             $r = Receive-LabDesktop $job
             Set-LabAgentPolicy -Name $VmName -Clear

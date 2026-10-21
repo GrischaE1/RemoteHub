@@ -128,6 +128,8 @@ End of C4.
         do {
             $view = if (Shown 'Notebooks and sections' 2) { 'Notes' } elseif (Shown 'SearchBox' 2) { 'Remote' } else { '' }
             if ($view) {
+                # the welcome tour comes modal over a fresh profile (Clear-RhData) and keeps real input from the window
+                $null = Close-LabFirstStart -Name $VmName
                 # moved into the screen, so real clicks reach all of it
                 $null = Ui 'Remote Control' -Value fit -Optional -TimeoutSec 10
                 return $view

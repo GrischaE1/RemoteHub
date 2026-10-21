@@ -22,6 +22,8 @@ BeforeDiscovery {
 
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
+    # BeforeDiscovery's variables don't reach the run: without this the setup below was skipped (run 20261021-062735)
+    $isClient = Test-LabConsoleVm -Name $VmName
     $R = [ordered]@{}
     $title = 'Lab notes page'
     $script = "Get-Service -Name 'Spooler' | Select-Object Status"

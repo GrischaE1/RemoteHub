@@ -96,8 +96,11 @@ BeforeAll {
             Invoke-LabGuest -Name $VmName -ArgumentList $guestDir, $Pattern, $TimeoutSec -ScriptBlock {
                 param($dir, $p, $t)
                 $deadline = (Get-Date).AddSeconds($t)
+                $log = Join-Path $dir 'server.log'
                 do {
-                    if (Select-String -Path (Join-Path $dir 'server.log') -Pattern $p -Quiet -ErrorAction SilentlyContinue) { return $true }
+                    # Test-Path first: Windows PowerShell's Select-String reports a missing file even with SilentlyContinue,
+                    # which ended the setup before the server had written its log (run 20261021-062735)
+                    if ((Test-Path $log) -and (Select-String -Path $log -Pattern $p -Quiet -ErrorAction SilentlyContinue)) { return $true }
                     Start-Sleep -Seconds 1
                 } while ((Get-Date) -lt $deadline)
                 $false
@@ -116,9 +119,12 @@ BeforeAll {
         $serverLog = Invoke-LabGuest -Name $VmName -ArgumentList $guestDir -ScriptBlock {
             param($dir)
             $deadline = (Get-Date).AddSeconds(30)
-            while ((Get-Date) -lt $deadline -and -not (Select-String -Path (Join-Path $dir 'server.log') -Pattern '(result|error) ' -Quiet -ErrorAction SilentlyContinue)) {
+            $log = Join-Path $dir 'server.log'
+            while ((Get-Date) -lt $deadline -and -not ((Test-Path $log) -and (Select-String -Path $log -Pattern '(result|error) ' -Quiet -ErrorAction SilentlyContinue))) {
                 Start-Sleep -Seconds 1
             }
+            # stopped before it goes: a running server keeps server.log open
+            Stop-ScheduledTask -TaskName 'RHLab-CpTestServer' -ErrorAction SilentlyContinue
             Unregister-ScheduledTask -TaskName 'RHLab-CpTestServer' -Confirm:$false -ErrorAction SilentlyContinue
             [pscustomobject]@{
                 Log          = @(Get-Content (Join-Path $dir 'server.log') -ErrorAction SilentlyContinue | ForEach-Object { "$_" })
@@ -171,7 +177,15 @@ AfterAll {
     try { Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'c-prov-agent-logs') } catch { }
     # the provider swapped, rebuilt agents installed: the next file starts from the checkpoint
     Set-LabVmDirty -Name $VmName
-    Get-LabFile -Name $VmName -Path "$guestDir\*.log" -Destination (Join-Path $EvidenceDir 'c-prov-logs')
+    # the test server too, if the setup ended before it was stopped (its log would be locked)
+    try {
+        Invoke-LabGuest -Name $VmName -ScriptBlock {
+            Stop-ScheduledTask -TaskName 'RHLab-CpTestServer' -ErrorAction SilentlyContinue
+            Unregister-ScheduledTask -TaskName 'RHLab-CpTestServer' -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    }
+    catch { }
+    try { Get-LabFile -Name $VmName -Path "$guestDir\*.log" -Destination (Join-Path $EvidenceDir 'c-prov-logs') } catch { }
 }
 
 Describe 'C-PROV <VmName>' -Tag Agent, 'C-PROV' {

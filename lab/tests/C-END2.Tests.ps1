@@ -370,9 +370,20 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             $s1 = Join-Path $EvidenceDir 'c-end2-byhand-1-after-ok.png'
             $null = Get-LabScreenshot -Name $VmName -Path $s1
             # OCR may read trailing dots ("options..", run 20261019-193627 W11): the word only has to start with it
-            $f.OptionsAt = @((Get-LabOcr -Path $s1).words | Where-Object { $_.text -match '^options' } |
+            $words1 = @((Get-LabOcr -Path $s1).words)
+            $f.OptionsAt = @($words1 | Where-Object { $_.text -match '^options' } |
                     ForEach-Object { "$([int]($_.x + $_.w / 2)),$([int]($_.y + $_.h / 2))" }) | Select-Object -First 1
-            if ($f.OptionsAt) {
+            # Since the provider drops its tile after a failure (C-END-13), Windows' own password box is there: its
+            # "Password" placeholder is clicked and typed into (run 20261021-062735 missed "Sign-in options" and typed
+            # into RemoteHub's tile, which has no box)
+            $f.PasswordAt = @($words1 | Where-Object { $_.text -ceq 'Password' } |
+                    ForEach-Object { "$([int]($_.x + $_.w / 2)),$([int]($_.y + $_.h / 2))" }) | Select-Object -First 1
+            if ($f.PasswordAt) {
+                $px, $py = [int[]]("$($f.PasswordAt)" -split ',')
+                Send-LabMouse -Name $VmName -X $px -Y $py
+                Start-Sleep -Seconds 1
+            }
+            elseif ($f.OptionsAt) {
                 $ox, $oy = [int[]]("$($f.OptionsAt)" -split ',')
                 Send-LabMouse -Name $VmName -X $ox -Y $oy
                 Start-Sleep -Seconds 2

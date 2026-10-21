@@ -277,6 +277,14 @@ function RemoteHubRun-Poll {
             }
         }
     }
+    # A short run can finish between the look for result.json above and the task or process check (Get-ScheduledTask
+    # is slow): gone without a result is only so if there is still none now.
+    if ($state -eq 'NoResult' -or $state -eq 'Vanished') {
+        if (Test-Path -LiteralPath $result) {
+            try { $exit = [int]((Get-Content -LiteralPath $result -Raw | ConvertFrom-Json).ExitCode) } catch { $exit = 1 }
+            $state = 'Ended'
+        }
+    }
     [pscustomobject]@{ Chunk = $chunk; Offset = $next; Done = $done; ExitCode = $exit; State = $state }
 }
 

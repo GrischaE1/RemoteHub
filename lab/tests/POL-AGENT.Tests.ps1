@@ -109,13 +109,17 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             # the heading of the privacy screen with message, on the device's own screen (it is never in the picture)
             Set-LabAutoLogon -Name $VmName -Account User
             $null = Wait-LabAgent -Name $VmName -Pin $pin
+            # the user's desktop up before the consent question is answered (run 20261021-062735: "'Allow' not found",
+            # the connection Denied after 30 s, so no privacy screen)
+            Wait-LabDesktop -Name $VmName -Account User -TimeoutSec 180
             function Heading([string]$Name) {
                 $o = Out $Name
                 $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                     @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 },
                     @{ do = 'privacy'; style = 'Message' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'markFile'; path = (Join-Path $o 'on.txt') },
                     @{ do = 'waitFile'; path = (Join-Path $o 'shot.txt'); timeout = 120 }, @{ do = 'close' })
-                $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+                # the click is tried again when it missed (as D-CADHIDE's Allow)
+                for ($i = 0; $i -lt 3; $i++) { if ((Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60).clicked) { break }; Start-Sleep -Seconds 3 }
                 Wait-LabHostFile (Join-Path $o 'on.txt') -TimeoutSec 180
                 $png = Join-Path $o 'console.png'
                 $null = Get-LabScreenshot -Name $VmName -Path $png

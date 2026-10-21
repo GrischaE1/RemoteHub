@@ -232,8 +232,8 @@ These are the places where the product code behaves differently from what the sh
 | D-VID-09 | When the Media Foundation H.264 encoder is missing (N edition without the Media Feature Pack), the client only gets the generic "kept failing" text and no event 3100 is written. The real cause appears only in the agent log. |
 | D-RES-07 | A connection that is taken over gets no final Status, and its 1101 audit event is skipped, so the audit trail doesn't show the hand-over. |
 | S-AUTH-08 / S-AUTH-10 | Seen in lab run 20261014-214238 (W11). An expired account (Windows error 1793) and an account that must change its password (1907) both get HTTP 500, not 401. Same unmapped-error path as above. **Fixed** on branch fixes-20261017 (`6dd3686`), passing in lab run 20261017-160133 (0.18.16, both platforms). |
-| A-INST-25 | Another program listening on 58732 without exclusive use: the agent binds the same port as well, without a warning. Connections then go to one of the two at random. Still so in lab run 20261019-193627 (0.20.3, both platforms). **Fixed** on branch credential-provider-by-default: before binding, the agent checks whether anything listens on the port (any address, IPv4 or IPv6) and fails to start ("could not start: … address already in use"), so the install rolls back; unit test `The_agent_does_not_start_on_a_port_another_program_listens_on`. |
-| A-ROLLBACK-01 | With 58732 held exclusively by another program, the service reports "started", then fails to bind. The MSI and RemoteHub report a successful install, but the agent isn't running. |
+| A-INST-25 | Another program listening on 58732 without exclusive use: the agent binds the same port as well, without a warning. Connections then go to one of the two at random. Still so in lab run 20261019-193627 (0.20.3, both platforms). **Fixed** on branch credential-provider-by-default: before binding, the agent checks whether anything listens on the port (any address, IPv4 or IPv6) and fails to start ("could not start: … address already in use"), so the install rolls back; unit test `The_agent_does_not_start_on_a_port_another_program_listens_on`. That check sat in the bind, after the service had reported running, so the install still succeeded (lab run 20261021-062735, 0.21.2): it now runs before the service starts (`Program.cs`), the start fails and the install rolls back. |
+| A-ROLLBACK-01 | With 58732 held exclusively by another program, the service reports "started", then fails to bind. The MSI and RemoteHub report a successful install, but the agent isn't running. **Fixed** with A-INST-25 above: the port is checked before the service starts. |
 | P-SES-06 | Seen in lab run 20261014-214238. A network drop ends the PowerShell session in time (54 s), but event 1001 gives the reason "PowerShell ended", not "connection lost: …". The keep-alive timeout ends the shell first, and `Tunnel.RunAsync` then reports the shell side (`AgentHost.cs:328`). **Fixed** on branch fixes-20261017 (`f7e9981`), passing in lab run 20261017-160133 (0.18.16). |
 | UI-* (accessibility) | Icon-only buttons in the PowerShell tab (`PsConsoleView.HeaderButton`, e.g. "Stop the running command") have only a tooltip and no `AutomationProperties.Name`, unlike `RemoteToolChrome.Tool`. The terminal's input line and output have no name either. |
 | C-REC-06 | Code review (0.18.11). On a Windows N edition without the Media Feature Pack `mfplat.dll` is missing: `MFStartup` throws `DllNotFoundException`, which `Mp4Writer.Create` doesn't catch (only `InvalidOperationException`), so the recording stops with "Unable to load DLL 'mfplat.dll' …" instead of the H.264 / Media Feature Pack message (`SessionRecorder.cs:349, 366, 387, 562`). |
@@ -8174,7 +8174,7 @@ P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 P3 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
-- *Settings → Help & about → Welcome tour…* opens the tour; *What's new…* opens "What's new in RemoteHub <version>"
+- *Settings → Help & about → Welcome tour…* opens the tour; *What's new…* opens "What's new in RemoteHub <newest entry>" with "Installed: <version>" under it – a patch without an entry of its own shows the last one there was
 
 #### C-FIRST-05 · Pages left out by policy
 P3 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
@@ -8185,10 +8185,12 @@ P3 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 #### C-FIRST-06 · What's new after an upgrade
 P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
-**Preconditions:** the previous release installed and started once with an .rdp file (a connection; settings without a remembered version).
+**Preconditions:** the previous release installed and started once with an .rdp file (a connection).
 
 **Expected:**
-- after installing this version, the first start shows What's new, not the tour: "What's new in RemoteHub <version>", this version's highlights (e.g. Favourites), *All release notes*
+- after installing this version, the first start never shows the tour
+- with What's new entries newer than the previous release: What's new, "What's new in RemoteHub <newest entry>" with those highlights and *All release notes*
+- with none newer (previous 0.21.0, newest entry 0.21.0): nothing opens
 
 #### C-FIRST-07 · What's new once
 P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`

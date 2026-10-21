@@ -1021,9 +1021,9 @@ RemoteHub alone in the client VM (no device), driven by UI Automation in `Admin`
 | C-FIRST-01 | Welcome tour on a new install | the first start of a new install opens "Welcome to RemoteHub" (its first page has no *Back*) | U | 2 | ✅ |
 | C-FIRST-02 | Tour pages | Next goes through 5 pages (welcome, *Add your connections*, *The RemoteHub Agent*, *Notes*, *Keep it safe*); the last button says *Get started* and closes it | U | 2 | ✅ |
 | C-FIRST-03 | Shown once | the next start opens neither the tour nor What's new | U | 2 | ✅ |
-| C-FIRST-04 | From Help & about | *Settings → Help & about → Welcome tour…* opens the tour, *What's new…* opens "What's new in RemoteHub <version>" | U | 3 | ✅ |
+| C-FIRST-04 | From Help & about | *Settings → Help & about → Welcome tour…* opens the tour, *What's new…* opens "What's new in RemoteHub <newest entry>" with "Installed: <version>" under it (a patch without an entry of its own shows the last one there was) | U | 3 | ✅ |
 | C-FIRST-05 | Pages left out by policy | `AllowNotes` = 0 and `AllowAgent` = 0 → the tour has 3 pages, without Notes and the agent | U PS | 3 | ✅ |
-| C-FIRST-06 | What's new after an upgrade | the previous release with a connection, then this one: the first start shows What's new (not the tour) with "What's new in RemoteHub <version>", this version's highlights and *All release notes* | U PS | 2 | ✅ |
+| C-FIRST-06 | What's new after an upgrade | the previous release with a connection, then this one: the first start shows What's new (not the tour) for the entries newer than that release – "What's new in RemoteHub <newest entry>" and *All release notes* – or, with none newer (previous 0.21.0, newest entry 0.21.0), nothing opens | U PS | 2 | ✅ |
 | C-FIRST-07 | What's new once | the next start shows nothing | U | 2 | ✅ |
 | C-FAV-01 | Pin a connection | a connection in folder *Lab* → right-click → *Add to favourites*: a *Favourites* group at the top with a link; the connection stays in *Lab* (its name shows twice) | U | 2 | ✅ |
 | C-FAV-02 | The link's menu and Edit | the link's menu offers *Remove from favourites*, no *Delete* / *Duplicate*; F2 on the link opens *Edit connection* for the connection itself | U | 2 | ✅ |

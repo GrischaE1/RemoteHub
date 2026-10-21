@@ -38,6 +38,11 @@ try
         log.Write($"Port {startPolicy.ListenPort} set by policy ListenPort (agent.json: {config.ListenPort})");
     if (startPolicy.LoadError is null) config.ListenPort = startPolicy.ListenPort; // not saved: without the policy agent.json's applies again
     if (Enrollment.SetFirewallPort(config.ListenPort) is { } firewall) log.Write(firewall);
+    // A port another program listens on, before the service reports running: Kestrel's bind (AgentHost) would refuse it
+    // too, but only after Windows was told the service runs, so the MSI's start succeeded and the install with it
+    // (A-INST-25). Ending here fails the service start, and the install rolls back.
+    if (AgentHost.PortInUse(config.ListenPort))
+        throw new InvalidOperationException($"port {config.ListenPort} is in use by another program – the agent doesn't move to another port.");
     var certificate = FindCertificate(config.CertificateThumbprint);
 
     // The pipe to the credential provider, before the agent listens on the network (design §7.1). Always created: the

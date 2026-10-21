@@ -202,6 +202,16 @@ namespace
         CHECK(PackInteractiveLogon(domain, 7, user, 5, password, 6, nullptr, &bytes) == E_POINTER);
     }
 
+    // C-END-13: after a failed sign-in (or a ticket LogonUI didn't take) the tile goes - LogonUI is told to enumerate
+    // again - instead of staying selected with "Signing in ..."; after a success LogonUI releases the provider anyway.
+    void TileGoesAfterAFailedResult()
+    {
+        g_test = "TileGoesAfterAFailedResult";
+        CHECK(!TileGoesAfterResult(false, 0));
+        CHECK(TileGoesAfterResult(false, static_cast<NTSTATUS>(0xC000006DL))); // STATUS_LOGON_FAILURE
+        CHECK(TileGoesAfterResult(false, static_cast<NTSTATUS>(0xC0000234L))); // STATUS_ACCOUNT_LOCKED_OUT
+        CHECK(TileGoesAfterResult(true, 0));
+    }
     // C-END-10: LogonUI reports the result and releases the provider (the stop) right after it; the pipe thread must
     // still see the result first, or the service never learns that the account was signed in.
     void ResultWinsOverStop()
@@ -400,6 +410,7 @@ int main(int argc, char** argv)
     PacksInteractiveLogon();
     FindsNegotiate();
     ResultWinsOverStop();
+    TileGoesAfterAFailedResult();
     TraceWritesQueuedLines();
     TicketDroppedOnlyWhenUnlisted();
     NotOfferedRoundTrip();

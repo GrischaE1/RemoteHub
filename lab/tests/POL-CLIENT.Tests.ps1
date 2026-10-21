@@ -114,12 +114,14 @@ BeforeAll {
             if ($m.found -and -not $err) {
                 # the answer's dialog under either title: the menu click doesn't always name the entry it took (lab run
                 # 20261019-190129 looked for "PowerShell remoting", missed the agent's "works" and left that dialog open)
+                # UIA names the box by its text ("The RemoteHub Agent works (...)", run 20261021-062735), not only by its
+                # title: the patterns UI-AGENT uses, and the box closed under the name it was found by
                 $answer = ''; $title = ''
                 $wait = (Get-Date).AddSeconds(180)
                 do {
-                    foreach ($t in 'RemoteHub Agent', 'PowerShell remoting') {
+                    foreach ($t in 'The RemoteHub Agent*', 'RemoteHub Agent', 'PowerShell remoting*', '*answers over HTTPS*') {
                         $box = Ui '*' -Title $t -Value list -Optional -TimeoutSec 2
-                        if ($box.found) { $title = $t; $answer = @($box.items) -join "`n"; break }
+                        if ($box.found) { $title = [WildcardPattern]::Escape("$($box.window)"); $answer = @($box.items) -join "`n"; break }
                     }
                 } while (-not $title -and (Get-Date) -lt $wait)
                 if ($answer -match 'works \(') { $null = Ui 'OK' -Title $title -Optional -TimeoutSec 10 }
@@ -560,6 +562,8 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
                 $f.exportOff = (Ui 'Export backup*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5).found
                 $f.importOff = (Ui 'Import backup*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5).found
                 $null = Ui 'Cancel' -Title 'Settings'
+                # Settings stayed open over the tree in run 20261021-062735 and took POL-15's clicks: closed for sure
+                if ((Ui '*' -Title 'Settings' -Value exists -Optional -TimeoutSec 2).found) { $null = Ui 'TitleBarCloseButton' -Title 'Settings' -Optional -TimeoutSec 5 }
             }
             Policy @{ AllowRdp = $null; AllowNetworkShares = $null; AllowRdpFileImport = $null; AllowBackupExport = $null }
             CloseTabs
@@ -567,7 +571,9 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
             Step $f quick {
                 Policy @{ AllowQuickConnect = 0 }
                 $null = Ui 'SearchBox' -Value 'keys:pol14-quick.invalid{ENTER}'
-                $f.quick = Message 'Quick connect' -TimeoutSec 30
+                # the box may be named by its text ("Quick connect is turned off ..."), not its title
+                $f.quick = Message 'Quick connect*' -TimeoutSec 30
+                $null = Ui 'OK' -Title 'Quick connect*' -Optional -TimeoutSec 3
                 $f.quickTab = (Ui 'Reconnect' -Value exists -Optional -TimeoutSec 3).found
                 $null = Ui 'SearchBox' -Value 'keys:{ESC}' -Optional
             }
@@ -639,6 +645,8 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
         BeforeAll {
             $s = [ordered]@{}
             Ensure-Setup
+            # a fresh start: nothing POL-14 left open (a dialog, Settings) covers the tree
+            Restart-Client
             CloseTabs
             # PolOffline's own "Local drives" On, and its .rdp file without the policy
             Step $s drivesOwn {

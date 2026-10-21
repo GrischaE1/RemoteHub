@@ -114,7 +114,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             # the stimulus first: a guest too starved to change its window 10 times a second says nothing about the agent
             $v.change30.perSecond | Should -BeGreaterThan 10 -Because "the window in the console session must change faster than the frames asked for (it changed $($v.change30.perSecond) times a second)"
             $s = Fps $v.fps30
-            ($s | Measure-Object -Maximum).Maximum | Should -BeGreaterThan 5 -Because "the picture changed $($v.change30.perSecond) times a second at 30 fps asked (stats fps: $($s -join ', '); $($v.fps30.frames.count) frames)"
+            ($s | Measure-Object -Maximum).Maximum | Should -BeGreaterThan 5 -Because "the picture changed $($v.change30.perSecond) times a second at 30 fps asked (stats fps: $($s -join ', '); $($v.fps30.frames.count) frames; capture: $((LastStats $v.fps30).capture))"
         }
 
         It 'D-VID-04 a key frame request is answered with a key frame' -Tag 'D-VID-04' {

@@ -43,14 +43,24 @@ BeforeAll {
     $names = 'DisableLockWorkstation', 'DisableChangePassword', 'NoLogoff', 'NoClose', 'HideFastUserSwitching'
     $actions = 'Lock', 'Switch user', 'Sign out', 'Change a password', 'Task Manager'
     # Ctrl+Alt+Del at the console, its screen read, Esc back
+    # The screen is read once it is there (it has Cancel) - Ctrl+Alt+Del is sent again when it didn't come within 10 s
+    # (run 20261021-062735 read the privacy screen 4 s after it). Actions match as whole words with their case: "Lock"
+    # is not the one in "blocked".
     function Read-CadScreen([string]$Path) {
-        Send-LabCtrlAltDel -Name $VmName
-        Start-Sleep -Seconds 4
-        $null = Get-LabScreenshot -Name $VmName -Path $Path
-        $text = (Get-LabOcr -Path $Path).text
+        $text = ''
+        foreach ($try in 1..2) {
+            Send-LabCtrlAltDel -Name $VmName
+            $until = (Get-Date).AddSeconds(10)
+            do {
+                Start-Sleep -Seconds 2
+                $null = Get-LabScreenshot -Name $VmName -Path $Path
+                $text = (Get-LabOcr -Path $Path).text
+            } while ($text -cnotmatch '\bCancel\b' -and (Get-Date) -lt $until)
+            if ($text -cmatch '\bCancel\b') { break }
+        }
         $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
         Start-Sleep -Seconds 2
-        [pscustomobject]@{ text = $text; shown = @($actions | Where-Object { $text -match [regex]::Escape($_) }) }
+        [pscustomobject]@{ text = $text; shown = @($actions | Where-Object { $text -cmatch "\b$([regex]::Escape($_))\b" }) }
     }
 
     $vm = Get-LabVm $VmName
