@@ -1,14 +1,17 @@
 # Builds the credential provider (src\RemoteHub.CredentialProvider) and its tests with MSBuild from the Visual Studio
 # C++ build tools (vswhere finds them; dotnet's MSBuild can't build C++). Runs the unit tests, and the fuzzer for a while.
-#   powershell -ExecutionPolicy Bypass -File build\build-credential-provider.ps1 [-Configuration Release|Lab|Debug] [-FuzzSeconds 60]
+#   powershell -ExecutionPolicy Bypass -File build\build-credential-provider.ps1 [-Configuration Release|Lab|Debug] [-FuzzSeconds 60] [-CodeAnalysis]
 #
 # -Configuration  Release (default) is the DLL that goes into the agent MSI; Lab is the lab-only build (see the vcxproj).
 # -FuzzSeconds    How long libFuzzer runs on the pipe message parser (0: not at all).
+# -CodeAnalysis   Rebuilds the provider with MSVC Code Analysis (/analyze) and writes its findings to
+#                 artifacts\credential-provider-analysis.sarif for code scanning (code-scanning.yml).
 # Prints the path of the DLL last.
 param(
     [ValidateSet('Release', 'Lab', 'Debug')][string]$Configuration = 'Release',
     [int]$FuzzSeconds = 0,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$CodeAnalysis
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -18,13 +21,23 @@ if (-not (Test-Path $vswhere)) { throw 'Visual Studio or the Build Tools with th
 $msbuild = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
 if (-not $msbuild) { throw 'No MSBuild with the C++ tools (component Microsoft.VisualStudio.Component.VC.Tools.x86.x64).' }
 
-function Build([string]$Project, [string]$Config) {
-    & $msbuild $Project -nologo -v:minimal -m "-p:Configuration=$Config" -p:Platform=x64
+function Build([string]$Project, [string]$Config, [string[]]$More = @()) {
+    & $msbuild $Project -nologo -v:minimal -m "-p:Configuration=$Config" -p:Platform=x64 @More
     if ($LASTEXITCODE) { throw "Building $(Split-Path $Project -Leaf) ($Config) failed." }
 }
 
 $provider = Join-Path $root 'src\RemoteHub.CredentialProvider\RemoteHub.CredentialProvider.vcxproj'
-Build $provider $Configuration
+if ($CodeAnalysis) {
+    # A rebuild, so every file is analysed again. _CL_ is appended to the compiler's options and makes it write SARIF
+    # (one file per source, next to the objects) instead of XML.
+    $obj = Join-Path $root "src\RemoteHub.CredentialProvider\obj\$Configuration"
+    Remove-Item (Join-Path $obj '*.nativecodeanalysis.sarif') -ErrorAction SilentlyContinue
+    $env:_CL_ = '/analyze:log:format:sarif'
+    try { Build $provider $Configuration '-t:Rebuild', '-p:RunCodeAnalysis=true' }
+    finally { Remove-Item Env:_CL_ }
+    & "$PSScriptRoot\Merge-CodeAnalysisSarif.ps1" -Path $obj -Root $root -OutFile (Join-Path $root 'artifacts\credential-provider-analysis.sarif')
+}
+else { Build $provider $Configuration }
 # The Lab DLL talks to the phase 1 test server instead of the agent service: build it alongside.
 if ($Configuration -eq 'Lab') { Build (Join-Path $root 'tests\RemoteHub.CredentialProvider.TestServer\RemoteHub.CredentialProvider.TestServer.vcxproj') 'Release' }
 
