@@ -88,12 +88,13 @@ public class AgentTests
         return X509CertificateLoader.LoadPkcs12(cert.Export(X509ContentType.Pfx), null); // SChannel needs a persisted key
     }
 
-    private static async Task<Agent> StartAgent(Func<A.AgentConfig, A.AgentPolicy>? policy = null)
+    private static async Task<Agent> StartAgent(Func<A.AgentConfig, A.AgentPolicy>? policy = null, Action<A.AgentConfig>? configure = null)
     {
         var cert = SelfSigned();
         var auth = new FakeAuth();
         var launcher = new CurrentUserLauncher();
         var config = new A.AgentConfig { DeviceId = "dev-1", ListenPort = 0, MaxSessions = 3 };
+        configure?.Invoke(config);
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, auth, launcher, A.AgentLog.Null, IPAddress.Loopback,
             Policy: policy is null ? null : () => policy(config)));
         await app.StartAsync();
@@ -323,36 +324,43 @@ public class AgentTests
     }
 
     [Fact]
-    public void An_enrollment_carries_a_fresh_device_identity_that_matches_its_fingerprint()
+    public async Task The_agent_proves_its_enrollment_for_its_own_certificate()
     {
-        var (e, fingerprint) = AgentEnrollment.Create("WKS-ACCOUNTING-07", 58800, ["S-1-5-32-544", " "], "10.0.0.0/8, 192.168.1.20");
-        var parsed = AgentEnrollment.Parse(e.Serialize());
-        Assert.True(Guid.TryParse(parsed.DeviceId, out _));
-        Assert.Equal(58800, parsed.ListenPort);
-        Assert.Equal(["S-1-5-32-544"], parsed.AllowedGroups);
-        Assert.Equal("10.0.0.0/8, 192.168.1.20", parsed.FirewallRemoteAddresses);
+        var keys = new AgentEnrollmentKeys();
+        var key = keys.EnsureCurrent(DateTime.UtcNow);
+        await using var a = await StartAgent(configure: c => { c.EnrollmentKeyId = key.Id.ToString(); c.EnrollmentSecret = key.Secret; c.DeviceId = Guid.NewGuid().ToString(); });
+        var r = await AgentInstaller.ClaimAsync("127.0.0.1", a.Port, null, keys, CancellationToken.None);
+        Assert.Equal(AgentInstaller.ClaimOutcome.Claimed, r.Outcome);
+        Assert.Equal(a.Fingerprint, r.Claim!.Fingerprint);
+        Assert.Equal(Environment.MachineName, r.Claim.ComputerName);
 
-        using var cert = parsed.PublicCertificate();
-        Assert.Equal(fingerprint, AgentProtocol.Fingerprint(cert.RawData));
-        Assert.Contains(parsed.DeviceId, cert.Subject);
-        Assert.InRange((cert.NotAfter - DateTime.Now).TotalDays, 700, 740);   // 2 years
-        using var full = X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(parsed.Pfx), parsed.PfxPassword, X509KeyStorageFlags.EphemeralKeySet);
-        Assert.True(full.HasPrivateKey);
-        Assert.Throws<CryptographicException>(() => X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(parsed.Pfx), "wrong", X509KeyStorageFlags.EphemeralKeySet));
-
-        var (other, otherFingerprint) = AgentEnrollment.Create("WKS-ACCOUNTING-07", 58800);
-        Assert.NotEqual(e.DeviceId, other.DeviceId);                         // every enrollment is a new identity
-        Assert.NotEqual(fingerprint, otherFingerprint);
+        // Another RemoteHub (other secrets) can't claim it; a revoked secret isn't accepted any more.
+        Assert.Equal(AgentInstaller.ClaimOutcome.UnknownSecret, (await AgentInstaller.ClaimAsync("127.0.0.1", a.Port, null, new AgentEnrollmentKeys(), CancellationToken.None)).Outcome);
+        keys.Replace(DateTime.UtcNow, revokeEarlier: true);
+        Assert.Equal(AgentInstaller.ClaimOutcome.RevokedSecret, (await AgentInstaller.ClaimAsync("127.0.0.1", a.Port, null, keys, CancellationToken.None)).Outcome);
     }
 
     [Fact]
-    public void Broken_enrollments_are_rejected()
+    public async Task An_agent_enrolled_without_a_secret_has_nothing_to_claim()
     {
-        var (e, _) = AgentEnrollment.Create("dev", 58732);
-        Assert.Throws<InvalidDataException>(() => AgentEnrollment.Parse("{}"u8.ToArray()));
-        e.Format = 99;
-        Assert.Throws<InvalidDataException>(() => AgentEnrollment.Parse(e.Serialize()));
-        Assert.Throws<InvalidDataException>(() => AgentEnrollment.Create("dev", 58732, firewallRemoteAddresses: "10.0.0.0/33"));
+        await using var a = await StartAgent();
+        var keys = new AgentEnrollmentKeys();
+        keys.EnsureCurrent(DateTime.UtcNow);
+        Assert.Equal(AgentInstaller.ClaimOutcome.NoEnrollment, (await AgentInstaller.ClaimAsync("127.0.0.1", a.Port, null, keys, CancellationToken.None)).Outcome);
+    }
+
+    [Fact]
+    public async Task The_claim_refuses_a_malformed_nonce()
+    {
+        var key = new AgentEnrollmentKeys().EnsureCurrent(DateTime.UtcNow);
+        await using var a = await StartAgent(configure: c => { c.EnrollmentKeyId = key.Id.ToString(); c.EnrollmentSecret = key.Secret; });
+        using var handler = new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true };
+        using var http = new HttpClient(handler);
+        foreach (var nonce in new[] { "", "short", new string('A', 65), "a%2Fb0123456789012345" })
+        {
+            using var response = await http.GetAsync($"https://127.0.0.1:{a.Port}{EnrollmentProof.Path}?nonce={nonce}");
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
     }
 
     [Theory]
@@ -415,11 +423,12 @@ public class AgentTests
         File.WriteAllBytes(package, [1, 2, 3]);
         try
         {
-            var (e, _) = AgentEnrollment.Create("WKS 07", 58732);
+            var key = new AgentEnrollmentKeys().EnsureCurrent(DateTime.UtcNow);
+            var e = AgentEnrollment.Create(key.Id.ToString(), key.Secret, "WKS 07", 58732);
             var (folder, msi, enrollment) = AgentInstaller.Prepare(package, e);
             Assert.Equal(AgentInstaller.PackageName, Path.GetFileName(msi));
             Assert.Equal("WKS-07.rhagent", Path.GetFileName(enrollment));
-            Assert.Equal(e.DeviceId, AgentEnrollment.Parse(File.ReadAllBytes(enrollment!)).DeviceId);
+            Assert.Equal(key.Secret, AgentEnrollment.Parse(File.ReadAllBytes(enrollment!)).Secret);
             Assert.StartsWith(AgentInstaller.TempRoot, folder);
             Directory.Delete(folder, true);
         }

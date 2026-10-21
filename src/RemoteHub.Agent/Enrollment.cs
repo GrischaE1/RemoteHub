@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 
@@ -8,9 +9,10 @@ namespace RemoteHub.Agent;
 /// <summary>
 /// Device-side setup, run by the MSI as LocalSystem:
 /// <list type="bullet">
-/// <item><c>RemoteHubAgent.exe enroll &lt;file | folder | msi path&gt;</c> – imports a <c>.rhagent</c> file: certificate into
-/// LocalMachine\My (key not exportable), <c>agent.json</c>, firewall rule; then deletes the file. Without a file an
-/// already enrolled agent keeps its identity (plain update).</item>
+/// <item><c>RemoteHubAgent.exe enroll &lt;file | folder | msi path&gt;</c> – enrolls with a <c>.rhagent</c> file: a new device
+/// ID, the device's own key and certificate in LocalMachine\My (key not exportable), <c>agent.json</c> with the
+/// enrollment secret, firewall rule; then deletes the file. Without a file an already enrolled agent keeps its identity
+/// (plain update).</item>
 /// <item><c>RemoteHubAgent.exe cleanup</c> – on uninstall: firewall rule, certificate and configuration are removed (logs stay).</item>
 /// <item><c>RemoteHubAgent.exe auto-sign-in on|off</c> – the policy values that allow automatic sign-in (<see cref="AutoSignInSetup"/>).</item>
 /// </list>
@@ -107,26 +109,31 @@ public static class Enrollment
                 }
                 return 0;
             }
-            throw new FileNotFoundException($"No {AgentEnrollment.Extension} enrollment file found next to the installer. Create it in RemoteHub " +
-                                            "(right-click the connection → Install RemoteHub Agent) and put it in the same folder as the MSI.");
+            throw new FileNotFoundException($"No {AgentEnrollment.Extension} enrollment file found next to the installer. Save it in RemoteHub " +
+                                            "(Settings → Security & storage → Save enrollment file) and put it in the same folder as the MSI.");
         }
 
         var enrollment = AgentEnrollment.Parse(File.ReadAllBytes(file));
-        var thumbprint = ImportCertificate(enrollment);
+        // The device's own identity (SEC-ENR-03): a new device ID and a key made here, which never leaves the device.
+        var deviceId = Guid.NewGuid().ToString();
+        var label = enrollment.DeviceLabel.Length > 0 ? enrollment.DeviceLabel : Environment.MachineName;
+        var thumbprint = CreateIdentity(deviceId, label);
         var config = File.Exists(AgentConfig.DefaultPath) ? TryLoad(AgentConfig.DefaultPath) ?? new AgentConfig() : new AgentConfig();
-        config.DeviceId = enrollment.DeviceId;
-        config.DeviceLabel = enrollment.DeviceLabel;
+        config.DeviceId = deviceId;
+        config.DeviceLabel = label;
         config.ListenPort = enrollment.ListenPort;
         config.CertificateThumbprint = thumbprint;
         config.AllowedGroups = enrollment.AllowedGroups;
+        config.EnrollmentKeyId = enrollment.KeyId;
+        config.EnrollmentSecret = enrollment.Secret;
         ApplyVirtualDisplay(config, virtualDisplay, enrollment.VirtualDisplay, log);
         config.Validate();
         SecureFolder(AgentConfig.Folder);
         config.Save(AgentConfig.DefaultPath);
         SetFirewallRule(enrollment.ListenPort, enrollment.FirewallRemoteAddresses);
 
-        try { File.Delete(file); } catch (Exception ex) { log.Write($"Could not delete {file}: {ex.Message} – delete it by hand, it contains the device key"); }
-        log.Write($"Enrolled as device {enrollment.DeviceId} ({enrollment.DeviceLabel}), port {enrollment.ListenPort}, " +
+        try { File.Delete(file); } catch (Exception ex) { log.Write($"Could not delete {file}: {ex.Message} – delete it by hand, it contains the enrollment secret"); }
+        log.Write($"Enrolled as device {deviceId} ({label}) with its own key, port {enrollment.ListenPort}, " +
                   $"firewall scope {(enrollment.FirewallRemoteAddresses.Length == 0 ? "any" : enrollment.FirewallRemoteAddresses)}");
         return 0;
     }
@@ -164,17 +171,46 @@ public static class Enrollment
         try { return AgentConfig.Load(path); } catch { return null; }
     }
 
-    /// <summary>Imports into LocalMachine\My (private key not exportable) and removes earlier agent certificates.</summary>
-    private static string ImportCertificate(AgentEnrollment e)
+    /// <summary>
+    /// The device's key – RSA 3072 as a persisted CNG machine key that can't be exported – and its certificate
+    /// (<see cref="AgentEnrollment.CreateCertificate"/>) in LocalMachine\My. Earlier agent certificates and the keys the
+    /// agent made for them are removed. Returns the thumbprint.
+    /// </summary>
+    private static string CreateIdentity(string deviceId, string label)
     {
-        var cert = X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(e.Pfx), e.PfxPassword,
-            X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet);
+        var parameters = new CngKeyCreationParameters
+        {
+            ExportPolicy = CngExportPolicies.None,
+            KeyCreationOptions = CngKeyCreationOptions.MachineKey | CngKeyCreationOptions.OverwriteExistingKey,
+            KeyUsage = CngKeyUsages.AllUsages,
+            Provider = CngProvider.MicrosoftSoftwareKeyStorageProvider,
+        };
+        parameters.Parameters.Add(new CngProperty("Length", BitConverter.GetBytes(3072), CngPropertyOptions.None));
+        using var key = CngKey.Create(CngAlgorithm.Rsa, KeyName(deviceId), parameters);
+        using var rsa = new RSACng(key);
+        using var cert = AgentEnrollment.CreateCertificate(rsa, deviceId, label, DateTime.UtcNow);
         cert.FriendlyName = AgentEnrollment.CertificateFriendlyName;
         using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
         store.Open(OpenFlags.ReadWrite);
-        foreach (var old in Ours(store).Where(c => c.Thumbprint != cert.Thumbprint).ToList()) store.Remove(old);
+        foreach (var old in Ours(store).Where(c => c.Thumbprint != cert.Thumbprint).ToList()) Remove(store, old);
         store.Add(cert);
         return cert.Thumbprint;
+    }
+
+    /// <summary>The CNG name of the key the agent makes for a device ID.</summary>
+    internal static string KeyName(string deviceId) => "RemoteHub Agent " + deviceId;
+
+    /// <summary>Removes an agent certificate and – when the agent made it – its key.</summary>
+    private static void Remove(X509Store store, X509Certificate2 cert)
+    {
+        store.Remove(cert);
+        try
+        {
+            // Only the agent's own named keys; a format-1 certificate's key came from a PFX.
+            using var rsa = cert.GetRSAPrivateKey();
+            if (rsa is RSACng { Key: { KeyName: { } name } key } && name.StartsWith(KeyName(""), StringComparison.Ordinal)) key.Delete();
+        }
+        catch { /* no key, or already gone */ }
     }
 
     private static IEnumerable<X509Certificate2> Ours(X509Store store) =>
@@ -286,7 +322,7 @@ public static class Enrollment
         Netsh($"advfirewall firewall delete rule name=\"{FirewallRuleName}\"", allowFailure: true);        using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
         {
             store.Open(OpenFlags.ReadWrite);
-            foreach (var c in Ours(store).ToList()) store.Remove(c);
+            foreach (var c in Ours(store).ToList()) Remove(store, c);
         }
         try { File.Delete(AgentConfig.DefaultPath); } catch { /* not there */ }
         // The last good copy too: a later install without an enrollment file must not bring back this device's settings.

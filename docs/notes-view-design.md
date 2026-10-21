@@ -637,6 +637,9 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 - `.rhbackup` (`Backup.Export` in `Services/SettingsStore.cs`) gains the notebooks, sections, pages, images and links,
   encrypted with the backup password like everything else in the file. Older RemoteHub versions don't need to read the
   new format (not GA, §5.3); backups from older versions, without notes, still import.
+- Since version 4 every section (settings, notes, scripts) is sealed with associated data: the format, the version,
+  the section's name, the file's salt and the list of sections in the file. A section taken out of a file, moved to
+  another place, or a file relabelled as an older version no longer opens (`Backup.AssociatedData`).
 - Import: *Add as folder* adds the notes as a second notebook, named after the backup file. *Replace everything* also
   replaces the notes, after the existing confirmation. The audit entry `backup.imported` gets "… and N pages".
 - `*.rdpmbackup` (from RdpManager) has no notes and imports as today.

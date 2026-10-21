@@ -6,7 +6,7 @@ Owner: Grischa Ernst
 Changes since v1, agreed during review:
 - **Transport:** a PowerShell tunnel instead of separate REST endpoints, which gives feature parity with PowerShell remoting.
 - **Sign-in:** a Windows account checked on the device, instead of client certificates pinned per operator.
-- **Install:** a generic MSI plus an enrollment file for each device, instead of a separate MSI for each device.
+- **Install:** a generic MSI plus an enrollment file, instead of a separate MSI for each device. Since SEC-ENR-03 the file holds RemoteHub's enrollment secret instead of a device key; the device makes its own key (§5).
 
 ## 1. Purpose
 
@@ -46,9 +46,10 @@ RemoteHub (operator PC)                               Device
 
 ### 4.1 Device identity (server)
 
-- Each device has its own certificate, in `LocalMachine\My` with a non-exportable key.
+- Each device has its own certificate, in `LocalMachine\My` with a non-exportable key. The device makes the key itself when it is enrolled (§5.3); it never leaves the device.
 - RemoteHub stores the certificate's SHA-256 fingerprint for the device. The device list is part of the settings file, so a shared settings location gives every RemoteHub instance the same pins.
-- RemoteHub accepts the TLS connection **only if the fingerprint matches**. There is no CA, no name check and no trust on first use.
+- RemoteHub learns the fingerprint once, by the claim (§5.5): the agent proves with RemoteHub's enrollment secret that it was enrolled from RemoteHub's file, bound to the certificate it presents. Trust on first use without that proof doesn't exist.
+- After that, RemoteHub accepts the TLS connection **only if the fingerprint matches**. There is no CA and no name check, and a claim never replaces a pin by itself.
 - On a mismatch RemoteHub stops before sending any credentials and shows a warning that can't be clicked through.
 
 ### 4.2 Operator sign-in
@@ -82,41 +83,42 @@ RemoteHub (operator PC)                               Device
   - Windows service `RemoteHubAgent` running as LocalSystem, set to *Automatic (Delayed Start)*.
   - All three recovery actions set to "Restart the service".
   - Self-contained, so no .NET runtime is needed on the device.
-- **Enrollment file `<label>.rhagent`, one per device:** created by RemoteHub (`AgentEnrollment.cs`, JSON, format 1). Contents:
-  - the device certificate and private key, as a PFX with a random one-time password
-  - what goes into `agent.json`: device ID, label, port, allowed groups – plus the firewall scope (remote addresses) and the virtual-display choice
+- **Enrollment file `<label>.rhagent`:** created by RemoteHub (`AgentEnrollment.cs`, JSON, format 2). One file can serve any number of devices – Intune, software distribution, by hand. Contents:
+  - RemoteHub's enrollment secret (32 random bytes) and its ID (§5.5) – no key and no device ID
+  - what goes into `agent.json`: label (empty = the device's computer name), port, allowed groups – plus the firewall scope (remote addresses) and the virtual-display choice
 
-  The PFX is in the enrollment file and not in the MSI, because Windows keeps a copy of every installed MSI in `C:\Windows\Installer`. The enrollment file is a secret: it is only moved over encrypted channels and deleted after import.
+  Each device that uses the file makes its own key and device ID (§5.3), so a copied file never gives a second device the first one's identity (SEC-ENR-03). The file is still kept out of reach and deleted after use: anyone with it can enroll a device of their own, which RemoteHub claims only at an address where an operator expects a device (§5.5). It isn't in the MSI because Windows keeps a copy of every installed MSI in `C:\Windows\Installer`. A format-1 file (before SEC-ENR-03: the device's PFX and its password) is refused with a message to save a new one.
 
 ### 5.2 Creating an enrollment (RemoteHub)
 
-1. The operator chooses **Install RemoteHub Agent** on a connection (right-click).
-2. RemoteHub creates:
-   - a device ID (GUID), unrelated to the anonymous telemetry install ID
-   - an RSA key pair (3072 bit)
-   - a self-signed end-entity certificate (basic constraints: no CA): CN = device ID, O = RemoteHub Agent; SAN `urn:remotehub:device:<device id>` (plus the label as DNS name when it is one); EKU server **and** client authentication; valid from 10 minutes before creation for 2 years
-   - the `.rhagent` file
-3. RemoteHub stores on the connection: the device ID, the SHA-256 fingerprint, the port and the status "not installed". The status changes to "installed" after the first successful connection.
+1. The operator chooses **Install RemoteHub Agent** on a connection (right-click) – or saves the file for Intune or software distribution in *Settings → Security & storage → Save enrollment file…* (this PC's install defaults, the device's computer name as label).
+2. RemoteHub writes the `.rhagent` file with its current enrollment secret – made on first use and kept with the settings (§5.5) – and the chosen settings.
+3. RemoteHub stores on the connection the port and the status "not installed" – no device ID and no fingerprint yet: both come with the claim (§5.5), which sets the status to "installed".
 
 ### 5.3 Installing
 
-- **Update through the running agent:** same upload, but `msiexec` is started through WMI (`Win32_Process.Create`), outside the session's job object, because the agent restarts during the update. RemoteHub waits until the agent answers again with the expected certificate.
+- **Update through the running agent:** same upload, but `msiexec` is started through WMI (`Win32_Process.Create`), outside the session's job object, because the agent restarts during the update. RemoteHub waits until the agent answers again with the expected certificate. With *Enroll again* (a new identity) it waits until the old certificate stops answering, then claims the new one (§5.5).
 - **If PowerShell remoting works for the connection:**
   1. RemoteHub copies the MSI and the `.rhagent` file to a new temp folder on the device.
   2. It runs `msiexec /i … ENROLLMENT="<path>" /qn`.
-  3. It reads the agent's fingerprint back to confirm it, then deletes both files.
-- **Otherwise:** RemoteHub puts both files on the clipboard as a file list. The operator pastes them into the RDP session and runs the MSI there. The MSI picks up the `.rhagent` file next to it.
-- **Save files:** the MSI and the `.rhagent` file go to a folder, for installing by hand or with software distribution.
+  3. It reads the certificate the device made back over the signed-in WinRM session and pins it, checks that the agent answers with it over the network, then deletes both files.
+- **Otherwise:** RemoteHub puts both files on the clipboard as a file list. The operator pastes them into the RDP session and runs the MSI there. The MSI picks up the `.rhagent` file next to it. RemoteHub claims the agent as soon as it answers (§5.5).
+- **Save files:** the MSI and the `.rhagent` file go to a folder, for installing by hand or with software distribution; claimed the same way.
 - MSI properties: `ENROLLMENT="<path>"` (default: the single `.rhagent` next to the MSI), `VIRTUALDISPLAY=0|1`, `AUTOSIGNIN=0|1` (only in MSIs built with the credential provider).
 - **Enrollment – done by the MSI, not at the agent's first start:** the custom action `RemoteHubAgent.exe enroll` runs deferred, as LocalSystem, after the files are in place and before the service starts:
   1. Set the service to *Automatic (Delayed Start)*.
-  2. Import the PFX into `LocalMachine\My` with a non-exportable key (friendly name "RemoteHub Agent"); earlier agent certificates are removed.
-  3. Write `agent.json`; `%ProgramData%\RemoteHub\Agent` gets an ACL of SYSTEM and Administrators only (also as owner, also for what is already there).
+  2. Make the device's identity:
+     - a new device ID (a GUID, unrelated to the anonymous telemetry install ID);
+     - an RSA key (3072 bit) as a persisted CNG machine key that can't be exported (`RemoteHub Agent <device id>`);
+     - its self-signed end-entity certificate: basic constraints no CA; CN = device ID, O = RemoteHub Agent; SAN `urn:remotehub:device:<device id>` (plus the label as DNS name when it is one); EKU server **and** client authentication; valid from 10 minutes before for 2 years.
+
+     The certificate goes into `LocalMachine\My` (friendly name "RemoteHub Agent"); earlier agent certificates, and the keys the agent made for them, are removed.
+  3. Write `agent.json`, with the enrollment secret and its ID; `%ProgramData%\RemoteHub\Agent` gets an ACL of SYSTEM and Administrators only (also as owner, also for what is already there).
   4. Create the firewall rule (below).
   5. Delete the `.rhagent` file (if that fails, the log says to delete it by hand).
   6. Virtual display and automatic sign-in as chosen (their failure doesn't fail the install).
 
-  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate, `agent.json` with its backup `agent.json.bak` (§7.2), `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
+  Without an enrollment file an already enrolled agent keeps its identity (plain update); a first install without one fails with a message saying where to put it. A first install that fails after enrolling runs `RemoteHubAgent.exe cleanup` as rollback; uninstall runs it too (firewall rule, certificate and its key, `agent.json` with the enrollment secret, with its backup `agent.json.bak` (§7.2), `autosignin.json`, the Ctrl+Alt+Del setting, the automatic sign-in policy values it set, the virtual display – logs stay).
 - **Firewall:** inbound rule "RemoteHub Agent" for the agent program and its port (TCP, all profiles), limited to the remote addresses given in the enrollment, or Any if none are given.
 - **Port in use:** the agent logs a clear error and doesn't start. It never moves silently to another port.
 
@@ -124,13 +126,48 @@ RemoteHub (operator PC)                               Device
 
 Out of scope for v1. The design keeps it possible:
 - The fingerprint is a mutable field on the connection.
-- A renewal can push a new PFX through the existing PowerShell session.
+- A renewal is an install with *Enroll again*: the device makes a new key and RemoteHub claims it.
+
+### 5.5 Claim: how RemoteHub learns the fingerprint (SEC-ENR-03)
+
+- **Enrollment secrets (RemoteHub):** `AgentEnrollmentKeys` in the settings (`AppData.AgentEnrollment`). The secret is stored like a password, in the database's secrets table. It travels with a shared settings file and with backups, so every RemoteHub using those settings can claim the devices.
+
+  *Settings → Security & storage* has three actions:
+  - **Save enrollment file…**
+  - **Replace enrollment secret…** – new files get a new secret. The earlier one is revoked at once, or stays accepted until it is revoked.
+  - **Revoke earlier secrets…**
+
+  A revoked secret is refused for new claims; agents already claimed keep their pin. Each change is audited (*Agent enrollment secret*).
+- **The agent** keeps the secret and its ID in `agent.json` (SYSTEM and Administrators only). It answers `GET /v1/enrollment?nonce=<16–64 base64url characters>` without credentials with `{deviceId, fingerprint, keyId, computerName, dnsHostName, proof}`.
+  - The proof is HMAC-SHA256 with the secret over `RemoteHub enrollment 2`, the key ID, device ID, fingerprint, computer name, DNS name and nonce, one per line (`EnrollmentProof`).
+  - 404: the agent holds no secret (it was enrolled with a format-1 file). 400: a malformed nonce.
+- **RemoteHub** sends a fresh nonce over TLS without a pin and records the certificate the connection presented. It pins only when all of these hold (`AgentInstaller.EvaluateClaim`):
+  - the stated fingerprint is that certificate;
+  - the key ID is one of its secrets and isn't revoked;
+  - the proof checks out (fixed-time comparison);
+  - the device is the host it asked: its computer or DNS name matches the connection's host name (the first part). A host given as an IP address can't be checked this way.
+
+  A man in the middle without the secret can't make a proof for its own certificate, and a recorded answer doesn't fit a new nonce. Through a jump host the claim goes through the tunnel, like every agent connection.
+- **When RemoteHub claims:**
+  - after a silent install (cross-checked with the fingerprint read over WinRM);
+  - after an update with *Enroll again*;
+  - every 10 s for 30 minutes after a clipboard or saved-files install;
+  - at start, for connections still waiting;
+  - when such a connection is used;
+  - at the first RDP sign-in of a connection without an agent, when a device installed with this RemoteHub's file answers on the default port (Intune, software distribution);
+  - by hand: right-click → *RemoteHub Agent → Claim RemoteHub Agent…* on a connection, or *Claim RemoteHub Agents…* on a folder for all its connections.
+- **What a claim never does:** an automatic claim pins only on a full match and never replaces a pin. A device enrolled again keeps answering with its old certificate until the new install has run: the connection remembers that certificate (`AgentDevice.ReplacesFingerprint`) and doesn't pin it. *Claim RemoteHub Agent again…* on an installed agent shows the pinned and the new fingerprint, and replaces the pin only when the operator confirms. A device whose name doesn't match can be claimed by hand after a question (an alias). Each claim is audited with the fingerprint and the device's computer name.
+- **What a copied file can still do:**
+  - It can't clone a device that is already claimed: the file holds no key, and pins aren't replaced.
+  - A device of the attacker's, enrolled with the file, is pinned only if it answers at an address where an operator expects a device, before the real device's first claim.
+  - Revoking the secret closes that for devices not yet claimed.
 
 ## 6. Wire protocol
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/v1/health` | none | `{product, version, protocol, deviceId, features}` – nothing sensitive. `features`: `powershell` always, `desktop` when the remote desktop is on (`DesktopEnabled`), `tunnel` when `TunnelEnabled` (older agents send none = PowerShell only) |
+| GET | `/v1/enrollment?nonce=…` | none | The claim (§5.5): `{deviceId, fingerprint, keyId, computerName, dnsHostName, proof}` – the proof is only of use to whoever holds the enrollment secret. 404 without a secret, 400 for a malformed nonce |
 | GET (WebSocket) | `/v1/powershell` | Basic (Windows account, right `PowerShell`) | One PowerShell session. Each text message is one line of the out-of-process remoting protocol, in both directions. |
 | GET (WebSocket) | `/v1/desktop` | Basic (Windows account, right `Desktop` or `DesktopViewOnly`) | Remote desktop (§12, `Desktop/DesktopProtocol.cs`). 404 when `DesktopEnabled` = 0. |
 | GET (WebSocket) | `/v1/tunnel` | Basic (Windows account, right `Tunnel`) | The device as a jump host: TCP streams from it to other devices, many in one connection (`TunnelProtocol.cs`; [jump-host-design.md](jump-host-design.md)). 404 when `TunnelEnabled` = 0. |
@@ -162,16 +199,22 @@ Out of scope for v1. The design keeps it possible:
   "allowedGroups": ["S-1-5-32-544"],
   "virtualDisplay": "auto",
   "logRetentionDays": 30,
-  "maxSessions": 20
+  "maxSessions": 20,
+  "enrollmentKeyId": "<ID of RemoteHub's enrollment secret>",
+  "enrollmentSecret": "<the enrollment secret, base64, for the claim (§5.5)>"
 }
 ```
+
+`enrollmentKeyId`, `enrollmentSecret`: from the `.rhagent` file, for the claim (§5.5); missing on devices enrolled with a format-1 file.
 
 `virtualDisplay`: the virtual monitor for devices without one – `auto` (switched on for a desktop connection only when
 the shown display offers less than the window and at most 1280×720, e.g. 640×480 without a monitor), `always`, `off`
 (driver not installed). Chosen at install (install dialog, MSI property `VIRTUALDISPLAY`, or the `.rhagent` file;
 default on). The driver – the third-party Virtual Display Driver (MIT, IddCx, signed by SignPath Foundation, shipped
 unchanged and hash-checked) – is installed with the device switched off; the service switches it on at the viewer's
-window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml`, reloaded through its control pipe on a resize),
+window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml` – the folder is the agent's own, with a protected
+ACL where only SYSTEM and Administrators write, and a link or foreign folder in its place is removed first – reloaded
+through its control pipe on a resize, connected anonymously and only to the driver host `WUDFHost.exe`),
 the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the service switches it off when the last
 connection that asked for it ends (and at service start). After a restart of the device Windows may no longer report
 the switched-off device (pnputil: *Disconnected*, enabling fails with 1167 "not connected"); switching it on then
@@ -296,7 +339,7 @@ zero-filled after a hard power-off, and the service didn't start).
 | Agent host: TLS, health, sign-in on upgrade, throttle, tunnel, log (`src/RemoteHub.Agent`) | done, tested with a test sign-in and in the lab (S-AUTH, S-THR) |
 | Windows sign-in and start-as-user (`WindowsShell.cs`) | done, tested as LocalSystem in the lab (P-SES, S-AUTH); Windows errors mapped in `SignInRefusal.cs` (§4.2) |
 | Connection setting "Connect through: PowerShell remoting (WinRM) / RemoteHub Agent" plus device data (`AgentDevice`) | done |
-| Enrollment generator (`AgentEnrollment.cs`), `.rhagent` import (`RemoteHubAgent.exe enroll`), cleanup on uninstall | done, tested (import itself needs LocalSystem) |
+| Enrollment file (`AgentEnrollment.cs`, format 2), enrollment with the device's own key (`RemoteHubAgent.exe enroll`), claim (§5.5), cleanup on uninstall | done, tested (the key itself needs LocalSystem: lab SEC-ENR-03, A-HAND) |
 | Agent MSI: service, delayed start, recovery, firewall rule | done |
 | Right-click install / update: silent over remoting, through the agent, clipboard or saved files (`AgentInstaller.cs`, `AgentInstallDialog.cs`) | done; lab: A-INST, A-HAND, A-UPD, A-UPDFAIL, A-UNINST |
 | Agent MSI in the build script and release workflow; bundled in RemoteHub | done |

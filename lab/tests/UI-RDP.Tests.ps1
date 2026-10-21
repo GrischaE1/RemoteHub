@@ -251,7 +251,7 @@ BeforeAll {
         $null = Ui 'Done' -Title '*RemoteHub Agent' -Optional
         $files = @(InSession $VmName Console $code.clipFiles)
         $o.files = @($files | ForEach-Object { Split-Path $_ -Leaf })
-        # the .rhagent holds the device key: kept out of the evidence folder
+        # the .rhagent holds RemoteHub's enrollment secret: kept out of the evidence folder
         $tmp = Join-Path ([IO.Path]::GetTempPath()) "rhlab-agent-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
         try {
             Get-LabFile -Name $VmName -Path $files -Destination $tmp
@@ -916,7 +916,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
     }
 
-    Context 'asked before the device key goes through a desktop tab' {
+    Context 'asked before the enrollment secret goes through a desktop tab' {
         BeforeAll {
             $k = [ordered]@{}
             # the agent from the context before - installed by hand when that didn't happen (lab run 20261017-054704: the
@@ -934,7 +934,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Menu 'RemoteHub Agent>Install RemoteHub Agent*' -Node 'DeviceA'
                 $null = Ui 'Copy the installer and the enrollment file to the clipboard*' -Title 'Install RemoteHub Agent' -Value check -TimeoutSec 60
                 $null = Ui 'Install' -Title 'Install RemoteHub Agent'
-                # Dialogs.Confirm "Copy the device key?" - its window name is the message
+                # Dialogs.Confirm "Copy the enrollment secret?" - its window name is the message
                 $k.question = Message -Title 'The remote desktop tab of*' -Button 'Cancel' -TimeoutSec 60
                 Start-Sleep -Seconds 2
                 $k.report = (@((Ui '*' -Title 'Install RemoteHub Agent' -Value list -TimeoutSec 20).items) -join "`n")
@@ -945,10 +945,11 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Save 'ask-key' $k
         }
 
-        It 'A-CLIP-03 an agent desktop tab to Device is open: "Copy the device key?" names it and DeviceA.rhagent; Cancel copies nothing' -Tag 'A-CLIP-03' {
+        It 'A-CLIP-03 an agent desktop tab to Device is open: "Copy the enrollment secret?" names it and DeviceA.rhagent; Cancel copies nothing' -Tag 'A-CLIP-03' {
             $k.desktop | Should -BeTrue
             $k.question | Should -Match 'The remote desktop tab of Device sends everything copied on this PC'
             $k.question | Should -Match 'DeviceA\.rhagent'
+            $k.question | Should -Match "which holds RemoteHub's enrollment secret"
             $k.question | Should -Match 'Close that tab first, or copy anyway\?'
             $k.report | Should -Match 'Cancelled\W+close the remote desktop tab, then try again\.'
             @($k.clipboard | Where-Object { $_ -like '*.rhagent' }) | Should -BeNullOrEmpty

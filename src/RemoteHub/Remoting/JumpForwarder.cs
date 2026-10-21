@@ -45,18 +45,18 @@ public static class JumpForwarders
     public static LocalForward Open(JumpRoute route, string host, int port)
     {
         host = host.Trim();
-        return Open($"{route.Key}|{host.ToLowerInvariant()}|{port}", $"{host}:{port} via {route.Name}",
+        return Open($"{route.Key}|{host.ToLowerInvariant()}|{port}",
             async ct => await JumpTunnels.OpenAsync(route, host, port, ct).ConfigureAwait(false));
     }
 
     /// <summary>With any way to the target (tests).</summary>
-    internal static LocalForward Open(string key, string name, Func<CancellationToken, Task<Stream>> connect)
+    internal static LocalForward Open(string key, Func<CancellationToken, Task<Stream>> connect)
     {
         lock (All)
         {
             if (!All.TryGetValue(key, out var f) || !f.TryAcquire())
             {
-                All[key] = f = new JumpForwarder(key, name, connect);
+                All[key] = f = new JumpForwarder(key, connect);
                 f.TryAcquire();
             }
             return new LocalForward(f);
@@ -87,7 +87,9 @@ public static class JumpForwarders
 /// </summary>
 internal sealed class JumpForwarder
 {
-    private readonly string _key, _name;
+    private readonly string _key;
+    /// <summary>What the diagnostic log calls it: a short hash of the route, never the host or account names it is made of.</summary>
+    internal readonly string LogId;
     private readonly Func<CancellationToken, Task<Stream>> _connect;
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
     private readonly CancellationTokenSource _cts = new();
@@ -97,15 +99,15 @@ internal sealed class JumpForwarder
     private Timer? _idle;
     private string? _error;
 
-    internal JumpForwarder(string key, string name, Func<CancellationToken, Task<Stream>> connect)
+    internal JumpForwarder(string key, Func<CancellationToken, Task<Stream>> connect)
     {
         _key = key;
-        _name = name;
+        LogId = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)))[..8].ToLowerInvariant();
         _connect = connect;
         _listener.Start();
         Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
         _ = Task.Run(AcceptLoop);
-        DiagLog.Write($"Jump host forwarder for {_name} on 127.0.0.1:{Port}");
+        DiagLog.Write($"Jump host forwarder {LogId} on 127.0.0.1:{Port}");
     }
 
     public int Port { get; }
@@ -154,7 +156,7 @@ internal sealed class JumpForwarder
         _cts.Cancel();
         try { _listener.Stop(); } catch { /* closed */ }
         JumpForwarders.Removed(_key, this);
-        DiagLog.Write($"Jump host forwarder for {_name} closed");
+        DiagLog.Write($"Jump host forwarder {LogId} closed");
     }
 
     private async Task AcceptLoop()
@@ -168,7 +170,7 @@ internal sealed class JumpForwarder
             if (pid != Environment.ProcessId)
             {
                 Interlocked.Increment(ref Refused);
-                DiagLog.Write($"Jump host forwarder for {_name}: a connection from another process ({(pid is { } p ? $"PID {p}" : "unknown")}) was refused");
+                DiagLog.Write($"Jump host forwarder {LogId}: a connection from another process ({(pid is { } p ? $"PID {p}" : "unknown")}) was refused");
                 socket.Dispose();
                 continue;
             }
@@ -189,7 +191,8 @@ internal sealed class JumpForwarder
             {
                 // The caller only sees the connection closed: the jump host's answer is kept for its error message.
                 _error = ex is JumpHostException ? ex.Message : $"Through the jump host: {ex.GetBaseException().Message}";
-                DiagLog.Write($"Jump host forwarder for {_name}: not connected – {_error}");
+                // The message names the target: the log gets only the kind of refusal.
+                DiagLog.Write($"Jump host forwarder {LogId}: not connected – {(ex is JumpHostException { Reason: { } reason } ? reason : ex.GetType().Name)}");
                 return;
             }
             await using (remote.ConfigureAwait(false))

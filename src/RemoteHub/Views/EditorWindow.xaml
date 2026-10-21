@@ -341,6 +341,18 @@
                         <ui:Button x:Name="ImportButton" Content="Import backup…" Icon="{ui:SymbolIcon ArrowImport24}"
                                    ToolTip="Closes this window first (unsaved changes here are discarded)" />
                     </StackPanel>
+
+                    <StackPanel x:Name="EnrollmentSection">
+                        <TextBlock Text="RemoteHub Agent enrollment" Style="{StaticResource SectionHeader}" Margin="0,18,0,4" />
+                        <TextBlock x:Name="EnrollmentText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6" />
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button x:Name="EnrollmentSaveButton" Content="Save enrollment file…" Icon="{ui:SymbolIcon ArrowExport24}" Margin="0,0,8,0" />
+                            <ui:Button x:Name="EnrollmentReplaceButton" Content="Replace enrollment secret…" Icon="{ui:SymbolIcon Key24}" Margin="0,0,8,0"
+                                       ToolTip="A new secret for new enrollment files; agents already claimed keep working" />
+                            <ui:Button x:Name="EnrollmentRevokeButton" Content="Revoke earlier secrets…" Icon="{ui:SymbolIcon Delete24}"
+                                       ToolTip="Devices installed with an earlier enrollment file can no longer be claimed" />
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel x:Name="PageLogs" Visibility="Collapsed">

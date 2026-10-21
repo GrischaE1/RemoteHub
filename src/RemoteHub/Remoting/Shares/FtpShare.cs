@@ -13,6 +13,18 @@ public sealed class FtpShare : ShareFileSystem
 {
     private readonly FtpClient _client;
 
+    internal enum CertificateDecision { Accept, Refuse, Ask }
+
+    /// <summary>
+    /// A certificate Windows trusts, or the one accepted for this share: accepted. Otherwise the user is asked – except
+    /// on a data connection: one whose certificate isn't the control connection's is someone else in between, refused
+    /// without asking (FluentFTP before 55.1.0 accepted any certificate there – its 55.1.0 release notes).
+    /// </summary>
+    internal static CertificateDecision Decide(SslPolicyErrors errors, string fingerprint, string? trusted, bool dataConnection) =>
+        errors == SslPolicyErrors.None || fingerprint == trusted ? CertificateDecision.Accept
+        : dataConnection ? CertificateDecision.Refuse
+        : CertificateDecision.Ask;
+
     public FtpShare(string host, int port, FtpSecurity security, string startFolder, CredentialSet credentials, string? trusted,
                     Func<TrustRequest, bool> trust, Action<string> accepted)
     {
@@ -32,9 +44,9 @@ public sealed class FtpShare : ShareFileSystem
         _client = new FtpClient(host, user, password, port, config, null);
         _client.ValidateCertificate += (_, e) =>
         {
-            if (e.PolicyErrors == SslPolicyErrors.None) { e.Accept = true; return; }
             var fp = Fingerprints.Of(e.Certificate);
-            if (fp == trusted) { e.Accept = true; return; }
+            var decision = Decide(e.PolicyErrors, fp, trusted, e.IsDataConnection);
+            if (decision != CertificateDecision.Ask) { e.Accept = decision == CertificateDecision.Accept; return; }
             e.Accept = trust(new TrustRequest(host, "certificate Windows doesn't trust", fp, $"{e.Certificate.Subject}\n{e.PolicyErrorMessage}"));
             if (e.Accept) { accepted(fp); trusted = fp; }
         };

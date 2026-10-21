@@ -237,7 +237,7 @@ until it exists.
 | W-PRE | Built-in WinRM rule enabled before | script leaves it on and warns |
 | W-TWICE | Script run twice | second run reuses the certificate (same thumbprint) |
 | **A-INST** ✅ | Agent install with the client's `InstallOverRemoting` (runspace: PowerShell Direct; the WinRM transport itself is covered by W-*) | fingerprint read back = pinned; service `RemoteHubAgent` running, LocalSystem, automatic (delayed); `/v1/health` over TLS pinned from the host; certificate in LocalMachine\My, SHA-256 = pin, key not exportable; `agent.json` identity; one inbound rule for `RemoteHubAgent.exe`, TCP 58732, remote address = the host only; `%ProgramData%\RemoteHub\Agent` owner Administrators, protected, only SYSTEM + Administrators; no `.rhagent` or staging folder left; event source registered, enrollment logged |
-| A-HAND | Install by hand (MSI next to `.rhagent`, run as the admin in the session) | the client's `WaitForManualInstall` marks it installed |
+| A-HAND | Install by hand (MSI next to `.rhagent`, run as the admin in the session) | the client's `WaitForClaim` claims it and marks it installed |
 | A-UPD | Update through the agent (`StartUpdateThroughAgent`) | new version answers; temp folder removed after msiexec ended |
 | A-UPDFAIL | Update with a broken MSI | reported as failed with the old version, not "updated" |
 | A-ROLLBACK | First install that fails after enrolling (forced via a failing custom action / `msiexec` with a bad property) | no firewall rule, no certificate, no config left |
@@ -259,7 +259,7 @@ until it exists.
 | D-IDLE | Policy `DesktopIdleTimeoutMinutes = 1` | warning, then ended + audit 2102 |
 | D-RESUME | Drop the connection, reconnect within 60 s | no new consent; a resume token presented by another account doesn't spoil it |
 | D-GPU | "Smooth" on a VM with a GPU-P adapter | connection info shows "GPU encoder"; frames decode; forced failure falls back to software |
-| D-DESKCLIP | Clipboard install while a desktop tab to another VM is open | client asks before copying the device key |
+| D-DESKCLIP | Clipboard install while a desktop tab to another VM is open | client asks before copying the enrollment secret |
 
 The client-side unit tests stay as they are; the lab adds the device-side truth.
 

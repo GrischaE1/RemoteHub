@@ -59,18 +59,20 @@ public sealed class AgentInstallDialog : FluentWindow
         var body = new StackPanel { Margin = new Thickness(20, 4, 20, 20) };
         body.Children.Add(new TextBlock { Text = $"{c.Name}  ·  {c.HostWithRoute}", FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) });
         body.Children.Add(Muted("The agent gives RemoteHub PowerShell, files, registry, services and processes on this device without WinRM. " +
-                                "Operators sign in with a Windows account of the device (administrators by default); RemoteHub only accepts the " +
-                                "device certificate created here.", 0, 0, 0, 12));
+                                "Operators sign in with a Windows account of the device (administrators by default). The device makes its own " +
+                                "certificate when it is installed; RemoteHub pins it when the agent first answers and accepts no other.", 0, 0, 0, 12));
 
         _options = new StackPanel();
         body.Children.Add(_options);
 
-        if (existing is not null)
+        if (existing is { Fingerprint.Length: 0 })
+            _options.Children.Add(Muted($"Prepared, waiting for the device to answer: port {existing.Port}.", 0, 0, 0, 6));
+        else if (existing is not null)
             _options.Children.Add(Muted($"{(installed ? "Installed" : "Prepared, not confirmed yet")}: device {AgentInstaller.Head(existing.DeviceId, 8)}…, port {existing.Port}, " +
                                         $"certificate …{AgentInstaller.Tail(existing.Fingerprint, 8)}{(existing.Version is { } v ? $", version {v}" : "")}", 0, 0, 0, 6));
         _newIdentity = new CheckBox
         {
-            Content = "Create a new device certificate (the current one stops working)",
+            Content = "Enroll again – the device makes a new certificate (the current one stops working)",
             IsChecked = !installed,
             Visibility = existing is null ? Visibility.Collapsed : Visibility.Visible,
             Margin = new Thickness(0, 0, 0, 8),

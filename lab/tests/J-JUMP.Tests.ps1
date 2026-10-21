@@ -35,6 +35,8 @@ BeforeAll {
     $cert = (Get-LabWinRmState -Name $VmName).Certificate.Thumbprint
     Use-LabJump -Jump $jump
     Save 'setup' @{ Jump = $jump; Target = $target; Install = $install; Setup = $setup; Cert = $cert }
+    # SEC-LOG-01 reads what RemoteHub's client code logged on this PC from here on
+    $logSince = Get-Date
 }
 
 AfterAll {
@@ -406,6 +408,28 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $ftp.ok | Should -BeFalse
             # (Unescape: Windows PowerShell's ConvertTo-Json writes ' as ')
             [regex]::Unescape(($ftp | ConvertTo-Json -Depth 5)) | Should -Match 'FTP can''t go through a jump host'
+        }
+    }
+
+    # last: everything above went through RemoteHub's client code on this PC (the harness), which writes its DiagLog here
+    Context 'what RemoteHub logged on this PC' {
+        BeforeAll {
+            $lines = @(Get-LabHostDiagLog -Since $logSince)
+            $user = ("$($vm.AdminAccount)" -split '\\')[-1]
+            $names = [ordered]@{ computer = $computer; address = "$target"; jumpAddress = "$($jump.Inner)"; account = $user }
+            $hits = [ordered]@{}
+            foreach ($k in $names.Keys) {
+                $v = $names[$k]
+                if ($v) { $hits[$k] = @($lines | Where-Object { $_ -match ('(?<![\w.])' + [regex]::Escape($v) + '(?![\w])') }).Count }
+            }
+            # the password is never written to evidence: only whether it was found
+            $hits.password = @($lines | Where-Object { $password -and $_.Contains($password) }).Count
+            Save 'diaglog' @{ Lines = $lines.Count; Forwarder = @($lines | Where-Object { $_ -match 'Jump host forwarder' }).Count; Hits = $hits }
+        }
+
+        It 'SEC-LOG-01 DiagLog names no device, address, account or password after jump sessions, forwarders and shares' -Tag 'SEC-LOG-01' {
+            @($lines | Where-Object { $_ -match 'Jump host forwarder [0-9a-f]{8}' }).Count | Should -BeGreaterThan 0 -Because 'the forwarders of this file wrote their lines (by ID)'
+            foreach ($k in $hits.Keys) { $hits[$k] | Should -Be 0 -Because "DiagLog must not contain the $k ($($hits[$k]) lines did - see j-diaglog.json)" }
         }
     }
 }

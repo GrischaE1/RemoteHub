@@ -34,6 +34,15 @@ public sealed class AgentConfig
 
     /// <summary>Who may sign in automatically, as the install chose it (null: the allowed groups). The policy Rights\AutoSignIn wins.</summary>
     public List<string>? AutoSignInGroups { get; set; }
+
+    /// <summary>
+    /// The RemoteHub enrollment secret this device was enrolled with (from the <c>.rhagent</c> file, format 2), and its ID:
+    /// the agent answers claims with it (<see cref="AgentClaim"/>, docs/agent-spec.md §5.5). Empty on devices enrolled
+    /// with a format-1 file – RemoteHub pinned those when it made their key. The folder is SYSTEM and Administrators only.
+    /// </summary>
+    public string? EnrollmentKeyId { get; set; }
+    public string? EnrollmentSecret { get; set; }
+
     public const string AdministratorsSid = "S-1-5-32-544";
 
     [JsonIgnore]

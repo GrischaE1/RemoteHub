@@ -36,7 +36,7 @@
     <PackageReference Include="SQLite3MC.PCLRaw.bundle" Version="2.4.0" />
     <!-- Network shares: SFTP, FTP/FTPS, and SMB when Windows' own client can't be used (another account on the same server) -->
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
-    <PackageReference Include="FluentFTP" Version="55.0.0" />
+    <PackageReference Include="FluentFTP" Version="55.1.0" />
     <PackageReference Include="SMBLibrary" Version="1.5.8.1" />
     <!-- Notes: Markdown parsing (the signed build the PowerShell SDK already brings) and the script block editor -->
     <PackageReference Include="Markdig.Signed" Version="0.44.0" />

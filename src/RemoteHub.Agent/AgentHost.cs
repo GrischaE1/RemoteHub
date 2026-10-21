@@ -88,6 +88,28 @@ public static class AgentHost
             return ctx.Response.WriteAsJsonAsync(health, AgentJson.Default.AgentHealth);
         }));
 
+        // The claim (docs/agent-spec.md §5.5): which device this is and the proof that it was enrolled with RemoteHub's
+        // secret, bound to this certificate and the caller's nonce. No credentials – it tells nothing a caller without the
+        // secret can use. 404 on a device enrolled with a format-1 file (no secret: RemoteHub pinned it at creation).
+        var fingerprint = AgentProtocol.Fingerprint(o.Certificate.RawData);
+        app.MapGet(EnrollmentProof.Path, (RequestDelegate)(ctx =>
+        {
+            var nonce = ctx.Request.Query["nonce"].ToString();
+            if (o.Config.EnrollmentSecret is not { } secret || !AgentEnrollment.IsValidSecret(secret) || o.Config.EnrollmentKeyId is not { Length: > 0 } keyId)
+            {
+                ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+                return Task.CompletedTask;
+            }
+            if (!EnrollmentProof.IsValidNonce(nonce))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+                return Task.CompletedTask;
+            }
+            var (computer, dns) = Names();
+            var claim = EnrollmentProof.Answer(secret, keyId, o.Config.DeviceId, fingerprint, computer, dns, nonce);
+            return ctx.Response.WriteAsJsonAsync(claim, AgentEnrollmentJson.Default.AgentClaim);
+        }));
+
         // The policy for this connection; one that can't be read allows nothing (and says so in the log). An invalid value
         // keeps its default and is logged once per service run.
         var reported = new ConcurrentDictionary<string, byte>();
@@ -233,6 +255,18 @@ public static class AgentHost
     }
 
     /// <summary>"Authorization: Basic base64(user:password)" – sent only inside TLS to a pinned certificate.</summary>
+    /// <summary>The device's computer name and DNS name (with its domain, if it has one) – for RemoteHub's check that the claim comes from the host it asked.</summary>
+    internal static (string Computer, string Dns) Names()
+    {
+        var computer = Environment.MachineName;
+        try
+        {
+            var p = IPGlobalProperties.GetIPGlobalProperties();
+            return (computer, string.IsNullOrEmpty(p.DomainName) ? p.HostName : $"{p.HostName}.{p.DomainName}");
+        }
+        catch { return (computer, computer); }
+    }
+
     internal static bool TryBasic(string? header, out string user, out string password)
     {
         user = password = "";

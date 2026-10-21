@@ -64,6 +64,25 @@ Describe 'S-SHARE <VmName>' -Tag Share, 'S-SHARE' -Skip:(-not $isServer) {
             $r.ok | Should -BeFalse
             ($r.steps | Where-Object step -eq 'connect').error | Should -Match 'password'
         }
+
+        # Windows doesn't report a session's signing, so this proves it by the result: RemoteHub's client signs every
+        # request and drops every answer without a valid signature, so with a server that doesn't require signing the
+        # copy only works because the server signs its answers to signed requests (MS-SMB2 3.3.4.1.1). The unit test
+        # RemoteHubs_SMB_client_always_signs_and_refuses_a_guest_session proves the client asks for it.
+        It 'SEC-SH-02 RemoteHub''s own SMB client signs also when the server doesn''t require it' -Tag 'SEC-SH-02' {
+            $before = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $c = Get-SmbServerConfiguration
+                Set-SmbServerConfiguration -RequireSecuritySignature $false -EnableSecuritySignature $true -Force
+                $c.RequireSecuritySignature
+            }
+            try {
+                $r = Invoke-LabShare -Conflict @('--host', $ip, '--share1', 'rhshare', '--user1', $admin, '--share2', 'rhshare2', '--user2', $vm.UserAccount)
+                Save 'smb-unsigned-server' $r
+                $r.second | Should -Match 'RemoteHub client'
+                $r.writtenBySecond | Should -Be 14 -Because 'the signed requests got signed answers'
+            }
+            finally { Invoke-LabGuest -Name $VmName -ArgumentList $before -ScriptBlock { param($b) Set-SmbServerConfiguration -RequireSecuritySignature $b -Force } }
+        }
     }
 
     Context 'SFTP' {

@@ -712,6 +712,7 @@ public static class SettingsStore
         SavedCredentials = data.SavedCredentials,
         Items = new(TreeLayout.Flatten(data.Items)), // items under a jump host follow it (older versions keep them)
         Tools = data.Tools,
+        AgentEnrollment = data.AgentEnrollment,
         Ui = null!,
     }, Json);
 
@@ -726,6 +727,8 @@ public static class SettingsStore
         data.DefaultCredentials ??= new CredentialSet();
         data.SavedCredentials ??= new();
         data.Tools ??= new RemoteToolSettings();
+        data.AgentEnrollment ??= new AgentEnrollmentKeys();
+        data.AgentEnrollment.Keys ??= [];
         data.Ui ??= new UiState();
         TreeLayout.Nest(data.Items);
         RelinkParents(data.Items, null);
@@ -782,7 +785,8 @@ public static class SettingsStore
 
 /// <summary>
 /// The password-protected backup file (.rhbackup; .rdpmbackup from RdpManager still imports). Settings and, since
-/// version 2, the notes are each encrypted with AES-256-GCM under a key from the password (docs/notes-view-design.md §9.1).
+/// version 2, the notes are each encrypted with AES-256-GCM under a key from the password (docs/notes-view-design.md §9.1);
+/// since version 4 with associated data that binds each section to its file (<see cref="AssociatedDataVersion"/>).
 /// </summary>
 public static class Backup
 {
@@ -809,24 +813,34 @@ public static class Backup
         public DateTime CreatedUtc { get; set; }
     }
 
+    /// <summary>
+    /// Version 4: each section is sealed with associated data naming the format, the version, the section, the file's
+    /// salt and which sections the file has. A section moved to another place, or one taken out of the file, no longer
+    /// opens – the file is rejected as damaged rather than imported with a part missing.
+    /// </summary>
+    internal const int AssociatedDataVersion = 4;
+
+    private static byte[] AssociatedData(string section, string salt, string sections) =>
+        Encoding.UTF8.GetBytes($"remotehub-backup|{AssociatedDataVersion}|{section}|{salt}|{sections}");
+
+    /// <summary>The sections a file has, in a fixed order – part of every section's associated data.</summary>
+    private static string Sections(bool notes, bool scripts) => "settings" + (notes ? ",notes" : "") + (scripts ? ",scripts" : "");
+
     public static void Export(AppData data, string path, string password, NotesExport? notes = null, ScriptsExport? scripts = null)
     {
         var salt = RandomNumberGenerator.GetBytes(16);
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, Iterations, HashAlgorithmName.SHA256, 32);
         try
         {
-            var env = new Envelope { Iterations = Iterations, Salt = Convert.ToBase64String(salt), CreatedUtc = DateTime.UtcNow };
-            (env.Nonce, env.Tag, env.Data) = Seal(key, SettingsStore.ToJson(data));
-            if (notes is { IsEmpty: false })
-            {
-                env.Version = 2;
-                (env.NotesNonce, env.NotesTag, env.NotesData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(notes));
-            }
-            if (scripts is { IsEmpty: false })
-            {
-                env.Version = 3;
-                (env.ScriptsNonce, env.ScriptsTag, env.ScriptsData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(scripts));
-            }
+            var env = new Envelope { Version = AssociatedDataVersion, Iterations = Iterations, Salt = Convert.ToBase64String(salt), CreatedUtc = DateTime.UtcNow };
+            var withNotes = notes is { IsEmpty: false };
+            var withScripts = scripts is { IsEmpty: false };
+            var sections = Sections(withNotes, withScripts);
+            (env.Nonce, env.Tag, env.Data) = Seal(key, SettingsStore.ToJson(data), AssociatedData("settings", env.Salt, sections));
+            if (withNotes)
+                (env.NotesNonce, env.NotesTag, env.NotesData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(notes), AssociatedData("notes", env.Salt, sections));
+            if (withScripts)
+                (env.ScriptsNonce, env.ScriptsTag, env.ScriptsData) = Seal(key, JsonSerializer.SerializeToUtf8Bytes(scripts), AssociatedData("scripts", env.Salt, sections));
             File.WriteAllText(path, JsonSerializer.Serialize(env, new JsonSerializerOptions { WriteIndented = true }));
         }
         finally { CryptographicOperations.ZeroMemory(key); }
@@ -847,23 +861,31 @@ public static class Backup
 
         SettingsStore.CheckIterations(env.Iterations);
         var salt = Convert.FromBase64String(env.Salt);
+        var hasNotes = env.NotesData is not null && env.NotesNonce is not null && env.NotesTag is not null;
+        var hasScripts = env.ScriptsData is not null && env.ScriptsNonce is not null && env.ScriptsTag is not null;
+        // Older files (versions 1–3, RdpManager's) have no associated data. A version 4 file relabelled as older still
+        // doesn't open: its sections were sealed with associated data.
+        var bound = env.Version >= AssociatedDataVersion;
+        if (bound && env.Format != "remotehub-backup") throw new InvalidDataException("Not a RemoteHub backup file.");
+        var sections = Sections(hasNotes, hasScripts);
+        byte[]? Aad(string section) => bound ? AssociatedData(section, env.Salt, sections) : null;
         var key = Rfc2898DeriveBytes.Pbkdf2(Encoding.UTF8.GetBytes(password), salt, env.Iterations, HashAlgorithmName.SHA256, 32);
         try
         {
-            var plain = Open(key, env.Nonce, env.Tag, env.Data);
+            var plain = Open(key, env.Nonce, env.Tag, env.Data, Aad("settings"));
             try
             {
                 var data = SettingsStore.FromJson(plain);
                 notes = null;
-                if (env.NotesData is not null && env.NotesNonce is not null && env.NotesTag is not null)
+                if (hasNotes)
                 {
-                    var notesPlain = Open(key, env.NotesNonce, env.NotesTag, env.NotesData);
+                    var notesPlain = Open(key, env.NotesNonce!, env.NotesTag!, env.NotesData!, Aad("notes"));
                     try { notes = JsonSerializer.Deserialize<NotesExport>(notesPlain); }
                     finally { CryptographicOperations.ZeroMemory(notesPlain); }
                 }
-                if (env.ScriptsData is not null && env.ScriptsNonce is not null && env.ScriptsTag is not null)
+                if (hasScripts)
                 {
-                    var scriptsPlain = Open(key, env.ScriptsNonce, env.ScriptsTag, env.ScriptsData);
+                    var scriptsPlain = Open(key, env.ScriptsNonce!, env.ScriptsTag!, env.ScriptsData!, Aad("scripts"));
                     try { scripts = JsonSerializer.Deserialize<ScriptsExport>(scriptsPlain); }
                     finally { CryptographicOperations.ZeroMemory(scriptsPlain); }
                 }
@@ -880,8 +902,8 @@ public static class Backup
 
     internal const int KeyIterations = Iterations;
 
-    /// <summary>AES-256-GCM; <paramref name="plain"/> is wiped afterwards.</summary>
-    internal static (string Nonce, string Tag, string Data) Seal(byte[] key, byte[] plain)
+    /// <summary>AES-256-GCM with optional associated data; <paramref name="plain"/> is wiped afterwards.</summary>
+    internal static (string Nonce, string Tag, string Data) Seal(byte[] key, byte[] plain, byte[]? associatedData = null)
     {
         var nonce = RandomNumberGenerator.GetBytes(12);
         var cipher = new byte[plain.Length];
@@ -889,20 +911,20 @@ public static class Backup
         try
         {
             using var aes = new AesGcm(key, 16);
-            aes.Encrypt(nonce, plain, cipher, tag);
+            aes.Encrypt(nonce, plain, cipher, tag, associatedData);
         }
         finally { CryptographicOperations.ZeroMemory(plain); }
         return (Convert.ToBase64String(nonce), Convert.ToBase64String(tag), Convert.ToBase64String(cipher));
     }
 
-    internal static byte[] Open(byte[] key, string nonce, string tag, string data)
+    internal static byte[] Open(byte[] key, string nonce, string tag, string data, byte[]? associatedData = null)
     {
         var cipher = Convert.FromBase64String(data);
         var plain = new byte[cipher.Length];
         try
         {
             using var aes = new AesGcm(key, 16);
-            aes.Decrypt(Convert.FromBase64String(nonce), cipher, Convert.FromBase64String(tag), plain);
+            aes.Decrypt(Convert.FromBase64String(nonce), cipher, Convert.FromBase64String(tag), plain, associatedData);
             return plain;
         }
         catch (AuthenticationTagMismatchException)

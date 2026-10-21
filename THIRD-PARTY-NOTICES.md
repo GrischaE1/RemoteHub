@@ -40,7 +40,7 @@ Source: https://github.com/sshnet/SSH.NET
 
 ## FluentFTP (RemoteHub, network shares over FTP/FTPS)
 
-FluentFTP 55.0.0 – Copyright (c) 2015 Robin Rodricks and FluentFTP Contributors. MIT License (text as above).
+FluentFTP 55.1.0 – Copyright (c) 2015 Robin Rodricks and FluentFTP Contributors. MIT License (text as above).
 Source: https://github.com/robinrodricks/FluentFTP
 
 ## SMBLibrary (RemoteHub, network shares over SMB with a second account)

@@ -192,6 +192,14 @@ public sealed class RemotingSetupDialog : FluentWindow
         }
         using (cert)
         {
+            // A CA certificate in the trusted roots would make this PC trust everything it issues, for every site.
+            if (!RemotingSetup.IsEndEntity(cert))
+            {
+                DiagLog.Write("Remoting setup: the presented certificate is a certificate authority – not offered for trust");
+                return (null, $"{host} presents a certificate authority's certificate, not one for itself. Trusting it would make this PC " +
+                              "trust everything it issues, so RemoteHub doesn't add it. Run the setup script on the target again – it makes a " +
+                              "certificate that stands only for that computer.");
+            }
             if (!await Dialogs.Confirm(owner, "Trust this certificate?",
                     $"{host} presents this certificate:\n\n{RemotingSetup.Grouped(cert.Thumbprint)}\n\n" +
                     "Is it the same thumbprint the setup script printed on the target? Trust it only then – otherwise something between this PC " +

@@ -420,7 +420,7 @@ Add-Type -AssemblyName System.Windows.Forms
 @{ files = @([System.Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { [string]$_ }) }
 '@).files)
         $o.files = @($files | ForEach-Object { Split-Path $_ -Leaf })
-        # the .rhagent holds the device key: kept out of the evidence folder
+        # the .rhagent holds RemoteHub's enrollment secret: kept out of the evidence folder
         $tmp = Join-Path ([IO.Path]::GetTempPath()) "rhlab-agent-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
         try {
             Get-LabFile -Name $VmName -Path $files -Destination $tmp

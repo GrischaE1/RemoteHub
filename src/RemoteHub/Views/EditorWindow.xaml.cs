@@ -27,7 +27,10 @@ public sealed record AppSettingsHost(
     Action SettingsOverview,
     Action About,
     Action WhatsNew,
-    Action Welcome);
+    Action Welcome,
+    Func<Task> SaveEnrollmentFile,
+    Func<Task> ReplaceEnrollmentSecret,
+    Func<Task> RevokeEnrollmentSecrets);
 
 /// <summary>
 /// Edits a connection or folder – or, without a node, the global settings: RemoteHub's own settings on this PC
@@ -291,6 +294,11 @@ public partial class EditorWindow : FluentWindow
         ImportButton.Visibility = Features.IsAllowed(Feature.BackupImport) ? Visibility.Visible : Visibility.Collapsed;
         BackupHeader.Visibility = BackupText.Visibility =
             ExportButton.Visibility == Visibility.Visible || ImportButton.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;
+        // The enrollment file is needed also where installing from RemoteHub is blocked (Intune deployments); only the agent being off hides it.
+        EnrollmentSection.Visibility = Features.IsAllowed(Feature.Agent) ? Visibility.Visible : Visibility.Collapsed;
+        EnrollmentSaveButton.Click += async (_, _) => { if (_host is not null) await _host.SaveEnrollmentFile(); RefreshDataPage(); };
+        EnrollmentReplaceButton.Click += async (_, _) => { if (_host is not null) await _host.ReplaceEnrollmentSecret(); RefreshDataPage(); };
+        EnrollmentRevokeButton.Click += async (_, _) => { if (_host is not null) await _host.RevokeEnrollmentSecrets(); RefreshDataPage(); };
         AuditButton.Click += (_, _) => _host?.AuditLog();
         // The diagnostic log has no user setting: say what is in effect (policy DiagnosticLog, DiagnosticLogRetentionDays, §6.5).
         DiagnosticLogText.Text = !AppPolicy.DiagnosticLog ? "Turned off by your organisation (Settings → Policies)."
@@ -463,7 +471,24 @@ public partial class EditorWindow : FluentWindow
         };
         LocationText.Text = SettingsStore.Describe() + (SettingsStore.IsPolicyManaged ? " (set by your organisation)" : "");
         if (SettingsStore.IsPolicyManaged) PolicyLock.Apply(LocationButton);
+        var keys = _data.AgentEnrollment;
+        EnrollmentText.Text = "The enrollment file goes with the agent's installer – for Intune, software distribution or by hand. It holds an " +
+                              "enrollment secret, not a device key: each device makes its own certificate, and RemoteHub pins it when the agent " +
+                              "first proves it was enrolled with this secret. Keep the file out of reach – anyone with it can enroll a device of " +
+                              "their own. " + EnrollmentStatus(keys);
+        EnrollmentRevokeButton.Visibility = keys.Earlier.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    /// <summary>What the enrollment section says about RemoteHub's enrollment secrets.</summary>
+    internal static string EnrollmentStatus(AgentEnrollmentKeys keys) =>
+        keys.Current is not { } current
+            ? "No enrollment secret yet – it is made when the first enrollment file is saved."
+            : $"Current secret made on {current.CreatedUtc.ToLocalTime():d}." + keys.Earlier.Count switch
+            {
+                0 => "",
+                1 => " 1 earlier secret is still accepted.",
+                var n => $" {n} earlier secrets are still accepted.",
+            };
 
     /// <summary>Writes the RemoteHub settings of this window into <see cref="UiState"/> and applies them.</summary>
     private void ApplyAppSettings()

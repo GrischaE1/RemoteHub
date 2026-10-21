@@ -540,7 +540,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Menu 'RemoteHub Agent>Update RemoteHub Agent*'
                 $R.updateDialog = (Ui '*' -Title 'Update RemoteHub Agent' -Value list -TimeoutSec 60).items
                 $null = Ui 'Update through the running agent' -Title 'Update RemoteHub Agent' -Value check
-                $null = Ui 'Create a new device certificate*' -Title 'Update RemoteHub Agent' -Value uncheck -Optional -TimeoutSec 5
+                $null = Ui 'Enroll again*' -Title 'Update RemoteHub Agent' -Value uncheck -Optional -TimeoutSec 5
                 # Allow automatic sign-in: offered for this way and ticked by default; unticked here, so the update passes
                 # AUTOSIGNIN=0 (the MSI would install the provider by default otherwise)
                 $R.updateAutoSignIn = Ui 'Allow automatic sign-in*' -Title 'Update RemoteHub Agent' -Value read -Optional

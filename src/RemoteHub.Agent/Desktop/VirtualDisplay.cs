@@ -2,7 +2,9 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Xml.Linq;
@@ -538,23 +540,96 @@ internal static class VirtualDisplay
                     new XElement("logging", false), new XElement("debuglogging", false))));
     }
 
-    private static void WriteSettings(int width, int height)
+    private static void WriteSettings(int width, int height) => WriteSettings(SettingsFolder, width, height);
+
+    /// <summary>
+    /// Writes the driver's settings as the service (LocalSystem) into <paramref name="folder"/>, which is at the drive
+    /// root where any signed-in user may create folders: it is made ours first (<see cref="PrepareSettingsFolder"/>), and
+    /// a file already there is removed rather than written through – it could be a hard link to a system file.
+    /// </summary>
+    internal static void WriteSettings(string folder, int width, int height)
     {
-        Directory.CreateDirectory(SettingsFolder);
-        Settings(width, height).Save(SettingsFile);
+        PrepareSettingsFolder(folder);
+        var file = Path.Combine(folder, "vdd_settings.xml");
+        File.Delete(file);
+        using var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        Settings(width, height).Save(stream);
+    }
+
+    /// <summary>
+    /// The settings folder as only the agent made it: a real folder (not a junction or symbolic link), owned by SYSTEM or
+    /// Administrators, with permissions that let nobody else write. Anything else in its place – a link planted to
+    /// redirect the service's write, a folder or file a user made – is removed (a link itself, never what it points to)
+    /// and the folder is created again with those permissions. The driver (a UMDF host, LocalService) only reads it.
+    /// </summary>
+    internal static void PrepareSettingsFolder(string folder)
+    {
+        if (File.Exists(folder)) File.Delete(folder);
+        if (Directory.Exists(folder) && !IsOurs(new DirectoryInfo(folder))) Directory.Delete(folder, recursive: true); // a link is removed, not followed
+        SettingsFolderAcl().CreateDirectory(folder); // nothing happens if someone made it again meanwhile – checked next
+        if (!IsOurs(new DirectoryInfo(folder)))
+            throw new IOException($"{folder} was replaced by someone else while the agent set it up – the virtual display stays off");
+    }
+
+    /// <summary>The accounts that may write the settings folder: SYSTEM, Administrators, and the agent's own account (SYSTEM; the tests' user).</summary>
+    private static SecurityIdentifier[] Writers()
+    {
+        using var me = WindowsIdentity.GetCurrent();
+        return [new(WellKnownSidType.LocalSystemSid, null), new(WellKnownSidType.BuiltinAdministratorsSid, null), me.User!];
+    }
+
+    private static DirectorySecurity SettingsFolderAcl()
+    {
+        var acl = new DirectorySecurity();
+        acl.SetAccessRuleProtection(true, false);
+        const InheritanceFlags inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        foreach (var writer in Writers().Distinct())
+            acl.AddAccessRule(new FileSystemAccessRule(writer, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+        foreach (var reader in new[] { WellKnownSidType.LocalServiceSid, WellKnownSidType.AuthenticatedUserSid, WellKnownSidType.BuiltinUsersSid })
+            acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(reader, null), FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
+        return acl;
+    }
+
+    private const FileSystemRights WriteRights = FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.WriteExtendedAttributes |
+        FileSystemRights.WriteAttributes | FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.ChangePermissions |
+        FileSystemRights.TakeOwnership;
+
+    internal static bool IsOurs(DirectoryInfo folder)
+    {
+        if (folder.Attributes.HasFlag(FileAttributes.ReparsePoint)) return false;
+        var acl = folder.GetAccessControl();
+        var writers = Writers();
+        if (acl.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || !writers.Contains(owner)) return false;
+        if (!acl.AreAccessRulesProtected) return false;
+        return acl.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>()
+            .All(r => r.AccessControlType == AccessControlType.Deny || (r.FileSystemRights & WriteRights) == 0 || writers.Contains((SecurityIdentifier)r.IdentityReference));
     }
 
     /// <summary>The driver re-reads its settings (new resolutions) – through its control pipe.</summary>
-    private static void Reload()
+    private static void Reload() => Reload(PipeName);
+
+    /// <summary>
+    /// Sends the reload command, only to the driver: any user could create a pipe with this name before the driver does.
+    /// The connection is anonymous, so such a server can't act as the service, and the command goes only to the driver's
+    /// host process (<see cref="IsDriverHost"/>).
+    /// </summary>
+    internal static void Reload(string pipeName)
     {
-        using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
+        using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None, TokenImpersonationLevel.Anonymous);
         // "The operation has timed out." alone (0.18.19) didn't say what: the driver's control pipe wasn't there or busy.
         try { pipe.Connect(3000); }
         catch (TimeoutException) { throw new IOException("the driver's control pipe didn't answer within 3 s"); }
+        var server = Native.PipeServerImage(pipe.SafePipeHandle);
+        if (!IsDriverHost(server))
+            throw new IOException($"the driver's control pipe is served by another program ({Path.GetFileName(server) ?? "unknown"}) – nothing was sent");
         var command = Encoding.Unicode.GetBytes("RELOAD_DRIVER");
         pipe.Write(command, 0, command.Length);
         pipe.Flush();
     }
+
+    /// <summary>Windows' host for user-mode drivers (UMDF), where the Indirect Display Driver runs.</summary>
+    internal static bool IsDriverHost(string? image) =>
+        image is not null && string.Equals(Path.GetFullPath(image), Path.Combine(Environment.SystemDirectory, "WUDFHost.exe"), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Runs pnputil; <paramref name="said"/>: its last lines (why it failed), on one line. The arguments go as a list,
@@ -645,6 +720,26 @@ internal static class VirtualDisplay
         }
 
         public static bool RemoveDriverPackage(string oemInf) => SetupUninstallOEMInfW(oemInf, 1 /* SUOI_FORCEDELETE */, IntPtr.Zero);
+
+        /// <summary>The program of the process that serves the pipe at the other end, or null if it can't be read.</summary>
+        public static string? PipeServerImage(Microsoft.Win32.SafeHandles.SafePipeHandle pipe)
+        {
+            if (!GetNamedPipeServerProcessId(pipe, out var pid)) return null;
+            var process = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+            if (process == IntPtr.Zero) return null;
+            try
+            {
+                var name = new char[1024];
+                var size = name.Length;
+                return QueryFullProcessImageNameW(process, 0, name, ref size) ? new string(name, 0, size) : null;
+            }
+            finally { CloseHandle(process); }
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint processId);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint processId);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool QueryFullProcessImageNameW(IntPtr process, int flags, [Out] char[] name, ref int size);
+        [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
 
         public static void UpdateDriver(string inf, string hardwareId)
         {

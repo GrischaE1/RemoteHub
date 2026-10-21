@@ -193,10 +193,13 @@ public sealed class UpdateWindow : FluentWindow
             try
             {
                 var msi = await UpdateService.DownloadAsync(info, new Progress<double>(v => { progress.Value = v; status.Text = $"Downloading… {v:P0}"; }), _download.Token);
-                status.Text = "Download verified (SHA-256).";
+                status.Text = Authenticode.RunningPublisher is null ? "Download verified (SHA-256)." : "Download verified (SHA-256 and signature).";
                 DiagLog.Write($"Update: {info.Version} downloaded and verified");
                 if (!await _host.ConfirmExit()) { status.Text = "Install cancelled. The verified download is kept until the next update."; install.IsEnabled = true; return; }
-                UpdateService.StartInstall(msi);
+                status.Text = "Waiting for administrator approval…";
+                var sha = info.Download!.Sha256!;
+                // Windows' approval prompt blocks the call until it is answered: off the UI thread.
+                await Task.Run(() => UpdateService.StartInstall(msi, sha));
                 DiagLog.Write($"Update: installing {info.Version}");
                 Close();
                 _host.Exit();

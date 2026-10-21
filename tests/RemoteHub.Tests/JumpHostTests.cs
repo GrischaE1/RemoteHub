@@ -510,7 +510,7 @@ public class JumpHostTests : IAsyncLifetime
     public async Task The_local_forwarder_refuses_connections_from_other_processes()
     {
         var connects = 0;
-        using var forward = JumpForwarders.Open("test-" + Guid.NewGuid(), "test", _ => { Interlocked.Increment(ref connects); return Task.FromResult<Stream>(new MemoryStream()); });
+        using var forward = JumpForwarders.Open("test-" + Guid.NewGuid(), _ => { Interlocked.Increment(ref connects); return Task.FromResult<Stream>(new MemoryStream()); });
         // Another process (on a terminal server: another user) connects and waits for an answer – it is closed at once.
         using var other = Process.Start(new ProcessStartInfo("powershell.exe",
             $"-NoProfile -Command \"$c = New-Object Net.Sockets.TcpClient('127.0.0.1', {forward.Port}); $s = $c.GetStream(); $s.ReadTimeout = 10000; " +
@@ -524,6 +524,26 @@ public class JumpHostTests : IAsyncLifetime
         using var client = new TcpClient();
         await client.ConnectAsync(forward.Host, forward.Port);
         await WaitFor(() => connects == 1, "the connection to go through");
+    }
+
+    [SkippableFact]
+    public async Task The_forwarder_logs_neither_the_target_nor_the_jump_hosts_answer()
+    {
+        Skip.IfNot(RemoteHub.Services.DiagLog.Enabled, "the diagnostic log is turned off by policy on this PC");
+        var secret = "secret-target-" + Guid.NewGuid().ToString("N");
+        using var forward = JumpForwarders.Open($"jump.example|5800|fp|admin|{secret}|3389",
+            _ => Task.FromException<Stream>(new JumpHostException($"{secret} couldn't be reached from the jump host.", "unreachable")));
+        string? error = null;
+        using (var client = new TcpClient())
+        {
+            await client.ConnectAsync(forward.Host, forward.Port);
+            await WaitFor(() => (error ??= forward.TakeError()) is not null, "the jump host's answer kept for the error message");
+        }
+        Assert.Contains(secret, error); // the user still learns what couldn't be reached
+        var line = $"Jump host forwarder {forward.Forwarder.LogId}: not connected – unreachable";
+        var log = "";
+        await WaitFor(() => (log = File.ReadAllText(RemoteHub.Services.DiagLog.FilePath)).Contains(line), "the forwarder's log line");
+        Assert.DoesNotContain(secret, log);
     }
 
     [Fact]
@@ -702,6 +722,38 @@ public class JumpHostTests : IAsyncLifetime
                 .GetField("m_serverName", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(client));
         }
         finally { listener.Stop(); }
+    }
+
+    [Fact]
+    public void RemoteHubs_SMB_client_always_signs_and_refuses_a_guest_session()
+    {
+        // SMBLibrary signs only when the server asks; RemoteHub switches it on through private fields – an update that
+        // renames them must fail here, not leave a user's connection unsigned.
+        Assert.True(Remoting.Shares.ManagedSmbShare.CanRequireSigning);
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var required = typeof(SMBLibrary.Client.SMB2Client).GetField("m_signingRequired", flags)!;
+        var key = typeof(SMBLibrary.Client.SMB2Client).GetField("m_signingKey", flags)!;
+
+        var guest = new SMBLibrary.Client.SMB2Client(2000, true); // a guest session has no signing key
+        Assert.False(Remoting.Shares.ManagedSmbShare.RequireSigning(guest));
+        Assert.False((bool)required.GetValue(guest)!);
+
+        var user = new SMBLibrary.Client.SMB2Client(2000, true);
+        key.SetValue(user, new byte[16]); // as Login leaves it for an account
+        Assert.True(Remoting.Shares.ManagedSmbShare.RequireSigning(user));
+        Assert.True((bool)required.GetValue(user)!);
+    }
+
+    [Fact]
+    public void An_FTPS_data_connection_with_another_certificate_is_refused_without_asking()
+    {
+        const string pinned = "AA11", other = "BB22";
+        Assert.Equal(Remoting.Shares.FtpShare.CertificateDecision.Accept, Remoting.Shares.FtpShare.Decide(System.Net.Security.SslPolicyErrors.None, other, pinned, dataConnection: true));
+        Assert.Equal(Remoting.Shares.FtpShare.CertificateDecision.Accept, Remoting.Shares.FtpShare.Decide(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, pinned, pinned, dataConnection: true));
+        Assert.Equal(Remoting.Shares.FtpShare.CertificateDecision.Refuse, Remoting.Shares.FtpShare.Decide(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, other, pinned, dataConnection: true));
+        Assert.Equal(Remoting.Shares.FtpShare.CertificateDecision.Refuse, Remoting.Shares.FtpShare.Decide(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, other, null, dataConnection: true));
+        // the control connection may still ask the user, as before
+        Assert.Equal(Remoting.Shares.FtpShare.CertificateDecision.Ask, Remoting.Shares.FtpShare.Decide(System.Net.Security.SslPolicyErrors.RemoteCertificateChainErrors, other, pinned, dataConnection: false));
     }
 
     private sealed class Values(Dictionary<string, object> values) : A.AgentPolicy.IPolicyValues

@@ -38,6 +38,84 @@ public class VirtualDisplayTests
         finally { Directory.Delete(dir, true); }
     }
 
+    private static void Mklink(string kind, string link, string target)
+    {
+        using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/c mklink {kind} \"{link}\" \"{target}\"")
+            { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        p.WaitForExit();
+        Assert.True(p.ExitCode == 0, $"mklink {kind} failed");
+    }
+
+    [Fact]
+    public void A_junction_planted_at_the_settings_folder_is_removed_not_written_through()
+    {
+        var dir = Directory.CreateTempSubdirectory("rh-vdd-acl-").FullName;
+        var target = Directory.CreateDirectory(Path.Combine(dir, "system-folder")).FullName; // stands for C:\Windows\System32\drivers
+        var settings = Path.Combine(dir, "VirtualDisplayDriver");
+        try
+        {
+            Mklink("/J", settings, target);
+            A.VirtualDisplay.WriteSettings(settings, 1600, 900);
+            Assert.Empty(Directory.GetFileSystemEntries(target)); // nothing written into what the link pointed to
+            Assert.True(Directory.Exists(target));               // and it wasn't deleted either
+            Assert.False(new DirectoryInfo(settings).Attributes.HasFlag(FileAttributes.ReparsePoint));
+            Assert.True(A.VirtualDisplay.IsOurs(new DirectoryInfo(settings)));
+            Assert.Contains("<width>1600</width>", File.ReadAllText(Path.Combine(settings, "vdd_settings.xml")));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void A_folder_someone_else_could_write_is_made_again_and_a_hard_link_isnt_written_through()
+    {
+        var dir = Directory.CreateTempSubdirectory("rh-vdd-acl-").FullName;
+        var settings = Path.Combine(dir, "VirtualDisplayDriver");
+        var victim = Path.Combine(dir, "victim.txt");
+        try
+        {
+            // as an older agent (or a user) left it: inherited permissions, a settings file that is a hard link elsewhere
+            Directory.CreateDirectory(settings);
+            File.WriteAllText(victim, "keep me");
+            Mklink("/H", Path.Combine(settings, "vdd_settings.xml"), victim);
+            File.WriteAllText(Path.Combine(settings, "planted.dll"), "x");
+            Assert.False(A.VirtualDisplay.IsOurs(new DirectoryInfo(settings)));
+
+            A.VirtualDisplay.WriteSettings(settings, 1280, 720);
+            Assert.Equal("keep me", File.ReadAllText(victim));
+            Assert.False(File.Exists(Path.Combine(settings, "planted.dll")));
+            Assert.True(A.VirtualDisplay.IsOurs(new DirectoryInfo(settings)));
+            var rules = new DirectoryInfo(settings).GetAccessControl().GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+                .Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+            var users = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.AuthenticatedUserSid, null);
+            Assert.Contains(rules, r => r.IdentityReference.Equals(users) && r.FileSystemRights.HasFlag(System.Security.AccessControl.FileSystemRights.ReadAndExecute));
+            Assert.DoesNotContain(rules, r => r.IdentityReference.Equals(users) && (r.FileSystemRights & System.Security.AccessControl.FileSystemRights.WriteData) != 0);
+
+            // written again (another size): the agent's own folder stays, its file is replaced
+            A.VirtualDisplay.WriteSettings(settings, 1024, 768);
+            Assert.Contains("<width>1024</width>", File.ReadAllText(Path.Combine(settings, "vdd_settings.xml")));
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public async Task The_reload_command_goes_only_to_the_driver_host()
+    {
+        // Any user can create a pipe with the driver's name first; here this test process serves it.
+        var name = "rh-vdd-test-" + Guid.NewGuid().ToString("N");
+        using var rogue = new System.IO.Pipes.NamedPipeServerStream(name, System.IO.Pipes.PipeDirection.InOut, 1,
+            System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.Asynchronous);
+        var connected = rogue.WaitForConnectionAsync();
+        var ex = Assert.Throws<IOException>(() => A.VirtualDisplay.Reload(name));
+        Assert.Contains("served by another program", ex.Message);
+        await connected.WaitAsync(TimeSpan.FromSeconds(10));
+        var buffer = new byte[64];
+        Assert.Equal(0, await rogue.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(10))); // closed, nothing sent
+
+        Assert.True(A.VirtualDisplay.IsDriverHost(Path.Combine(Environment.SystemDirectory, "wudfhost.exe")));
+        Assert.False(A.VirtualDisplay.IsDriverHost(@"C:\Users\Public\WUDFHost.exe"));
+        Assert.False(A.VirtualDisplay.IsDriverHost(null));
+    }
+
     [Fact]
     public void The_driver_settings_offer_the_window_size_first_at_60_hz()
     {
@@ -78,9 +156,10 @@ public class VirtualDisplayTests
     [Fact]
     public void The_enrollment_file_carries_the_choice()
     {
-        var (e, _) = AgentEnrollment.Create("dev", 58732, virtualDisplay: false);
+        var key = new RemoteHub.Models.AgentEnrollmentKeys().EnsureCurrent(DateTime.UtcNow);
+        var e = AgentEnrollment.Create(key.Id.ToString(), key.Secret, "dev", 58732, virtualDisplay: false);
         Assert.False(AgentEnrollment.Parse(e.Serialize()).VirtualDisplay);
-        var (unset, _) = AgentEnrollment.Create("dev", 58732);
+        var unset = AgentEnrollment.Create(key.Id.ToString(), key.Secret, "dev", 58732);
         Assert.Null(AgentEnrollment.Parse(unset.Serialize()).VirtualDisplay);
     }
 

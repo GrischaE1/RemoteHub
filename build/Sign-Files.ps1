@@ -9,7 +9,8 @@
 #                   signature stays valid after the certificate expires).
 # -ESigner          Signs through SSL.com eSigner with CodeSignTool (release builds, release.yml). CodeSignTool's folder
 #                   comes from CODE_SIGN_TOOL_PATH, the account from ES_USERNAME, ES_PASSWORD, ES_CREDENTIAL_ID and
-#                   ES_TOTP_SECRET - environment variables, never parameters, so they don't end up in a log. eSigner
+#                   ES_TOTP_SECRET - environment variables, never parameters, so they don't end up in a log; they reach
+#                   CodeSignTool through a Java argument file, not its command line (JavaArgFile.ps1). eSigner
 #                   timestamps the signature itself (ts.ssl.com).
 #
 # eSigner signings are counted (240 a year): one attempt per file, no retries - a failure fails the build instead of
@@ -22,6 +23,7 @@ param(
     [switch]$ESigner
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'JavaArgFile.ps1')
 
 $thumbprint = $Certificate -replace '\s', ''
 foreach ($file in $Path) { if (-not (Test-Path $file)) { throw "Can't sign $file - it doesn't exist." } }
@@ -53,12 +55,15 @@ foreach ($file in $Path) {
         Push-Location $tool
         # Java writes its log to stderr: with 'Stop', Windows PowerShell would end at the first line of it.
         $ErrorActionPreference = 'Continue'
+        # The credentials go through an argument file, not the command line (JavaArgFile.ps1), deleted right after.
+        $argFile = Join-Path ([IO.Path]::GetTempPath()) ("esigner-" + [guid]::NewGuid().ToString('N') + '.args')
         try {
-            $output = & $java -jar $jar.FullName sign "-username=$env:ES_USERNAME" "-password=$env:ES_PASSWORD" `
-                "-credential_id=$env:ES_CREDENTIAL_ID" "-totp_secret=$env:ES_TOTP_SECRET" "-input_file_path=$full" "-override=true" 2>&1
+            Write-JavaArgFile -Path $argFile -Arguments '-jar', $jar.FullName, 'sign', "-username=$env:ES_USERNAME", "-password=$env:ES_PASSWORD",
+                "-credential_id=$env:ES_CREDENTIAL_ID", "-totp_secret=$env:ES_TOTP_SECRET", "-input_file_path=$full", '-override=true'
+            $output = & $java "@$argFile" 2>&1
             $exit = $LASTEXITCODE
         }
-        finally { $ErrorActionPreference = 'Stop'; Pop-Location }
+        finally { Remove-Item -LiteralPath $argFile -Force -ErrorAction SilentlyContinue; $ErrorActionPreference = 'Stop'; Pop-Location }
         # CodeSignTool doesn't echo the credentials; its own messages say why a signing failed.
         $text = ($output | Out-String).Trim()
         if ($exit -ne 0 -or $text -match '(?im)^\s*Error') { throw "eSigner couldn't sign $(Split-Path $file -Leaf): $text" }

@@ -481,7 +481,7 @@ P2 · How: S C · Needs: – · Status: ✅ Automated – `Smoke.Tests.ps1`
 
 ## 5. Agent – install, update, uninstall
 
-Common setup for this section: every test file starts with `Reset-LabVm`. The agent is installed with `Install-LabAgent`, which runs the C# lab harness `install` command: `AgentEnrollment.Create` (new device ID, RSA 3072 certificate, pin = SHA-256 of the certificate), `AgentInstaller.Prepare`, `AgentInstaller.InstallOverRemoting` over a PowerShell Direct session as `PSAdmin` (instead of WinRM). Defaults: port 58732, label = the VM's ID from `lab.json`, firewall scope = the host's source address towards the VM (`Get-LabHostAddress`), `VIRTUALDISPLAY=1`. The MSI under test is `LabRoot\msi\RemoteHub-Agent-<ver>-x64.msi`; the previous release is in `LabRoot\msi\previous`. Device state is read with `Get-LabAgentState` (PowerShell Direct as `PSAdmin`).
+Common setup for this section: every test file starts with `Reset-LabVm`. The agent is installed with `Install-LabAgent`, which runs the C# lab harness `install` command: `AgentEnrollment.Create` (an enrollment file with the lab's enrollment secret, `LabRootharnessab-enrollment.json`; no key – the device makes its own device ID and RSA 3072 certificate, and the pin is that certificate's SHA-256, read back), `AgentInstaller.Prepare`, `AgentInstaller.InstallOverRemoting` (an older agent that refuses enrollment format 2 – the previous release the update cases start from – is installed again with the format-1 file its RemoteHub made, with a PFX) over a PowerShell Direct session as `PSAdmin` (instead of WinRM). Defaults: port 58732, label = the VM's ID from `lab.json`, firewall scope = the host's source address towards the VM (`Get-LabHostAddress`), `VIRTUALDISPLAY=1`. The MSI under test is `LabRoot\msi\RemoteHub-Agent-<ver>-x64.msi`; the previous release is in `LabRoot\msi\previous`. Device state is read with `Get-LabAgentState` (PowerShell Direct as `PSAdmin`).
 
 ### 5.1 First install
 
@@ -492,7 +492,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1`
 
 **Steps:**
 1. The host reads its own address towards the VM (`Get-LabHostAddress`).
-2. The harness creates a new enrollment (label = VM ID, port 58732, scope = host address) and keeps the pin.
+2. The harness creates an enrollment file (label = VM ID, port 58732, scope = host address, the lab's enrollment secret).
 3. `InstallOverRemoting` creates `%TEMP%\RemoteHub-Agent-<12 hex>` in the guest, uploads `RemoteHub-Agent-x64.msi` and `<label>.rhagent` in chunks and compares SHA-256 checksums.
 4. It runs `msiexec /i "...\RemoteHub-Agent-x64.msi" /qn /norestart /l*v "...\install.log" VIRTUALDISPLAY=1 ENROLLMENT="...\<label>.rhagent"` and waits.
 5. It reads back `agent.json`, the certificate's SHA-256 and the service status (`fingerprint|port|deviceId|status`), then deletes the temp folder.
@@ -500,8 +500,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated – `A-INST.Tests.ps1`
 
 **Expected:**
 - `Install-LabAgent` returns without error (`InstallOverRemoting` throws "The installer failed (exit code N)" for any exit code other than 0 or 3010).
-- `installed.fingerprint` = the pin created in step 2.
-- `installed.deviceId` = the enrollment's device ID.
+- `installed.fingerprint` = the pin, the certificate the device made; the claim over the network (`Get-LabAgentClaim`) succeeds and names the same certificate and device ID.
 - `installed.port` = 58732.
 
 #### A-INST-02 · Service
@@ -882,16 +881,16 @@ P2 · How: H · Needs: – · Status: ✅ Automated – `A-INSTOPT.Tests.ps1`
 #### A-HAND-01 · MSI by hand next to the `.rhagent`
 P1 · How: H S · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
-**Preconditions:** VM reverted. Enrollment and pin created on the host (`AgentEnrollment.Create`). `Admin` signed in at the console.
+**Preconditions:** VM reverted. Enrollment file created on the host with the lab's enrollment secret (`AgentEnrollment.Create`, no key). `Admin` signed in at the console.
 
 **Steps:**
 1. Copy `RemoteHub-Agent-x64.msi` and `<label>.rhagent` into one folder in the guest (for example `C:\Users\Admin\Desktop\agent`).
 2. In Admin's session (scheduled task, highest privileges) run `msiexec /i RemoteHub-Agent-x64.msi /qn` from that folder without `ENROLLMENT`.
-3. On the host, poll health with the pin every 10 s, like `WaitForManualInstall` does (5 s timeout per try, up to 30 min).
+3. On the host, claim the agent every 10 s, like `WaitForClaim` does (`AgentInstaller.ClaimAsync`, up to 30 min).
 
 **Expected:**
 - msiexec exit 0; the `.rhagent` file is gone from the folder.
-- Health answers with the enrolled device ID within 10 s of the service start (one poll interval).
+- The claim succeeds within 10 s of the service start (one poll interval), with the device ID and the certificate fingerprint in the device's `agent.json` and `LocalMachineMy` – the device made them itself.
 
 #### A-HAND-02 · Two `.rhagent` files in the folder
 P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
@@ -931,13 +930,13 @@ P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 2. Read `agent.json` and check the file.
 
 **Expected:**
-- msiexec exit 0; `deviceId` = the enrollment's ID.
+- msiexec exit 0; the claim succeeds, and `deviceId` and the certificate are the ones it names.
 - `C:\Enroll\dev.rhagent` is deleted.
 
-#### A-HAND-05 · Enrollment format 2 / bad GUID / port 0 / empty groups
+#### A-HAND-05 · Enrollment format 3 / format-1 file / bad key ID / bad secret / port 0 / empty groups
 P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
-**Preconditions:** VM reverted. Four `.rhagent` files made from a valid one, each with one field changed.
+**Preconditions:** VM reverted. Six `.rhagent` files made from a valid one, each with one field changed (`format` 3, `format` 1 – as a file from an older RemoteHub, which held the device's PFX –, `keyId`, `secret`, `listenPort`, `allowedGroups`).
 
 **Steps:**
 1. For each file: install with `ENROLLMENT=<file>` and a verbose log.
@@ -945,7 +944,7 @@ P2 · How: PS · Needs: – · Status: ✅ Automated – `A-HAND.Tests.ps1`
 
 **Expected:**
 - Each install fails (1603) and rolls back (no service, rule, certificate, `agent.json`).
-- The log shows: "Enrollment format 2 is not supported by this agent version." / "The enrollment has no valid device ID." / "Port 0 is not valid." / "No allowed groups – nobody could connect."
+- The log shows: "Enrollment format 3 is not supported by this agent version." / "This enrollment file was made by an older RemoteHub and holds a device key, which this agent no longer accepts. …" / "The enrollment has no valid key ID." / "The enrollment has no valid secret." / "Port 0 is not valid." / "No allowed groups – nobody could connect."
 
 #### A-HAND-06 · Interactive install (UI, not /qn)
 P3 · How: S · Needs: – · Status: ✅ Automated – `A-MORE.Tests.ps1`
@@ -977,7 +976,7 @@ P2 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 
 **Expected:**
 - RemoteHub shows "Copied RemoteHub-Agent-x64.msi and <label>.rhagent to the clipboard."
-- After the install the connection is marked installed on the first health answer (`WaitForManualInstall`, audit "Installed – answered as RemoteHub Agent <ver>").
+- After the install the connection is claimed and marked installed on the agent's first answer (`WaitForClaim`, audit "Claimed – installed by hand, certificate SHA-256 …").
 
 #### A-CLIP-02 · Staging cleanup on the admin's PC
 P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
@@ -1003,7 +1002,7 @@ P1 · How: U · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 2. Read the dialog through UI Automation; press Cancel.
 
 **Expected:**
-- Dialog "Copy the device key?" naming device B and `<A label>.rhagent` ("…which holds A's device key. Close that tab first, or copy anyway?").
+- Dialog "Copy the enrollment secret?" naming device B and `<A label>.rhagent` ("…which holds RemoteHub's enrollment secret. Close that tab first, or copy anyway?").
 - After Cancel: "Cancelled – close the remote desktop tab, then try again."; the clipboard holds no `.rhagent`.
 
 ### 5.3 Update, repair, downgrade
@@ -1064,7 +1063,7 @@ P1 · How: H PS · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 **Preconditions:** VM reverted; previous release installed.
 
 **Steps:**
-1. `Update-LabAgent -Msi <under test> -NewIdentity`: the harness creates a new enrollment (label = VM ID, scope = host address) and sends it with the update; it then waits for the new pin.
+1. `Update-LabAgent -Msi <under test> -NewIdentity` ("Enroll again"): the harness sends a new enrollment file (label = VM ID, scope = host address) with the update; it waits for the old certificate to stop answering, then claims the new one – its pin is `expectedPin`.
 2. Read the device state; save `a-upd-new-identity.json`.
 
 **Expected:**
@@ -1233,7 +1232,7 @@ P2 · How: H · Needs: – · Status: ✅ Automated – `A-UPD.Tests.ps1`
 **Preconditions:** same context as A-SAME-01, after its update.
 
 **Steps:**
-1. `Update-LabAgent -Msi <under test> -NewIdentity` (new enrollment and pin, same version).
+1. `Update-LabAgent -Msi <under test> -NewIdentity` (new enrollment, claimed after the restart, same version).
 2. Read the device state.
 
 **Expected:**
@@ -5595,7 +5594,7 @@ P1 · How: U PS · Needs: 2VM · Status: ✅ Automated – `UI-DESKTOP.Tests.ps1
 
 **Steps:**
 1. FlaUI: right-click → *RemoteHub Agent* → *Update RemoteHub Agent…*.
-2. Choose "Update through the running agent"; leave "Create a new device certificate" unticked; click *Update*.
+2. Choose "Update through the running agent"; leave "Enroll again" unticked; click *Update*.
 3. Wait for *Done*.
 4. Hover the shield; PS Direct on the device: read the agent's file version and certificate thumbprint.
 
@@ -8233,3 +8232,117 @@ P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
 **Expected:**
 - clicking the version on the rail opens *About RemoteHub*, not the update window
+
+## 12. Security – attack cases (SEC)
+
+The cases of [test-lab-cases.md](test-lab-cases.md) §13: the lab plays the attacker. Design: [security-test-lab-design.md](security-test-lab-design.md).
+
+#### SEC-UPD-01 · Update with the right checksum, broken signature
+P1 · How: U M PS · Needs: the lab signing certificate · Status: ◐ Written – `C-POLUPD2.Tests.ps1`
+
+**Preconditions:** client VM from the checkpoint; RemoteHub installed with `Install-LabClient -Network` (the VM trusts the lab signing certificate that signed the build); the mock update server serves the build's MSI and `RemoteHub-99.0.0-x64.msi`, a rebuild of it (`New-LabRebuiltMsi`: new ProductCode, so its signature no longer matches).
+
+**Steps:**
+1. The mock announces 99.0.0 with the rebuild, its real SHA-256 and size.
+2. RemoteHub: *Settings → Updates & privacy → Check for updates now → Download and install*.
+3. Watch for Windows' approval prompt (`consent.exe`) for up to 2 minutes while reading the update window.
+
+**Expected:**
+- the update window says "The downloaded installer has a signature that doesn't match the file or that this PC doesn't trust. It was deleted and won't be installed."
+- Windows never asks for approval
+- no `.msi` in `C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates`
+
+#### SEC-UPD-02 · Download swapped during the approval prompt
+P1 · How: U M C PS · Needs: the lab signing certificate · Status: ◐ Written – `C-POLUPD2.Tests.ps1`
+
+**Preconditions:** as SEC-UPD-01; the mock announces 99.0.0 with the build's own (signed) MSI; the rebuild copied into the VM.
+
+**Steps:**
+1. *Check for updates now → Download and install*; wait for Windows' approval prompt.
+2. While it is shown, copy the rebuild over the downloaded MSI in the user's `%TEMP%\RemoteHub\Updates` (as the user's own programs could).
+3. Approve (Alt+Y). Wait until RemoteHub runs again and read the message in the *RemoteHub updates* dialog.
+4. Read `C:\Program Files\RemoteHub Updates` (its permissions, `*.msi`, `results\*.txt`) and the installed version.
+5. Again without the swap: *Download and install*, approve, wait until RemoteHub runs again.
+
+**Expected:**
+- the approval prompt comes while RemoteHub still runs
+- after the swap: RemoteHub starts again and says "The update wasn't installed: the downloaded file changed after RemoteHub had checked it…"; the outcome file says `refused changed`; no `.msi` in the staging folder; its permissions are not inherited and name only SYSTEM and Administrators; the installed version is unchanged
+- without the swap: the newest outcome is `installed 0` (or 3010), no `.msi` left, RemoteHub runs again and shows no update message
+
+#### SEC-VDD-01 · Rogue display-driver pipe
+P1 · How: H S PS E · Needs: normaluser signed in at the console · Status: ◐ Written – `SEC-VDD.Tests.ps1`
+
+**Preconditions:** device VM with the agent (`-AutoLogon User`), `virtualDisplay` = `always` in agent.json.
+
+**Steps:**
+1. Connection A (headless desktop client) asks for 1280×720: the virtual monitor goes on; A stays connected.
+2. In normaluser's session, a script serves `MTTVirtualDisplayPipe` with 4 instances and records, per connection, the bytes it reads and the account `GetImpersonationUserName` gives.
+3. Connection B asks for 1600×900: the device is on already, so the agent sends the driver its reload command. B and A end.
+4. Read the rogue script's record and the agent log since step 3.
+
+**Expected:**
+- normaluser could create the pipe name (the attack's precondition)
+- no rogue connection received a byte; none could act as SYSTEM
+- if a rogue instance was reached, the agent log says the control pipe "is served by another program"
+
+#### SEC-VDD-02 · Settings folder at the drive root
+P1 · How: H PS · Needs: – · Status: ◐ Written – `SEC-VDD.Tests.ps1`
+
+**Preconditions:** as SEC-VDD-01.
+
+**Steps:**
+1. A connection asks for 1280×720; read `C:\VirtualDisplayDriver`'s attributes, owner and permissions.
+2. As normaluser, try to remove the folder and to create a file in it.
+3. As the admin account, replace the folder with a junction to `C:\Users\Public\rh-sec-vdd-target`.
+4. A connection asks for 1600×900; read the folder and the junction's target again.
+
+**Expected:**
+- after step 1: a real folder, permissions not inherited, owner SYSTEM or Administrators, only they may write
+- normaluser can neither remove it nor create files in it
+- after step 4: nothing in the junction's target; `C:\VirtualDisplayDriver` is a real folder again with those permissions, and its `vdd_settings.xml` has width 1600
+
+#### SEC-SH-02 · SMB signing with RemoteHub's own client
+P1 · How: H PS · Needs: Windows Server VM (share servers) · Status: ◐ Written – `S-SHARE.Tests.ps1`
+
+**Preconditions:** the S-SHARE shares; the server's `RequireSecuritySignature` set to `$false` (restored afterwards).
+
+**Steps:**
+1. The S-SMB-02 run: the admin through Windows' client, normaluser through RemoteHub's own client, which writes 14 files.
+
+**Expected:**
+- the second connection is RemoteHub's client and writes all 14 files
+
+Note: Windows doesn't report a session's signing. RemoteHub's client signs every request and drops answers without a valid signature, so the copy only works because the server signs its answers to signed requests. The unit test `RemoteHubs_SMB_client_always_signs_and_refuses_a_guest_session` shows the client asks for signing.
+
+#### SEC-LOG-01 · Nothing identifying in DiagLog
+P1 · How: H E · Needs: the jump host VM · Status: ◐ Written – `J-JUMP.Tests.ps1`
+
+**Preconditions:** the J-JUMP file's setup; the time it ended is the start of the log read.
+
+**Steps:**
+1. Run the file's cases (jump sessions, forwarders, WinRM, shares).
+2. Read this PC's DiagLog (`%APPDATA%\RemoteHub\logs\remotehub.log` and `.old`) from the start time on, with `Get-LabHostDiagLog`.
+
+**Expected:**
+- at least one "Jump host forwarder <8 hex characters>" line
+- no line names the device's computer name, its address, the jump host's address, the account or the lab password (the evidence keeps only counts)
+
+#### SEC-ENR-03 · A copied enrollment file
+P1 · How: H PS · Needs: a second device VM (`Get-LabDevice`) · Status: ✅ Automated – `SEC-ENR.Tests.ps1`
+
+**Preconditions:** both VMs reverted. One `.rhagent` made on the host with the lab's enrollment secret (`New-LabEnrollment`), kept outside the evidence folder.
+
+**Steps:**
+1. Read the file's fields (only their names go into the evidence).
+2. Install the agent on the VM and on the second device with that same file (`Install-LabAgent -EnrollmentFile`) – the copy taken before it was used.
+3. Read both devices' state (`Get-LabAgentState`: device ID, certificate, whether its key can be exported).
+4. Claim each device as RemoteHub does (`Get-LabAgentClaim`, `AgentInstaller.ClaimAsync`).
+5. Claim the second device under the first one's computer name (a DNS name pointing at it); ask the second device's health with the first one's pin.
+6. Claim both again as RemoteHub would after *Replace and revoke* (`-RevokeCurrent`).
+
+**Expected:**
+- the file has `secret` and no `pfx` or `deviceId`
+- the two devices have different device IDs and certificates; neither key can be exported; `enrollmentKeyId` in `agent.json` is the file's
+- both claims succeed (`Claimed`), each with the certificate its own device holds – the first one's is the pin read back at the install
+- the second device under the first one's name: `OtherName`; the first one's pin is refused by the second device
+- after the revocation both claims: `RevokedSecret`

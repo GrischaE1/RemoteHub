@@ -154,16 +154,75 @@ public class UpdateTelemetryTests
         }
     }
 
-    private static async Task<(string? Path, Exception? Error, string Folder)> Download(byte[] served, UpdateInfo info, string current = "0.8.0")
+    /// <summary>A download as RemoteHub makes it; <paramref name="publisher"/>: the running build's signer (null: an unsigned build).</summary>
+    private static async Task<(string? Path, Exception? Error, string Folder)> Download(byte[] served, UpdateInfo info, string current = "0.8.0", string? publisher = null)
     {
         var folder = Path.Combine(Path.GetTempPath(), "rh-update-test-" + Guid.NewGuid().ToString("N"));
         var oldHttp = UpdateService.Http;
         var oldVersion = UpdateService.Current;
+        var oldPublisher = Authenticode.RunningPublisher;
         UpdateService.Http = new HttpClient(new FakeHandler(served));
         UpdateService.Current = AppVersion.Parse(current)!;
+        Authenticode.RunningPublisher = publisher;
         try { return (await UpdateService.DownloadAsync(info, null, CancellationToken.None, folder), null, folder); }
         catch (Exception ex) { return (null, ex, folder); }
-        finally { UpdateService.Http = oldHttp; UpdateService.Current = oldVersion; }
+        finally { UpdateService.Http = oldHttp; UpdateService.Current = oldVersion; Authenticode.RunningPublisher = oldPublisher; }
+    }
+
+    /// <summary>A file with an embedded Authenticode signature that every Windows trusts: the .NET runtime's own coreclr.dll.</summary>
+    private static string SignedFile => Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "coreclr.dll");
+
+    [Fact]
+    public async Task A_signed_build_installs_only_downloads_signed_by_its_own_publisher()
+    {
+        var signed = File.ReadAllBytes(SignedFile);
+        var publisher = Authenticode.SignerSubject(SignedFile);
+        Assert.NotNull(publisher);
+        var unsigned = new byte[100_000];
+        Random.Shared.NextBytes(unsigned);
+        var tampered = (byte[])signed.Clone();
+        tampered[signed.Length / 3] ^= 0xFF; // in the code, not the signature: the signature no longer matches
+        var folders = new List<string>();
+        try
+        {
+            var ok = await Download(signed, Info(signed), publisher: publisher);
+            folders.Add(ok.Folder);
+            Assert.Null(ok.Error);
+            Assert.True(File.Exists(ok.Path));
+
+            foreach (var (served, signer, why) in new (byte[], string, string)[]
+                     {
+                         (unsigned, publisher!, "isn't signed"),
+                         (tampered, publisher!, "doesn't match the file"),
+                         (signed, "CN=Someone Else, O=Someone Else, C=DE", "not by RemoteHub's publisher"),
+                     })
+            {
+                var refused = await Download(served, Info(served), publisher: signer);
+                folders.Add(refused.Folder);
+                var error = Assert.IsType<InvalidDataException>(refused.Error);
+                Assert.Contains(why, error.Message);
+                Assert.Empty(Directory.GetFiles(refused.Folder)); // deleted, nothing left to install
+            }
+
+            // An unsigned build (test release, local build) can't name a publisher: the checksum is all it has.
+            var unsignedBuild = await Download(unsigned, Info(unsigned), publisher: null);
+            folders.Add(unsignedBuild.Folder);
+            Assert.Null(unsignedBuild.Error);
+        }
+        finally
+        {
+            foreach (var f in folders) try { Directory.Delete(f, true); } catch { /* temp */ }
+        }
+    }
+
+    [Fact]
+    public void The_publisher_is_compared_by_subject_with_a_trusted_chain()
+    {
+        var publisher = Authenticode.SignerSubject(SignedFile)!;
+        Assert.Null(Authenticode.Refusal(SignedFile, publisher));
+        Assert.Null(Authenticode.Refusal(SignedFile, null));
+        Assert.Contains("not by RemoteHub's publisher", Authenticode.Refusal(SignedFile, publisher.ToUpperInvariant() + "X"));
+        Assert.Null(Authenticode.SignerSubject(Path.Combine(Path.GetTempPath(), "rh-missing-" + Guid.NewGuid().ToString("N"))));
     }
 
     private static UpdateInfo Info(byte[] content, string? sha = null, long? size = null, string url = "https://api.github.com/repositories/1409080301/releases/assets/2") =>
@@ -211,13 +270,98 @@ public class UpdateTelemetryTests
     }
 
     [Fact]
-    public void Install_helper_waits_runs_the_msi_and_restarts()
+    public void Restart_helper_waits_for_the_elevated_step_and_passes_its_result()
     {
-        var script = UpdateService.InstallScript(@"C:\Temp\100%\RemoteHub-0.9.1-x64.msi", 4242, @"C:\Program Files\RemoteHub\RemoteHub.exe", @"D:\Tools\RemoteHub\RemoteHub.exe");
+        var id = Guid.NewGuid().ToString("N");
+        var script = UpdateService.RestartScript(4242, @"C:\Program Files\RemoteHub\RemoteHub.exe", @"D:\Tools\100%\RemoteHub.exe", id);
         Assert.Contains("PID eq 4242", script);
-        Assert.Contains(@"msiexec.exe"" /i ""C:\Temp\100%%\RemoteHub-0.9.1-x64.msi"" /passive /norestart", script);
-        Assert.Contains(@"start """" ""C:\Program Files\RemoteHub\RemoteHub.exe""", script);
-        Assert.Contains(@"start """" ""D:\Tools\RemoteHub\RemoteHub.exe""", script);
+        Assert.Contains("powershell.exe", script);
+        Assert.DoesNotContain("msiexec", script); // the user's own helper never installs anything
+        Assert.Contains($@"start """" ""C:\Program Files\RemoteHub\RemoteHub.exe"" --update-result {id}", script);
+        Assert.Contains($@"start """" ""D:\Tools\100%%\RemoteHub.exe"" --update-result {id}", script);
+    }
+
+    [Fact]
+    public void Elevated_step_is_valid_PowerShell_with_its_values_quoted()
+    {
+        var command = UpdateService.InstallCommand(@"C:\Users\O'Brien\AppData\Local\Temp\RemoteHub\Updates\RemoteHub-0.9.1-x64.msi", "ab" + new string('0', 62),
+            "CN=O'Brien GmbH, O=O'Brien GmbH, C=DE", 4242, "0123456789abcdef0123456789abcdef");
+        System.Management.Automation.Language.Parser.ParseInput(command, out _, out var errors);
+        Assert.Empty(errors);
+        Assert.Contains(@"$source = 'C:\Users\O''Brien\AppData", command);
+        Assert.Contains("$sha = 'AB" + new string('0', 62) + "'", command);
+        Assert.Contains("$publisher = 'CN=O''Brien GmbH, O=O''Brien GmbH, C=DE'", command);
+        Assert.Contains("Wait-Process -Id 4242", command);
+        Assert.Contains("Join-Path $env:ProgramFiles 'RemoteHub Updates'", command);
+        Assert.Contains("/inheritance:r", command);
+        // the copy is checked, never the user's download
+        Assert.Contains("Get-FileHash -LiteralPath $target", command);
+        Assert.Contains("Get-AuthenticodeSignature -LiteralPath $target", command);
+    }
+
+    /// <summary>Runs the elevated step's script without elevation, in a temp folder instead of Program Files.</summary>
+    private static string RunInstallCommand(string source, string sha, string? publisher, string stage)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var command = UpdateService.InstallCommand(source, sha, publisher, 0, id, stage);
+        var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command)))
+        { UseShellExecute = false, CreateNoWindow = true };
+        using var p = System.Diagnostics.Process.Start(start)!;
+        Assert.True(p.WaitForExit(60_000), "the step didn't end within 60 s");
+        return File.ReadAllText(Path.Combine(stage, "results", id + ".txt")).Trim();
+    }
+
+    [SkippableFact]
+    public void Elevated_step_refuses_a_swapped_or_wrongly_signed_file_and_keeps_no_copy()
+    {
+        // The step locks its folder to administrators and SYSTEM: without elevation it can't use it (CI runs elevated).
+        Skip.IfNot(new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator), "needs an elevated test run");
+        var dir = Path.Combine(Path.GetTempPath(), "rh-update-stage-" + Guid.NewGuid().ToString("N"));
+        var stage = Path.Combine(dir, "stage");
+        var download = Path.Combine(dir, "RemoteHub-9.9.9-x64.msi");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.Copy(SignedFile, download);
+            var sha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(download)));
+            var publisher = Authenticode.SignerSubject(SignedFile)!;
+
+            // swapped after RemoteHub checked it: another file, another hash
+            Assert.Equal("refused changed", RunInstallCommand(download, new string('0', 64), publisher, stage));
+            // the right file, but RemoteHub's publisher is someone else
+            Assert.Equal("refused signature", RunInstallCommand(download, sha, "CN=RemoteHub Publisher", stage));
+            Assert.Empty(Directory.GetFiles(stage, "*.msi")); // the copy is always removed
+            Assert.Equal("The update wasn't installed: the installer isn't signed by RemoteHub's publisher.",
+                UpdateService.DescribeInstallResult("refused signature"));
+
+            // only administrators and SYSTEM may write the staging folder
+            var rules = new DirectoryInfo(stage).GetAccessControl().GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+                .Cast<System.Security.AccessControl.FileSystemAccessRule>().ToList();
+            Assert.All(rules, r => Assert.Contains(r.IdentityReference.Value, new[] { "S-1-5-18", "S-1-5-32-544" }));
+            Assert.True(new DirectoryInfo(stage).GetAccessControl().AreAccessRulesProtected);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* temp */ }
+        }
+    }
+
+    [Theory]
+    [InlineData("installed 0", null)]
+    [InlineData("installed 3010", null)]
+    [InlineData("installed 1602", "cancelled")]
+    [InlineData("installed 1603", "error 1603")]
+    [InlineData("refused changed", "changed after RemoteHub had checked it")]
+    [InlineData("failed the staging folder could not be locked down.", "couldn't be installed – RemoteHub wasn't updated (the staging folder could not be locked down)")]
+    [InlineData("something else", null)]
+    public void The_restarted_RemoteHub_says_why_an_update_did_not_install(string result, string? expected)
+    {
+        var message = UpdateService.DescribeInstallResult(result);
+        if (expected is null) Assert.Null(message);
+        else Assert.Contains(expected, message);
+        Assert.Null(UpdateService.InstallResultMessage(@"..\..\Windows\win")); // only an id names a result file
     }
 
     // ------------------------------------------------------------------ telemetry
