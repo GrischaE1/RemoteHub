@@ -169,7 +169,9 @@ foreach ($file in $testFiles) {
 }
 Write-Host "$($queue.Count) file runs on $($vms.Count) VMs"
 # what each file took in the last runs: the longest start first, and a file that hangs is ended sooner
-$times = Get-LabFileTimes -ResultsRoot (Join-Path $cfg.LabRoot 'results')
+# (only an aid: without it the files start in name order with their own time limits)
+$times = try { Get-LabFileTimes -ResultsRoot (Join-Path $cfg.LabRoot 'results') }
+         catch { Write-Warning "Earlier run times not read ($($_.Exception.Message)) - files start in name order"; @{} }
 $expected = 0
 foreach ($item in $queue) { $t = $times["$($item.Name)|$($item.Kind)"]; $expected += $(if ($t) { $t.Median } else { 10 }) }
 Write-Host "Expected: about $([math]::Round($expected / [math]::Max(1, $vms.Count) / 60, 1)) h of work per VM ($expected VM-minutes)$(if ($FailFast) { ' - fail fast: on' })"

@@ -97,6 +97,20 @@ public class LabDataTests
     }
 
     [Fact]
+    public void The_lanes_come_from_run_json_also_for_a_vm_that_only_lent_itself_to_others()
+    {
+        const string json = """
+            { "RunId": "x", "Vms": [
+                { "Id": "Server-2025-en-US", "Lanes": ["TestAutomation - Server - 2025 - en-US", "TestAutomation - Server - 2025 - en-US - 2"] },
+                { "Id": "Console-26H2-en-US", "Lanes": ["a", "b", "c"] },
+                { "Id": "W11-26H2-en-US", "Lanes": "TestAutomation - W11 - 26H2 - en-US" } ] }
+            """;
+        Assert.Equal([("Console-26H2-en-US", 3), ("Server-2025-en-US", 2), ("W11-26H2-en-US", 1)], LabVms.FromRunJson(json));
+        Assert.Equal([("W11-26H2-en-US", 1)], LabVms.FromRunJson("""{ "Vms": { "Id": "W11-26H2-en-US", "Lanes": ["a"] } }"""));
+        Assert.Empty(LabVms.FromRunJson("""{ "RunId": "x" }"""));
+    }
+
+    [Fact]
     public void The_estimate_weighs_what_each_file_took_before_and_shares_the_rest_between_the_vms()
     {
         var history = new LabHistory();

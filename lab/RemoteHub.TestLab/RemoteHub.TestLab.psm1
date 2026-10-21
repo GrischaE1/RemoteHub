@@ -125,18 +125,26 @@ function Get-LabFileNeeds {
     }
 }
 
-# How long each file took on each kind in the last -Runs runs (the "done" lines of results\<run>\console.log):
-# "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count.
+# How long each file took on each kind in the last -Runs finished runs (the "done" lines of results\<run>\console.log):
+# "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count. Only
+# finished runs (done.json): the run going on writes its console.log, which can't be opened then - and a log that can't
+# be read is left out, never a reason to fail the run.
 function Get-LabFileTimes {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 10)
+    param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 20)
     $all = @{}
     $dirs = @(Get-ChildItem $ResultsRoot -Directory -ErrorAction SilentlyContinue | Where-Object Name -match '^\d{8}-\d{6}$' |
-            Sort-Object Name -Descending | Select-Object -First $Runs)
+            Where-Object { Test-Path (Join-Path $_.FullName 'done.json') } | Sort-Object Name -Descending | Select-Object -First $Runs)
     foreach ($d in $dirs) {
         $log = Join-Path $d.FullName 'console.log'
         if (-not (Test-Path $log)) { continue }
-        foreach ($m in [regex]::Matches([IO.File]::ReadAllText($log), '(?m)^\d\d:\d\d:\d\d done\s+(\S+) on (\S+?): .*\((\d+) min\)')) {
+        $text = try {
+            $s = [IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
+            try { (New-Object IO.StreamReader($s, $true)).ReadToEnd() } finally { $s.Dispose() }
+        }
+        catch { $null }
+        if (-not $text) { continue }
+        foreach ($m in [regex]::Matches($text, '(?m)^\d\d:\d\d:\d\d done\s+(\S+) on (\S+?): .*\((\d+) min\)')) {
             # the kind: the VM's Id without its lane ("W11-26H2-en-US-2" -> "W11-26H2-en-US")
             $key = "$($m.Groups[1].Value)|$($m.Groups[2].Value -replace '-\d+$', '')"
             if (-not $all.ContainsKey($key)) { $all[$key] = [Collections.Generic.List[int]]::new() }
