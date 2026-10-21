@@ -202,7 +202,9 @@ public sealed partial class EditorViewModel : ObservableObject
         c.PsRemoting is { } st
             ? $"Last check ({(st.ViaAgent ? "RemoteHub Agent" : "WinRM")}) {st.CheckedUtc.ToLocalTime():g}: {(st.State == PsRemotingState.Available ? "available" : "not available")} – {st.Message}"
             : "Not checked yet. It is checked after the first RDP login, or right-click → Test PowerShell remoting.",
-        c.Agent is { } a
+        c.Agent is { Fingerprint.Length: 0 } p
+            ? $"RemoteHub Agent: prepared, waiting for the device – port {p.Port}. RemoteHub pins the device's certificate when the agent first answers."
+            : c.Agent is { } a
             ? $"RemoteHub Agent: {(a.Status == AgentStatus.Installed ? "installed" : "prepared, not confirmed yet")} – port {a.Port}, " +
               $"certificate SHA-256 {a.Fingerprint}{(a.Version is { } v ? $", version {v}" : "")}"
             : "RemoteHub Agent: not installed (right-click the connection → Install RemoteHub Agent).",

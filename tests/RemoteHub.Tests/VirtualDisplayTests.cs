@@ -156,9 +156,10 @@ public class VirtualDisplayTests
     [Fact]
     public void The_enrollment_file_carries_the_choice()
     {
-        var (e, _) = AgentEnrollment.Create("dev", 58732, virtualDisplay: false);
+        var key = new RemoteHub.Models.AgentEnrollmentKeys().EnsureCurrent(DateTime.UtcNow);
+        var e = AgentEnrollment.Create(key.Id.ToString(), key.Secret, "dev", 58732, virtualDisplay: false);
         Assert.False(AgentEnrollment.Parse(e.Serialize()).VirtualDisplay);
-        var (unset, _) = AgentEnrollment.Create("dev", 58732);
+        var unset = AgentEnrollment.Create(key.Id.ToString(), key.Secret, "dev", 58732);
         Assert.Null(AgentEnrollment.Parse(unset.Serialize()).VirtualDisplay);
     }
 

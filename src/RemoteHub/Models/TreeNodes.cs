@@ -261,6 +261,11 @@ public sealed class AgentDevice
     public string Label { get; set; } = "";
     public int Port { get; set; } = RemoteHub.Agent.AgentProtocol.DefaultPort;
     public string Fingerprint { get; set; } = "";
+    /// <summary>
+    /// While enrolled again and waiting for the claim: the certificate this enrollment replaces. Until the new one is
+    /// installed the old agent still answers claims with it, and that answer must not be pinned.
+    /// </summary>
+    public string? ReplacesFingerprint { get; set; }
     public AgentStatus Status { get; set; }
     public DateTime CreatedUtc { get; set; }
     public DateTime? InstalledUtc { get; set; }
@@ -316,6 +321,8 @@ public sealed class AppData
     public ObservableCollection<NodeBase> Items { get; set; } = new();
     public UiState Ui { get; set; } = new();
     public RemoteToolSettings Tools { get; set; } = new();
+    /// <summary>The RemoteHub Agent enrollment secrets (docs/agent-spec.md §5.5).</summary>
+    public AgentEnrollmentKeys AgentEnrollment { get; set; } = new();
 }
 
 /// <summary>Global settings of the remote tool tabs (shared with the other settings).</summary>

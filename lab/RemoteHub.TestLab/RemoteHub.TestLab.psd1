@@ -19,7 +19,7 @@
         'Save-LabAgentEvidence', 'Get-LabAgentMsi', 'Get-LabClientMsi', 'Install-LabClient', 'Start-LabClient', 'Close-LabFirstStart', 'Stop-LabClient', 'Invoke-LabUi', 'Wait-LabCredentialDialog','New-LabClientConnection', 'Start-LabMockServer', 'Set-LabMockLatest', 'Set-LabMockControl', 'Get-LabMockRequests', 'Invoke-LabInSessionJson', 'Invoke-LabClientSql', 'Get-LabMsiVersion', 'Update-LabAgent', 'Invoke-LabAgentCommand', 'Set-LabCredentialProvider', 'Disconnect-LabConsole', 'Invoke-LabAutoSignIn', 'New-LabBrokenMsi', 'New-LabRebuiltMsi',
         'Set-LabAgentPolicy', 'Get-LabAgentPolicy', 'Set-LabAgentJsonValue', 'Get-LabHostDiagLog', 'Enable-LabShareServers', 'Invoke-LabShare',
         'Invoke-LabTool', 'Invoke-LabProbe', 'Invoke-LabSetupScript', 'Get-LabWinRmState', 'Invoke-LabScriptRun', 'Get-LabScriptLeftovers',
-        'Restart-LabAgent', 'Wait-LabAgent', 'Restart-LabRdpService', 'New-LabGuestUser', 'New-LabEnrollment', 'Get-LabGuestTime', 'Get-LabAgentEvent', 'Get-LabFailedLogon', 'Get-LabAgentLog'
+        'Restart-LabAgent', 'Wait-LabAgent', 'Restart-LabRdpService', 'New-LabGuestUser', 'New-LabEnrollment', 'Get-LabAgentClaim', 'Get-LabGuestTime', 'Get-LabAgentEvent', 'Get-LabFailedLogon', 'Get-LabAgentLog'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

@@ -29,6 +29,11 @@ Describe 'A-INST <VmName>' -Tag Agent, 'A-INST' {
     It 'A-INST-01 reports the pinned fingerprint back from the device' -Tag 'A-INST-01' {
         $install.installed.fingerprint | Should -Be $install.pin
         $install.installed.deviceId | Should -Be $install.deviceId
+        # the device made the certificate itself: the claim over the network names the one read back over the session
+        $claim = Get-LabAgentClaim -Name $VmName
+        $claim.outcome | Should -Be 'Claimed' -Because $claim.message
+        $claim.pin | Should -Be $install.pin
+        $claim.deviceId | Should -Be $install.deviceId
         $install.installed.port | Should -Be 58732
     }
 

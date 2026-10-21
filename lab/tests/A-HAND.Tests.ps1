@@ -1,7 +1,8 @@
 # A-HAND - installing the agent by hand, the way the clipboard install leaves it to the admin: the MSI next to the
 # .rhagent RemoteHub made (or ENROLLMENT=<path>), msiexec run on the device. Checks the refusals of a wrong folder or a
 # wrong enrollment (each rolled back without a trace), the ENROLLMENT property, and the install from the console
-# user's session, seen by RemoteHub's polling for the answer (WaitForManualInstall: health every 10 s, 5 s timeout).
+# user's session, seen by RemoteHub's polling for the claim (WaitForClaim: a claim every 10 s, docs/agent-spec.md
+# section 5.5 - the device makes its own certificate, so the pin comes from the claim).
 # The interactive install dialog (A-HAND-06) is UI automation, not here. See docs/test-lab-cases.md section 5.2.
 # Starts from the checkpoint (Reset-LabVm): the agent must not be installed yet.
 # LabRole: device
@@ -79,8 +80,10 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             $r.none = Invoke-Msi (New-Case 'none')
             $r.noneState = Get-LabAgentState -Name $VmName
             $bad = [ordered]@{
-                format = { param($e) $e.format = 2 }
-                guid   = { param($e) $e.deviceId = 'not-a-guid' }
+                format = { param($e) $e.format = 3 }
+                old    = { param($e) $e.format = 1 }
+                guid   = { param($e) $e.keyId = 'not-a-guid' }
+                secret = { param($e) $e.secret = 'c2hvcnQ=' }
                 port   = { param($e) $e.listenPort = 0 }
                 groups = { param($e) $e.allowedGroups = @() }
             }
@@ -104,8 +107,8 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             Test-Clean $r.noneState
         }
 
-        It 'A-HAND-05 enrollment format 2, bad GUID, port 0, no groups: each refused with its reason, rolled back' -Tag 'A-HAND-05' {
-            $reasons = @{ format = 'format 2 is not supported'; guid = 'no valid device ID'; port = 'Port 0 is not valid'; groups = 'No allowed groups' }
+        It 'A-HAND-05 enrollment format 3, a format-1 file (device key), bad key ID, bad secret, port 0, no groups: each refused with its reason, rolled back' -Tag 'A-HAND-05' {
+            $reasons = @{ format = 'format 3 is not supported'; old = 'made by an older RemoteHub'; guid = 'no valid key ID'; secret = 'no valid secret'; port = 'Port 0 is not valid'; groups = 'No allowed groups' }
             foreach ($k in $reasons.Keys) {
                 $r["bad-$k"].ExitCode | Should -Be 1603 -Because $k
                 ($r["bad-$k"].Lines -join "`n") | Should -Match ([regex]::Escape($reasons[$k])) -Because $k
@@ -122,16 +125,18 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             $result = Invoke-Msi $dir 'C:\LabHand\elsewhere\device.rhagent'
             $state = Get-LabAgentState -Name $VmName
             $fileLeft = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\LabHand\elsewhere\device.rhagent' }
-            $health = Get-LabAgentHealth -Name $VmName -Pin $e.pin
+            $claim = Get-LabAgentClaim -Name $VmName
+            $health = Get-LabAgentHealth -Name $VmName -Pin $claim.pin
             $uninstall = Uninstall-LabAgent -Name $VmName
-            Save 'property' @{ Enrollment = $e; Result = $result; State = $state; FileLeft = $fileLeft; Health = $health; Uninstall = $uninstall }
+            Save 'property' @{ Enrollment = $e; Claim = $claim; Result = $result; State = $state; FileLeft = $fileLeft; Health = $health; Uninstall = $uninstall }
         }
 
         It 'A-HAND-04 ENROLLMENT=[path] in another folder is used, and the file is deleted afterwards' -Tag 'A-HAND-04' {
             $result.ExitCode | Should -BeIn 0, 3010
-            $state.Config.deviceId | Should -Be $e.deviceId
-            $state.Certificate.Sha256 | Should -Be $e.pin
-            $health.deviceId | Should -Be $e.deviceId
+            $claim.outcome | Should -Be 'Claimed'
+            $state.Config.deviceId | Should -Be $claim.deviceId
+            $state.Certificate.Sha256 | Should -Be $claim.pin
+            $health.deviceId | Should -Be $claim.deviceId
             $fileLeft | Should -BeFalse
         }
     }
@@ -142,13 +147,13 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             $dir = New-Case 'session' @($e.file)
             # the handle is read before waiting: with -Wait -PassThru the exit code stays empty in a session task
             $script = "`$p = Start-Process msiexec.exe -ArgumentList '/i', '`"$dir\$(Split-Path $msi -Leaf)`"', '/qn', '/norestart' -PassThru; `$null = `$p.Handle; `$p.WaitForExit(); `$p.ExitCode"
-            # RemoteHub polls as WaitForManualInstall does: every 10 s, 5 s each, from the moment the admin was told to install
-            $job = Start-Job -ArgumentList (Get-LabVmAddress -Name $VmName), $e.pin, (Join-Path (Get-LabConfig).LabRoot 'harness\RemoteHub.LabHarness.exe') -ScriptBlock {
-                param($ip, $pin, $exe)
+            # RemoteHub polls as WaitForClaim does: a claim every 10 s, from the moment the admin was told to install
+            $job = Start-Job -ArgumentList (Get-LabVmAddress -Name $VmName), (Join-Path (Get-LabConfig).LabRoot 'harness\RemoteHub.LabHarness.exe') -ScriptBlock {
+                param($ip, $exe)
                 $until = (Get-Date).AddMinutes(10)
                 while ((Get-Date) -lt $until) {
-                    $out = & $exe health --host $ip --port 58732 --pin $pin 2>$null
-                    if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ At = Get-Date; Health = ($out -join "`n") } }
+                    $out = & $exe claim --host $ip --port 58732 2>$null
+                    if ($LASTEXITCODE -eq 0) { return [pscustomobject]@{ At = Get-Date; Claim = (($out -join "`n") | ConvertFrom-Json) } }
                     Start-Sleep -Seconds 10
                 }
             }
@@ -159,11 +164,12 @@ Describe 'A-HAND <VmName>' -Tag Agent, 'A-HAND' {
             Save 'session' @{ Enrollment = $e; Exit = $exit; InstalledAt = $installedAt; Seen = $seen; State = $state }
         }
 
-        It 'A-HAND-01 MSI next to the .rhagent, run as admin in the console session: installed, and RemoteHub''s polling sees it within 10 s' -Tag 'A-HAND-01' {
+        It 'A-HAND-01 MSI next to the .rhagent, run as admin in the console session: installed, and RemoteHub''s polling claims it within 10 s' -Tag 'A-HAND-01' {
             "$exit".Trim() | Should -BeIn '0', '3010'
-            $state.Config.deviceId | Should -Be $e.deviceId
-            $state.Certificate.Sha256 | Should -Be $e.pin
             $seen | Should -Not -BeNullOrEmpty
+            $seen.Claim.outcome | Should -Be 'Claimed'
+            $state.Config.deviceId | Should -Be $seen.Claim.deviceId
+            $state.Certificate.Sha256 | Should -Be $seen.Claim.pin
             # polling every 10 s: the answer comes at the latest one interval (plus the 5 s try) after the install ended
             ($seen.At - $installedAt).TotalSeconds | Should -BeLessOrEqual 15
         }

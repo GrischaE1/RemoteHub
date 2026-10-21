@@ -132,7 +132,9 @@ while (-not $p.HasExited) {
         It 'A-HAND-06 the interactive install (Windows Installer''s progress window, no own dialogs) installs and enrolls' -Tag 'A-HAND-06' {
             $seen.found | Should -BeTrue -Because "msiexec's window titles: $(@($seen.titles) -join ', '); output: $($seen.raw)"
             $seen.exitCode | Should -BeIn 0, 3010
-            $state.Config.deviceId | Should -Be $e.deviceId
+            $claim = Get-LabAgentClaim -Name $VmName
+            $claim.outcome | Should -Be 'Claimed'
+            $state.Config.deviceId | Should -Be $claim.deviceId
             $state.Service.State | Should -Be 'Running'
         }
     }

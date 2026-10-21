@@ -137,9 +137,11 @@ Legacy data: `%APPDATA%\RdpManager` is copied, old DPAPI entropy and `RDPM` file
 - **Session secrets:** 6-digit consent PIN (3 attempts) and a 32-byte resume token (single use, same account,
   1–2 minutes), both from `RandomNumberGenerator`. The PIN is compared in constant time.
 - **Automatic sign-in password:** protected in memory with `CryptProtectMemory(SAME_PROCESS)` and wiped after use.
-- **Enrollment file `.rhagent`:** **plaintext JSON that holds the PFX and its password together.** It travels over
-  PowerShell remoting, the RDP clipboard or a saved folder, and is deleted after import (best effort – a failed
-  delete only logs a warning).
+- **Enrollment file `.rhagent`:** plaintext JSON with RemoteHub's enrollment secret (format 2, since SEC-ENR-03 –
+  before, it held the device's PFX and its password). Each device makes its own non-exportable key; RemoteHub pins the
+  certificate by a claim proven with the secret (agent-spec.md §5.5). It travels over PowerShell remoting, the RDP
+  clipboard, a saved folder or software distribution, and is deleted after use (best effort – a failed delete only
+  logs a warning).
 - **Config folder** `%ProgramData%\RemoteHub\Agent`: SYSTEM and Administrators only, inheritance cut, owner
   Administrators, written atomically (`DurableFile`).
 - No DPAPI, AES or HMAC on the agent side.
@@ -252,7 +254,7 @@ Legacy data: `%APPDATA%\RdpManager` is copied, old DPAPI entropy and `RDPM` file
    IP.
 2. **Console ↔ agent identity** – a certificate pin with no revocation or renewal; the pins sync through the settings
    file.
-3. **`.rhagent` in transit** – the device's private key.
+3. **`.rhagent` in transit** – RemoteHub's enrollment secret (enough to enroll a device of one's own, not to clone one).
 4. **Agent (SYSTEM) → PowerShell with the user's full token** – PSRP content isn't inspected.
 5. **Agent → internal network** as a jump host – lateral movement, limited only by policy.
 6. **Service → desktop helper** – SYSTEM with UIAccess inside the user's session.
@@ -269,7 +271,7 @@ Legacy data: `%APPDATA%\RdpManager` is copied, old DPAPI entropy and `RDPM` file
 ## 8. Points worth a closer look
 
 - The update MSI is installed without an Authenticode check, through a script in a user-writable folder.
-- `.rhagent` holds the private key and its password in plaintext.
+- `.rhagent` held the private key and its password in plaintext – fixed: it holds an enrollment secret, and the device makes its own key (SEC-ENR-03).
 - The default firewall rule (`any`/`any`) and the default tunnel rule (any host and port) are wide open.
 - The helper runs with UIAccess on, behind an undocumented "spike" switch.
 - The Virtual Display Driver pipe isn't verified, and its settings folder at the root of `C:\` uses default ACLs.

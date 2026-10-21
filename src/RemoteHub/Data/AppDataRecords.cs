@@ -109,6 +109,7 @@ internal static class AppDataRecords
         (nameof(AppData.DefaultCredentials), typeof(CredentialSet), d => d.DefaultCredentials, (d, v) => d.DefaultCredentials = (CredentialSet)v!),
         (nameof(AppData.DefaultCredentialId), typeof(Guid?), d => d.DefaultCredentialId, (d, v) => d.DefaultCredentialId = (Guid?)v),
         (nameof(AppData.Tools), typeof(RemoteToolSettings), d => d.Tools, (d, v) => d.Tools = (RemoteToolSettings)v!),
+        (nameof(AppData.AgentEnrollment), typeof(AgentEnrollmentKeys), d => d.AgentEnrollment, (d, v) => d.AgentEnrollment = (AgentEnrollmentKeys)v!),
     ];
 
     // ------------------------------------------------------------------ AppData -> records
@@ -163,8 +164,8 @@ internal static class AppDataRecords
     {
         var json = JsonSerializer.Serialize(value, type, RowJson);
         var secrets = new List<(string, string)>();
-        // Fast path: most records carry no password (credentials are inherited or saved separately).
-        if (json.Contains("\"Password\":", StringComparison.Ordinal) && JsonNode.Parse(json) is { } node)
+        // Fast path: most records carry no password (credentials are inherited or saved separately) and no enrollment secret.
+        if ((json.Contains("\"Password\":", StringComparison.Ordinal) || json.Contains("\"Secret\":", StringComparison.Ordinal)) && JsonNode.Parse(json) is { } node)
         {
             Extract(node, "", secrets);
             json = node.ToJsonString();
@@ -172,7 +173,7 @@ internal static class AppDataRecords
         return new Record { Table = table, Id = id, ParentId = parent, Sort = sort, Kind = kind, Name = name, Host = host, Data = json, Secrets = secrets };
     }
 
-    /// <summary>Moves every "Password" string out of the JSON, remembering where it was ("Credentials/Password").</summary>
+    /// <summary>Moves every "Password" and "Secret" string out of the JSON, remembering where it was ("Credentials/Password", "Keys/0/Secret").</summary>
     private static void Extract(JsonNode? node, string path, List<(string, string)> secrets)
     {
         switch (node)
@@ -181,7 +182,7 @@ internal static class AppDataRecords
                 foreach (var (key, value) in o.ToList())
                 {
                     var p = path.Length == 0 ? key : path + "/" + key;
-                    if (key == "Password" && value is JsonValue v && v.TryGetValue<string>(out var s))
+                    if (key is "Password" or "Secret" && value is JsonValue v && v.TryGetValue<string>(out var s))
                     {
                         secrets.Add((p, s));
                         o.Remove(key);
@@ -349,6 +350,7 @@ internal static class AppDataRecords
             nameof(AppData.DefaultCredentials) => "Default credentials",
             nameof(AppData.DefaultCredentialId) => "Default saved credential",
             nameof(AppData.Tools) => "Remote tool settings",
+            nameof(AppData.AgentEnrollment) => "RemoteHub Agent enrollment",
             _ => r.Id,
         },
     };

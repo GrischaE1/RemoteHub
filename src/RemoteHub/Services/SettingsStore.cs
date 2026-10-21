@@ -712,6 +712,7 @@ public static class SettingsStore
         SavedCredentials = data.SavedCredentials,
         Items = new(TreeLayout.Flatten(data.Items)), // items under a jump host follow it (older versions keep them)
         Tools = data.Tools,
+        AgentEnrollment = data.AgentEnrollment,
         Ui = null!,
     }, Json);
 
@@ -726,6 +727,8 @@ public static class SettingsStore
         data.DefaultCredentials ??= new CredentialSet();
         data.SavedCredentials ??= new();
         data.Tools ??= new RemoteToolSettings();
+        data.AgentEnrollment ??= new AgentEnrollmentKeys();
+        data.AgentEnrollment.Keys ??= [];
         data.Ui ??= new UiState();
         TreeLayout.Nest(data.Items);
         RelinkParents(data.Items, null);

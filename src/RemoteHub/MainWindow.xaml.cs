@@ -372,6 +372,7 @@ public partial class MainWindow : FluentWindow
             if (SecureClipboard.HoldsSecret) SecureClipboard.ClearIfOurs();
             _toast?.Close();
             AutoCheckPsRemoting(s);
+            AutoClaim(s.Connection); // an agent from software distribution with this RemoteHub's enrollment file
         };
         s.MinimizeRequested += () =>
         {
@@ -826,6 +827,12 @@ public partial class MainWindow : FluentWindow
         CmAgent.Header = c?.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…";
         CmCredentialProvider.Visibility = V(c is not null && CredentialProviderOffered(c));
         CmAgentUninstall.Visibility = V(c?.Agent is { Status: AgentStatus.Installed } && Features.IsAllowed(Feature.AgentInstall));
+        // Claiming isn't installing: organisations that deploy the agent with Intune (AllowAgentInstall = 0) claim it here.
+        CmAgentClaim.Visibility = V(n is Connection or Folder && Features.IsAllowed(Feature.Agent));
+        CmAgentClaim.Header = n is Folder ? "Claim RemoteHub Agents…" : c?.Agent is { Status: AgentStatus.Installed } ? "Claim RemoteHub Agent again…" : "Claim RemoteHub Agent…";
+        CmAgentClaim.ToolTip = n is Folder
+            ? "For agents installed with this RemoteHub's enrollment file (Intune, software distribution): asks each connection in the folder and pins the certificates they made"
+            : "For an agent installed with this RemoteHub's enrollment file (Intune, software distribution): pins the certificate it made";
         if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
 
         // The server's own shares in Tools, as in the tab menus (filled fresh each time).
@@ -860,6 +867,11 @@ public partial class MainWindow : FluentWindow
     private static bool GroupHasItems(MenuItem group) => group.Items.OfType<MenuItem>().Any(i => i.Visibility == Visibility.Visible);
 
     private void CmAgent_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = InstallAgent(c); }
+    private void CmAgentClaim_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedNode is Connection c) _ = ClaimAgent(c);
+        else if (_vm.SelectedNode is Folder f) _ = ClaimFolder(f);
+    }
     private void CmCredentialProvider_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = ChangeCredentialProvider(c); }
     private void CmAgentUninstall_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = UninstallAgent(c); }
     private void CmFavorite_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _vm.SetFavorite(c, !_vm.IsFavorite(c)); }
@@ -954,6 +966,10 @@ public partial class MainWindow : FluentWindow
         if (Features.IsAllowed(Feature.AgentInstall))
             manage.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Update RemoteHub Agent…" : "Install RemoteHub Agent…",
                 SymbolRegular.Shield24, () => _ = InstallAgent(c)));
+        if (Features.IsAllowed(Feature.Agent))
+            manage.Items.Add(MenuEntry(c.Agent is { Status: AgentStatus.Installed } ? "Claim RemoteHub Agent again…" : "Claim RemoteHub Agent…",
+                SymbolRegular.ShieldCheckmark24, () => _ = ClaimAgent(c),
+                tip: "For an agent installed with this RemoteHub's enrollment file (Intune, software distribution): pins the certificate it made"));
         if (CredentialProviderOffered(c))
             manage.Items.Add(MenuEntry(CredentialProviderHeader(c), SymbolRegular.Key24, () => _ = ChangeCredentialProvider(c),
                 tip: "Lets the RemoteHub Agent sign in automatically on the device's sign-in screen"));
@@ -1125,7 +1141,15 @@ public partial class MainWindow : FluentWindow
     private AgentEndpoint? AgentEndpointFor(Connection c, bool quiet = false)
     {
         if (c.Agent is { Fingerprint.Length: > 0 } d) return EndpointOf(c, d, quiet);
-        if (!quiet)
+        if (!quiet && AwaitsClaim(c.Agent))
+        {
+            // Installed meanwhile? Claimed now if it answers; the operator tries again in a moment.
+            _ = ClaimQuietly(c, c.Agent!, AgentInstallDefaultUseAgent());
+            _ = Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent of {c.Name} hasn't answered yet, so its certificate isn't pinned. RemoteHub " +
+                                                     "claims it as soon as it answers – try again in a moment, or right-click the connection → RemoteHub Agent → " +
+                                                     "Claim RemoteHub Agent… to see why it isn't claimed.");
+        }
+        else if (!quiet)
             _ = Dialogs.Info(this, "RemoteHub Agent", c.JumpHost is { } j
                 ? $"{c.Name} is reached through {j.Name}, which only works with a RemoteHub Agent on {c.Name} – none is installed for it yet. " +
                   "Right-click the connection → Install RemoteHub Agent… (the installer files can be saved and installed by hand)."
@@ -1450,49 +1474,19 @@ public partial class MainWindow : FluentWindow
         DiagLog.Write("RemoteHub Agent removed from a connection");
     }
 
-    /// <summary>
-    /// After an install by hand (clipboard): asks the agent every 10 s, for up to 30 minutes, whether it answers with the
-    /// device certificate. Then it's marked installed and – if chosen – the connection switches to it. Until then the
-    /// connection keeps working the way it did.
-    /// </summary>
-    private async Task WaitForManualInstall(Connection c, bool useAgent)
-    {
-        var until = DateTime.UtcNow.AddMinutes(30);
-        while (DateTime.UtcNow < until && c.Agent is { Status: AgentStatus.NotInstalled } d)
-        {
-            try
-            {
-                // Through its jump host, if it has one (only with a known password – this runs in the background).
-                if (EndpointOf(c, d) is not { } endpoint) throw new InvalidOperationException("The jump host can't be used now.");
-                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(endpoint.Via is null ? 5 : 20));
-                var health = await AgentInstaller.HealthAsync(c.Host, endpoint, cts.Token);
-                if (c.Agent != d) return; // replaced meanwhile
-                d.Status = AgentStatus.Installed;
-                d.Version = health.Version;
-                d.InstalledUtc = DateTime.UtcNow;
-                if (useAgent && !UsesAgent(c)) c.Options.UseAgent = true;
-                c.PsRemoting = null;
-                c.RefreshLabels();
-                _vm.RequestSave();
-                Data.AuditLog.Write(Data.AuditEvents.AgentInstalled, c, $"Installed – answered as RemoteHub Agent {health.Version}");
-                DiagLog.Write("RemoteHub Agent: installed by hand – it answers now");
-                return;
-            }
-            catch { /* not installed yet */ }
-            await Task.Delay(TimeSpan.FromSeconds(10));
-        }
-    }
-
     private async Task<bool> RunAgentInstall(Connection c, string package, AgentInstallOptions o, Action<string> report)
     {
         AgentEnrollment? enrollment = null;
         AgentDevice device;
         if (o.NewIdentity || c.Agent is null)
         {
-            var (e, fingerprint) = await Task.Run(() => AgentEnrollment.Create(o.Label, o.Port, o.AllowedGroups, o.FirewallScope, virtualDisplay: o.VirtualDisplay));
-            enrollment = e;
-            device = new AgentDevice { DeviceId = e.DeviceId, Label = e.DeviceLabel, Port = e.ListenPort, Fingerprint = fingerprint, Status = AgentStatus.NotInstalled, CreatedUtc = DateTime.UtcNow };
-            report($"New device certificate: SHA-256 …{fingerprint[^16..]}");
+            // The device makes its own key (SEC-ENR-03); the file carries the enrollment secret, and RemoteHub pins the
+            // device's certificate when it claims the agent (docs/agent-spec.md §5.5). Device ID and fingerprint come then.
+            var key = EnrollmentKey();
+            enrollment = AgentEnrollment.Create(key.Id.ToString(), key.Secret, o.Label, o.Port, o.AllowedGroups, o.FirewallScope, virtualDisplay: o.VirtualDisplay);
+            device = NewPendingAgent(enrollment.DeviceLabel, enrollment.ListenPort);
+            device.ReplacesFingerprint = c.Agent is { Fingerprint.Length: > 0 } old ? old.Fingerprint : c.Agent?.ReplacesFingerprint;
+            report("Enrollment file ready – the device makes its own certificate when it is installed.");
         }
         else device = c.Agent.Clone();
         device.VirtualDisplay = o.VirtualDisplay;
@@ -1525,33 +1519,33 @@ public partial class MainWindow : FluentWindow
                         File.Copy(file, to, overwrite: true);
                         saved.Add(to);
                     }
-                    // Not installed yet: the connection keeps its current way until the agent answers (see WaitForManualInstall).
+                    // Not installed yet: the connection keeps its current way until the agent is claimed (see WaitForClaim).
                     if (enrollment is not null)
                     {
                         Finish(device, switchNow: false);
-                        _ = WaitForManualInstall(c, o.UseAgentAfterwards);
+                        _ = WaitForClaim(c, device, o.UseAgentAfterwards);
                     }
                     report(enrollmentFile is null
                         ? $"Saved {AgentInstaller.PackageName} to {pick.FolderName}. On {c.Name}: run it as administrator (or deploy it with software distribution)."
                         : $"Saved {AgentInstaller.PackageName} and {Path.GetFileName(enrollmentFile)} to {pick.FolderName}.\n\n" +
-                          $"On {c.Name}:\n  1. Copy both files into the same folder – over a secure channel: the .rhagent file contains the device key.\n" +
+                          $"On {c.Name}:\n  1. Copy both files into the same folder – over a secure channel: the .rhagent file contains RemoteHub's enrollment secret.\n" +
                           $"  2. Run {AgentInstaller.PackageName} as administrator (or with software distribution: msiexec /i {AgentInstaller.PackageName} " +
                           "ENROLLMENT=<path of the .rhagent file> /qn).\n" +
-                          "  3. The agent imports and deletes the .rhagent file – if it's still there, delete it.\n\n" +
+                          "  3. The agent makes its own certificate and deletes the .rhagent file – if it's still there, delete it.\n\n" +
                           "Delete the files in the chosen folder once they are installed. " +
-                          "RemoteHub checks for the agent every few seconds and marks it installed as soon as it answers" +
+                          "RemoteHub checks for the agent every few seconds and claims it as soon as it answers" +
                           (o.UseAgentAfterwards && !UsesAgent(c) ? " – then the connection switches to it." : "."));
                     return true;
                 }
 
                 case AgentInstallMethod.Clipboard:
                 {
-                    // The .rhagent file holds this device's private key; a remote desktop tab would send it to another device.
+                    // The .rhagent file holds RemoteHub's enrollment secret; a remote desktop tab would send it to another device.
                     if (enrollmentFile is not null
                         && _vm.Sessions.OfType<AgentDesktopSession>().Where(s => s.SendsClipboard && s.Connection != c).Select(s => s.Connection.Name).ToList() is [_, ..] others
-                        && !await Dialogs.Confirm(this, "Copy the device key?",
+                        && !await Dialogs.Confirm(this, "Copy the enrollment secret?",
                             $"The remote desktop tab of {string.Join(", ", others)} sends everything copied on this PC to that device – including " +
-                            $"{Path.GetFileName(enrollmentFile)}, which holds {c.Name}'s device key.\n\nClose that tab first, or copy anyway?", "Copy anyway"))
+                            $"{Path.GetFileName(enrollmentFile)}, which holds RemoteHub's enrollment secret.\n\nClose that tab first, or copy anyway?", "Copy anyway"))
                     {
                         report("Cancelled – close the remote desktop tab, then try again.");
                         return false;
@@ -1560,19 +1554,19 @@ public partial class MainWindow : FluentWindow
                     if (enrollmentFile is not null) files.Add(enrollmentFile);
                     Clipboard.SetFileDropList(files);
                     folder = null; // the files must stay until they are pasted – deleted when RemoteHub closes
-                    // Not installed yet: the connection keeps its current way until the agent answers (see WaitForManualInstall).
+                    // Not installed yet: the connection keeps its current way until the agent is claimed (see WaitForClaim).
                     if (enrollment is not null)
                     {
                         Finish(device, switchNow: false);
-                        _ = WaitForManualInstall(c, o.UseAgentAfterwards);
+                        _ = WaitForClaim(c, device, o.UseAgentAfterwards);
                     }
                     report(enrollmentFile is null
                         ? $"Copied {AgentInstaller.PackageName} to the clipboard. In the RDP session of {c.Name}: paste it and run it as administrator."
                         : $"Copied {AgentInstaller.PackageName} and {Path.GetFileName(enrollmentFile)} to the clipboard.\n\n" +
                           $"In the RDP session of {c.Name}:\n  1. Paste both files into the same folder.\n  2. Run {AgentInstaller.PackageName} as administrator.\n" +
-                          "  3. The agent imports and deletes the .rhagent file – if it's still there, delete it (it contains the device key).\n\n" +
+                          "  3. The agent makes its own certificate and deletes the .rhagent file – if it's still there, delete it (it contains the enrollment secret).\n\n" +
                           "This needs clipboard redirection for the RDP session. The files on this PC are deleted when RemoteHub closes. " +
-                          "RemoteHub checks for the agent every few seconds and marks it installed as soon as it answers" +
+                          "RemoteHub checks for the agent every few seconds and claims it as soon as it answers" +
                           (o.UseAgentAfterwards ? " – then the connection switches to it." : "."));
                     return true;
                 }
@@ -1596,10 +1590,17 @@ public partial class MainWindow : FluentWindow
                         report("Failed: " + (ex is RemoteCommandException ? ex.Message : PsRemoting.Explain(ex, t.Target)));
                         return false;
                     }
-                    if (!string.Equals(installed.Fingerprint, device.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    if (enrollment is not null)
                     {
-                        report($"The device's agent uses a certificate RemoteHub didn't create for it (…{installed.Fingerprint[^16..]}). " +
-                               "Install again with \"Create a new device certificate\".");
+                        // The certificate the device just made, read over the signed-in WinRM session: this is the claim, and
+                        // the check below that it answers with it over the network confirms it.
+                        device.Fingerprint = installed.Fingerprint;
+                        device.DeviceId = installed.DeviceId;
+                    }
+                    else if (!string.Equals(installed.Fingerprint, device.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    {
+                        report($"The device's agent uses another certificate than the one RemoteHub pinned (…{installed.Fingerprint[^16..]}). " +
+                               "Install again with \"Enroll again\".");
                         return false;
                     }
                     device.Port = installed.Port;
@@ -1631,8 +1632,33 @@ public partial class MainWindow : FluentWindow
                         return false;
                     }
                     var expected = AgentInstaller.PackageVersion(msi);
-                    var health = await AgentInstaller.WaitForRestartAsync(c.Host, EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint), expected, report, System.Threading.CancellationToken.None);
                     const string logs = "On the device, see %TEMP%\\RemoteHub-Agent-update.log of the signing-in account and the agent's log in %ProgramData%\\RemoteHub\\Agent\\logs.";
+                    if (enrollment is not null)
+                    {
+                        // A new identity: the agent comes back with a certificate of its own, which nothing has pinned yet.
+                        // Wait for the old one to go away, then claim the new one.
+                        var old = c.Agent!;
+                        await AgentInstaller.WaitForStopAsync(c.Host, EndpointOf(c, old) ?? new AgentEndpoint(old.Port, old.Fingerprint),
+                            TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(3), report, System.Threading.CancellationToken.None);
+                        report("Waiting for the agent to answer with its new certificate…");
+                        var claimed = await ClaimWithin(c, device, TimeSpan.FromMinutes(3));
+                        // The new identity was sent through the agent RemoteHub had pinned, so a device name that doesn't
+                        // match the connection's host (an alias) doesn't stop it; every other refusal does.
+                        if (!IsNewClaim(device, claimed is { Outcome: AgentInstaller.ClaimOutcome.OtherName } alias ? alias with { Outcome = AgentInstaller.ClaimOutcome.Claimed } : claimed))
+                        {
+                            report((claimed is null or { Outcome: AgentInstaller.ClaimOutcome.Claimed }
+                                ? "The agent didn't answer with a new certificate within a few minutes. "
+                                : AgentInstaller.Explain(claimed, c.Name) + " ") + logs);
+                            return false;
+                        }
+                        device.Fingerprint = claimed!.Claim!.Fingerprint;
+                        device.DeviceId = claimed.Claim.DeviceId;
+                        report($"Claimed – its own certificate: SHA-256 …{AgentInstaller.Tail(device.Fingerprint, 16)}.");
+                    }
+                    var endpoint = EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint);
+                    var health = enrollment is null
+                        ? await AgentInstaller.WaitForRestartAsync(c.Host, endpoint, expected, report, System.Threading.CancellationToken.None)
+                        : await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token);
                     if (health is null)
                     {
                         report("The agent didn't answer again within a few minutes. " + logs);
@@ -2267,7 +2293,10 @@ public partial class MainWindow : FluentWindow
             SettingsOverview: () => SettingsOverview_Click(this, e),
             About: () => new AboutWindow { Owner = ActiveOwner() }.ShowDialog(),
             WhatsNew: () => new WhatsNewWindow(FirstStart.Since(null, UpdateService.Current)) { Owner = ActiveOwner() }.ShowDialog(),
-            Welcome: () => new WelcomeWindow { Owner = ActiveOwner() }.ShowDialog());
+            Welcome: () => new WelcomeWindow { Owner = ActiveOwner() }.ShowDialog(),
+            SaveEnrollmentFile: () => SaveEnrollmentFile(ActiveOwner()),
+            ReplaceEnrollmentSecret: () => ReplaceEnrollmentSecret(ActiveOwner()),
+            RevokeEnrollmentSecrets: () => RevokeEnrollmentSecrets(ActiveOwner()));
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
         UpdateRailVersion();
     }
@@ -2294,6 +2323,7 @@ public partial class MainWindow : FluentWindow
     private async void StartupChecks()
     {
         var ui = _vm.Data.Ui;
+        ClaimPending();
         Telemetry.AppStart(ui, Telemetry.Count(_vm.Data.Items));
         // Policy AllowSavedPasswords = 0: passwords stored on this PC are removed, after saying so (§14 Q2). A shared settings
         // file keeps them – other PCs may allow them – but they aren't used here either way.

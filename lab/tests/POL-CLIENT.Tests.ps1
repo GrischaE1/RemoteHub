@@ -257,8 +257,8 @@ BeforeAll {
             $u.files = @($files | ForEach-Object { Split-Path $_ -Leaf })
             if (-not @($files | Where-Object { $_ -like '*.msi' }).Count) { throw "RemoteHub's clipboard install put no MSI on the clipboard: $raw" }
             Install-LabSigningCertificate -Name $VmName
-            # installed by hand, as the admin would run the MSI next to the enrollment file; the .rhagent holds the
-            # device key and is removed afterwards
+            # installed by hand, as the admin would run the MSI next to the enrollment file; the .rhagent holds
+            # RemoteHub's enrollment secret and is removed afterwards
             $u.exit = Invoke-LabGuest -Name $VmName -ArgumentList (, [string[]]$files) -ScriptBlock {
                 param([string[]]$f)
                 $d = 'C:\LabAgentByHand'

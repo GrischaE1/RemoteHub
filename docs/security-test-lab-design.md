@@ -108,7 +108,7 @@ attack succeeds today and the case is a `KnownGap` (§7).
 |---|---|---|---|
 | T3.1 Poisoned pin through the shared settings file | The file is AES-256-GCM under the shared password; a byte changed anywhere fails the tag | C-SHARE-01…07 | SEC-ID-01 |
 | T3.2 No revocation | By design; re-pin on update | A-UPD-04 | – (documented in SEC-NET-05) |
-| T4.1 `.rhagent` holds PFX + password in plaintext | True (`AgentEnrollment.cs`) | A-INST-08 (partly), A-CLIP-02 | SEC-ENR-01, SEC-ENR-03 (**gap**) |
+| T4.1 `.rhagent` holds PFX + password in plaintext | Fixed: format 2 holds RemoteHub's enrollment secret, the device makes its own key (agent-spec.md §5.5) | A-INST-08 (partly), A-CLIP-02, A-HAND-05 | SEC-ENR-01, SEC-ENR-03 |
 | T4.2 Failed delete only logged | True | – | SEC-ENR-02 |
 | T12.1 `enroll` custom action trusts a file next to the MSI | True; RemoteHub compares the fingerprint read back with its own (A-INST-01) | A-HAND-02…05 | SEC-MSI-01 |
 | T12.2 Firewall rule `any/any` | Only when the scope is empty; `InstallOverRemoting` and the install dialog use the admin PC's address | A-INST-06, A-INST-13, J-09 | SEC-MSI-02 |
@@ -326,9 +326,9 @@ by `Install-LabAgent` (scope = the host) unless it says otherwise.
 
 | ID | Attack | Pass when | How | P | Pos | Needs |
 |---|---|---|---|---|---|---|
-| SEC-ENR-01 | The key leaves nothing behind: after `InstallOverRemoting`, a hand install (A-HAND-01) and a clipboard install (A-CLIP-01), search the device and the admin PC for the enrollment's PFX (its certificate serial, DER and Base64), the PFX password, and the text `"pfx"` of the JSON | no hit outside `LocalMachine\My` and its key container: not in user or Windows temp, `C:\Windows\Installer`, the MSI log, the agent log, the event log, `%TEMP%\RemoteHub-Agent-*` on the admin PC, RDP clipboard history; the private key isn't exportable (A-INST-04) | PS U | 1 | A4 | 2VM |
+| SEC-ENR-01 | The secret leaves nothing behind: after `InstallOverRemoting`, a hand install (A-HAND-01) and a clipboard install (A-CLIP-01), search the device and the admin PC for the enrollment secret (Base64 and raw) and the `.rhagent` file | no hit outside `LocalMachine\My` and its key container: not in user or Windows temp, `C:\Windows\Installer`, the MSI log, the agent log, the event log, `%TEMP%\RemoteHub-Agent-*` on the admin PC, RDP clipboard history; the private key isn't exportable (A-INST-04) | PS U | 1 | A4 | 2VM |
 | SEC-ENR-02 | The file can't be deleted: hold the `.rhagent` open with `FileShare.None` from another process during the hand install | the install succeeds; the warning reaches the operator (RemoteHub's install result / the MSI log line "could not be deleted") and the agent log; the test then deletes it and asserts nothing else references it | PS S E | 2 | A3 |
-| SEC-ENR-03 | Stolen enrollment: copy the `.rhagent` before it is used, install it on the device **and** on a second VM | **target behaviour:** the second device is detectable – RemoteHub warns when a device ID answers from a different address with the same pin, or the agent re-keys on first start so the file is worthless after use. **Today:** both devices answer with the same identity and RemoteHub can't tell them apart | H PS | 1 | A4 | 2VM, **KnownGap** |
+| SEC-ENR-03 | Stolen enrollment: copy the `.rhagent` before it is used, install it on the device **and** on a second VM | the two devices have different device IDs and certificates, neither key exportable, and the file holds no key; RemoteHub's claim pins each as itself; the second device's claim under the first one's name is refused (`OtherName`) and it doesn't answer to the first one's pin; after *Replace and revoke* neither can be claimed (`RevokedSecret`) | H PS | 1 | A4 | 2VM |
 | SEC-ID-01 | Poisoned pin in the shared settings file: with settings on an SMB share (C-SHARE-01), change the device's pin bytes in the file without the password; then with the password (an insider) | without the password: RemoteHub refuses the file ("damaged or not from RemoteHub"), keeps its local copy, audits "shared file rejected", trusts nothing new; with the password: the pin changes – documented as the shared-password trust boundary, and the audit log on every PC that loads it records "pin changed for <device>" | U PS | 1 | A4/A6 | SMB |
 | SEC-ID-02 | Replay of an old identity after re-pin: after A-UPD-04 (new certificate), a rogue listener presents the **old** certificate (from the test's own copy of the old enrollment) | RemoteHub refuses it (pin mismatch, nothing sent); the old pin is gone from the settings | H PS | 2 | A4 | |
 
@@ -545,9 +545,7 @@ removed (so the register and the code never disagree).
 
 ## 7. Known-gap register (state on 2026-10-21)
 
-| Case | Gap (attack succeeds today) | Fix that makes it pass | Sev | Issue / owner |
-|---|---|---|---|---|
-| SEC-ENR-03 | A copied `.rhagent` enrolls a second device with the same identity | The agent generates its own key at enrollment and reports the fingerprint; the file carries a one-time enrollment secret, not the PFX | Critical | – (product decision: changes the install flow) |
+No open gaps.
 
 **Closed on 2026-10-21** (the cases assert the fixed behaviour, without the `KnownGap` tag; the lab cases are in
 [test-lab-cases.md](test-lab-cases.md) §13):
@@ -563,6 +561,7 @@ removed (so the register and the code never disagree).
 | SEC-LOG-01 | Connection names (host names) in `DiagLog` | The forwarder logs an 8-character hash of its route and only the kind of a refusal |
 | SEC-RDP-03 | Verified: any certificate could be added to the trusted roots | Only an end-entity certificate (`RemotingSetup.IsEndEntity`); a CA certificate is refused with an explanation |
 | SEC-SH-02 | Verified: SMBLibrary signed only when the server required it | Signing switched on after every sign-in (`ManagedSmbShare.RequireSigning`); guest sessions refused |
+| SEC-ENR-03 | A copied `.rhagent` enrolled a second device with the same identity | Enrollment format 2 (agent-spec.md §5.5): the file carries RemoteHub's enrollment secret, not a PFX; each device makes its own non-exportable key and device ID at enrollment; RemoteHub pins the certificate by a claim proven with the secret (HMAC over the certificate, the device and a nonce), never replaces a pin by itself, and can replace and revoke the secret. Agreed with the owner without a time limit on the file, so MDM and software-distribution packages stay valid |
 | SEC-CI-01 / 02 | eSigner credentials on the `java` command line; the tag inlined into release scripts | A Java argument file, deleted after use (`build/JavaArgFile.ps1`, `BuildScriptTests`); `env: TAG` |
 
 Accepted by design, documented in the cases and not in the register: expired certificate still served (SEC-NET-05);

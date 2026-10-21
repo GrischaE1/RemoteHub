@@ -14,7 +14,7 @@ using RemoteHub.Remoting;
 
 // Lab harness: runs RemoteHub's own client code against a lab VM so the lab tests the real thing.
 //   install --vm <Hyper-V name> --user <guest admin> --password <pw> --msi <path> --label <label> [--scope <addresses>] [--port <n>]
-//       AgentEnrollment.Create + AgentInstaller.Prepare + AgentInstaller.InstallOverRemoting. The runspace is a
+//       AgentEnrollment.Create (the lab's enrollment secret, LabEnrollment.cs) + AgentInstaller.Prepare + AgentInstaller.InstallOverRemoting; the pin is the certificate the device made, read back. The runspace is a
 //       PowerShell Direct session instead of WinRM - everything the client does over it is the same.
 //       --keep-identity 1: no new enrollment (an update over remoting); --virtual-display 0|1 (default 1);
 //       --auto-sign-in 0|1: MSI property AUTOSIGNIN (not passed without it); --groups <text>: the dialog's "Allowed accounts"
@@ -22,14 +22,17 @@ using RemoteHub.Remoting;
 //       install on purpose). --via winrm --host <address> --cert <thumbprint>: over WinRM HTTPS
 //       instead of PowerShell Direct (RemoteHub's way on a device without the agent; through the jump host with --jump).
 //   enrollment --label .. --out <file> [--port n] [--scope ..] [--groups ..]
-//       AgentEnrollment.Create as RemoteHub makes it for the clipboard / by-hand install: writes the .rhagent, answers
-//       pin and deviceId.
+//       AgentEnrollment.Create as RemoteHub makes it for the clipboard / by-hand install / software distribution: writes
+//       the .rhagent (the lab's enrollment secret, no key) and answers its keyId. --label may be left out (the device's name).
+//   claim --host <address> [--port n] [--name <host name>] [--revoke-current 1] [--keys <file>]
+//       AgentInstaller.ClaimAsync as RemoteHub claims an agent: outcome, pin, deviceId, computerName (LabEnrollment.cs).
 //   health --host <address> --port <n> --pin <sha256>
 //       AgentInstaller.HealthAsync (TLS, certificate pinned to the fingerprint).
 //   update --host <address> --port <n> --pin <sha256> --user <guest admin> --password <pw> --msi <path>
 //          [--new-identity <label> [--scope <addresses>]] [--enrollment-file <path>] [--virtual-display 0|1] [--hold-session 1] [--auto-sign-in 0|1]
 //       Update through the running agent, as MainWindow.RunAgentInstall (AgentInstallMethod.ThroughAgent) does it:
-//       PowerShell over the agent, AgentInstaller.StartUpdateThroughAgent, PackageVersion, WaitForRestartAsync, and the
+//       PowerShell over the agent, AgentInstaller.StartUpdateThroughAgent, PackageVersion, WaitForRestartAsync (with
+//       --new-identity: WaitForStopAsync and the claim of the new certificate), and the
 //       same verdict (updated / not installed / no answer). --enrollment-file sends any file as the enrollment (to
 //       break an update on purpose); --hold-session keeps another agent session open during the update.
 //   run --host <address> --port <n> --pin <sha256> --user <account> --password <pw> --script <PowerShell>
@@ -60,6 +63,7 @@ try
     {
         "install" => Install(opt),
         "enrollment" => NewEnrollment(opt),
+        "claim" => await LabEnrollment.Claim(opt),
         "health" => await Health(opt),
         "cad" => await CtrlAltDel(opt),
         "copy" => await CopyFiles(opt),
@@ -98,7 +102,8 @@ static object Install(Dictionary<string, string> o)
     // or, for an update with the device's identity kept, no enrollment at all
     var keep = o.GetValueOrDefault("keep-identity") == "1";
     var groups = o.TryGetValue("groups", out var g) ? AgentInstaller.ParseGroups(g) : null;
-    var (enrollment, pin) = keep ? (null, null) : AgentEnrollment.Create(o["label"], port, groups, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    // the device makes its own key: the pin is the certificate read back over the signed-in session (as RemoteHub pins it)
+    var enrollment = keep ? null : LabEnrollment.Create(o, o["label"], port, groups, scope);
     var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
     bool? autoSignIn = o.GetValueOrDefault("auto-sign-in") switch { "1" => true, "0" => false, _ => null };
     var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
@@ -115,7 +120,7 @@ static object Install(Dictionary<string, string> o)
         {
             using var rs = LabTools.OpenWinRm(o).GetAwaiter().GetResult();
             var viaWinRm = AgentInstaller.InstallOverRemoting(rs, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
-            return new { deviceId = enrollment?.DeviceId ?? viaWinRm.DeviceId, label = enrollment?.DeviceLabel, pin = pin ?? viaWinRm.Fingerprint, port, scope, installed = viaWinRm, progress };
+            return new { deviceId = viaWinRm.DeviceId, label = enrollment?.DeviceLabel, pin = viaWinRm.Fingerprint, port, scope, installed = viaWinRm, progress };
         }
         using var local = RunspaceFactory.CreateRunspace(InitialSessionState.CreateDefault2());
         local.Open();
@@ -125,9 +130,9 @@ static object Install(Dictionary<string, string> o)
             var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
             return new
             {
-                deviceId = enrollment?.DeviceId ?? installed.DeviceId,
+                deviceId = installed.DeviceId,
                 label = enrollment?.DeviceLabel,
-                pin = pin ?? installed.Fingerprint,
+                pin = installed.Fingerprint,
                 port,
                 scope,
                 enrollmentFile = rhagent is null ? null : Path.GetFileName(rhagent),
@@ -152,9 +157,10 @@ static object NewEnrollment(Dictionary<string, string> o)
     var port = o.TryGetValue("port", out var p) ? int.Parse(p) : AgentProtocol.DefaultPort;
     var scope = o.GetValueOrDefault("scope");
     var groups = o.TryGetValue("groups", out var g) ? AgentInstaller.ParseGroups(g) : null;
-    var (enrollment, pin) = AgentEnrollment.Create(o["label"], port, groups, string.IsNullOrWhiteSpace(scope) ? null : scope);
+    // no pin and no device ID yet: the device makes both, and the claim (harness "claim") tells them
+    var enrollment = LabEnrollment.Create(o, o.GetValueOrDefault("label") ?? "", port, groups, scope);
     File.WriteAllBytes(o["out"], enrollment.Serialize());
-    return new { file = o["out"], pin, deviceId = enrollment.DeviceId, port, groups = enrollment.AllowedGroups };
+    return new { file = o["out"], keyId = enrollment.KeyId, port, groups = enrollment.AllowedGroups };
 }
 
 static async Task<object> Health(Dictionary<string, string> o)
@@ -390,14 +396,12 @@ static async Task<object> Update(Dictionary<string, string> o)
     // AUTOSIGNIN as MainWindow.RunAgentInstall passes it (o.AutoSignIn): not given = the device keeps its choice
     bool? autoSignIn = o.GetValueOrDefault("auto-sign-in") switch { "1" => true, "0" => false, _ => null };
 
-    // "Create a new device certificate": a new identity, and RemoteHub then waits for the new fingerprint
+    // "Enroll again": a new identity the device makes itself - RemoteHub claims it after the restart (expectedPin then)
     AgentEnrollment? enrollment = null;
     var expectedPin = pin;
+    string? deviceId = null;
     if (o.TryGetValue("new-identity", out var label))
-    {
-        var scope = o.GetValueOrDefault("scope");
-        (enrollment, expectedPin) = AgentEnrollment.Create(label, port, null, string.IsNullOrWhiteSpace(scope) ? null : scope, virtualDisplay: virtualDisplay);
-    }
+        enrollment = LabEnrollment.Create(o, label, port, null, o.GetValueOrDefault("scope"), virtualDisplay);
     var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
     if (o.TryGetValue("enrollment-file", out var forced))
     {
@@ -437,7 +441,20 @@ static async Task<object> Update(Dictionary<string, string> o)
         }
         else
         {
-            health = await AgentInstaller.WaitForRestartAsync(host, LabJump.Endpoint(o, port, expectedPin), expected, progress.Add, CancellationToken.None);
+            if (enrollment is null)
+                health = await AgentInstaller.WaitForRestartAsync(host, LabJump.Endpoint(o, port, expectedPin), expected, progress.Add, CancellationToken.None);
+            else
+            {
+                // as RunAgentInstall: the old certificate goes away, then the claim of the new one, then its health
+                await AgentInstaller.WaitForStopAsync(host, LabJump.Endpoint(o, port, pin), TimeSpan.FromSeconds(90), TimeSpan.FromSeconds(3), progress.Add, CancellationToken.None);
+                progress.Add("Waiting for the agent to answer with its new certificate…");
+                if (await LabEnrollment.ClaimWithin(host, port, o, TimeSpan.FromMinutes(3)) is { Outcome: AgentInstaller.ClaimOutcome.Claimed } claimed)
+                {
+                    expectedPin = claimed.Claim!.Fingerprint;
+                    deviceId = claimed.Claim.DeviceId;
+                    try { health = await AgentInstaller.HealthAsync(host, LabJump.Endpoint(o, port, expectedPin), CancellationToken.None); } catch { /* no answer */ }
+                }
+            }
             if (health is null) { verdict = "noAnswer"; message = "The agent didn't answer again within a few minutes."; }
             else if (expected is not null && health.Version != expected) { verdict = "notInstalled"; message = $"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expected})."; }
             else { verdict = "updated"; message = $"Updated – RemoteHub Agent {health.Version} is running."; }
@@ -473,7 +490,7 @@ static async Task<object> Update(Dictionary<string, string> o)
             before = before.Version,
             health,
             expectedPin,
-            deviceId = enrollment?.DeviceId ?? before.DeviceId,
+            deviceId = deviceId ?? before.DeviceId,
             oldPinNow,
             heldPid,
             heldAfter,

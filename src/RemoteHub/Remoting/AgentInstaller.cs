@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 using RemoteHub.Agent;
+using RemoteHub.Models;
 
 namespace RemoteHub.Remoting;
 
@@ -158,6 +159,11 @@ public static class AgentInstaller
 
     public sealed record Installed(string Fingerprint, int Port, string DeviceId, string ServiceStatus);
 
+    public enum ClaimOutcome { Claimed, NoEnrollment, OtherCertificate, UnknownSecret, RevokedSecret, WrongProof, OtherName }
+
+    /// <summary>The outcome of a claim and, when the agent answered with one, the claim itself.</summary>
+    public sealed record ClaimResult(ClaimOutcome Outcome, AgentClaim? Claim);
+
     /// <summary>
     /// The package's ProductCode for the install scripts (or ""). When the device already has that very product – the same
     /// package installed again – msiexec /i alone would only open maintenance and change nothing, not even a new
@@ -262,6 +268,91 @@ public static class AgentInstaller
         return JsonSerializer.Deserialize<AgentHealth>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))
                ?? throw new InvalidDataException("Empty answer from the agent.");
     }
+
+    // ------------------------------------------------------------------ claim (docs/agent-spec.md §5.5)
+
+    /// <summary>
+    /// Asks the agent at <paramref name="host"/> which device it is (GET /v1/enrollment) and checks the answer against
+    /// <paramref name="keys"/> (<see cref="EvaluateClaim"/>). TLS isn't pinned here – there is no pin yet – but the
+    /// certificate this connection presented is recorded, and the claim only counts for that very certificate.
+    /// Network errors are thrown; everything the agent answers is a <see cref="ClaimResult"/>.
+    /// </summary>
+    public static async Task<ClaimResult> ClaimAsync(string host, int port, JumpRoute? via, AgentEnrollmentKeys keys, CancellationToken ct)
+    {
+        string? seen = null;
+        RemoteCertificateValidationCallback record = (_, cert, _, _) =>
+        {
+            seen = cert is null ? null : AgentProtocol.Fingerprint(cert.GetRawCertData());
+            return cert is not null;
+        };
+        using var handler = via is not null
+            ? AgentClientTransport.ThroughJumpHost(via, record)
+            : new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = record }, UseProxy = false };
+        handler.MaxConnectionsPerServer = 1; // one connection: the answer comes over the TLS session whose certificate was recorded
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(via is null ? 8 : 30) };
+        var h = host.Trim();
+        if (h.Contains(':') && !h.StartsWith('[')) h = $"[{h}]";
+        var nonce = EnrollmentProof.NewNonce();
+        using var response = await http.GetAsync($"https://{h}:{port}{EnrollmentProof.Path}?nonce={nonce}", ct).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return new(ClaimOutcome.NoEnrollment, null);
+        response.EnsureSuccessStatusCode();
+        var content = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        if (content.Length > 64 * 1024) return new(ClaimOutcome.WrongProof, null);
+        AgentClaim? claim;
+        try { claim = JsonSerializer.Deserialize(content, AgentEnrollmentJson.Default.AgentClaim); }
+        catch (JsonException) { return new(ClaimOutcome.WrongProof, null); }
+        return EvaluateClaim(claim, seen, nonce, keys, host);
+    }
+
+    /// <summary>
+    /// Whether a claim may be pinned: the fingerprint it states is the certificate the connection presented, the secret it
+    /// names is one of this RemoteHub's and not revoked, the proof is right for this nonce, and the device is the host
+    /// RemoteHub asked (<see cref="NameMatches"/>).
+    /// </summary>
+    public static ClaimResult EvaluateClaim(AgentClaim? claim, string? presentedFingerprint, string nonce, AgentEnrollmentKeys keys, string host)
+    {
+        if (claim is null || claim.DeviceId is null || claim.Fingerprint is null || claim.KeyId is null || claim.Proof is null
+            || claim.ComputerName is null || claim.DnsHostName is null || !Guid.TryParse(claim.DeviceId, out _))
+            return new(ClaimOutcome.WrongProof, null);
+        var stated = AgentProtocol.NormalizeFingerprint(claim.Fingerprint);
+        if (stated.Length == 0 || stated != presentedFingerprint) return new(ClaimOutcome.OtherCertificate, claim);
+        if (keys.Find(claim.KeyId) is not { } key) return new(ClaimOutcome.UnknownSecret, claim);
+        if (!EnrollmentProof.Verify(key.Secret, claim, nonce)) return new(ClaimOutcome.WrongProof, claim);
+        if (key.RevokedUtc is not null) return new(ClaimOutcome.RevokedSecret, claim);
+        if (!NameMatches(host, claim)) return new(ClaimOutcome.OtherName, claim);
+        return new(ClaimOutcome.Claimed, claim with { Fingerprint = stated });
+    }
+
+    /// <summary>
+    /// The device is the one <paramref name="host"/> names: its computer name, its DNS name, or the first part of either
+    /// equals the host's first part (case-insensitive). A host given as an IP address can't be checked this way and passes –
+    /// the proof and the certificate binding still apply. Guards against a name that points at the wrong device.
+    /// </summary>
+    public static bool NameMatches(string host, AgentClaim claim)
+    {
+        var h = host.Trim().TrimEnd('.');
+        if (System.Net.IPAddress.TryParse(h.Trim('[', ']'), out _)) return true;
+        static string First(string name) => name.Split('.')[0];
+        var names = new[] { claim.ComputerName, claim.DnsHostName }.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim().TrimEnd('.')).ToList();
+        return names.Any(n => string.Equals(n, h, StringComparison.OrdinalIgnoreCase) || string.Equals(First(n), First(h), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>What a claim's outcome means for the operator.</summary>
+    public static string Explain(ClaimResult r, string name) => r.Outcome switch
+    {
+        ClaimOutcome.Claimed => $"The RemoteHub Agent of {name} is claimed: SHA-256 …{Tail(r.Claim!.Fingerprint, 16)}.",
+        ClaimOutcome.NoEnrollment => $"The RemoteHub Agent of {name} wasn't enrolled with an enrollment file of this RemoteHub version (it holds no " +
+                                     "enrollment secret) – install it again with a new enrollment file.",
+        ClaimOutcome.OtherCertificate => $"The agent of {name} answered with another certificate than the one it reported – something between this PC " +
+                                         "and the device intercepts the connection. Nothing was pinned.",
+        ClaimOutcome.UnknownSecret => $"The agent of {name} was enrolled with another RemoteHub's enrollment file. Nothing was pinned.",
+        ClaimOutcome.RevokedSecret => $"The agent of {name} was enrolled with an enrollment secret that has been revoked. Install it again with the " +
+                                      "current enrollment file. Nothing was pinned.",
+        ClaimOutcome.WrongProof => $"The agent of {name} couldn't prove that it was enrolled with this RemoteHub's enrollment file. Nothing was pinned.",
+        ClaimOutcome.OtherName => $"The agent at {name}'s address is the device {r.Claim!.ComputerName}, not {name}. Nothing was pinned – check the " +
+                                  "connection's host name.",
+        _ => r.Outcome.ToString(),
+    };
 
     /// <summary>
     /// After an update through the agent: waits until it has gone away and answers again (with the expected certificate)

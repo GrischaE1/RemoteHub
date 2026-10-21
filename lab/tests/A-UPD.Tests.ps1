@@ -170,7 +170,7 @@ Describe 'A-UPD <VmName>' -Tag Agent, 'A-UPD' {
         }
 
         It 'A-SAME-02 takes a new device certificate with the same version' -Tag 'A-SAME-02' {
-            # RemoteHub suggests "Install again with Create a new device certificate" when a pin doesn't match
+            # RemoteHub suggests "Install again with Enroll again" when a pin doesn't match
             $sameNew.verdict | Should -Be 'updated' -Because $sameNew.message
             $sameNew.oldPinNow | Should -Match '^refused'
             $after.Certificate.Sha256 | Should -Be $sameNew.expectedPin
