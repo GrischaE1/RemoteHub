@@ -204,12 +204,22 @@ BeforeAll {
         $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
         Install-AgentByHand -Node 'Device' -TargetVm $device.Name
     }
+    # The person at the device ready to answer the agent. Their first call after the device's reset starts the person
+    # server, compiles its helper and starts the OCR (slow): done before Connect, not against the consent dialog's 30 s
+    # countdown (as in D-CLIP and D-MORE). Lab run 20261021-120638: the agent asked in session 1 and counted it as
+    # denied 30 s later, while the first click call found no agent window - A-CLIP-03 had failed that way since
+    # 20261016. Quick once the server runs.
+    function Ensure-DevicePerson {
+        $null = Invoke-LabPerson -Name $device.Name -Account Console -Do windows
+        $null = Invoke-LabPerson -Name $device.Name -Account Console -Do screen-read -TimeoutSec 30
+    }
     # An agent desktop tab of Device, allowed by the person at the device
     function Ensure-AgentDesktop {
         $null = Ensure-Agent
         # (10 s: in lab run 20261019-193627 3 s missed the open, connected tab after a failed step, so Connect was used
         # and the person waited 60 s for an "Allow" that never came - the device's session was the one already allowed)
         if ((Ui 'Desktop (agent)' -Value exists -Optional -TimeoutSec 10).found) { return $true }
+        Ensure-DevicePerson
         Menu 'Connect'
         $null = Ui 'Connect' -Optional -TimeoutSec 15
         $null = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60
@@ -924,6 +934,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Step $k agent { $k.agent = Ensure-Agent }
             Step $k desktop {
                 # with the agent installed, Connect opens the agent desktop; the person at the device allows it
+                Ensure-DevicePerson
                 Menu 'Connect'
                 $null = Ui 'Connect' -Optional -TimeoutSec 15
                 $k.allow = Invoke-LabPerson -Name $device.Name -Account Console -Do click -Text 'Allow' -TimeoutSec 60
