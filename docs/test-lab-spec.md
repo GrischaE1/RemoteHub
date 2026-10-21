@@ -301,7 +301,7 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
   started from (the one the exe sits in, else the one from last time in `%LOCALAPPDATA%\RemoteHubLab\checkout.txt`, else
   it asks). A branch's own tests run in the lab once merged, or with `Start-LabRun.ps1` from that branch. It shows the tests as group > file > case with check boxes and a search box, read from
   `lab\tests\` (a new file or case shows up by itself; the group is the first bare tag of the file's `Describe`), the
-  VM kinds, the MSI under test and an optional build of new MSIs, *Start run* / *Stop* (`Stop-LabRun.ps1`), a
+  VM kinds, the MSI under test and an optional build of new MSIs (with the credential provider's lab build, `build-credential-provider.ps1 -Configuration Lab`), *Start run* / *Stop* (`Stop-LabRun.ps1`), a
   progress bar with the time left (from what each file took before), the file runs, the output, and `failures.txt`
   when it ends. *Failed in last run* ticks just the cases that failed in the newest run; *Changed since full run*
   ticks the files that what changed since the last full run can affect (git's changes from the commit that run

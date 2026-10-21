@@ -53,7 +53,11 @@ public sealed class MainWindow : FluentWindow
     private readonly WrapPanel _summary = new() { Margin = new Thickness(0, 8, 0, 0) };
     private readonly TextBlock _tagText = Text("", muted: true, size: 12, bottom: 0);
     private readonly WrapPanel _vms = new() { Margin = new Thickness(0, 0, 0, 10) };
-    private readonly CheckBox _build = new() { Content = "Build new MSIs first, version", VerticalAlignment = VerticalAlignment.Center };
+    private readonly CheckBox _build = new()
+    {
+        Content = "Build new MSIs first, version", VerticalAlignment = VerticalAlignment.Center,
+        ToolTip = "RemoteHub and the agent (lab-signed, with the credential provider), then the credential provider's lab build for the sign-in tests.",
+    };
     private readonly TextBox _version = new() { Width = 100, Margin = new Thickness(8, 0, 0, 0) };
     private readonly CheckBox _harness = new() { Content = "Rebuild the lab harness (after client or harness changes)", IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
     private readonly TextBlock _msi = Text("", muted: true, size: 12, bottom: 6);
@@ -643,6 +647,10 @@ public sealed class MainWindow : FluentWindow
         {
             cmd.Append($"Write-Host 'Building RemoteHub {version} ...'; & {q(Path.Combine(_paths.Repo, "build", "build-installer.ps1"))} -Version '{version}' -LabSigning -CredentialProvider; ");
             cmd.Append("if ($LASTEXITCODE) { throw \"The build failed (exit $LASTEXITCODE).\" }; ");
+            // The credential provider's lab build too (C-PROV and the sign-in cases use it): Start-LabRun.ps1 takes
+            // artifacts\credential-provider-lab of this checkout, which otherwise stays whatever was built last.
+            cmd.Append($"Write-Host 'Building the credential provider (Lab) ...'; & {q(Path.Combine(_paths.Repo, "build", "build-credential-provider.ps1"))} -Configuration Lab; ");
+            cmd.Append("if ($LASTEXITCODE) { throw \"The credential provider's lab build failed (exit $LASTEXITCODE).\" }; ");
         }
         cmd.Append($"& {q(Path.Combine(_paths.LabDir, "Start-LabRun.ps1"))}");
         if (tags.Count > 0) cmd.Append(" -Tag " + string.Join(",", tags.Select(q)));
