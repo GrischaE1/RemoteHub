@@ -578,16 +578,8 @@ public sealed class MainWindow : FluentWindow
 
     // ------------------------------------------------------------------ what there is
 
-    /// <summary>The VM kinds and their lanes, from the result folders of the newest runs (no Hyper-V rights needed).</summary>
-    private IEnumerable<(string Kind, int Lanes)> Kinds()
-    {
-        if (!Directory.Exists(_paths.Results)) return [];
-        var names = Directory.GetDirectories(_paths.Results).Select(Path.GetFileName).OfType<string>()
-            .Where(n => Regex.IsMatch(n, @"^\d{8}-\d{6}$")).OrderByDescending(n => n, StringComparer.Ordinal).Take(15)
-            .SelectMany(r => Directory.GetDirectories(Path.Combine(_paths.Results, r)).Select(Path.GetFileName).OfType<string>())
-            .Distinct().ToList();
-        return names.GroupBy(RunLog.Kind).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => (g.Key, g.Count()));
-    }
+    /// <summary>The VM kinds and their lanes (<see cref="LabVms"/>).</summary>
+    private IEnumerable<(string Kind, int Lanes)> Kinds() => LabVms.Read(_paths.Results);
 
     private string? NewestRun() => Directory.Exists(_paths.Results)
         ? Directory.GetDirectories(_paths.Results).Select(Path.GetFileName).OfType<string>()
@@ -778,6 +770,22 @@ public sealed class MainWindow : FluentWindow
             _progress.Value = 0;
             _tabs.SelectedIndex = 2;
             foreach (var c in _cases) c.Live = null;
+        }
+        else if (code != 0 && _doneRead.Count == 0)
+        {
+            // the lab ended the run before any file finished: an error, not "no failures" - and no repeat of it
+            _phase.Text = $"Run {_runId} stopped after {Minutes(elapsed)} before any test file finished (exit code {code}) – see Output";
+            _progress.Value = 0;
+            _progressText.Text = $"Ended at {DateTime.Now:HH:mm}";
+            var log = Path.Combine(_paths.Results, _runId, "console.log");
+            if (File.Exists(log))
+            {
+                Output($"--- the end of {log} ---");
+                foreach (var line in LabHistory.ReadShared(log).Split('\n').TakeLast(25)) Output(line.TrimEnd('\r'));
+            }
+            _tabs.SelectedIndex = 2;
+            foreach (var c in _cases) c.Live = null;
+            if (_repeat.IsChecked == true) { _stopRequested = true; _phase.Text += " · repeat stopped"; }
         }
         else
         {

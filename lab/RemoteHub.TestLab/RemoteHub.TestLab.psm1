@@ -125,14 +125,16 @@ function Get-LabFileNeeds {
     }
 }
 
-# How long each file took on each kind in the last -Runs runs (the "done" lines of results\<run>\console.log):
-# "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count.
+# How long each file took on each kind in the last -Runs finished runs (the "done" lines of results\<run>\console.log):
+# "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count. Only
+# finished runs (done.json): the run going on writes its console.log, which can't be opened then - and a log that can't
+# be read is left out, never a reason to fail the run.
 function Get-LabFileTimes {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 10)
+    param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 20)
     $all = @{}
     $dirs = @(Get-ChildItem $ResultsRoot -Directory -ErrorAction SilentlyContinue | Where-Object Name -match '^\d{8}-\d{6}$' |
-            Sort-Object Name -Descending | Select-Object -First $Runs)
+            Where-Object { Test-Path (Join-Path $_.FullName 'done.json') } | Sort-Object Name -Descending | Select-Object -First $Runs)
     foreach ($d in $dirs) {
         $log = Join-Path $d.FullName 'console.log'
         if (-not (Test-Path $log)) { continue }

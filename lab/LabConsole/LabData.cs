@@ -369,3 +369,41 @@ public static class Areas
         return null;
     }
 }
+/// <summary>
+/// The lab's VM kinds and how many VMs (lanes) each has – from the newest run.json, which lists every VM of each kind
+/// the run used (no Hyper-V rights needed). A VM that was only lent to other VMs' files has no result folder of its
+/// own, so the folders alone can miss a lane.
+/// </summary>
+public static class LabVms
+{
+    public static List<(string Kind, int Lanes)> Read(string resultsRoot)
+    {
+        if (!Directory.Exists(resultsRoot)) return [];
+        var runs = Directory.GetDirectories(resultsRoot).Select(Path.GetFileName).OfType<string>()
+            .Where(n => Regex.IsMatch(n, @"^\d{8}-\d{6}$")).OrderByDescending(n => n, StringComparer.Ordinal).Take(15).ToList();
+        foreach (var run in runs)
+        {
+            var json = Path.Combine(resultsRoot, run, "run.json");
+            if (!File.Exists(json)) continue;
+            try { if (FromRunJson(File.ReadAllText(json)) is { Count: > 0 } kinds) return kinds; }
+            catch (JsonException) { }
+            catch (IOException) { }
+        }
+        // no run.json with its VMs: the result folders of those runs
+        return runs.SelectMany(r => Directory.GetDirectories(Path.Combine(resultsRoot, r)).Select(Path.GetFileName).OfType<string>())
+            .Distinct().GroupBy(RunLog.Kind).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => (g.Key, g.Count())).ToList();
+    }
+
+    /// <summary>run.json's Vms: each kind's Id with the number of its Lanes (one VM when it names none).</summary>
+    public static List<(string Kind, int Lanes)> FromRunJson(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("Vms", out var vms)) return [];
+        // ConvertTo-Json writes a single VM as an object, not a list
+        var list = vms.ValueKind == JsonValueKind.Array ? vms.EnumerateArray().ToList() : vms.ValueKind == JsonValueKind.Object ? [vms] : [];
+        return list.Where(v => v.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String)
+            .Select(v => (v.GetProperty("Id").GetString()!,
+                v.TryGetProperty("Lanes", out var l) ? l.ValueKind switch { JsonValueKind.Array => Math.Max(1, l.GetArrayLength()), JsonValueKind.String => 1, _ => 1 } : 1))
+            .OrderBy(k => k.Item1, StringComparer.Ordinal).ToList();
+    }
+}
