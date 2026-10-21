@@ -27,13 +27,17 @@ jobs:
         with:
           global-json-file: global.json
 
+      # The tag name comes in through the environment, never written into the script: a tag is any text its author
+      # chose, and inlined it would run as PowerShell.
       - name: Compute version
         id: version
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')            # v0.9.1 -> 0.9.1
+          $version = $env:TAG.TrimStart('v')            # v0.9.1 -> 0.9.1
           if ($version -notmatch '^(\d+)\.\d+\.\d+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$') {
-            throw "Tag '${{ github.ref_name }}' is not a version tag like v0.9.1 or v0.9.1-beta.1."
+            throw "Tag '$env:TAG' is not a version tag like v0.9.1 or v0.9.1-beta.1."
           }
           $prerelease = ([int]$Matches[1] -eq 0 -or $version.Contains('-')).ToString().ToLower()
           $csproj = [xml](Get-Content -Raw src/RemoteHub/RemoteHub.csproj)
@@ -73,8 +77,9 @@ jobs:
         env:
           ES_USERNAME: ${{ secrets.ES_USERNAME }}
           THUMBPRINT: ${{ vars.SIGNING_CERTIFICATE_THUMBPRINT }}
+          TAG: ${{ github.ref_name }}
         run: |
-          if ('${{ github.ref_name }}'.Contains('-')) { "::notice::Test release ${{ github.ref_name }} - not signed, no signings used."; exit 0 }
+          if ($env:TAG.Contains('-')) { "::notice::Test release $env:TAG - not signed, no signings used."; exit 0 }
           if (-not $env:ES_USERNAME -or -not $env:THUMBPRINT) {
             "::warning::No eSigner account (environment release-signing: secrets ES_*, variable SIGNING_CERTIFICATE_THUMBPRINT) - this release is not signed."
             exit 0

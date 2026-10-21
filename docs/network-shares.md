@@ -49,9 +49,9 @@ A server's shares stay inside its record (no `$type`) and are never selected, dr
 | Protocol | Client | Sign-in | Notes |
 |---|---|---|---|
 | SMB | Windows' own client (`WNetAddConnection2` without a drive letter) | Kerberos/NTLM, whatever Windows negotiates; no account means the Windows account | Encryption and signing as the server requires |
-| SMB, second account | SMBLibrary (LGPL, unchanged DLL) | NTLMv2 | Used automatically when Windows reports error 1219, meaning it already uses another account for that server |
+| SMB, second account | SMBLibrary (LGPL, unchanged DLL) | NTLMv2; every request signed and every answer's signature checked, also when the server doesn't require it; a guest session is refused | Used automatically when Windows reports error 1219, meaning it already uses another account for that server |
 | SFTP | SSH.NET | Password, keyboard-interactive (no key authentication); an account is required | The host key is pinned per share after the user confirms it; a changed key is asked about with a warning |
-| FTP/FTPS | FluentFTP | Password; anonymous if no account is set | Security None / Explicit TLS (21) / Implicit TLS (990); data connections encrypted too. A certificate Windows doesn't trust needs the user's OK, which is remembered per share |
+| FTP/FTPS | FluentFTP | Password; anonymous if no account is set | Security None / Explicit TLS (21) / Implicit TLS (990); data connections encrypted too. A certificate Windows doesn't trust needs the user's OK, which is remembered per share; a data connection must present that certificate (or one Windows trusts) – it is refused without asking otherwise |
 | WebDAV | Own client on `HttpClient` (PROPFIND, MKCOL, MOVE, DELETE, GET, PUT) | Basic, Digest, NTLM, Negotiate; no account means the Windows account | Same certificate handling as FTPS. Redirects aren't followed: a file path answered with a redirect is read as a folder; otherwise "The server redirects to <address> – use that address for the share." Status codes are said in words (401 user name or password, 403 access denied, 404/409 not found, 405 not allowed here, 412 already exists, 423 locked, 507 no space left) |
 
 The tab's status names the client: "SMB · Windows", "SMB · Windows · your Windows account", "SMB · RemoteHub client

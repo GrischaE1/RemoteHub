@@ -203,6 +203,13 @@ public partial class App : Application
     {
         var rdpFiles = args.Where(a => a.EndsWith(".rdp", StringComparison.OrdinalIgnoreCase) && File.Exists(a)).ToArray();
         if (rdpFiles.Length > 0) window.ImportRdpFiles(rdpFiles, null, connectAfterImport: true);
+        // Started again by the update's restart helper: says why an update didn't install (UpdateService.StartInstall).
+        var result = Array.IndexOf(args, UpdateService.UpdateResultArg);
+        if (result >= 0 && result + 1 < args.Length && UpdateService.InstallResultMessage(args[result + 1]) is { } message)
+        {
+            DiagLog.Write("Update: the install after the restart didn't complete");
+            _ = Views.Dialogs.Info(window, "RemoteHub updates", message);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

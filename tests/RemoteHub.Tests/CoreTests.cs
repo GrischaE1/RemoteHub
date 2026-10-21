@@ -122,6 +122,76 @@ public class CoreTests
         finally { File.Delete(path); }
     }
 
+    /// <summary>Rewrites a backup file's JSON (the envelope's fields are plain properties).</summary>
+    private static void Rewrite(string path, Action<System.Text.Json.Nodes.JsonObject> change)
+    {
+        var env = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+        change(env);
+        File.WriteAllText(path, env.ToJsonString());
+    }
+
+    [Fact]
+    public void A_backup_with_a_section_removed_moved_or_relabelled_is_refused()
+    {
+        var notes = new RemoteHub.Data.NotesExport { Notebooks = [new("b1", "Book", 0)], Pages = [new("p1", "s1", "Page", "body", "body", 0, 0, 0)] };
+        var path = TempFile(".rhbackup");
+        var other = TempFile(".rhbackup");
+        try
+        {
+            void Fresh() => Backup.Export(BigData(10), path, "correct horse", notes);
+            Fresh();
+            Assert.Equal(Backup.AssociatedDataVersion, System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!["Version"]!.GetValue<int>());
+            Backup.Import(path, "correct horse", out var back);
+            Assert.Equal("body", Assert.Single(back!.Pages).Body);
+
+            // the notes taken out: the settings alone would import without them
+            Rewrite(path, e => { e.Remove("NotesNonce"); e.Remove("NotesTag"); e.Remove("NotesData"); });
+            Assert.Throws<UnauthorizedAccessException>(() => Backup.Import(path, "correct horse"));
+
+            // the sections swapped within the file
+            Fresh();
+            Rewrite(path, e =>
+            {
+                foreach (var (a, b) in new[] { ("Nonce", "NotesNonce"), ("Tag", "NotesTag"), ("Data", "NotesData") })
+                    (e[a], e[b]) = (e[b]!.DeepClone(), e[a]!.DeepClone());
+            });
+            Assert.Throws<UnauthorizedAccessException>(() => Backup.Import(path, "correct horse"));
+
+            // relabelled as an older version (no associated data then): still doesn't open
+            Fresh();
+            Rewrite(path, e => e["Version"] = 3);
+            Assert.Throws<UnauthorizedAccessException>(() => Backup.Import(path, "correct horse"));
+
+            // the notes of another backup with the same password: another salt, another key
+            Fresh();
+            Backup.Export(BigData(10), other, "correct horse", new RemoteHub.Data.NotesExport { Notebooks = [new("b2", "Other", 0)] });
+            var foreign = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(other))!.AsObject();
+            Rewrite(path, e => { foreach (var f in new[] { "NotesNonce", "NotesTag", "NotesData" }) e[f] = foreign[f]!.DeepClone(); });
+            Assert.Throws<UnauthorizedAccessException>(() => Backup.Import(path, "correct horse"));
+        }
+        finally { File.Delete(path); File.Delete(other); }
+    }
+
+    [Fact]
+    public void An_older_backup_without_associated_data_still_imports()
+    {
+        // as RemoteHub wrote it before version 4 (and RdpManager's .rdpmbackup): sections sealed without associated data
+        var path = TempFile(".rdpmbackup");
+        var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+        var key = Backup.DeriveKey("correct horse", salt, 600_000);
+        var (nonce, tag, data) = Backup.Seal(key, SettingsStore.ToJson(BigData(10)));
+        try
+        {
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Format = "rdpmanager-backup", Version = 1, Kdf = "PBKDF2-SHA256", Iterations = 600_000,
+                Salt = Convert.ToBase64String(salt), Nonce = nonce, Tag = tag, Data = data,
+            }));
+            Assert.Equal(10, Backup.Import(path, "correct horse").Items.OfType<Folder>().Sum(f => f.Children.Count));
+        }
+        finally { File.Delete(path); }
+    }
+
     [Fact]
     public void Move_prevents_cycles_and_reorders()
     {

@@ -175,8 +175,8 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 
 | Threat | Verified today | Existing cases | SEC case |
 |---|---|---|---|
-| T8.1 `MTTVirtualDisplayPipe` server not verified | `VirtualDisplay.cs:550` connects to whatever serves the name | – | SEC-VDD-01 (**gap**) |
-| T8.2 `C:\VirtualDisplayDriver` with default ACLs | `Directory.CreateDirectory` without a reparse check (`VirtualDisplay.cs:543`) | A-INST-20, A-UNINST-11 | SEC-VDD-02 (**gap**) |
+| T8.1 `MTTVirtualDisplayPipe` server not verified | Fixed 2026-10-21: anonymous connection, the command goes only to `WUDFHost.exe` (`VirtualDisplay.Reload`) | – | SEC-VDD-01 |
+| T8.2 `C:\VirtualDisplayDriver` with default ACLs | Fixed 2026-10-21: the agent's own folder (protected ACL, SYSTEM / Administrators write); links and foreign folders removed, a file there deleted rather than written through (`VirtualDisplay.PrepareSettingsFolder`) | A-INST-20, A-UNINST-11 | SEC-VDD-02 |
 | T8.3 SignPath certificate in TrustedPublisher | By design; exact thumbprint; removed when the agent added it | A-INST-20/21, A-UNINST-11 | – |
 
 ### TB8 – Compromised device → console (A4)
@@ -196,8 +196,8 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 | T10.1 RDP server authentication *Warn* | `RdpSession.cs:191`: 0 only when RemoteHub checked the certificate itself | R-RDP-01, UI-JUMP-02 | SEC-RDP-01 |
 | T10.2 Plain FTP allowed | The editor warns (network-shares.md) | S-FTP-03 | SEC-SH-01 |
 | T10.3 WebDAV over HTTP | The editor warns; redirects off | S-DAV-02, S-DAV-04 | SEC-SH-01 |
-| T10.4 SMBLibrary without explicit signing | Unverified | S-SMB-02 | SEC-SH-02 |
-| T10.5 Certificate to CurrentUser\Root | Behind the Windows confirmation; end-entity expected | UI-TL-08, W-TRUST-01 | SEC-RDP-03 |
+| T10.4 SMBLibrary without explicit signing | Verified: SMBLibrary 1.5.8 signed only when the server required it. Fixed 2026-10-21: always signs, guest sessions refused (`ManagedSmbShare.RequireSigning`) | S-SMB-02 | SEC-SH-02 |
+| T10.5 Certificate to CurrentUser\Root | Verified: any presented certificate could be added. Fixed 2026-10-21: only an end-entity certificate (`RemotingSetup.IsEndEntity`), behind the Windows confirmation | UI-TL-08, W-TRUST-01 | SEC-RDP-03 (unit test) |
 | T10.6 `.rdp` import with `password 51:b` | Risk list before connecting (`RdpFileParser.Risks`) | R-RDP-08, C-MSI-03 | SEC-RDP-02 |
 | (new) Host key / certificate changed on a share | Asked before anything is sent | S-SFTP-03, S-FTP-02 | SEC-SH-03 |
 
@@ -205,8 +205,8 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 
 | Threat | Verified today | Existing cases | SEC case |
 |---|---|---|---|
-| T11.1 MSI verified by SHA-256 and size only, no Authenticode | True (`UpdateService.DownloadAsync`) | C-UPD-02/03/06/07/08 | SEC-UPD-01 (**gap**) |
-| T11.2 Script and MSI in user-writable `%TEMP%` before elevation | True (`UpdateService.StartInstall`) | C-UPD-04 | SEC-UPD-02 (**gap**) |
+| T11.1 MSI verified by SHA-256 and size only, no Authenticode | Fixed 2026-10-21: signed by the running build's publisher, chain trusted (`Authenticode.Refusal`); an unsigned build (test release) has only the checksum | C-UPD-02/03/06/07/08 | SEC-UPD-01 |
+| T11.2 Script and MSI in user-writable `%TEMP%` before elevation | Fixed 2026-10-21: the elevated step copies the MSI to `%ProgramFiles%RemoteHub Updates` (SYSTEM / Administrators) and checks hash and signature there (`UpdateService.InstallCommand`) | C-UPD-04 | SEC-UPD-02 |
 | T11.4 Telemetry correlation / redaction | Redacted; random install ID; off by policy | C-TEL-01…03, C-CRASH-01 | – |
 | (new) Rogue update server (TLS, payload size) | Host allow-list, HTTPS only | C-UPD-09 | SEC-UPD-03 |
 
@@ -214,7 +214,7 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 
 | Threat | Verified today | Existing cases | SEC case |
 |---|---|---|---|
-| T13.1 Backup envelope without associated data | True (`SettingsStore.cs:771-865`): sections under one key, nothing binds them | C-BAK-02/04 | SEC-BAK-01 (**gap** for the section swap) |
+| T13.1 Backup envelope without associated data | Fixed 2026-10-21: version 4 seals each section with the format, version, section, salt and the list of sections (`Backup.AssociatedData`) | C-BAK-02/04 | SEC-BAK-01 |
 | T13.2 Iteration count read from the file, 10k–10M | True (`CheckIterations`); RemoteHub writes 600k | C-BAK-03 | SEC-BAK-02 |
 | T13.3 `.rdpmbackup` parsing | Imported by format | C-BAK-03 | SEC-BAK-01 corpus |
 | T14.1 `db.key` under DPAPI CurrentUser | Design: same-user code can read it; the startup lock raises the bar | C-DB-01/02, C-LOCK-01/10 | SEC-DPAPI-01 |
@@ -231,7 +231,7 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 
 | Threat | Verified today | Existing cases | SEC case |
 |---|---|---|---|
-| Host names in `DiagLog` | `JumpForwarder.cs:108-192` writes the connection's name | – | SEC-LOG-01 (**gap**) |
+| Host names in `DiagLog` | Fixed 2026-10-21: the forwarder logs a hash of its route and the refusal's kind (`JumpForwarder.LogId`) | – | SEC-LOG-01 |
 | Secrets or content in agent logs and events | Checked by the functional sheet | A-CFG-05, D-AUD-02, C-AUTO-06 | – |
 | Audit written before the operator can act | – | D-AUD-01 | SEC-LOG-02 |
 
@@ -241,18 +241,18 @@ Not lab cases – CI gates, specified in §8:
 
 | Threat | Verified today | Gate |
 |---|---|---|
-| T16.1 Signing secrets on the `java` command line | True (`release.yml`) | SEC-CI-01 |
-| T16.2 `${{ github.ref_name }}` inlined into release scripts | True | SEC-CI-02 |
+| T16.1 Signing secrets on the `java` command line | Fixed 2026-10-21: a Java argument file, deleted after use (`build/JavaArgFile.ps1`) | SEC-CI-01 |
+| T16.2 `${{ github.ref_name }}` inlined into release scripts | Fixed 2026-10-21: through `env: TAG` | SEC-CI-02 |
 | T16.3 `pull_request_target` with write, `bot*` wildcard in the CLA allow-list | PR code never checked out; wildcard present | SEC-CI-03 |
 | T16.4 ClamAV from apt, unpinned | True | SEC-CI-04, DEP-GATE |
 | T16.5 No SBOM or provenance; sidecar hashes in the same job | True | SEC-CI-05 |
 | T16.6 `credential-provider-design.md` §16 contradicts `release.yml` on signing | True | SEC-CI-06 |
-| §2 of the catalogue: FluentFTP 55.0.0 (GHSA-7vvr-w3q4-373p), .NET runtime < 10.0.13 | To confirm which runtime the self-contained build carries | DEP-GATE |
+| §2 of the catalogue: FluentFTP 55.0.0, .NET runtime < 10.0.13 | FluentFTP 55.1.0 since 2026-10-21 (its release notes: data connections no longer accept any certificate; the draft's advisory ID wasn't found on GitHub); the runtime still to confirm | DEP-GATE |
 
 ### 3.1 Corrections to the threat catalogue draft
 
-Writing the cases against the code showed four places where the draft overstates or misplaces a threat. The draft
-should be updated before sign-off:
+Writing the cases against the code (and fixing the gaps, 2026-10-21) showed six places where the draft overstates or
+misplaces a threat. The draft should be updated before sign-off:
 
 - **T5.2 (Critical → Low).** IPv4-mapped IPv6 and scoped addresses are normalised before the filter
   (`TunnelRules.Plain`). The NAT64, 6to4 and Teredo prefixes are not translated by the device; they are plain IPv6
@@ -267,6 +267,11 @@ should be updated before sign-off:
 - **T1.3.** No forwarded-header middleware is registered, so `X-Forwarded-For` can't move the counter. Per-address
   counting of IPv6 is a design choice; SEC-NET-03 bounds its cost (memory, 4625 count) rather than demanding a /64
   rule.
+- **T13.1.** Moving a section from one backup into another with the same password never worked: each file has its
+  own salt, so its own key. What a section without associated data allowed was taking one *out* of a file (the
+  notes or scripts dropped, the rest imported) and relabelling the version; version 4 binds them (SEC-BAK-01).
+- **§2, FluentFTP.** The advisory ID the draft cites (GHSA-7vvr-w3q4-373p) isn't on GitHub's advisory database; the
+  fix itself is real – FluentFTP 55.1.0's release notes say data connections no longer accept any certificate.
 
 ### 3.2 Completeness
 
@@ -538,20 +543,27 @@ It 'SEC-VDD-02 refuses a planted junction at C:\VirtualDisplayDriver' -Tag 'SEC-
 failing the run; a **passed** one is reported as "gap closed – remove the tag" and fails the run until the tag is
 removed (so the register and the code never disagree).
 
-## 7. Known-gap register (state on 2026-10-20)
+## 7. Known-gap register (state on 2026-10-21)
 
 | Case | Gap (attack succeeds today) | Fix that makes it pass | Sev | Issue / owner |
 |---|---|---|---|---|
-| SEC-UPD-01 | Update MSI installed without an Authenticode check | Verify the signer (publisher thumbprint of the running build, `WinVerifyTrust` with chain) before `msiexec`; refuse otherwise | Critical | – |
-| SEC-UPD-02 | MSI and `install-update.cmd` swappable in `%TEMP%` before elevation | Stage under `%ProgramData%\RemoteHub\Updates` with SYSTEM/Admins ACL written by the elevated step, and re-verify hash + signature in that step | Critical | – |
 | SEC-ENR-03 | A copied `.rhagent` enrolls a second device with the same identity | The agent generates its own key at enrollment and reports the fingerprint; the file carries a one-time enrollment secret, not the PFX | Critical | – (product decision: changes the install flow) |
-| SEC-VDD-01 | `MTTVirtualDisplayPipe` server not verified; client allows impersonation | `TokenImpersonationLevel.Anonymous`; check the server's PID is the driver host | High | – |
-| SEC-VDD-02 | Settings folder follows a planted junction; default ACL at the drive root | Create with an explicit ACL, refuse reparse points and foreign owners; or move the settings under `%ProgramData%\RemoteHub\Agent` | High | – |
-| SEC-BAK-01 | Backup sections can be swapped between files with the same password | AES-GCM associated data: format version + section name + the file's own salt | High | – |
-| DEP-GATE | FluentFTP 55.0.0 (`RemoteHub.csproj`) accepts any certificate on FTPS data connections (GHSA-7vvr-w3q4-373p) – SEC-SH-03's data-connection variant | Update to ≥ 55.1.0 | High | – |
-| SEC-LOG-01 | Connection names (host names) in `DiagLog` | Log the connection ID | Medium | – |
-| SEC-RDP-03 | Unverified: a CA certificate may be offered for *Trust on this PC* | Refuse `CA = true` in the trust dialog | Medium | – (verify first) |
-| SEC-SH-02 | Unverified: SMBLibrary signing / encryption | Set signing required in the client; report a server that can't | High | – (verify first) |
+
+**Closed on 2026-10-21** (the cases assert the fixed behaviour, without the `KnownGap` tag; the lab cases are in
+[test-lab-cases.md](test-lab-cases.md) §13):
+
+| Case | Gap | Fix |
+|---|---|---|
+| SEC-UPD-01 | Update MSI installed without an Authenticode check | `Authenticode.Refusal`: signed, chain trusted (`WinVerifyTrust`, no revocation check), signer subject = the running build's (a renewed certificate keeps its subject). An unsigned running build (test release, local build) can't name a publisher and keeps the checksum only |
+| SEC-UPD-02 | MSI and `install-update.cmd` swappable in `%TEMP%` before elevation | The elevated step (Windows PowerShell given as its command line) copies the MSI into `%ProgramFiles%\RemoteHub Updates` (SYSTEM / Administrators only – under Program Files rather than `%ProgramData%`, where users may create folders), checks hash and signature of that copy and installs it; the user's helper only restarts RemoteHub, which shows the step's outcome |
+| SEC-VDD-01 | `MTTVirtualDisplayPipe` server not verified; client allows impersonation | `TokenImpersonationLevel.Anonymous`; the command only goes to `%SystemRoot%\System32\WUDFHost.exe` |
+| SEC-VDD-02 | Settings folder follows a planted junction; default ACL at the drive root | The folder stays where the driver reads it, made the agent's own: created with a protected ACL; a link, a file or a folder with other permissions in its place is removed (a link itself) and made again; the settings file deleted before it is written (no hard link written through) |
+| SEC-BAK-01 | A section could be taken out of a backup (and the version relabelled) unnoticed | Version 4: AES-GCM associated data = format, version, section, salt, list of sections; versions 1–3 and `.rdpmbackup` still import |
+| DEP-GATE | FluentFTP 55.0.0 accepts any certificate on FTPS data connections | 55.1.0; a data connection whose certificate isn't the control connection's (or trusted) is refused without asking (`FtpShare.Decide`) |
+| SEC-LOG-01 | Connection names (host names) in `DiagLog` | The forwarder logs an 8-character hash of its route and only the kind of a refusal |
+| SEC-RDP-03 | Verified: any certificate could be added to the trusted roots | Only an end-entity certificate (`RemotingSetup.IsEndEntity`); a CA certificate is refused with an explanation |
+| SEC-SH-02 | Verified: SMBLibrary signed only when the server required it | Signing switched on after every sign-in (`ManagedSmbShare.RequireSigning`); guest sessions refused |
+| SEC-CI-01 / 02 | eSigner credentials on the `java` command line; the tag inlined into release scripts | A Java argument file, deleted after use (`build/JavaArgFile.ps1`, `BuildScriptTests`); `env: TAG` |
 
 Accepted by design, documented in the cases and not in the register: expired certificate still served (SEC-NET-05);
 no revocation of pins or signers (SEC-ID-02, SEC-CP-04); per-address throttling (SEC-NET-03); rights checked per
@@ -564,7 +576,7 @@ These belong with the code, not in the VM lab, and the release checklist (§9) r
 
 | Gate | Where | What |
 |---|---|---|
-| **DEP-GATE** | `build/` + `ci.yml` | A table of minimum fixed versions (FluentFTP ≥ 55.1.0 for GHSA-7vvr-w3q4-373p, .NET runtime ≥ 10.0.13, ClamAV pinned) checked against the lockfile and `THIRD-PARTY-NOTICES.md`; fails the build below the minimum |
+| **DEP-GATE** | `build/` + `ci.yml` | A table of minimum fixed versions (FluentFTP ≥ 55.1.0 for its data-connection certificates, .NET runtime ≥ 10.0.13, ClamAV pinned) checked against the lockfile and `THIRD-PARTY-NOTICES.md`; fails the build below the minimum |
 | **Unit: TunnelRules matrix** | `tests/RemoteHub.Tests` | The SEC-TUN-01/02 address matrix against `TunnelRules.IsSpecial` / `Allowed` – fast, no VM; the lab proves the connect side |
 | **Unit: SafeRelativePath matrix** | `tests/RemoteHub.Tests` | The SEC-DEC-03 names against `DesktopWire.SafeRelativePath` and the console's receive path |
 | **Unit: backup corpus** | `tests/RemoteHub.Tests` | SEC-BAK-01's variants against `BackupFile.Import` (the lab adds the UI and the file system) |

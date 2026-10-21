@@ -8,6 +8,9 @@
 #   C-UPD-08  untrusted redirect (a 302 to dl.untrusted.test - the mock under a second name, TLS-valid, not allowed)
 #   C-UPD-09  update-server errors (404 stable / 404 beta / 500 / bad JSON / lower version / no answer within 15 s)
 #   C-UPD-10  install declined at the open-sessions question (needs an active session: the device VM, 2VM)
+#   SEC-UPD-01 an installer with the right checksum but a broken signature: refused before the approval prompt
+#   SEC-UPD-02 the download swapped while Windows asks for approval: the elevated step checks its own copy and refuses
+#             it; without a swap it installs that copy (docs/security-test-lab-design.md 4.11, test-lab-cases.md 13)
 #   C-TEL-03  telemetry off discards local records (install-id deleted under the policy too)
 #   C-CRASH-03 native crash -> app_crash NativeCrash (a synthetic Application Error 1000 event; there is no crash switch)
 #   C-CRASH-04 crash-queue limits (newest 5 sent, older than 30 days deleted; refusal-persistence and the 3-per-session
@@ -364,6 +367,127 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $i.msiexec.installs | Should -Be 0 -Because "the install was declined (msiexec: $($i.msiexec.commandLines -join '; '))"
             $i.msiexec.helper | Should -BeFalse -Because 'the install helper is written only when the install goes ahead'
             $i.versionAfter | Should -Be $i.versionBefore
+        }
+    }
+
+    Context 'update signature and the elevated install step (SEC-UPD)' {
+        BeforeAll {
+            $u = [ordered]@{}
+            Reset-LabVm -Name $VmName
+            $current = Get-LabClientMsi
+            $updates = 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates'
+            # Install-LabClient makes the VM trust the lab certificate, which signed the build under test
+            $null = Install-LabClient -Name $VmName -Network
+            $u.versionBefore = InstalledVersion
+            # the same package rebuilt (New-LabRebuiltMsi changes the ProductCode): its signature no longer matches it
+            $rebuilt = New-LabRebuiltMsi -Source $current -Path (Join-Path $EvidenceDir 'RemoteHub-99.0.0-x64.msi')
+            Copy-LabFile -Name $VmName -Path $rebuilt.FullName -Destination 'C:\LabClient\swap'
+            Start-LabMockServer -Name $VmName -Files $current, $rebuilt.FullName
+            function Consent { Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) } }
+            function Install-Now {
+                Settings-Page 'Updates & privacy'
+                $null = Ui 'Check for updates now' -Title 'Settings'
+                $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
+            }
+            # the elevated step's folder and outcomes, read as the admin account
+            function Staging {
+                Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    $stage = 'C:\Program Files\RemoteHub Updates'
+                    if (-not (Test-Path $stage)) { return [pscustomobject]@{ exists = $false } }
+                    $acl = Get-Acl $stage
+                    [pscustomobject]@{
+                        exists    = $true
+                        protected = $acl.AreAccessRulesProtected
+                        who       = @($acl.Access | ForEach-Object { try { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" } } | Sort-Object -Unique)
+                        msi       = @(Get-ChildItem $stage -Filter *.msi -Force -ErrorAction SilentlyContinue).Count
+                        results   = @(Get-ChildItem (Join-Path $stage 'results') -Filter *.txt -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() })
+                    }
+                }
+            }
+            function Wait-Restarted([int]$TimeoutSec = 300) {
+                $until = (Get-Date).AddSeconds($TimeoutSec)
+                do { Start-Sleep -Seconds 5; $n = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count } } while (-not $n -and (Get-Date) -lt $until)
+                [bool]$n
+            }
+
+            # SEC-UPD-01: right checksum and size, broken signature -> refused before Windows asks, nothing kept
+            Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $rebuilt.FullName -Leaf)
+            Restart-Client
+            Install-Now
+            $u.unsignedConsent = $false
+            $until = (Get-Date).AddSeconds(120)
+            do {
+                Start-Sleep -Seconds 2
+                if (Consent) { $u.unsignedConsent = $true }
+                $u.unsigned = WinText 'RemoteHub updates'
+            } while ("$($u.unsigned)" -notmatch 'won''t be installed' -and (Get-Date) -lt $until)
+            if (Consent) { $u.unsignedConsent = $true; Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x4E }   # Alt+N: never install it
+            $u.unsignedFiles = Invoke-LabGuest -Name $VmName -ArgumentList $updates -ScriptBlock { param($d) @(Get-ChildItem $d -Filter *.msi -ErrorAction SilentlyContinue).Count }
+            Shot 'sec-upd-01'
+            $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
+            $null = Ui 'Cancel' -Title 'Settings' -Optional
+
+            # SEC-UPD-02: the signed package; while Windows asks for approval, the user's download is swapped for the rebuild
+            Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $current -Leaf)
+            Restart-Client
+            Install-Now
+            $until = (Get-Date).AddSeconds(180)
+            while (-not (Consent) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+            $u.swapConsent = Consent
+            $u.swap = Invoke-LabGuest -Name $VmName -ArgumentList $updates -ScriptBlock {
+                param($d)
+                $msi = @(Get-ChildItem $d -Filter *.msi)[0]
+                Copy-Item 'C:\LabClient\swap\RemoteHub-99.0.0-x64.msi' $msi.FullName -Force
+                (Get-FileHash $msi.FullName).Hash
+            }
+            if ($u.swapConsent) { Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59 }   # Alt+Y: approve
+            $u.swapRestarted = Wait-Restarted
+            $until = (Get-Date).AddSeconds(90)
+            do { Start-Sleep -Seconds 3; $u.swapMessage = WinText 'RemoteHub updates' } while ("$($u.swapMessage)" -notmatch 'wasn''t installed' -and (Get-Date) -lt $until)
+            Shot 'sec-upd-02'
+            $null = Ui 'OK' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
+            $u.swapStaging = Staging
+            $u.swapVersion = InstalledVersion
+
+            # the same without the swap: the elevated step installs its own checked copy and RemoteHub starts again
+            Close-Rh
+            Restart-Client
+            Install-Now
+            $until = (Get-Date).AddSeconds(180)
+            while (-not (Consent) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
+            $u.okConsent = Consent
+            if ($u.okConsent) { Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59 }
+            $u.okRestarted = Wait-Restarted
+            $until = (Get-Date).AddSeconds(120)
+            do { Start-Sleep -Seconds 5; $u.okStaging = Staging } while (@($u.okStaging.results).Count -lt 2 -and (Get-Date) -lt $until)
+            $u.okMessage = WinText 'RemoteHub updates'
+            Close-Rh
+            Save 'sec-upd' $u
+        }
+
+        It 'SEC-UPD-01 an installer whose signature doesn''t match is refused before Windows asks; nothing is kept' -Tag 'SEC-UPD-01' {
+            $u.unsigned | Should -Match 'signature doesn''t match the file or that this PC doesn''t trust\. It was deleted and won''t be installed\.'
+            $u.unsignedConsent | Should -BeFalse -Because 'the refusal comes before the administrator approval'
+            $u.unsignedFiles | Should -Be 0
+        }
+
+        It 'SEC-UPD-02 a download swapped while Windows asks for approval isn''t installed; the step''s folder is for administrators only' -Tag 'SEC-UPD-02' {
+            $u.swapConsent | Should -BeTrue -Because 'Windows asks for approval before RemoteHub exits'
+            $u.swapRestarted | Should -BeTrue -Because 'the restart helper starts RemoteHub again after the elevated step'
+            $u.swapMessage | Should -Match 'the downloaded file changed after RemoteHub had checked it'
+            @($u.swapStaging.results)[0] | Should -Be 'refused changed'
+            $u.swapStaging.msi | Should -Be 0 -Because 'the step removes its copy'
+            $u.swapStaging.protected | Should -BeTrue
+            @($u.swapStaging.who | Where-Object { $_ -notin 'S-1-5-18', 'S-1-5-32-544' }) | Should -BeNullOrEmpty -Because "only SYSTEM and Administrators (users may read only its results folder) - found: $($u.swapStaging.who -join ', ')"
+            $u.swapVersion | Should -Be $u.versionBefore
+        }
+
+        It 'SEC-UPD-02 without a swap the elevated step installs its own checked copy and RemoteHub starts again' -Tag 'SEC-UPD-02' {
+            $u.okConsent | Should -BeTrue
+            $u.okRestarted | Should -BeTrue
+            @($u.okStaging.results)[-1] | Should -Match '^installed (0|3010)$' -Because "the step's outcomes: $(@($u.okStaging.results) -join ' / ')"
+            $u.okStaging.msi | Should -Be 0
+            "$($u.okMessage)" | Should -Not -Match 'wasn''t installed|couldn''t be installed'
         }
     }
 

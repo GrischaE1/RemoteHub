@@ -143,11 +143,27 @@ public static class RemotingSetup
         string.Join(" ", Enumerable.Range(0, (thumbprint.Length + 3) / 4).Select(i => thumbprint.Substring(i * 4, Math.Min(4, thumbprint.Length - i * 4))));
 
     /// <summary>
+    /// Whether <paramref name="cert"/> can only stand for itself: not a certificate authority (basic constraints
+    /// CA = false, as the setup script makes it, or no basic constraints) and a key usage that doesn't allow signing
+    /// certificates. Without basic constraints, the key usage must be there to say so: such a certificate with no key
+    /// usage at all may act as a CA in Windows.
+    /// </summary>
+    public static bool IsEndEntity(X509Certificate2 cert)
+    {
+        var constraints = cert.Extensions.OfType<X509BasicConstraintsExtension>().FirstOrDefault();
+        var usage = cert.Extensions.OfType<X509KeyUsageExtension>().FirstOrDefault();
+        if (constraints is { CertificateAuthority: true } || constraints is null && usage is null) return false;
+        return ((usage?.KeyUsages ?? X509KeyUsageFlags.None) & (X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign)) == 0;
+    }
+
+    /// <summary>
     /// Adds the target's certificate (public part only) to the current user's trusted roots, so WinRM on this PC
-    /// accepts it. Windows asks the user to confirm. It is an end-entity certificate: it can't vouch for anything else.
+    /// accepts it. Windows asks the user to confirm. Only an end-entity certificate (<see cref="IsEndEntity"/>): it
+    /// can't vouch for anything else, where a CA certificate would make this PC trust everything it issues.
     /// </summary>
     public static void TrustOnThisPc(X509Certificate2 cert, string host)
     {
+        if (!IsEndEntity(cert)) throw new InvalidOperationException("The certificate is a certificate authority – it isn't added to the trusted roots.");
         using var c = X509CertificateLoader.LoadCertificate(cert.RawData);
         c.FriendlyName = $"RemoteHub – WinRM {host}";
         using var store = new X509Store(StoreName.Root, StoreLocation.CurrentUser);

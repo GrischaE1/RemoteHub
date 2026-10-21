@@ -8,7 +8,8 @@ namespace RemoteHub.Remoting.Shares;
 /// <summary>
 /// SMB 2/3 through RemoteHub's own client connection (SMBLibrary), used when Windows is already connected to the same
 /// server with another account. Each instance has its own connection and account, independent of Windows. Signs in
-/// with NTLMv2 (no Kerberos). Paths are shown as UNC paths, like with Windows' client. Always used behind a jump host:
+/// with NTLMv2 (no Kerberos) and always signs, even when the server doesn't require it; guest sessions are refused.
+/// Paths are shown as UNC paths, like with Windows' client. Always used behind a jump host:
 /// then it connects to <paramref name="forward"/>'s local port.
 /// </summary>
 public sealed class ManagedSmbShare : ShareFileSystem
@@ -31,6 +32,9 @@ public sealed class ManagedSmbShare : ShareFileSystem
             var (domain, user) = Split(credentials, host);
             var status = _client.Login(domain, user, credentials.Password ?? "");
             if (status != NTStatus.STATUS_SUCCESS) throw new ShareException(Explain(status, $"{host}: sign-in failed"));
+            if (!RequireSigning(_client))
+                throw new ShareException($"{host} signed the account in as a guest, whose connection can't be signed – nothing was read or written. " +
+                                         "Check the user name and password set for the share or its server.");
             _store = _client.TreeConnect(shareName, out status);
             if (status != NTStatus.STATUS_SUCCESS) throw new ShareException(Explain(status, Top));
             if (Stat(Start) is not { Kind: EntryKind.Folder }) throw new ShareException($"Folder not found: {Start}");
@@ -52,6 +56,28 @@ public sealed class ManagedSmbShare : ShareFileSystem
 
     /// <summary>Whether this SMBLibrary can connect to another port (a test fails when an update takes it away).</summary>
     internal static bool CanUseOtherPort => PortConnect is not null && ServerName is not null;
+
+    // SMBLibrary signs only when the server demands it ([MS-SMB2] SigningRequired); RemoteHub always wants it.
+    private static readonly System.Reflection.FieldInfo? SigningRequired = typeof(SMB2Client).GetField("m_signingRequired",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+    private static readonly System.Reflection.FieldInfo? SigningKey = typeof(SMB2Client).GetField("m_signingKey",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+    /// <summary>Whether this SMBLibrary can be made to sign (a test fails when an update takes it away).</summary>
+    internal static bool CanRequireSigning => SigningRequired?.FieldType == typeof(bool) && SigningKey?.FieldType == typeof(byte[]);
+
+    /// <summary>
+    /// After the sign-in: every request is signed and every answer's signature checked (an unsigned or wrongly signed
+    /// answer is discarded), whatever the server asks for – so nobody in between can change the data or take over the
+    /// session. False for a guest session: it has no key to sign with.
+    /// </summary>
+    internal static bool RequireSigning(SMB2Client client)
+    {
+        if (!CanRequireSigning) throw new ShareException("RemoteHub's SMB client can't sign its connection in this version – nothing was read or written.");
+        if (SigningKey!.GetValue(client) is not byte[] { Length: > 0 }) return false;
+        SigningRequired!.SetValue(client, true);
+        return true;
+    }
 
     /// <summary>
     /// Connects to 127.0.0.1:<paramref name="port"/> as if it were <paramref name="host"/>: the name is set first, so the

@@ -141,8 +141,36 @@ public class RemotingSetupTests
             Assert.Equal("1.3.6.1.5.5.7.3.1", pub.Extensions.OfType<X509EnhancedKeyUsageExtension>().Single().EnhancedKeyUsages.Cast<System.Security.Cryptography.Oid>().Single().Value);
             Assert.True(pub.MatchesHostname(host));
             Assert.InRange(pub.NotAfter, DateTime.Now.AddYears(2).AddDays(-2), DateTime.Now.AddYears(2).AddDays(1));
+            Assert.True(RemotingSetup.IsEndEntity(pub)); // what the script makes can be trusted on this PC
         }
         finally { File.Delete(test); File.Delete(cer); }
+    }
+
+    private static X509Certificate2 SelfSigned(X509BasicConstraintsExtension? constraints, X509KeyUsageFlags? usage)
+    {
+        using var key = System.Security.Cryptography.RSA.Create(2048);
+        var request = new CertificateRequest("CN=srv01", key, System.Security.Cryptography.HashAlgorithmName.SHA256, System.Security.Cryptography.RSASignaturePadding.Pkcs1);
+        if (constraints is not null) request.CertificateExtensions.Add(constraints);
+        if (usage is { } u) request.CertificateExtensions.Add(new X509KeyUsageExtension(u, true));
+        return request.CreateSelfSigned(DateTimeOffset.Now.AddDays(-1), DateTimeOffset.Now.AddYears(1));
+    }
+
+    [Fact]
+    public void Only_a_certificate_that_stands_for_itself_can_be_trusted_on_this_PC()
+    {
+        var leaf = new X509BasicConstraintsExtension(false, false, 0, true);
+        var ca = new X509BasicConstraintsExtension(true, false, 0, true);
+        const X509KeyUsageFlags server = X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment;
+        using (var c = SelfSigned(leaf, server)) Assert.True(RemotingSetup.IsEndEntity(c));
+        using (var c = SelfSigned(leaf, null)) Assert.True(RemotingSetup.IsEndEntity(c));
+        using (var c = SelfSigned(null, server)) Assert.True(RemotingSetup.IsEndEntity(c)); // no constraints, but its key can't sign certificates
+        using (var c = SelfSigned(ca, server)) Assert.False(RemotingSetup.IsEndEntity(c));
+        using (var c = SelfSigned(ca, null)) Assert.False(RemotingSetup.IsEndEntity(c));
+        using (var c = SelfSigned(leaf, server | X509KeyUsageFlags.KeyCertSign)) Assert.False(RemotingSetup.IsEndEntity(c));
+        using (var c = SelfSigned(null, null)) Assert.False(RemotingSetup.IsEndEntity(c)); // Windows may treat it as a CA
+        // never added, not even after the user's OK (the store isn't touched)
+        using (var c = SelfSigned(ca, null))
+            Assert.Throws<InvalidOperationException>(() => RemotingSetup.TrustOnThisPc(c, "srv01"));
     }
 
     [Fact]

@@ -1080,3 +1080,18 @@ Not automated: 12 (listed below)
 
 Suggested order: report + IDs → policy/update helpers → harness PowerShell/probes (S, P, T, W) → headless desktop
 client + in-session helpers (D) → FlaUI + mock server (C, R).
+
+## 13. Security – attack cases (SEC)
+
+The lab plays the attacker ([security-test-lab-design.md](security-test-lab-design.md) §4). These are the cases whose fix is in the
+code; the design's other `SEC-*` cases follow with their test files. Unit tests cover the same fixes without a VM
+(`UpdateTelemetryTests`, `VirtualDisplayTests`, `CoreTests`, `JumpHostTests`, `RemotingSetupTests`, `BuildScriptTests`).
+
+| ID | Case | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| SEC-UPD-01 | Update with the right checksum, broken signature | the mock announces 99.0.0 with a rebuilt MSI (`New-LabRebuiltMsi`: right `sha256` and `size`, signature no longer valid) → "The downloaded installer has a signature that doesn't match the file or that this PC doesn't trust. It was deleted and won't be installed."; Windows never asks for approval; no `.msi` left in `%TEMP%\RemoteHub\Updates` (`C-POLUPD2.Tests.ps1`) | U M PS | 1 | ◐ | lab signing certificate |
+| SEC-UPD-02 | Download swapped during the approval prompt | while Windows asks for approval, the MSI in the user's `%TEMP%` is replaced by the rebuild; after *Yes*: nothing installed (version unchanged), RemoteHub starts again and says "…the downloaded file changed after RemoteHub had checked it…", the step's outcome is `refused changed`, no copy left in `C:\Program Files\RemoteHub Updates`, whose permissions are SYSTEM and Administrators only (not inherited). Without a swap the step installs its own copy (`installed 0`) and RemoteHub starts again without a message (`C-POLUPD2.Tests.ps1`) | U M C PS | 1 | ◐ | lab signing certificate |
+| SEC-VDD-01 | Rogue display-driver pipe | normaluser serves `MTTVirtualDisplayPipe` (4 instances) while the virtual display is on; a second connection with another size makes the agent reload the driver: no rogue instance receives a byte, none can act as SYSTEM (anonymous connection); a refused reload says "served by another program" in the agent log (`SEC-VDD.Tests.ps1`) | H S PS E | 1 | ◐ | normaluser signed in |
+| SEC-VDD-02 | Settings folder at the drive root | `C:\VirtualDisplayDriver` after the first connection: no reparse point, permissions not inherited, owner SYSTEM or Administrators, only they may write; normaluser can neither remove it nor create a file in it; a junction planted in its place (as an older build could leave it) gets nothing written through it and is replaced by the agent's own folder with the next connection's settings (`SEC-VDD.Tests.ps1`) | H PS | 1 | ◐ | |
+| SEC-SH-02 | SMB signing with RemoteHub's own client | the server set to `RequireSecuritySignature = $false`: the second account (RemoteHub's client) still copies (14 files) – its requests are signed and answers without a valid signature are dropped, so it works only because the server signs (`S-SHARE.Tests.ps1`) | H PS | 1 | ◐ | Server |
+| SEC-LOG-01 | Nothing identifying in DiagLog | after the jump-host file's sessions, forwarders and shares, this PC's `remotehub.log` names neither the device, its address, the jump host's address, the account nor the password; the forwarders log by an 8-character ID (`J-JUMP.Tests.ps1`) | H E | 1 | ◐ | jump host |

@@ -171,7 +171,9 @@ the shown display offers less than the window and at most 1280×720, e.g. 640×4
 (driver not installed). Chosen at install (install dialog, MSI property `VIRTUALDISPLAY`, or the `.rhagent` file;
 default on). The driver – the third-party Virtual Display Driver (MIT, IddCx, signed by SignPath Foundation, shipped
 unchanged and hash-checked) – is installed with the device switched off; the service switches it on at the viewer's
-window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml`, reloaded through its control pipe on a resize),
+window size (driver settings `C:\VirtualDisplayDriver\vdd_settings.xml` – the folder is the agent's own, with a protected
+ACL where only SYSTEM and Administrators write, and a link or foreign folder in its place is removed first – reloaded
+through its control pipe on a resize, connected anonymously and only to the driver host `WUDFHost.exe`),
 the helper makes it the primary monitor (SetDisplayConfig) and fits it, and the service switches it off when the last
 connection that asked for it ends (and at service start). After a restart of the device Windows may no longer report
 the switched-off device (pnputil: *Disconnected*, enabling fails with 1167 "not connected"); switching it on then

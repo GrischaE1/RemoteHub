@@ -3182,6 +3182,41 @@ function Restart-LabAgent {
     Wait-LabAgent -Name $Name -Pin $Pin -Port $Port -TimeoutSec $TimeoutSec
 }
 
+# Sets one value in the agent's agent.json (e.g. virtualDisplay = always) and restarts the agent so it reads it.
+function Set-LabAgentJsonValue {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Pin,
+        [Parameter(Mandatory)][string]$Key,
+        $Value
+    )
+    Invoke-LabGuest -Name $Name -ArgumentList $Key, $Value -ScriptBlock {
+        param($k, $v)
+        $f = 'C:\ProgramData\RemoteHub\Agent\agent.json'
+        $c = Get-Content $f -Raw | ConvertFrom-Json
+        $c | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
+        [IO.File]::WriteAllText($f, ($c | ConvertTo-Json -Depth 5))
+    }
+    $null = Restart-LabAgent -Name $Name -Pin $Pin
+}
+
+# The lines RemoteHub's diagnostic log (DiagLog) got on this PC since -Since: what the harness's client code wrote
+# (%APPDATA%\RemoteHub\logs, or REMOTEHUB_DATA_DIR's logs; the rotated file too). For checking that nothing names a
+# device, account or address there.
+function Get-LabHostDiagLog {
+    [CmdletBinding()]
+    param([datetime]$Since = [datetime]::MinValue)
+    $dir = if ($env:REMOTEHUB_DATA_DIR) { $env:REMOTEHUB_DATA_DIR } else { Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'RemoteHub' }
+    $files = @('remotehub.log.old', 'remotehub.log') | ForEach-Object { Join-Path $dir "logs\$_" } | Where-Object { Test-Path $_ }
+    $keep = $false
+    foreach ($line in @($files | ForEach-Object { Get-Content $_ -Encoding UTF8 })) {
+        # a line without a date (the rest of a message with a line break) goes with the line before it
+        if ($line -match '^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') { $keep = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null) -ge $Since.AddSeconds(-1) }
+        if ($keep) { $line }
+    }
+}
+
 # Waits until health answers with the pin (after a restart or reboot - the service starts delayed) and returns it.
 function Wait-LabAgent {
     [CmdletBinding()]
@@ -3336,13 +3371,15 @@ function Save-LabAgentEvidence {
 #region RemoteHub client
 
 # Installs RemoteHub's package (LabRoot\client unless -Msi) silently. The update check and telemetry are turned off by
-# policy unless -Network (a client in the lab must not call update.remotehub.dev).
+# policy unless -Network (a client in the lab must not call update.remotehub.dev). The VM trusts the lab's signing
+# certificate, as a PC trusts a release's publisher: an update must be signed by the publisher of the running build.
 function Install-LabClient {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Msi, [switch]$Network)
     # set up outside Initialize-LabVm: the VM is no longer what Initialize-LabVm left
     if (-not $script:LabInitializing) { Clear-LabVmState -Name $Name }
     if (-not $Msi) { $Msi = Get-LabClientMsi }
+    Install-LabSigningCertificate -Name $Name
     Copy-LabFile -Name $Name -Path $Msi -Destination 'C:\LabClient'
     Invoke-LabGuest -Name $Name -ArgumentList (Split-Path $Msi -Leaf), $Network.IsPresent -ScriptBlock {
         param($leaf, $network)

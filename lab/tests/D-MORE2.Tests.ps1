@@ -35,16 +35,7 @@ BeforeAll {
         $job
     }
     function Get-Vdd { Invoke-LabGuest -Name $VmName -ScriptBlock { $d = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1; if ($d) { [string]$d.Status } } }
-    function Set-AgentJsonValue([string]$Key, $Value) {
-        Invoke-LabGuest -Name $VmName -ArgumentList $Key, $Value -ScriptBlock {
-            param($k, $v)
-            $f = 'C:\ProgramData\RemoteHub\Agent\agent.json'
-            $c = Get-Content $f -Raw | ConvertFrom-Json
-            $c | Add-Member -NotePropertyName $k -NotePropertyValue $v -Force
-            [IO.File]::WriteAllText($f, ($c | ConvertTo-Json -Depth 5))
-        }
-        $null = Restart-LabAgent -Name $VmName -Pin $pin
-    }
+    function Set-AgentJsonValue([string]$Key, $Value) { Set-LabAgentJsonValue -Name $VmName -Pin $pin -Key $Key -Value $Value }
     # pastes the clipboard into a folder of normaluser's, as Explorer's Paste does, until $Count files are there
     # (Invoke-LabPaste: it pumps messages while the shell fetches the offered files); answers the paste's result - files
     # (Path, Name, Length, Hash), the clipboard's formats before the paste and the thread's apartment

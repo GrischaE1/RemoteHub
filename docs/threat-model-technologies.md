@@ -15,7 +15,7 @@ deserve a closer look. Sources are the code and the design documents in `docs/`.
 | **Installers** | msiexec, SYSTEM custom actions | WiX v5.0.2 |
 
 Third-party libraries (see `THIRD-PARTY-NOTICES.md`): PowerShell SDK 7.6.6, Microsoft.Data.Sqlite 10 with
-SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle 2.4.0), SSH.NET 2026.0.0, FluentFTP 55.0.0, SMBLibrary 1.5.8.1
+SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle 2.4.0), SSH.NET 2026.0.0, FluentFTP 55.1.0, SMBLibrary 1.5.8.1
 (LGPL), Markdig 0.44.0, AvalonEdit 6.3.1, WPF-UI 4.3.0, CommunityToolkit.Mvvm 8.4.2, Virtual Display Driver 24.12.24
 (signed driver, MIT).
 
