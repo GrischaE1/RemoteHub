@@ -1,11 +1,11 @@
 name: Code scanning
 
-# Static analysis of the source, with the results under Security > Code scanning:
-# - CodeQL for the app and the agent (C#), the credential provider (C++), and these workflows themselves (script
-#   injection, token permissions). The security-extended queries add the lower-precision security checks.
+# Analysis next to CodeQL, with the results under Security > Code scanning too. CodeQL itself runs as the
+# repository's default setup (Settings > Code security), not from a workflow: GitHub rejects CodeQL results from a
+# workflow while default setup is on.
 # - MSVC Code Analysis (/analyze) for the credential provider: SAL, COM and HRESULT checks CodeQL doesn't make.
 # - On pull requests, dependency review: a new or updated package with a known vulnerability fails the check.
-# Weekly as well, so new queries reach code that hasn't changed.
+# Weekly as well, so a newer compiler's checks reach code that hasn't changed.
 on:
   push:
     branches: [ main ]
@@ -19,53 +19,6 @@ permissions:
   contents: read
 
 jobs:
-  codeql:
-    name: CodeQL (${{ matrix.language }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      security-events: write   # upload the results
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # C# needs no build: CodeQL reads the source and restores the NuGet packages itself. Windows, because the
-          # WPF projects target the Windows desktop SDK.
-          - language: csharp
-            build-mode: none
-            runner: windows-latest
-          # C++ is analysed from a real compile, so the provider is built the way CI builds it (hardening flags and
-          # all; credential-provider-design.md §8.1). Its tests and fuzzer are left out – they don't ship.
-          - language: c-cpp
-            build-mode: manual
-            runner: windows-latest
-          - language: actions
-            build-mode: none
-            runner: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          queries: security-extended
-
-      - name: Spectre-mitigated libraries
-        if: matrix.language == 'c-cpp'
-        shell: pwsh
-        run: ./build/Install-SpectreLibraries.ps1
-
-      - name: Credential provider
-        if: matrix.language == 'c-cpp'
-        shell: pwsh
-        run: ./build/build-credential-provider.ps1 -Configuration Release -SkipTests
-
-      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
-        with:
-          category: /language:${{ matrix.language }}
-
   msvc-code-analysis:
     name: MSVC Code Analysis (credential provider)
     runs-on: windows-latest
