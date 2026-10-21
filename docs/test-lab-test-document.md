@@ -8328,7 +8328,7 @@ P1 · How: H E · Needs: the jump host VM · Status: ◐ Written – `J-JUMP.Tes
 - no line names the device's computer name, its address, the jump host's address, the account or the lab password (the evidence keeps only counts)
 
 #### SEC-ENR-03 · A copied enrollment file
-P1 · How: H PS · Needs: a second device VM (`Get-LabDevice`) · Status: ○ Written – `SEC-ENR.Tests.ps1`
+P1 · How: H PS · Needs: a second device VM (`Get-LabDevice`) · Status: ✅ Automated – `SEC-ENR.Tests.ps1`
 
 **Preconditions:** both VMs reverted. One `.rhagent` made on the host with the lab's enrollment secret (`New-LabEnrollment`), kept outside the evidence folder.
 
