@@ -263,6 +263,9 @@ public static class UpdateService
         static string Q(string s) => "'" + s.Replace("'", "''") + "'";
         return string.Join("\n",
             "$ErrorActionPreference = 'Stop'",
+            // RemoteHub hosts PowerShell 7, which puts its own module folders into PSModulePath; inherited, Windows
+            // PowerShell would look for Get-FileHash there and not find it. Its own folders only, and nothing a user can write.
+            "$env:PSModulePath = \"$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\"",
             $"$source = {Q(msi)}; $sha = {Q(sha256.ToUpperInvariant())}; $publisher = {Q(publisher ?? "")}; $id = {Q(resultId)}",
             stage is null ? "$stage = Join-Path $env:ProgramFiles 'RemoteHub Updates'" : $"$stage = {Q(stage)}", // another folder: tests only
             "$results = Join-Path $stage 'results'",
