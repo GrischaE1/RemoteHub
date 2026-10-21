@@ -46,6 +46,33 @@ internal static class LabEnrollment
     }
 
     /// <summary>
+    /// The same enrollment as a format-1 file – what RemoteHub made before SEC-ENR-03: a new device ID and the device's
+    /// certificate as a PFX with a one-time password – for an older agent that reads only that format (the previous
+    /// release the update cases install first).
+    /// </summary>
+    public static byte[] FormatOne(AgentEnrollment e)
+    {
+        var deviceId = Guid.NewGuid().ToString();
+        var label = e.DeviceLabel.Length > 0 ? e.DeviceLabel : "device";
+        using var key = System.Security.Cryptography.RSA.Create(3072);
+        using var cert = AgentEnrollment.CreateCertificate(key, deviceId, label, DateTime.UtcNow);
+        var password = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+        return JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?>
+        {
+            ["format"] = 1,
+            ["deviceId"] = deviceId,
+            ["deviceLabel"] = label,
+            ["listenPort"] = e.ListenPort,
+            ["allowedGroups"] = e.AllowedGroups,
+            ["firewallRemoteAddresses"] = e.FirewallRemoteAddresses,
+            ["virtualDisplay"] = e.VirtualDisplay,
+            ["pfx"] = Convert.ToBase64String(cert.Export(System.Security.Cryptography.X509Certificates.X509ContentType.Pfx, password)),
+            ["pfxPassword"] = password,
+            ["createdUtc"] = e.CreatedUtc,
+        }, Json);
+    }
+
+    /// <summary>
     /// claim --host .. [--port n] [--name <host name RemoteHub knows the device by>] [--revoke-current 1]: AgentInstaller.ClaimAsync,
     /// as RemoteHub claims an agent. --name checks the device against another name than the address (a DNS name that
     /// points elsewhere); --revoke-current judges the claim as RemoteHub would after "Replace and revoke".

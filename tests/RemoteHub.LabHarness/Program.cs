@@ -107,6 +107,20 @@ static object Install(Dictionary<string, string> o)
     var virtualDisplay = o.GetValueOrDefault("virtual-display") != "0";
     bool? autoSignIn = o.GetValueOrDefault("auto-sign-in") switch { "1" => true, "0" => false, _ => null };
     var (folder, msi, rhagent) = AgentInstaller.Prepare(o["msi"], enrollment);
+    var legacyEnrollment = false;
+    // An agent older than enrollment format 2 (the previous release the update cases start from) refuses the new file:
+    // it gets the format-1 file it reads, as RemoteHub of its own version made it (LabEnrollment.FormatOne).
+    AgentInstaller.Installed WithLegacyFallback(Func<string?, AgentInstaller.Installed> install)
+    {
+        try { return install(rhagent); }
+        catch (RemoteCommandException ex) when (enrollment is not null && !o.ContainsKey("enrollment-file") && ex.Message.Contains("Enrollment format 2 is not supported"))
+        {
+            progress.Add("The agent reads only enrollment format 1 - installing again with a format-1 file");
+            File.WriteAllBytes(rhagent!, LabEnrollment.FormatOne(enrollment));
+            legacyEnrollment = true;
+            return install(rhagent);
+        }
+    }
     if (o.TryGetValue("enrollment-file", out var forced))
     {
         rhagent = Path.Combine(folder, Path.GetFileName(forced));
@@ -119,15 +133,15 @@ static object Install(Dictionary<string, string> o)
         if (o.GetValueOrDefault("via") == "winrm")
         {
             using var rs = LabTools.OpenWinRm(o).GetAwaiter().GetResult();
-            var viaWinRm = AgentInstaller.InstallOverRemoting(rs, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
-            return new { deviceId = viaWinRm.DeviceId, label = enrollment?.DeviceLabel, pin = viaWinRm.Fingerprint, port, scope, installed = viaWinRm, progress };
+            var viaWinRm = WithLegacyFallback(r => AgentInstaller.InstallOverRemoting(rs, msi, r, progress.Add, virtualDisplay, autoSignIn));
+            return new { deviceId = viaWinRm.DeviceId, label = enrollment?.DeviceLabel, pin = viaWinRm.Fingerprint, port, scope, installed = viaWinRm, legacyEnrollment, progress };
         }
         using var local = RunspaceFactory.CreateRunspace(InitialSessionState.CreateDefault2());
         local.Open();
         var session = OpenDirectSession(local, o["vm"], o["user"], o["password"]);
         try
         {
-            var installed = AgentInstaller.InstallOverRemoting(session.Runspace, msi, rhagent, progress.Add, virtualDisplay, autoSignIn);
+            var installed = WithLegacyFallback(r => AgentInstaller.InstallOverRemoting(session.Runspace, msi, r, progress.Add, virtualDisplay, autoSignIn));
             return new
             {
                 deviceId = installed.DeviceId,
@@ -136,6 +150,7 @@ static object Install(Dictionary<string, string> o)
                 port,
                 scope,
                 enrollmentFile = rhagent is null ? null : Path.GetFileName(rhagent),
+                legacyEnrollment,
                 installed,
                 progress,
             };
