@@ -276,10 +276,14 @@ public static class UpdateService
             "    if (Test-Path -LiteralPath $dir) { if (\"$((Get-Item -LiteralPath $dir -Force).Attributes)\" -match 'ReparsePoint') { throw \"$dir is a link\" } }",
             "    else { $null = New-Item -ItemType Directory -Path $dir }",
             "  }",
-            // Administrators and SYSTEM only; users may read the outcomes, nothing else.
-            "  $null = & \"$env:SystemRoot\\System32\\icacls.exe\" $stage /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'",
+            // Administrators and SYSTEM only; users may read the outcomes, nothing else. /reset first: a folder made where
+            // nothing is inherited gets the creator's default permissions as its own entries, which /inheritance:r keeps.
+            "  $icacls = \"$env:SystemRoot\\System32\\icacls.exe\"",
+            "  $null = & $icacls $stage /reset",
+            "  $null = & $icacls $stage /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'",
             "  if ($LASTEXITCODE -ne 0) { throw 'the staging folder could not be locked down' }",
-            "  $null = & \"$env:SystemRoot\\System32\\icacls.exe\" $results /grant '*S-1-5-32-545:(OI)(CI)RX'",
+            "  $null = & $icacls $results /reset",
+            "  $null = & $icacls $results /grant '*S-1-5-32-545:(OI)(CI)RX'",
             "  Get-ChildItem -LiteralPath $stage -Filter *.msi -File -Force | Remove-Item -Force",
             "  Get-ChildItem -LiteralPath $results -File -Force | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force",
             $"  Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue",
