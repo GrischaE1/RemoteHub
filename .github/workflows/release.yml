@@ -7,7 +7,9 @@ on:
     tags: [ 'v[0-9]+.[0-9]+.[0-9]+*' ]
 
 permissions:
-  contents: write   # create the release
+  contents: write       # create the release
+  id-token: write       # sign the build provenance (Sigstore, through GitHub's OIDC token)
+  attestations: write   # store it with the repository's attestations
 
 concurrency:
   group: release-${{ github.ref }}
@@ -165,6 +167,40 @@ jobs:
           "admx=artifacts/RemoteHub.admx" >> $env:GITHUB_OUTPUT
           "adml=artifacts/RemoteHub.adml" >> $env:GITHUB_OUTPUT
 
+      # What the release is made of (SEC-CI-05): a CycloneDX SBOM of the NuGet packages of RemoteHub and the agent (not
+      # the test projects). Components outside NuGet aren't in it: the Virtual Display Driver (third-party\, listed in
+      # THIRD-PARTY-NOTICES.md) and the C++ credential provider, which has no packages.
+      - name: SBOM
+        id: sbom
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'tools'
+          dotnet tool install CycloneDX --version 6.3.1 --tool-path $tools
+          if ($LASTEXITCODE -ne 0) { throw 'CycloneDX could not be installed.' }
+          $name = "RemoteHub-$env:VERSION-sbom.cdx.json"
+          & (Join-Path $tools 'dotnet-CycloneDX') RemoteHub.sln --exclude-test-projects --output artifacts --filename $name --output-format Json --set-name RemoteHub --set-version $env:VERSION
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "artifacts/$name")) { throw 'The SBOM was not written.' }
+          $file = "artifacts/$name"
+          $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Out-File -Encoding ascii "$file.sha256"
+          "path=$file" >> $env:GITHUB_OUTPUT
+
+      # Build provenance (SEC-CI-05): GitHub signs which workflow, commit and runner made each file (Sigstore), so a
+      # download can be checked with "gh attestation verify <file> -R GrischaE1/RemoteHub" - unlike the .sha256 files,
+      # which come from the same place as the file.
+      - name: Provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.msi.outputs.path }}
+            ${{ steps.msi.outputs.agent }}
+            ${{ steps.policy.outputs.admx }}
+            ${{ steps.policy.outputs.adml }}
+            ${{ steps.policy.outputs.zip }}
+            ${{ steps.sbom.outputs.path }}
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -180,8 +216,12 @@ jobs:
             ${{ steps.policy.outputs.adml }}.sha256
             ${{ steps.policy.outputs.zip }}
             ${{ steps.policy.outputs.zip }}.sha256
+            ${{ steps.sbom.outputs.path }}
+            ${{ steps.sbom.outputs.path }}.sha256
           prerelease: ${{ steps.version.outputs.prerelease }}
           body: |
+            **Checking a download:** every file has a build provenance signed by GitHub – `gh attestation verify <file> -R GrischaE1/RemoteHub` shows the workflow and commit that made it. `RemoteHub-<version>-sbom.cdx.json` lists the NuGet packages RemoteHub and the agent are built from (CycloneDX).
+
             **Group Policy / Intune templates** for RemoteHub and the RemoteHub Agent: `RemoteHub.admx` goes into `PolicyDefinitions` (the Central Store, or `%WINDIR%\PolicyDefinitions`), `RemoteHub.adml` into its `en-US` folder – or take `RemoteHub-PolicyTemplates-<version>.zip`, which has that layout. Intune: import `RemoteHub.admx` and `RemoteHub.adml` under *Devices → Configuration → Import ADMX*.
           generate_release_notes: true
           fail_on_unmatched_files: true

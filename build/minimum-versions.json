@@ -1,0 +1,10 @@
+{
+  "comment": "Lowest versions the build accepts: each entry is a version with a known security fix. Test-DependencyVersions.ps1 fails the build when a project references a lower one. Add an entry when an advisory affects a dependency (with its source); Dependabot proposes the update itself.",
+  "packages": [
+    {
+      "id": "FluentFTP",
+      "minimum": "55.1.0",
+      "reason": "FTPS data connections accepted any certificate before 55.1.0 (FluentFTP 55.1.0 release notes)"
+    }
+  ]
+}

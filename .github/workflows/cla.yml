@@ -28,8 +28,9 @@ jobs:
           path-to-document: 'https://github.com/GrischaE1/RemoteHub/blob/main/CLA.md'
           path-to-signatures: 'signatures/version1/cla.json'
           branch: 'cla-signatures'
-          # The owner (all their code is theirs anyway) and bots don't sign.
-          allowlist: GrischaE1,dependabot[bot],github-actions[bot],bot*
+          # The owner (all their code is theirs anyway) and the two bots that commit here don't sign. Each by its exact
+          # name: a pattern like bot* would also let any account called "bot..." past the CLA (SEC-CI-03).
+          allowlist: GrischaE1,dependabot[bot],github-actions[bot]
           custom-pr-sign-comment: 'I have read the RemoteHub CLA and I agree to it'
           custom-notsigned-prcomment: 'Thank you for your contribution! Before it can be merged, please read the [RemoteHub Contributor License Agreement](https://github.com/GrischaE1/RemoteHub/blob/main/CLA.md) and agree to it by commenting the sentence below. You only do this once. You keep the copyright to your work; the CLA lets the project also offer it under other license terms (see CONTRIBUTING.md).'
           custom-allsigned-prcomment: 'All contributors have agreed to the RemoteHub CLA. Thank you!'
