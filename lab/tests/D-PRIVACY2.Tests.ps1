@@ -333,8 +333,16 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
         BeforeAll {
             $h = [ordered]@{}
             $task = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
-            Start-Sleep -Seconds 4
-            $notepad = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-Process notepad | Select-Object -First 1).Path }
+            # waited for, not a fixed 4 s (run 20261021-062735: notepad wasn't up yet on Server-2)
+            $notepad = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $until = (Get-Date).AddSeconds(60)
+                do {
+                    $p = Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($p -and $p.Path) { return $p.Path }
+                    Start-Sleep -Milliseconds 500
+                } while ((Get-Date) -lt $until)
+                throw 'notepad did not start in the session within 60 s'
+            }
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ HiddenApps = @($notepad) }
             $since = Get-LabGuestTime -Name $VmName
             $o = Out 'policy-apps'

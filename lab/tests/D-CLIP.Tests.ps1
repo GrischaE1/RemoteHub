@@ -298,8 +298,10 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             ($offer | ConvertTo-Json -Depth 6) | Should -Not -Match 'hosts'
         }
 
-        It 'D-CLIP-13 files to the sign-in screen: "Nobody is signed in on the device."' -Tag 'D-CLIP-13' {
-            ($u.signin | ConvertTo-Json -Depth 8) | Should -Match 'Nobody is signed in on the device'
+        It 'D-CLIP-13 files to the sign-in screen are refused: the clipboard is closed there (or "Nobody is signed in on the device.")' -Tag 'D-CLIP-13' {
+            # since #54 the lock / sign-in screen is checked first (DesktopEndpoint.ClipboardClosedReason); nobody signed in
+            # is the older answer for the same refusal
+            ($u.signin | ConvertTo-Json -Depth 8) | Should -Match 'Nothing is copied while the device shows its lock or sign-in screen|Nobody is signed in on the device'
         }
     }
 

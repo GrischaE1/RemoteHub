@@ -247,7 +247,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             # Win+L passes through the secure desktop, then Windows 11 / Server 2025 show the lock screen on the Default
             # desktop (as in D-LOCK-01): the last layout is not secure (run 20261019-193627), so the case checks the
             # switch after Allow and that the picture is the lock screen, no longer the user's desktop (the marker)
-            $allowedAt = @(Of $l.allow 'Connected')[-1].ms
+            $allowedAt = (Of $l.allow 'Connected')[-1].ms   # (Of answers the list itself: @(...) would wrap it once more)
             @($l.allow.layouts | Where-Object { $_.ms -gt $allowedAt -and $_.layout.secureDesktop }).Count | Should -BeGreaterThan 0
             $l.relockedMagenta | Should -BeLessThan 0.05 -Because 'd-secure-lock\relocked.png shows the lock screen, not the marker'
         }

@@ -8174,7 +8174,7 @@ P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 P3 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
 **Expected:**
-- *Settings → Help & about → Welcome tour…* opens the tour; *What's new…* opens "What's new in RemoteHub <version>"
+- *Settings → Help & about → Welcome tour…* opens the tour; *What's new…* opens "What's new in RemoteHub <newest entry>" with "Installed: <version>" under it – a patch without an entry of its own shows the last one there was
 
 #### C-FIRST-05 · Pages left out by policy
 P3 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
@@ -8185,10 +8185,12 @@ P3 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 #### C-FIRST-06 · What's new after an upgrade
 P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`
 
-**Preconditions:** the previous release installed and started once with an .rdp file (a connection; settings without a remembered version).
+**Preconditions:** the previous release installed and started once with an .rdp file (a connection).
 
 **Expected:**
-- after installing this version, the first start shows What's new, not the tour: "What's new in RemoteHub <version>", this version's highlights (e.g. Favourites), *All release notes*
+- after installing this version, the first start never shows the tour
+- with What's new entries newer than the previous release: What's new, "What's new in RemoteHub <newest entry>" with those highlights and *All release notes*
+- with none newer (previous 0.21.0, newest entry 0.21.0): nothing opens
 
 #### C-FIRST-07 · What's new once
 P2 · How: U · Needs: – · Status: ✅ Automated – `C-FIRST.Tests.ps1`

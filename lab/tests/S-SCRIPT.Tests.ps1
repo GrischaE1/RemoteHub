@@ -105,6 +105,9 @@ Describe 'S-SCRIPT <VmName>' -Tag Scripts, 'S-SCRIPT' {
     Context 'over WinRM, nobody signed in' {
         BeforeAll {
             Reset-LabVm -Name $VmName
+            # the checkpoint has Admin signed in at the console: signed out, so nobody is (run 20261021-062735 ran the
+            # "signed-in user" script as Admin)
+            Disconnect-LabConsole -Name $VmName
             $setup = Invoke-LabSetupScript -Name $VmName
             $cert = (Get-LabWinRmState -Name $VmName).Certificate.Thumbprint
             Save 'winrm-setup' @{ Setup = $setup; Certificate = $cert }

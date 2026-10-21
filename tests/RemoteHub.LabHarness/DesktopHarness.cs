@@ -150,7 +150,7 @@ internal static class DesktopHarness
             }
 
             // the end, like closing the tab: a normal close of what is still open
-            if (_conn is { } open) { open.EndedBy = "close"; open.Client.Dispose(); open.Decoder?.Dispose(); }
+            if (_conn is { } open) { if (!open.Closed) open.EndedBy = "close"; open.Client.Dispose(); open.Decoder?.Dispose(); }
             lock (_receiveGate) { _receiving?.Dispose(); _receiving = null; }
 
             object result;
@@ -643,10 +643,13 @@ internal static class DesktopHarness
         private void OnClosed(Conn c, string why)
         {
             if (c.Closed) return;
+            // who ended it, read before Closed is set: the step loop ends its wait on Closed and then marks what is still
+            // open as closed by the harness (lab run 20261021-062735, D-RES-07: the agent's close recorded as "close")
+            var by = c.EndedBy ?? "agent";
             c.Closed = true;
             string? status = null, description = null;
             try { if (SocketOf(c.Client) is { } ws) (status, description) = (ws.CloseStatus?.ToString(), ws.CloseStatusDescription); } catch { /* disposed */ }
-            lock (_gate) _closes.Add(new { ms = Ms, connection = c.N, why, closeStatus = status, closeDescription = description, by = c.EndedBy ?? "agent" });
+            lock (_gate) _closes.Add(new { ms = Ms, connection = c.N, why, closeStatus = status, closeDescription = description, by });
             foreach (var r in _received.Values) r.TrySetResult(new D { ["failed"] = "connection ended: " + why });
         }
 

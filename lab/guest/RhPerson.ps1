@@ -579,9 +579,25 @@ switch ($Do) {
         # would take the click instead - lab run 20261019-193627: a right-click on a connection opened no menu under the
         # expanded rail. Then the pointer is moved to the window's right edge first, until the point is the element's
         # window again (hover popups close when the pointer leaves them), at most 3 s.
+        # A point off the screen is no click at all: when the element's centre lies outside the working area (lab run
+        # 20261021-062735, C-AUD-08: RemoteHub's window half off the left edge, a right-click on a folder opened no menu),
+        # the window is first moved to the top left and kept within the screen, as 'fit' does.
         $center = {
             $r = $found.Current.BoundingRectangle
             $pt = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+            $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+            if ($pt[0] -lt $wa.Left -or $pt[0] -ge $wa.Right -or $pt[1] -lt $wa.Top -or $pt[1] -ge $wa.Bottom) {
+                $tp = $null
+                if ($win.TryGetCurrentPattern([Windows.Automation.TransformPattern]::Pattern, [ref]$tp)) {
+                    $wr0 = $win.Current.BoundingRectangle
+                    if ($tp.Current.CanResize) { $tp.Resize([math]::Min($wr0.Width, $wa.Width - 40), [math]::Min($wr0.Height, $wa.Height - 60)) }
+                    if ($tp.Current.CanMove) { $tp.Move($wa.X, $wa.Y) }
+                    Start-Sleep -Milliseconds 300
+                    $result.movedOnScreen = "$wr0"
+                    $r = $found.Current.BoundingRectangle
+                    $pt = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+                }
+            }
             # the window the element is drawn in: its nearest ancestor with a window handle (a popup's own, else $win)
             $own = [IntPtr]::Zero
             $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
@@ -635,6 +651,21 @@ switch ($Do) {
                 $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
                 if ($action -like 'pick:*') { $ip = & $pat ([Windows.Automation.InvokePattern]::Pattern); if ($ip) { $ip.Invoke() } else { [RhNative]::Click($c[0], $c[1]) } } else { [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero) }
                 $isItem = New-Object Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([Windows.Automation.ControlType]::MenuItem)
+                # A right-click that opened no menu at all within 2 s is made once more (lab run 20261021-062735, C-AUD-01:
+                # the pointer rested on the connection, its tooltip showed, no menu - the next steps' menus opened fine)
+                if ($action -like 'menu:*') {
+                    $menuSeen = $false
+                    $retryAt = (Get-Date).AddSeconds(2)
+                    do {
+                        Start-Sleep -Milliseconds 300
+                        $menuSeen = [bool]($A::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants, $isItem))
+                    } while (-not $menuSeen -and (Get-Date) -lt $retryAt)
+                    if (-not $menuSeen) {
+                        $result.rightClickAgain = $true
+                        $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
+                        [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero)
+                    }
+                }
                 $path = @($action.Substring(5) -split '>')
                 foreach ($entry in $path) {
                     $item = $null

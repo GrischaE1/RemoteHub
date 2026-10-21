@@ -600,6 +600,20 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 Get-LabFile -Name $VmName -Path $thumb -Destination $EvidenceDir
                 $r5.ocr = "$((Get-LabOcr -Path (Join-Path $EvidenceDir 'c-rec-last.img')).text)"
                 $r5.times = @([regex]::Matches($r5.ocr, '\b([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b') | ForEach-Object Value)
+                if (-not $r5.times.Count) {
+                    # Windows OCR missed the console's clock lines at the frame's own size while the frame showed them
+                    # (runs 20261019-193627 and 20261021-062735): read again from a copy twice as large
+                    Add-Type -AssemblyName System.Drawing
+                    $big = Join-Path $EvidenceDir 'c-rec-last-x2.png'
+                    $img = [Drawing.Image]::FromFile((Join-Path $EvidenceDir 'c-rec-last.img'))
+                    try {
+                        $bmp = New-Object Drawing.Bitmap($img, ($img.Width * 2), ($img.Height * 2))
+                        try { $bmp.Save($big, [Drawing.Imaging.ImageFormat]::Png) } finally { $bmp.Dispose() }
+                    }
+                    finally { $img.Dispose() }
+                    $r5.ocr2 = "$((Get-LabOcr -Path $big).text)"
+                    $r5.times = @([regex]::Matches($r5.ocr2, '\b([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b') | ForEach-Object Value)
+                }
             }
             Shot 'clock'
             Save 'stop-time' $r5

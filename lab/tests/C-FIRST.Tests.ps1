@@ -90,6 +90,8 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
             $null = Ui "What*s new*" -Title 'Settings'
             $n.newsFromHelp = Shown $news 'Close' 15
             $n.newsTexts = Texts $news
+            # the newest What's new entry, for the upgrade (C-FIRST-06)
+            $script:newestNews = if (($n.newsTexts -join "`n") -match "What's new in RemoteHub (\d+\.\d+\.\d+)") { [version]$Matches[1] } else { $null }
             Shot 'news-from-help'
             $null = Ui 'Close' -Title $news -Optional
             $null = Ui 'Close' -Title 'Settings' -Optional
@@ -118,7 +120,10 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
         It 'C-FIRST-04 Settings - Help & about opens the welcome tour and What''s new again' -Tag 'C-FIRST-04' {
             $n.tourFromHelp | Should -BeTrue
             $n.newsFromHelp | Should -BeTrue
-            ($n.newsTexts -join "`n") | Should -Match ([regex]::Escape("What's new in RemoteHub $version"))
+            # named after the newest entry up to this version - a patch without one of its own shows the last there was
+            # (FirstStart.Since); the installed version is under it
+            ($n.newsTexts -join "`n") | Should -Match "What's new in RemoteHub \d+\.\d+\.\d+"
+            ($n.newsTexts -join "`n") | Should -Match ([regex]::Escape("Installed: $version"))
         }
     }
 
@@ -153,8 +158,8 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
             $u = [ordered]@{}
             Stop-LabClient -Name $VmName -Task $script:task
             Reset-LabVm -Name $VmName
-            # the previous release with a connection (made by starting it with an .rdp file): settings from a version
-            # before What's new, so the first start of this one is an upgrade
+            # the previous release with a connection (made by starting it with an .rdp file), so the first start of this
+            # one is an upgrade - What's new comes for entries newer than that release (C-FIRST-06)
             $previous = Get-LabClientMsi -Previous
             $u.previous = (Split-Path $previous -Leaf)
             $u.previousExit = Install-Client $previous
@@ -182,16 +187,26 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
             Save 'upgrade' $u
         }
 
-        It 'C-FIRST-06 after the upgrade What''s new (not the tour) lists this version''s highlights' -Tag 'C-FIRST-06' {
+        It 'C-FIRST-06 after the upgrade What''s new (not the tour) lists the highlights the upgrade brings - or nothing opens when there are none' -Tag 'C-FIRST-06' {
             $u.previousExit | Should -BeIn 0, 3010
             $u.upgradeExit | Should -BeIn 0, 3010
             $u.previousWindow | Should -BeTrue
-            $u.newsShown | Should -BeTrue
             $u.tourShown | Should -BeFalse
-            $all = $u.texts -join "`n"
-            $all | Should -Match ([regex]::Escape("What's new in RemoteHub $version"))
-            $all | Should -Match 'Favourites'
-            $all | Should -Match 'All release notes'
+            # What's new comes only for entries newer than the previous release (FirstStart.Since): the newest entry is the
+            # one Help & about showed in C-FIRST-04. Previous 0.21.0 and newest entry 0.21.0 (run 20261021-062735): none.
+            $newest = $script:newestNews
+            $prev = if ($u.previous -match '-(\d+\.\d+\.\d+)-x64\.msi$') { [version]$Matches[1] }
+            $newest | Should -Not -BeNullOrEmpty -Because 'the new-install part (C-FIRST-04) reads the newest entry - run C-FIRST-06 with it'
+            $prev | Should -Not -BeNullOrEmpty -Because "the previous package's name has its version ($($u.previous))"
+            if ($prev -lt $newest) {
+                $u.newsShown | Should -BeTrue
+                $all = $u.texts -join "`n"
+                $all | Should -Match ([regex]::Escape("What's new in RemoteHub $newest"))
+                $all | Should -Match 'All release notes'
+            }
+            else {
+                $u.newsShown | Should -BeFalse -Because "no entry is newer than the previous release $prev (newest: $newest)"
+            }
         }
 
         It 'C-FIRST-07 What''s new is shown once' -Tag 'C-FIRST-07' {

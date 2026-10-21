@@ -1610,8 +1610,17 @@ $form.add_Shown({ $global:clock.Restart(); [IO.File]::WriteAllText('__FILE__', '
     $until = (Get-Date).AddSeconds($TimeoutSec)
     while (-not (Invoke-LabGuest -Name $Name -ArgumentList $file -ScriptBlock { param($f) Test-Path $f })) {
         if ((Get-Date) -gt $until) {
+            # whether the task ran at all, for the next look (run 20261021-062735, J-08: no file, no telling why)
+            $why = try {
+                Invoke-LabGuest -Name $Name -ArgumentList $task -ScriptBlock {
+                    param($t)
+                    $i = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue | Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+                    $ps = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | ForEach-Object { "$($_.ProcessId)@$($_.SessionId)" })
+                    "task $(if ($i) { "last run $($i.LastRunTime), result $($i.LastTaskResult)" } else { 'not found' }); powershell.exe: $($ps -join ', ')"
+                }
+            } catch { "state not read: $($_.Exception.Message)" }
             Stop-LabInSession -Name $Name -Task $task
-            throw "The changing window didn't come up in the $Account session within $TimeoutSec s (no $file)."
+            throw "The changing window didn't come up in the $Account session within $TimeoutSec s (no $file) - $why."
         }
         Start-Sleep -Seconds 1
     }
@@ -3366,23 +3375,20 @@ function Start-LabClient {
     $task
 }
 
-# VMs and accounts whose first start a test file has already handled (the module's state lasts one file: imported -Force)
-$script:LabFirstStartSeen = @{}
-
-# Closes the welcome tour ("Skip") or What's new ("Close") if one opens within -TimeoutSec of the main window, and
-# answers which it was ('' when none did). Once per VM and account in a test file: after the first start the version is
-# remembered and neither comes again, so later starts don't wait.
+# Closes the welcome tour ("Skip") or What's new ("Close") when one is open over the main window, and answers which it
+# was ('' when none). Every start is checked: a test that resets the VM, wipes RemoteHub's data or upgrades it brings
+# one back, modal, and then no real click or key reaches the main window (lab run 20261021-062735: remembering one
+# check per file left them open in C-DATA2, C-POLUPD, C-POLUPD2 and C-NOTES). Call it once the main window is up:
+# RemoteHub opens either right after its window shows (MainWindow.StartupChecks), so one that hasn't come within
+# -TimeoutSec isn't coming.
 function Close-LabFirstStart {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int]$TimeoutSec = 20)
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int]$TimeoutSec = 6)
 
-    $key = "$Name|$Account"
-    if ($script:LabFirstStartSeen.ContainsKey($key)) { return '' }
-    $script:LabFirstStartSeen[$key] = $true
     $until = (Get-Date).AddSeconds($TimeoutSec)
     do {
         foreach ($d in @(@{ Title = 'Welcome to RemoteHub'; Button = 'Skip' }, @{ Title = "What's new"; Button = 'Close' })) {
-            $r = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title $d.Title -Text $d.Button -Value click -TimeoutSec 2
+            $r = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title $d.Title -Text $d.Button -Value click -TimeoutSec 1
             if ($r.found -and -not ($r.PSObject.Properties['error'] -and $r.error)) { return $d.Title }
         }
     } while ((Get-Date) -lt $until)
