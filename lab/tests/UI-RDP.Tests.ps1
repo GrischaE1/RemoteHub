@@ -963,7 +963,9 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             $k.question | Should -Match "which holds RemoteHub's enrollment secret"
             $k.question | Should -Match 'Close that tab first, or copy anyway\?'
             $k.report | Should -Match 'Cancelled\W+close the remote desktop tab, then try again\.'
-            @($k.clipboard | Where-Object { $_ -like '*.rhagent' }) | Should -BeNullOrEmpty
+            # DeviceA's file only: Device.rhagent may still be on the clipboard from Device's own install (Ensure-Agent
+            # by hand, or A-CLIP-02's crash step) - lab run 20261021-135850
+            @($k.clipboard | Where-Object { (Split-Path $_ -Leaf) -eq 'DeviceA.rhagent' }) | Should -BeNullOrEmpty
         }
     }
 
