@@ -24,9 +24,12 @@ public class BuildScriptTests
         // the PowerShell 7 SDK in this process changes PSModulePath; Windows PowerShell needs its own
         start.Environment.Remove("PSModulePath");
         using var p = Process.Start(start)!;
-        var output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
-        p.WaitForExit();
-        return (p.ExitCode, output);
+        // Both at once: Windows PowerShell writes its module-loading progress to stderr, and a full stderr pipe would
+        // stall it while this waited for the end of stdout.
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        var stderr = p.StandardError.ReadToEndAsync();
+        Assert.True(p.WaitForExit(120_000), "Windows PowerShell didn't end within 2 minutes");
+        return (p.ExitCode, stdout.Result + stderr.Result);
     }
 
     [SkippableFact]
@@ -70,5 +73,92 @@ public class BuildScriptTests
             Assert.False(File.Exists(file));
         }
         finally { File.Delete(file); }
+    }
+
+    private static (int Exit, string Output) Script(string name, string arguments) =>
+        PowerShell($"& '{Path.Combine(Build, name)}' {arguments}; exit $LASTEXITCODE");
+
+    [Fact]
+    public void The_build_refuses_a_package_below_its_minimum_fixed_version()
+    {
+        var dir = Directory.CreateTempSubdirectory("rh-depgate-").FullName;
+        try
+        {
+            var project = Path.Combine(dir, "src", "App", "App.csproj");
+            Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+            void Write(string version) => File.WriteAllText(project,
+                $"""<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="FluentFTP" Version="{version}" /><PackageReference Include="Other" Version="1.0.0" /></ItemGroup></Project>""");
+
+            Write("55.0.0");
+            var (exit, output) = Script("Test-DependencyVersions.ps1", $"-Root '{dir}'");
+            Assert.Equal(1, exit);
+            Assert.Contains("FluentFTP 55.0.0 is below 55.1.0", output);
+
+            Write("55.1.0-beta.1"); // a pre-release of the fixed version isn't the fix
+            Assert.Equal(1, Script("Test-DependencyVersions.ps1", $"-Root '{dir}'").Exit);
+
+            Write("55.1.0");
+            (exit, output) = Script("Test-DependencyVersions.ps1", $"-Root '{dir}'");
+            Assert.True(exit == 0, output);
+
+            // the repository itself passes (the CI step)
+            (exit, output) = Script("Test-DependencyVersions.ps1", "");
+            Assert.True(exit == 0, output);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void Workflows_keep_github_values_out_of_scripts_and_pin_every_action()
+    {
+        var dir = Directory.CreateTempSubdirectory("rh-workflows-").FullName;
+        const string pinned = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1";
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "good.yml"), $$$"""
+                on: push
+                jobs:
+                  a:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: {{{pinned}}}
+                      - name: Version
+                        env:
+                          TAG: ${{ github.ref_name }}
+                        run: |
+                          echo "$TAG ${{ steps.v.outputs.version }}"
+                      - run: echo done
+                """);
+            var (exit, output) = Script("Test-Workflows.ps1", $"-Path '{dir}'");
+            Assert.True(exit == 0, output);
+
+            File.WriteAllText(Path.Combine(dir, "bad.yml"), """
+                on: pull_request_target
+                jobs:
+                  a:
+                    runs-on: ubuntu-latest
+                    steps:
+                      - uses: actions/checkout@v4
+                      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+                      - run: echo "${{ github.event.pull_request.title }}"
+                      - name: Block
+                        run: |
+                          echo start
+                          echo "${{ inputs.name }}"
+                """);
+            (exit, output) = Script("Test-Workflows.ps1", $"-Path '{dir}'");
+            Assert.Equal(1, exit);
+            Assert.Contains("bad.yml:6: actions/checkout@v4 is not pinned to a full commit SHA", output);
+            Assert.Contains("bad.yml:7: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 has no version comment", output);
+            Assert.Contains("bad.yml:8: ${{ github.* }} in a run: script", output);
+            Assert.Contains("bad.yml:12: ${{ inputs.* }} in a run: script", output);
+            Assert.Contains("bad.yml: pull_request_target with actions/checkout", output);
+            Assert.DoesNotContain("good.yml", output);
+
+            // the repository's own workflows pass (the CI step)
+            (exit, output) = Script("Test-Workflows.ps1", "");
+            Assert.True(exit == 0, output);
+        }
+        finally { Directory.Delete(dir, true); }
     }
 }

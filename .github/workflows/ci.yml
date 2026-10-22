@@ -21,6 +21,11 @@ jobs:
         with:
           global-json-file: global.json
 
+      # No package below a version with a known security fix (build/minimum-versions.json; security-test-lab-design.md §8).
+      - name: Dependency versions
+        shell: pwsh
+        run: ./build/Test-DependencyVersions.ps1
+
       - name: Restore
         run: dotnet restore RemoteHub.sln
 
@@ -103,17 +108,27 @@ jobs:
           name: installers
           path: artifacts
 
+      # Cisco-Talos' own package of a pinned version, checked against the SHA-256 GitHub publishes for it – not whatever
+      # the distribution's archive has (Ubuntu's lags behind ClamAV's security releases). Raise both together.
       - name: Install ClamAV and update signatures
+        env:
+          CLAMAV_VERSION: 1.5.4
+          CLAMAV_SHA256: 28d6efc5b4423e7830c3559339552eb53870a9eac51ac4efb37d60530d329886
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clamav
-          sudo systemctl stop clamav-freshclam || true   # the service holds the update lock
-          sudo freshclam
+          deb="$RUNNER_TEMP/clamav.deb"
+          curl -fsSL -o "$deb" "https://github.com/Cisco-Talos/clamav/releases/download/clamav-$CLAMAV_VERSION/clamav-$CLAMAV_VERSION.linux.x86_64.deb"
+          echo "$CLAMAV_SHA256  $deb" | sha256sum --check --strict
+          sudo dpkg -i "$deb"
+          clamscan --version | grep -F "ClamAV $CLAMAV_VERSION" || { echo "::error::clamscan is not ClamAV $CLAMAV_VERSION"; exit 1; }
+          db="$RUNNER_TEMP/clamav-db"; mkdir -p "$db"
+          printf 'DatabaseDirectory %s\nDatabaseMirror database.clamav.net\n' "$db" > "$RUNNER_TEMP/freshclam.conf"
+          freshclam --config-file="$RUNNER_TEMP/freshclam.conf"
+          echo "CLAMAV_DB=$db" >> "$GITHUB_ENV"
 
       # The limits are raised so the MSIs (cabinets inside) are scanned whole and not skipped for their size.
       - name: Scan
         run: |
-          limits="--max-filesize=2000M --max-scansize=4000M --max-files=100000 --max-recursion=30"
+          limits="--database=$CLAMAV_DB --max-filesize=2000M --max-scansize=4000M --max-files=100000 --max-recursion=30"
           probe="$RUNNER_TEMP/av-probe"; mkdir -p "$probe"
           printf '%s%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}$' 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' > "$probe/eicar.txt"
           rc=0; clamscan --no-summary $limits "$probe/eicar.txt" > /dev/null || rc=$?
@@ -122,3 +137,30 @@ jobs:
           fi
           rm -rf "$probe"
           clamscan --recursive --infected $limits artifacts/
+
+  # The workflows themselves (SEC-CI-02, SEC-CI-03; security-test-lab-design.md §8): actionlint, then the project's own
+  # rules - nothing from github.* or inputs.* written into a script, every action pinned to a commit SHA, no checkout
+  # under pull_request_target. actionlint is rhysd's release, checked against the SHA-256 in its checksums file.
+  workflow-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          tgz="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$tgz" "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $tgz" | sha256sum --check --strict
+          tar -xzf "$tgz" -C "$RUNNER_TEMP" actionlint
+          # The scripts are PowerShell or short shell lines: shellcheck's and pyflakes' style findings are left out.
+          "$RUNNER_TEMP/actionlint" -color -shellcheck= -pyflakes=
+
+      - name: Project rules
+        shell: pwsh
+        run: ./build/Test-Workflows.ps1

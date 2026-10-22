@@ -504,7 +504,7 @@ Each phase can be tested and merged on its own. Nothing is offered to customers 
 **Status (0.18.11, 2026-10-15):**
 - **Phase 0:**
   - Done: `build/Sign-Files.ps1`; `build-installer.ps1 -SigningCertificate | -LabSigning` signs both exes and both MSIs, each before it's packed into the next step; `release.yml` signs through SSL.com eSigner (`-ESigner`, secrets `ES_*` and variable `SIGNING_CERTIFICATE_THUMBPRINT` in the environment `release-signing`) and builds unsigned, with a warning, until they exist; `lab/New-LabSigningCertificate.ps1`; `Install-LabAgent` makes each VM trust the lab certificate.
-  - Open: the eSigner secrets in `release-signing`, then the first signed release.
+  - Done since 0.20.2 (2026-10-19): the eSigner secrets are in `release-signing`; 0.20.2 was the first signed release (both exes, the provider DLL and both MSIs). The credentials reach CodeSignTool through a Java argument file, not its command line (`build/JavaArgFile.ps1`).
 - **Phase 1:**
   - Done: the provider; unit tests; the fuzzer (CI runs it for 60 s); the MSI component behind `AUTOSIGNIN`, which needs a signing certificate (`build-installer.ps1 -CredentialProvider`); the optional `autoSignIn` in `AgentInstaller`, with the install dialog's "Allow automatic sign-in (installs a credential provider)" and the right-click *Install / Remove credential provider* (`ChangeCredentialProvider`, audit `agent.credential_provider`); the Lab build and `RemoteHubCpTestServer.exe`.
   - Lab cases C-PROV-01 to 05 pass on Windows 11 26H2 and Server 2025: signed install, inert without a ticket, sign-in through the provider, kept on an update, removed with `AUTOSIGNIN=0`. C-PROV-06 to 09 (`lab/tests/C-PROV.Tests.ps1`) cover RemoteHub's install and remove on a running agent, another build refused, and the "isn't installed" / restart answers.
@@ -566,7 +566,7 @@ Each phase can be tested and merged on its own. Nothing is offered to customers 
 
 ### Installer and build
 - [x] `installer/RemoteHub.Agent.Installer/Package.wxs`: property `AUTOSIGNIN` (Secure, next to `VIRTUALDISPLAY`); a component with the DLL and the two registry keys (CLSID `{718FFFD2-6671-4FA4-9FA8-86D1CD4D84C3}`), conditioned on it; removed when uninstalling or when set to 0; **kept on an update without the property** (§8.4).
-- [ ] `build/build-installer.ps1`, `ci.yml`, `release.yml`: build the vcxproj (`build/build-credential-provider.ps1`, `build-installer.ps1 -CredentialProvider`); **Authenticode signing of the DLL and the agent exe (blocker)** – the signing is built, the release certificate is missing (phase 0); the release build fails if the DLL isn't signed by the release certificate.
+- [x] `build/build-installer.ps1`, `ci.yml`, `release.yml`: build the vcxproj (`build/build-credential-provider.ps1`, `build-installer.ps1 -CredentialProvider`); **Authenticode signing of the DLL and the agent exe** – releases are signed through eSigner since 0.20.2; the release build fails if the DLL isn't signed by the release certificate, and a release that can't sign leaves the provider out.
 - [x] Agent install dialog (`AgentInstallDialog.cs`): checkbox "Allow automatic sign-in (installs a credential provider)", shown only when RemoteHub's package has the provider, preset to what RemoteHub last did on the device, silent installs only, with a short hint ("Anyone at the device can see the session while you work."); it doesn't name the case without the privacy screen separately.
 
 ### RemoteHub (`src/RemoteHub`)
@@ -675,7 +675,6 @@ The questions from v1 were decided by the owner on 2026-10-13. Q5 was reopened b
 
 ## 16. Not done yet (0.18.11)
 
-- **Release signing certificate** (phase 0). Until it exists the provider ships only to lab VMs.
 - **1104 for the service's privacy screen** names the admin as the one who turned it on (§9.1, product finding, C-END-14).
 - **`AUTOSIGNIN=1` on a package without the provider** still writes the policy values (§5, product gap).
 - RemoteHub: the notice before the start when the device can't hide its screen (§9.1); asking for the password when none is stored (§10.2); the jump host in the `agent.auto_sign_in` audit entries (§10.2).
