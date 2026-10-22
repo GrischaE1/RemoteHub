@@ -1464,7 +1464,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             $exp = @($audit | Where-Object event -eq 'backup.exported')
             $exp.Count | Should -Be 1
             $exp[0].target | Should -Be 'aud07.rhbackup'
-            $exp[0].detail | Should -Match '^\d+ folders and connections, \d+ saved credentials, \d+ pages$'
+            # each kind of data the backup holds is counted - pages since Notes, scripts since the Scripts view (#56)
+            $exp[0].detail | Should -Match '^\d+ folders and connections, \d+ saved credentials, \d+ pages(, \d+ [a-z]+)*$'
             # the viewer's labels, as the CSV export writes them next to the event code
             $s['csv-error'] | Should -BeNullOrEmpty
             foreach ($pair in 'Added,data.added', 'Connection failed,session.failed', 'Startup protection changed,app.protection_changed', 'Settings location changed,storage.location_changed', 'Backup exported,backup.exported') {

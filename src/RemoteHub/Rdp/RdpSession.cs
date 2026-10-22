@@ -373,7 +373,8 @@ public sealed partial class RdpSession : SessionBase
     }
 
     /// <summary>
-    /// Ctrl+Alt+&lt;key&gt; makes the RDP control release keyboard focus back to the app (raising OnFocusReleased).
+    /// Ctrl+Alt+&lt;key&gt; makes the RDP control release keyboard focus back to the app (raising OnFocusReleased). Only a
+    /// fallback: <see cref="SwitchKeyHook"/> normally takes these keys before the control sees them.
     /// </summary>
     private static void ApplySwitchHotkeys(dynamic advancedSettings)
     {
@@ -398,7 +399,8 @@ public sealed partial class RdpSession : SessionBase
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool IsChild(IntPtr parent, IntPtr child);
     [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
 
-    private bool ControlHasFocus()
+    /// <summary>True while keystrokes go to this session's control (in full screen: while it is connected).</summary>
+    internal bool ControlHasFocus()
     {
         if (_disposed || !_host.IsHandleCreated || IsFullScreen) return IsFullScreen && IsConnected;
         if (State is not (SessionState.Connected or SessionState.Connecting)) return false; // overlay shown, nothing to type into

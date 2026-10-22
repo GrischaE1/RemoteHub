@@ -85,6 +85,7 @@ public class SerializationTests
     }
 }
 
+/// <summary>The session switch keys: presets and which key presses count as the hotkey.</summary>
 public class HotkeyTests
 {
     [Fact]
@@ -98,6 +99,57 @@ public class HotkeyTests
         Assert.False(SwitchHotkeys.Get("F1F2").ShiftReverses);
         Assert.Same(p, SwitchHotkeys.Get("unknown-id"));
         Assert.Equal("Less", new UiState().SwitchKeys);
+    }
+
+    private const int VK_OEM_102 = 0xE2, VK_LEFT = 0x25, VK_RIGHT = 0x27, VK_PRIOR = 0x21, VK_NEXT = 0x22, VK_F1 = 0x70, VK_F2 = 0x71, VK_A = 0x41;
+
+    [Theory]
+    [InlineData("Less", VK_OEM_102)]
+    [InlineData("Caret", 0xDC)]
+    public void Single_key_presets_switch_to_the_next_session_and_back_with_shift(string id, int vk)
+    {
+        var p = SwitchHotkeys.Get(id);
+        Assert.Equal(1, SwitchHotkeys.Match(vk, ctrl: true, leftAlt: true, shift: false, p));
+        Assert.Equal(-1, SwitchHotkeys.Match(vk, ctrl: true, leftAlt: true, shift: true, p));
+    }
+
+    [Theory]
+    [InlineData("F1F2", VK_F1, VK_F2)]
+    [InlineData("PgUpPgDn", VK_PRIOR, VK_NEXT)]
+    [InlineData("LeftRight", VK_LEFT, VK_RIGHT)]
+    public void Two_key_presets_switch_by_key_whether_or_not_shift_is_held(string id, int prev, int next)
+    {
+        var p = SwitchHotkeys.Get(id);
+        Assert.Equal(-1, SwitchHotkeys.Match(prev, ctrl: true, leftAlt: true, shift: false, p));
+        Assert.Equal(1, SwitchHotkeys.Match(next, ctrl: true, leftAlt: true, shift: false, p));
+        Assert.Equal(-1, SwitchHotkeys.Match(prev, ctrl: true, leftAlt: true, shift: true, p));
+        Assert.Equal(1, SwitchHotkeys.Match(next, ctrl: true, leftAlt: true, shift: true, p));
+    }
+
+    [Fact]
+    public void AltGr_with_the_switch_key_types_a_character_instead_of_switching()
+    {
+        // AltGr arrives as Ctrl + right Alt: left Alt is not held. AltGr+< has to type "|" in the session.
+        Assert.Equal(0, SwitchHotkeys.Match(VK_OEM_102, ctrl: true, leftAlt: false, shift: false, SwitchHotkeys.Get("Less")));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_RIGHT, ctrl: true, leftAlt: false, shift: false, SwitchHotkeys.Get("LeftRight")));
+    }
+
+    [Fact]
+    public void The_switch_key_without_ctrl_or_left_alt_does_not_switch()
+    {
+        var p = SwitchHotkeys.Get("Less");
+        Assert.Equal(0, SwitchHotkeys.Match(VK_OEM_102, ctrl: false, leftAlt: true, shift: false, p));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_OEM_102, ctrl: false, leftAlt: false, shift: true, p));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_RIGHT, ctrl: false, leftAlt: true, shift: false, SwitchHotkeys.Get("LeftRight")));
+    }
+
+    [Fact]
+    public void Other_keys_with_ctrl_and_left_alt_do_not_switch()
+    {
+        Assert.Equal(0, SwitchHotkeys.Match(VK_A, ctrl: true, leftAlt: true, shift: false, SwitchHotkeys.Get("Less")));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_RIGHT, ctrl: true, leftAlt: true, shift: false, SwitchHotkeys.Get("Less")));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_OEM_102, ctrl: true, leftAlt: true, shift: false, SwitchHotkeys.Get("LeftRight")));
+        Assert.Equal(0, SwitchHotkeys.Match(VK_F1, ctrl: true, leftAlt: true, shift: false, SwitchHotkeys.Get("PgUpPgDn")));
     }
 }
 

@@ -30,9 +30,10 @@ $pc.Run.PassThru = $true
 $tags = @($Tag -split ',' | Where-Object { $_ })
 if ($tags) { $pc.Filter.Tag = $tags }
 if ($FailFast) { $pc.Run.SkipRemainingOnFailure = 'Block' }
-$pc.TestResult.Enabled = $true
-$pc.TestResult.OutputFormat = 'NUnitXml'
-$pc.TestResult.OutputPath = $OutputPath
+# The NUnit file is written below rather than by Invoke-Pester: a failure message may hold characters XML can't carry
+# (lab run 20261022-061254, UI-RDP: a UI Automation list with U+000F in A-CLIP-01's message - Pester's writer threw
+# half-way, the XML ended inside a failure and the summary had no counts)
+$pc.TestResult.Enabled = $false
 $pc.Output.Verbosity = 'Detailed'
 
 $r = Invoke-Pester -Configuration $pc
@@ -42,6 +43,18 @@ $r = Invoke-Pester -Configuration $pc
     Skipped = $r.SkippedCount
     Total   = $r.TotalCount
 } | ConvertTo-Json -Compress | Set-Content "$OutputPath.summary.json" -Encoding UTF8
+
+# control characters (other than tab and line breaks) and unpaired surrogates out of the messages the report carries
+$notXml = '[\x00-\x08\x0B\x0C\x0E-\x1F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]'
+foreach ($item in @(@($r.Tests) + @($r.FailedBlocks) + @($r.FailedContainers))) {
+    if (-not $item -or -not $item.PSObject.Properties['ErrorRecord']) { continue }
+    foreach ($e in @($item.ErrorRecord)) {
+        foreach ($n in 'DisplayErrorMessage', 'DisplayStackTrace') {
+            if ($e -and $e.PSObject.Properties[$n] -and $e.$n) { $e.$n = [regex]::Replace([string]$e.$n, $notXml, '?') }
+        }
+    }
+}
+Export-NUnitReport -Result $r -Path $OutputPath
 
 # minutes per helper (outermost calls only) and what the file did besides them (its own waits and checks)
 $calls = @(if (Get-Variable RhLabTiming -Scope Global -ErrorAction SilentlyContinue) {

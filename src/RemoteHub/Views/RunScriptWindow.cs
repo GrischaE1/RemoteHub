@@ -445,7 +445,7 @@ public sealed class RunScriptWindow : FluentWindow
         var hash = content.Sha256();
         foreach (var (context, user) in runs)
         {
-            var output = new TextEditor
+            var output = new CodeEditor
             {
                 IsReadOnly = true, FontFamily = NoteMarkdown.MonoFont, FontSize = 12.5, WordWrap = false, ShowLineNumbers = false,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Background = Brushes.Transparent,
@@ -533,7 +533,7 @@ public sealed class RunScriptWindow : FluentWindow
 public sealed class ScriptRunHistoryWindow : FluentWindow
 {
     private readonly ListView _list = new() { Height = 220, SelectionMode = SelectionMode.Single, BorderThickness = new Thickness(0) };
-    private readonly TextEditor _output = new()
+    private readonly CodeEditor _output = new()
     {
         IsReadOnly = true, FontFamily = NoteMarkdown.MonoFont, FontSize = 12.5, WordWrap = false, Background = Brushes.Transparent,
         HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(6),

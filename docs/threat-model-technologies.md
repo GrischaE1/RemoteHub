@@ -77,6 +77,8 @@ SQLite3 Multiple Ciphers (SQLite3MC.PCLRaw.bundle 2.4.0), SSH.NET 2026.0.0, Flue
   - The password goes in through `IMsTscNonScriptable.SetClearTextPassword`.
   - Clipboard redirection is on; drives, printers and smart cards are off by default.
   - No RD Gateway, Restricted Admin or Remote Credential Guard.
+  - While a session has the keyboard, a `WH_KEYBOARD_LL` hook in the console (`SwitchKeyHook`) takes only the session
+    switch keys (Ctrl+left Alt+key) before the control does; every other key goes on to the control unchanged.
   - Exported `.rdp` files may contain a `password 51:b:` DPAPI blob; import can decrypt it.
 - **PowerShell remoting:** the in-process PowerShell 7.6.6 SDK, WSMan over HTTP 5985 or HTTPS 5986, Negotiate (or
   Kerberos as the current user).

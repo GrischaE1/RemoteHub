@@ -22,7 +22,7 @@ namespace RemoteHub.Views;
 public sealed class ScriptBlock : Border, INoteScriptBlock
 {
     private const int MaxAutoLines = 30;
-    private readonly TextEditor _editor = new();
+    private readonly CodeEditor _editor = new();
     private readonly Button _language = new() { Padding = new Thickness(8, 2, 6, 2), MinWidth = 0, Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
     private readonly TextBlock _languageText = new() { FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button _copy;

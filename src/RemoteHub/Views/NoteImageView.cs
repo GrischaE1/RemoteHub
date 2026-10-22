@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -74,6 +75,16 @@ public sealed class NoteImageView : Border, INoteImage
         ContextMenu = Menu();
         AutomationProperties.SetName(this, alt.Length > 0 ? alt : "Image");
         ApplyWidth();
+    }
+
+    // A Border has no automation peer of its own, so the alternative text set as its name reached no screen reader:
+    // UI Automation saw only an unnamed image inside the page (lab run 20261022-092309, C-NOTE-06).
+    protected override AutomationPeer OnCreateAutomationPeer() => new ImagePeer(this);
+
+    private sealed class ImagePeer(NoteImageView owner) : FrameworkElementAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Image;
+        protected override string GetClassNameCore() => nameof(NoteImageView);
     }
 
     /// <summary>The widest the image may be shown (the page's width); set by the editor.</summary>

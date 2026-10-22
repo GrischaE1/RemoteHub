@@ -76,6 +76,7 @@ try
         "share-lifetime" => ShareHarness.Lifetime(opt),
         "share-session" => ShareHarness.Session(opt),
         "seed" => SeedHarness.Run(opt),
+        "old-backup" => OldBackup.Run(opt),
         "tool" => await LabTools.Run(opt),
         "probe" => await LabProbes.Run(opt),
         "jump" => await LabJump.Run(opt),

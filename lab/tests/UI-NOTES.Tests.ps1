@@ -78,8 +78,12 @@ BeforeAll {
         Step 'paste' {
             # the format bar's button (a backtick in a wildcard pattern escapes the next character, so it ends in *)
             $null = Ui 'Script block (Ctrl+Shift+*'
-            $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value $script
-            $null = Ui 'Script block' -Value 'keys:^v'
+            $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $script
+            # clicked and Ctrl+V pressed at the console keyboard, as the user does: 'keys:' starts with a UIA SetFocus,
+            # which the script block's editor refuses - it hands the focus on to its text area, so SetFocus throws
+            # (run 20261022-061254: "Operation is not valid due to the current state of the object")
+            $null = Ui 'Script block' -Value realclick
+            Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x56
             $block = Wait-Text 'Script block' "*$script*"
             Shot 'pasted'
             @{ block = $block }
@@ -88,7 +92,9 @@ BeforeAll {
         # ---- 4. View Markdown: the page as Markdown text; the format buttons off
         Step 'markdown' {
             $null = Ui 'View Markdown' -Value 'toggle-on'
-            $md = Wait-Text 'Markdown' '*```*'
+            # a backtick escapes the next character in a wildcard pattern: two stand for one, so this is a code fence
+            # ('*```*' wanted a backtick and a star, and never matched in run 20261022-061254)
+            $md = Wait-Text 'Markdown' ('*``````*' + $script + '*')
             Shot 'markdown'
             @{ markdown = $md; boldEnabled = (Ui 'Bold (Ctrl+B)' -Value exists).enabled; toggle = (Ui 'View Markdown' -Value read).value }
         }
@@ -107,7 +113,7 @@ BeforeAll {
         Step 'copy' {
             $null = Ui 'Copy page as Markdown'
             Start-Sleep -Seconds 1
-            $c = Invoke-LabPerson -Name $VmName -Do clip-get
+            $c = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
             @{ length = $c.length; start = $c.start; formats = @($c.formats) }
         }
 
@@ -156,7 +162,7 @@ Describe 'UI-NOTES <VmName>' -Tag Client, UI, 'UI-NOTE' -Skip:(-not $isClient) {
 
     It 'UI-NOTE-04 View Markdown shows the page as Markdown text, with the format buttons off' -Tag 'UI-NOTE-04' {
         $R['markdown-error'] | Should -BeNullOrEmpty
-        $R.markdown.markdown | Should -BeLike "*``````*$script*``````*"
+        $R.markdown.markdown | Should -BeLike ('*``````*' + $script + '*``````*')
         $R.markdown.boldEnabled | Should -BeFalse
         $R.markdown.toggle | Should -Be 'On'
     }

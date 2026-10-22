@@ -365,19 +365,29 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 @{ do = 'cad' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'options.png' }, (Mark $o 'options'), @{ do = 'click'; fromFile = (Join-Path $o 'switch-xy.txt') }
                 # Server 2025 shows "Press Ctrl+Alt+Delete to unlock" first (run 20261019-193627): Ctrl+Alt+Del then
                 @{ do = 'sleep'; seconds = 8 }, @{ do = 'frame'; out = 'curtain.png' }, (Mark $o 'curtain'), @{ do = 'cad'; ifFile = (Join-Path $o 'cad.txt') }
-                @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'tiles.png' }, (Mark $o 'tiles'), @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }
-                @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }, (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
+                # the tiles read in up to four pictures: on a slow switch the first still shows the spinner (run
+                # 20261022-061254, Server 2025: tile list read empty)
+                @(1..4 | ForEach-Object { @{ do = 'sleep'; seconds = 5 }, @{ do = 'frame'; out = "tiles-$_.png" }, (Mark $o "tiles-$_"), (Park $o "tiles-$_-go" 120) })
+                @{ do = 'click'; fromFile = (Join-Path $o 'admin-xy.txt') }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'frame'; out = 'selected.png' }, (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }, @{ do = 'close' })
             $null = Allow $o @('type')
             Reached $o 'options'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'curtain'
             Set-Content (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
-            Reached $o 'tiles'
             # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
             # to the device's accounts, not as an exact word (an exact "Admin" clicked 0,0 in D-ROBUST)
-            $tile = Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'tiles.png') -Account $vm.ConsoleAccount
-            Set-Content (Join-Path $o 'admin-xy.txt') $(if ($tile.XY) { $tile.XY } else { '0,0' })
+            $tile = $null
+            foreach ($n in 1..4) {
+                Reached $o "tiles-$n"
+                if (-not ($tile -and $tile.XY)) {
+                    $tile = Find-LabSignInTile -Name $VmName -Picture (Join-Path $o "tiles-$n.png") -Account $vm.ConsoleAccount
+                    Copy-Item (Join-Path $o "tiles-$n.png") (Join-Path $o 'tiles.png') -Force
+                }
+                # where to click, before the last picture lets the harness go on to the click
+                if ($n -eq 4) { Set-Content (Join-Path $o 'admin-xy.txt') $(if ($tile.XY) { $tile.XY } else { '0,0' }) }
+                Release $o "tiles-$n-go"
+            }
             Reached $o 'selected'
             # the chosen tile's name stands large in the middle; when it isn't Admin the password signs normaluser in
             # again and nobody new is asked - the context stops here with the pictures as evidence

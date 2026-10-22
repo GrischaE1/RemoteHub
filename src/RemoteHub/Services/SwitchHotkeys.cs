@@ -3,8 +3,11 @@ using System.Windows.Input;
 namespace RemoteHub.Services;
 
 /// <summary>
-/// Keys (always combined with Ctrl+Alt) for switching sessions. Inside a session they are handled by the RDP
-/// control's focus-release hotkeys, so they work even while the session has keyboard focus.
+/// Keys (always combined with Ctrl+Alt) for switching sessions. While an RDP session has the keyboard, RemoteHub
+/// catches them with a low-level keyboard hook (<see cref="Rdp.SwitchKeyHook"/>) before the RDP control sees them: the
+/// control's focus-release hotkeys (OnFocusReleased) never fired in the lab (R-RDP-12), and with "Send Windows key
+/// combinations" its own keyboard hook sends every Ctrl+Alt combination to the remote session. The focus-release
+/// hotkeys stay set as a fallback.
 /// Single-key presets switch to the next session; holding Shift as well goes to the previous one.
 ///
 /// Note: on German and many other layouts AltGr = Ctrl+Alt. Only the LEFT Alt key counts as the hotkey;
@@ -39,4 +42,15 @@ public static class SwitchHotkeys
 
     /// <summary>The preset in use (set at start-up and when changed in the menu).</summary>
     public static Preset Current { get; set; } = Default;
+
+    /// <summary>
+    /// Whether a key press is the switch hotkey of <paramref name="preset"/>: -1 previous session, +1 next, 0 not the
+    /// hotkey. Ctrl and the LEFT Alt key must be held; right Alt alone is AltGr, which types a character (AltGr+&lt; = "|").
+    /// </summary>
+    public static int Match(int vk, bool ctrl, bool leftAlt, bool shift, Preset preset)
+    {
+        if (!ctrl || !leftAlt) return 0;
+        if (preset.ShiftReverses) return vk == preset.NextVk ? (shift ? -1 : 1) : 0;
+        return vk == preset.PrevVk ? -1 : vk == preset.NextVk ? 1 : 0;
+    }
 }

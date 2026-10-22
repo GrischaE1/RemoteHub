@@ -223,6 +223,21 @@ $r = if ($e) { $e.Current.BoundingRectangle } else { [Windows.Rect]::Empty }
     function Reveal([string]$Name) {
         try { InSession $revealCode @{ NAME = (B64 $Name) } } catch { [pscustomobject]@{ error = "$_" } }
     }
+    # Both ends of a drag scrolled into the tree's visible part, then probed: a row scrolled out answers a rectangle on
+    # the search box or the status line, where a press starts no drag and a drop is refused (run 20261022-061254:
+    # JumpHost above the tree's top - JShare stayed in Plain; Orphan below its bottom - it never reached Lonely).
+    # The row that must stay at the far end is revealed last. Throws naming the row that is still outside.
+    function RevealRows([string[]]$Names, [string[]]$Texts) {
+        $rv = $null
+        foreach ($n in $Names) { $rv = Reveal $n }
+        $pr = Probe $Texts
+        foreach ($n in $Names) {
+            $h = TreeHit $pr $n
+            if (-not $h -or -not $h.rect -or -not $rv -or $null -eq $rv.treeTop) { throw "drag: $n not found in the tree ($(ConvertTo-Json -Compress -InputObject $rv))" }
+            if ($h.rect.y -lt $rv.treeTop -or $h.rect.y + $h.rect.h -gt $rv.treeBottom) { throw "drag: $n not scrolled into the tree (y $($h.rect.y), tree $($rv.treeTop)-$($rv.treeBottom))" }
+        }
+        $pr
+    }
     function Hits($probe, [string]$Text) { $p = $probe.PSObject.Properties[$Text]; if ($p) { @($p.Value) } else { @() } }
     # the match that is in the navigation tree
     function TreeHit($probe, [string]$Text) { @(Hits $probe $Text | Where-Object { $_.treeItem }) | Select-Object -First 1 }
@@ -258,6 +273,10 @@ Go 1010 700; Start-Sleep -Milliseconds 800
 Go (__X__ + 4) (__Y__ + 1); Start-Sleep -Milliseconds 300; Go __X__ __Y__
 $ids = @(Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object Id)
 $tips = @()
+# WPF's tooltip popup is owned by the main window, and UI Automation lists owned windows inside it, not at the top
+# (RhPerson's dialogs the same way): the main window's ToolTip elements are read too. Only the top-level windows were
+# read before - empty in every run up to 20261022-061254, although the tooltip showed.
+$isTip = New-Object Windows.Automation.PropertyCondition ($AE::ControlTypeProperty), ([Windows.Automation.ControlType]::ToolTip)
 $until = (Get-Date).AddSeconds(8)
 do {
     Start-Sleep -Milliseconds 400
@@ -265,7 +284,10 @@ do {
     foreach ($t in $AE::RootElement.FindAll($TS::Children, $all)) {
         $c = $t.Current
         if ($ids -notcontains $c.ProcessId) { continue }
-        if ($c.Name -like 'RemoteHub*' -or $c.Name -like '* RemoteHub') { continue }
+        if ($c.Name -like 'RemoteHub*' -or $c.Name -like '* RemoteHub') {
+            $tips += @($t.FindAll($TS::Descendants, $isTip) | ForEach-Object { $_.Current.Name })
+            continue
+        }
         $tips += @($c.Name) + @($t.FindAll($TS::Descendants, $all) | ForEach-Object { $_.Current.Name })
     }
     $tips = @($tips | Where-Object { $_ })
@@ -608,7 +630,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             }
             Step $t shareDrop {
                 # a share on its own dropped onto a connection lands next to it (not under it) ...
-                $pr = Probe @('JShare', 'JumpHost', $script:jump.Address)
+                $pr = RevealRows @('JumpHost', 'JShare') @('JShare', 'JumpHost', $script:jump.Address)
                 Drag (Center $pr 'JShare') (Mid $pr 'JumpHost' $script:jump.Address)
                 $pr = Probe @('JShare', 'JumpHost')
                 $t.shareDropped = [ordered]@{ row = @((TreeHit $pr 'JShare').row); x = (TreeHit $pr 'JShare').treeItem.x; jumpX = (TreeHit $pr 'JumpHost').treeItem.x }
@@ -650,8 +672,11 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $t.moverOut = @((TreeHit (Probe @('Mover')) 'Mover').row)
             }
             Step $t noAgent {
-                $pr = Probe @('Orphan', 'Lonely', 'lonely.lab.test')
+                $pr = RevealRows @('Lonely', 'Orphan') @('Orphan', 'Lonely', 'lonely.lab.test')
                 Drag (Center $pr 'Orphan') (Mid $pr 'Lonely' 'lonely.lab.test')
+                # where the drop went and whether RemoteHub asked (run 20261021-222745: Orphan didn't end up under Lonely)
+                $t.orphanDropAsk = Box '*Move "Orphan"*' -Button 'Move' -TimeoutSec 5
+                Shot 'orphan-dropped'
                 $pr = Probe @('Orphan', 'via Lonely')
                 $t.orphanRow = @((TreeHit $pr 'Orphan').row)
                 $t.viaLonelyHelp = @(Hits $pr 'via Lonely' | ForEach-Object { $_.help })

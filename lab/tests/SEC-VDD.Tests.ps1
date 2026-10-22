@@ -19,11 +19,15 @@ BeforeAll {
     $vm = Get-LabVm $VmName
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "sec-vdd-$name.json") -Encoding UTF8 }
     function Out([string]$name) { $d = Join-Path $EvidenceDir "sec-vdd-$name"; $null = New-Item -ItemType Directory -Path $d -Force; $d }
-    # one desktop connection that asks for a size (Fit), keeps it a few seconds and ends
+    # one desktop connection that asks for a size (Fit), keeps it a few seconds and ends. normaluser is signed in at the
+    # device and is asked: the person clicks Allow (tried again when it missed) - without that the question ran out and
+    # the connection was Denied before it asked for a size (run 20261021-222745)
     function Fit([string]$Name, [int]$Width, [int]$Height) {
-        Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out $Name) -Steps @(
+        $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out $Name) -Steps @(
             @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; state = 'Connected'; timeout = 60 }
             @{ do = 'settings'; fitWidth = $Width; fitHeight = $Height }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'close' })
+        for ($i = 0; $i -lt 3; $i++) { $c = try { Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 25 } catch { $null }; if ($c -and $c.clicked) { break }; Start-Sleep -Seconds 2 }
+        Receive-LabDesktop $job
     }
     # what the settings folder is now, read as the admin account
     function Folder {

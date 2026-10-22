@@ -212,6 +212,16 @@ namespace
         CHECK(TileGoesAfterResult(false, static_cast<NTSTATUS>(0xC0000234L))); // STATUS_ACCOUNT_LOCKED_OUT
         CHECK(TileGoesAfterResult(true, 0));
     }
+    // C-PROV-03 (Server 2025): a ticket that came before Advise is announced again once LogonUI advises - only while it
+    // is unused, and only when the first CredentialsChanged went nowhere.
+    void MissedChangeIsSentOnAdvise()
+    {
+        g_test = "MissedChangeIsSentOnAdvise";
+        CHECK(NotifyOnAdvise(true, true));
+        CHECK(!NotifyOnAdvise(true, false));   // taken or gone: nothing to show
+        CHECK(!NotifyOnAdvise(false, true));   // LogonUI was told already
+        CHECK(!NotifyOnAdvise(false, false));
+    }
     // C-END-10: LogonUI reports the result and releases the provider (the stop) right after it; the pipe thread must
     // still see the result first, or the service never learns that the account was signed in.
     void ResultWinsOverStop()
@@ -411,6 +421,7 @@ int main(int argc, char** argv)
     FindsNegotiate();
     ResultWinsOverStop();
     TileGoesAfterAFailedResult();
+    MissedChangeIsSentOnAdvise();
     TraceWritesQueuedLines();
     TicketDroppedOnlyWhenUnlisted();
     NotOfferedRoundTrip();

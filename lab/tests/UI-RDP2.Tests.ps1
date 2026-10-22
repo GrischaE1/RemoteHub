@@ -124,15 +124,25 @@ BeforeAll {
                 $t = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
                 $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 23, 24, 25, 39, 40; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction SilentlyContinue |
                         Sort-Object TimeCreated | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) LSM $($_.Id): $(($_.Message -replace '\s+', ' ').Trim())" })
+                # who ended the second session (run 20261022-092309: LSM 40 reason 12, "logoff by user", with no sign-in
+                # recorded for it): the connection manager's view, and Winlogon's and the Security log's logoff entries
+                $ev += @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 20 -ErrorAction SilentlyContinue |
+                        Sort-Object TimeCreated | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) RCM $($_.Id): $((($_.Message -replace '\s+', ' ').Trim()).Substring(0, [Math]::Min(200, ($_.Message -replace '\s+', ' ').Trim().Length)))" })
+                $ev += @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4624, 4625, 4634, 4647; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 30 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Message -match 'PSAdmin' } | Sort-Object TimeCreated |
+                        ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) SEC $($_.Id) type $(if ($_.Message -match 'Logon Type:\s+(\d+)') { $Matches[1] })" })
                 @(quser 2>$null) + @("fSingleSessionPerUser: policy $(if ($p) { $p.fSingleSessionPerUser }), registry $(if ($t) { $t.fSingleSessionPerUser })") + $ev
             } | ForEach-Object { "$_".Trim() })
         $ids
     }
+    # Every session on the device signed out - the console account's too: Windows Server without the Remote Desktop
+    # Session Host role allows two signed-in sessions, the console counts, and PSAdmin's second RDP session met "There
+    # are too many users signed in. Select a user to disconnect" and was dropped after 30 s (run 20261022-124318,
+    # R-RDP-12/13 - the console's Admin and PSAdmin's first session were the two).
     function Clear-DeviceSessions {
-        $null = Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
-            param($u)
+        $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
             foreach ($l in @(quser 2>$null | Select-Object -Skip 1)) {
-                if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)' -and $Matches.u -eq $u) { logoff $Matches.id }
+                if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)') { logoff $Matches.id }
             }
         }
         Start-Sleep -Seconds 5
@@ -205,7 +215,9 @@ BeforeAll {
             # while the first stayed connected, and quser listed one session.
             Set-ItemProperty $ts -Name fSingleSessionPerUser -Value 0
             $tsp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-            $null = New-Item $tsp -Force
+            # created only when missing: New-Item -Force on an existing key empties it (run 20261021-222745: the step for
+            # fPromptForPassword wiped fSingleSessionPerUser, and the second session took over the first)
+            if (-not (Test-Path $tsp)) { $null = New-Item $tsp -Force }
             Set-ItemProperty $tsp -Name fSingleSessionPerUser -Value 0 -Type DWord
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
@@ -244,7 +256,8 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             # "Always prompt for password upon connection" on the device: Windows asks although RemoteHub sends the password
             Invoke-LabGuest -Name $device.Name -ScriptBlock {
                 $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-                $null = New-Item $k -Force
+                # kept, not made again: New-Item -Force would empty it and drop fSingleSessionPerUser (set in the setup)
+                if (-not (Test-Path $k)) { $null = New-Item $k -Force }
                 Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
             }
             Restart-LabRdpService -Name $device.Name
@@ -354,9 +367,14 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $s.device = Wait-RdpTab 90
                 Menu 'Connect' -Node 'Device2'
                 $s.device2 = Wait-RdpTab 90
+                # what the second session shows before Windows drops it: its arbitration waited 32 s and the session
+                # went (run 20261022-112607, LSM 41 then 40 reason 12) - a question on its screen nobody answered?
+                Start-Sleep -Seconds 5
+                Shot 'device2-connected'
                 Menu 'Connect' -Node 'Ghost'
                 Start-Sleep -Seconds 3
                 $s.sessions = Wait-DeviceRdp 2; $s.quser = $script:quser
+                if (@($s.sessions).Count -lt 2) { Shot 'switch-one-session' }   # PSAdmin's active RDP session ids
             }
             Step $s next {
                 # back on Device's tab, a click into its session, then Ctrl+Alt+< (left Alt; VK_OEM_102 = the "<" key).
@@ -366,15 +384,20 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Wait-RdpTab 30
                 $s.before = SelectedTab
                 ClickIntoSession
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 3
                 $s.afterNext = SelectedTab
                 Shot 'switch-next'
+                # held for 300 ms as a person would (run 20261022-132024: all keys down and up in one burst, no switch);
+                # RemoteHub's log says whether the RDP control reported the hotkey at all
+                $s.hotkeyLog = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                        param($u) Select-String -Path "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Pattern 'Session switch hotkey' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
+                    })
             }
             Step $s previous {
                 # in Device2's session: Ctrl+Alt+Shift+< goes back to Device (next would be Ghost)
                 ClickIntoSession
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 3
                 $s.afterPrevious = SelectedTab
                 Shot 'switch-previous'
@@ -384,7 +407,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Ui 'Full screen'
                 Start-Sleep -Seconds 3
                 $s.fsBefore = TopWindows
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 4
                 $s.fsAfter = TopWindows
                 $s.fsSelected = SelectedTab
@@ -402,7 +425,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             $s.device2 | Should -BeTrue
             @($s.sessions).Count | Should -Be 2 -Because "Device and Device2 each have their own session (device: $(@($s.quser) -join ' / '))"
             $s.before | Should -Be 'Device'
-            $s.afterNext | Should -Be 'Device2'
+            $s.afterNext | Should -Be 'Device2' -Because "the RDP control's hotkey reached RemoteHub: $(if (@($s.hotkeyLog).Count) { @($s.hotkeyLog)[-1] } else { 'no - nothing in its log' })"
             $s.afterPrevious | Should -Be 'Device'
             @($s.fsBefore | Where-Object { $_ -eq 'Device' }).Count | Should -BeGreaterThan 0 -Because 'Device was in full screen'
             @($s.fsAfter | Where-Object { $_ -eq 'Device' }).Count | Should -Be 0 -Because 'full screen is left first'
@@ -426,6 +449,8 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Open additional session'
                 $a.tabs2 = Wait-RdpTabCount 2 60
                 $a.second = Wait-RdpTab 90
+                Start-Sleep -Seconds 5
+                Shot 'additional-second-connected'   # as 'device2-connected' above
                 $a.sessions2 = Wait-DeviceRdp 2; $a.quser2 = $script:quser
                 Shot 'additional-tree'
             }
