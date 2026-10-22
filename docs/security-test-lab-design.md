@@ -243,11 +243,11 @@ Not lab cases – CI gates, specified in §8:
 |---|---|---|
 | T16.1 Signing secrets on the `java` command line | Fixed 2026-10-21: a Java argument file, deleted after use (`build/JavaArgFile.ps1`) | SEC-CI-01 |
 | T16.2 `${{ github.ref_name }}` inlined into release scripts | Fixed 2026-10-21: through `env: TAG` | SEC-CI-02 |
-| T16.3 `pull_request_target` with write, `bot*` wildcard in the CLA allow-list | PR code never checked out; wildcard present | SEC-CI-03 |
-| T16.4 ClamAV from apt, unpinned | True | SEC-CI-04, DEP-GATE |
-| T16.5 No SBOM or provenance; sidecar hashes in the same job | True | SEC-CI-05 |
-| T16.6 `credential-provider-design.md` §16 contradicts `release.yml` on signing | True | SEC-CI-06 |
-| §2 of the catalogue: FluentFTP 55.0.0, .NET runtime < 10.0.13 | FluentFTP 55.1.0 since 2026-10-21 (its release notes: data connections no longer accept any certificate; the draft's advisory ID wasn't found on GitHub); the runtime still to confirm | DEP-GATE |
+| T16.3 `pull_request_target` with write, `bot*` wildcard in the CLA allow-list | Fixed 2026-10-22: the allow-list names its two bots exactly; `Test-Workflows.ps1` fails a `pull_request_target` workflow with a checkout. The write rights stay – the CLA action and the draft workflow need them | SEC-CI-03 |
+| T16.4 ClamAV from apt, unpinned | Fixed 2026-10-22: Cisco-Talos' package of a pinned version (1.5.4), checked against its published SHA-256, the version checked after the install | SEC-CI-04 |
+| T16.5 No SBOM or provenance; sidecar hashes in the same job | Fixed 2026-10-22: a CycloneDX SBOM and GitHub build provenance (`gh attestation verify`) for every release file. The `.sha256` files stay in the release job – the provenance is the proof, they only catch a broken download | SEC-CI-05 |
+| T16.6 `credential-provider-design.md` §16 contradicts `release.yml` on signing | Fixed 2026-10-22: releases are signed since 0.20.2, the design says so | SEC-CI-06 |
+| §2 of the catalogue: FluentFTP 55.0.0, .NET runtime < 10.0.13 | FluentFTP 55.1.0 since 2026-10-21 (its release notes: data connections no longer accept any certificate; the draft's advisory ID wasn't found on GitHub), held by the DEP-GATE (`build/minimum-versions.json`). The runtime finding doesn't apply as written: RemoteHub and the agent aren't self-contained (`SelfContained` false) – they run on the .NET 10 runtime installed on the PC, which Microsoft Update keeps current, and no build carries a runtime | DEP-GATE |
 
 ### 3.1 Corrections to the threat catalogue draft
 
@@ -575,18 +575,18 @@ These belong with the code, not in the VM lab, and the release checklist (§9) r
 
 | Gate | Where | What |
 |---|---|---|
-| **DEP-GATE** | `build/` + `ci.yml` | A table of minimum fixed versions (FluentFTP ≥ 55.1.0 for its data-connection certificates, .NET runtime ≥ 10.0.13, ClamAV pinned) checked against the lockfile and `THIRD-PARTY-NOTICES.md`; fails the build below the minimum |
+| **DEP-GATE** | `build/Test-DependencyVersions.ps1` + `build/minimum-versions.json`, `ci.yml` | Built (2026-10-22): every `PackageReference` (`.csproj`, `.vcxproj`, `.wixproj`) checked against a table of versions with a known security fix (FluentFTP ≥ 55.1.0); below it, or without a fixed version, the build fails. ClamAV is pinned in its own step (SEC-CI-04); the .NET runtime isn't part of the build (framework-dependent) |
 | **Unit: TunnelRules matrix** | `tests/RemoteHub.Tests` | The SEC-TUN-01/02 address matrix against `TunnelRules.IsSpecial` / `Allowed` – fast, no VM; the lab proves the connect side |
 | **Unit: SafeRelativePath matrix** | `tests/RemoteHub.Tests` | The SEC-DEC-03 names against `DesktopWire.SafeRelativePath` and the console's receive path |
 | **Unit: backup corpus** | `tests/RemoteHub.Tests` | SEC-BAK-01's variants against `BackupFile.Import` (the lab adds the UI and the file system) |
 | **Unit: protocol parsers** | `tests/RemoteHub.Tests` | The SEC-DEC-04/05 and SEC-PS-05 inputs against `DesktopProtocol`, `AgentProtocol`, `TunnelProtocol` parsing |
 | **Fuzz: `Wire.cpp`** | `build/build-credential-provider.ps1 -FuzzSeconds 60` | Existing; extend the corpus with the SEC-CP-02 nonce / ticket cases |
-| **SEC-CI-01** | workflow lint | Fail if `${{ secrets.* }}` appears as a command-line argument (`-password=`, `-totp_secret=`); require env or stdin |
-| **SEC-CI-02** | `actionlint` + `zizmor` | `${{ github.* }}` inlined into `run:` → fail; `ref_name` through `env:` |
-| **SEC-CI-03** | workflow lint | `pull_request_target` jobs never check out the PR head; least-privilege `permissions:`; the CLA allow-list has no wildcard entries |
-| **SEC-CI-04** | `ci.yml` | ClamAV (and every apt tool) version-pinned and hash-checked |
-| **SEC-CI-05** | `release.yml` | SBOM (CycloneDX) and provenance attestation produced; sidecar hashes made in a separate least-privilege job |
-| **SEC-CI-06** | docs check | `credential-provider-design.md` §16 (signing) agrees with `release.yml` |
+| **SEC-CI-01** | `build/Sign-Files.ps1` | Built (2026-10-21): the eSigner credentials reach CodeSignTool through a Java argument file, deleted after use; `BuildScriptTests` proves the file's arguments arrive unchanged |
+| **SEC-CI-02** | `ci.yml` job `workflow-lint`: actionlint + `build/Test-Workflows.ps1` | Built (2026-10-22): actionlint (pinned, hash-checked) fails on untrusted input in scripts; the project check fails on any `${{ github.* }}` or `${{ inputs.* }}` in a `run:` script and on an action not pinned to a commit SHA with its version |
+| **SEC-CI-03** | `cla.yml`, `Test-Workflows.ps1` | Built (2026-10-22): no wildcard in the CLA allow-list; a `pull_request_target` workflow with `actions/checkout` fails the check |
+| **SEC-CI-04** | `ci.yml` | Built (2026-10-22): ClamAV 1.5.4 from Cisco-Talos' release, SHA-256 checked, version checked after the install |
+| **SEC-CI-05** | `release.yml` | Built (2026-10-22): CycloneDX SBOM of the NuGet packages and GitHub build provenance for every release file |
+| **SEC-CI-06** | docs | Done (2026-10-22): `credential-provider-design.md` says releases are signed since 0.20.2 |
 
 ## 9. Report and docs in step
 
