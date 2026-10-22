@@ -2282,6 +2282,9 @@ function Invoke-LabPersonServer {
                 # its exit code tells a native crash (0xC0000005), a stack overflow (0xC00000FD), Ctrl+C/Break
                 # (0xC000013A), an exit of its own or a kill from outside apart - and which request it was doing
                 $exit = try { if ($serverProc -and $serverProc.WaitForExit(2000)) { '0x{0:X8}' -f $serverProc.ExitCode } else { '?' } } catch { '?' }
+                # the error it ended with, as RhPerson -Do serve writes it down
+                $lastError = Get-Content (Join-Path $q 'last-error.txt') -Raw -ErrorAction SilentlyContinue
+                if ($lastError -and (Get-Item (Join-Path $q 'last-error.txt')).LastWriteTime -ge $sent.AddSeconds(-2)) { $exit += "; its error: $($lastError.Trim())" }
                 $why = "the person server (process $serverPid, exit code $exit) ended $secs s after taking the request ($($req.do) '$($req.text)' $(if ("$($req.value)" -match '^set') { 'set...' } else { $req.value })), without an answer$(if ($crash) { '; Application log: ' + $crash[0] } else { ' (no crash in the Application log)' })"
                 # ended within seconds with no crash recorded (runs 20261022-092309 and -112607, both in
                 # New-LabClientConnection): Defender's behaviour monitoring stops a process without one - its detections

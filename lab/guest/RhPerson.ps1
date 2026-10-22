@@ -314,6 +314,11 @@ switch ($Do) {
         $self = $PSCommandPath
         $stamp = (Get-Item $self).LastWriteTimeUtc
         [RhNative]::WatchCrash()
+        # an error that ends the server is written down for the host (Invoke-LabPersonServer quotes it) before it ends
+        trap {
+            try { Set-Content -Path (Join-Path $q 'last-error.txt') -Value "$((Get-Date).ToString('HH:mm:ss')) $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)" -Encoding UTF8 } catch { }
+            break
+        }
         $idleUntil = (Get-Date).AddMinutes(30)
         while ((Get-Date) -lt $idleUntil) {
             Set-Content -Path (Join-Path $q 'alive.txt') -Value "$PID $((Get-Date).ToUniversalTime().ToString('o'))"
@@ -332,19 +337,34 @@ switch ($Do) {
             # stuck call can't be stopped (the host's next request starts a new server). The deadline is
             # max(5, timeout) + 50 s; the host (Invoke-LabPersonServer) waits 30 s longer, for the window list below
             # and the write. A crash on the way is written to the answer file too (RhNative.WatchCrash).
-            if (-not $worker) {
-                $worker = [runspacefactory]::CreateRunspace()
-                $worker.ApartmentState = 'STA'
-                $worker.ThreadOptions = 'ReuseThread'
-                $worker.Open()
+            # A worker left broken by an earlier action is replaced, and an error while starting the action is the
+            # request's answer: thrown here, it ended the whole server with exit code 1 a second after taking the
+            # request (runs 20261022-092309 to -150024, POL-CLIENT and UI-RDP: "ended 1 s after taking the request")
+            $h = $null
+            try {
+                if ($worker -and $worker.RunspaceStateInfo.State -ne 'Opened') { try { $worker.Dispose() } catch { }; $worker = $null }
+                if (-not $worker) {
+                    $worker = [runspacefactory]::CreateRunspace()
+                    $worker.ApartmentState = 'STA'
+                    $worker.ThreadOptions = 'ReuseThread'
+                    $worker.Open()
+                }
+                $ps = [powershell]::Create()
+                $ps.Runspace = $worker
+                $null = $ps.AddCommand($self)
+                foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
+                $limit = [Math]::Max(5, $a.TimeoutSec) + 50
+                [RhNative]::CrashOut = $req.out
+                $h = $ps.BeginInvoke()
             }
-            $ps = [powershell]::Create()
-            $ps.Runspace = $worker
-            $null = $ps.AddCommand($self)
-            foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
-            $limit = [Math]::Max(5, $a.TimeoutSec) + 50
-            [RhNative]::CrashOut = $req.out
-            $h = $ps.BeginInvoke()
+            catch {
+                [RhNative]::CrashOut = $null
+                $why = "the action couldn't start: $($_.Exception.Message)"
+                try { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $why } -Compress)) } catch { }
+                if ($worker) { try { $worker.Dispose() } catch { }; $worker = $null }
+                $idleUntil = (Get-Date).AddMinutes(30)
+                continue
+            }
             if ($h.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($limit))) {
                 [RhNative]::CrashOut = $null
                 try {
