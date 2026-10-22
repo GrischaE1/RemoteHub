@@ -221,6 +221,26 @@ public class NoteEditorTests
     }
 
     [SkippableFact]
+    public void A_screen_reader_finds_an_image_by_its_alternative_text()
+    {
+        Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");
+        WithEditor("First page\n", (editor, _) =>
+        {
+            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(System.Windows.Media.Imaging.BitmapSource.Create(8, 6, 96, 96, PixelFormats.Bgra32, null, new byte[8 * 6 * 4], 8 * 4)));
+            using var ms = new MemoryStream();
+            png.Save(ms);
+            const string id = "0123456789abcdef0123456789abcdef";
+            editor.Load($"![Pasted image](note-file:{id})\n\nAfter\n", [new RemoteHub.Data.NoteImage(id, "", "image/png", 8, 6, ms.ToArray())]);
+            Pump();
+            static IEnumerable<System.Windows.Automation.Peers.AutomationPeer> All(System.Windows.Automation.Peers.AutomationPeer p) =>
+                (p.GetChildren() ?? []).SelectMany(c => All(c).Prepend(c));
+            var page = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(Find<RichTextBox>(editor));
+            Assert.Contains(All(page), p => p.GetName() == "Pasted image" && p.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Image);
+        });
+    }
+
+    [SkippableFact]
     public void A_copied_image_file_is_pasted_as_a_picture()
     {
         Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");

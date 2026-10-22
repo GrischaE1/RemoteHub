@@ -127,6 +127,11 @@ public static class RhTok {
     $null = Invoke-LabInSession -Name $VmName -ScriptBlock $taskbarButton
     $taskbar = [string](Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Content 'C:\Users\Public\rhlab-taskbar.json' -Raw }) | ConvertFrom-Json
     $right = @(1..([math]::Max(0, [int]$taskbar.index)) | Where-Object { $taskbar.index -gt 0 } | ForEach-Object { @{ do = 'key'; scan = '0xE04D' }, @{ do = 'key'; scan = '0xE04D'; flags = @('Up') }, @{ do = 'sleep'; seconds = 1 } })
+    # Notepad as the last button (after the pinned ones): End goes there in one key - a Right lost on the way left the
+    # focus on Edge (run 20261022-092309, Server 2025, the 'on' thumbnail)
+    if ([int]$taskbar.index -gt 0 -and [int]$taskbar.index -eq @($taskbar.names).Count - 1) {
+        $right = @(@{ do = 'key'; scan = '0xE04F' }, @{ do = 'key'; scan = '0xE04F'; flags = @('Up') }, @{ do = 'sleep'; seconds = 1 })
+    }
 
     $esc = @(@{ do = 'combo'; scans = @('0x01') })
     $win = '0xE05B'

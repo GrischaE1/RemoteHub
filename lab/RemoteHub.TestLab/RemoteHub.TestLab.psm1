@@ -3478,13 +3478,23 @@ function Start-LabClient {
     $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
     # The main window is up: its New button, or - when RemoteHub opens in the view used last, Notes or Scripts, which
     # have none (UI-NOTE-07, run 20261021-222745) - the rail's Remote Control, which every view has
+    # A person server stuck in one search (run 20261022-092309, C-POLUPD2: right after an update it took the request and
+    # never answered) is ended by Invoke-LabPerson and the next search starts a new one: once more, not the end.
     function Wait-Main([int]$Sec) {
         $until = (Get-Date).AddSeconds($Sec)
+        $stuck = 0
         do {
-            $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec 5
-            if ($m.found) { return $m }
-            $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'Remote Control' -Value exists -TimeoutSec 2
-            if ($m.found) { return $m }
+            try {
+                $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec 5
+                if ($m.found) { return $m }
+                $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'Remote Control' -Value exists -TimeoutSec 2
+                if ($m.found) { return $m }
+            }
+            catch {
+                if ("$_" -notmatch 'took the request but didn''t answer' -or ++$stuck -gt 1) { throw }
+                $m = [pscustomobject]@{ found = $false; error = "$_" }
+                $until = $until.AddSeconds(60)   # the stuck wait isn't the main window's time
+            }
         } while ((Get-Date) -lt $until)
         $m
     }
