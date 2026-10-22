@@ -812,17 +812,24 @@ switch ($Do) {
                 $v = & $pat ([Windows.Automation.ValuePattern]::Pattern)
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
                 $tp = & $pat ([Windows.Automation.TextPattern]::Pattern)
-                # the label text inside a CheckBox (WPF lists both with the same name, either may be found first): the
-                # CheckBox's state, as check / uncheck use its parent's pattern
+                # the label text inside a CheckBox or a toggle switch (WPF lists both with the same name, either may be
+                # found first): the parent's state - any parent that toggles (run 20261022-143904, POL-15: WPF-UI's
+                # ToggleSwitch is a toggle button, not a CheckBox, and the label's own name was read instead)
                 if (-not $v -and -not $tp -and -not $t) {
                     $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
                     $o = $null
-                    if ($p -and $p.Current.ControlType.ProgrammaticName -eq 'ControlType.CheckBox' -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o; $result.enabled = $p.Current.IsEnabled }
+                    if ($p -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o; $result.enabled = $p.Current.IsEnabled }
                 }
                 $result.value = if ($v) { $v.Current.Value } elseif ($tp) { $tp.DocumentRange.GetText(200000) } elseif ($t) { [string]$t.Current.ToggleState } else { $found.Current.Name }
             }
             'toggle-*' {
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
+                # the label inside the switch found first: the switch itself (as 'read' above)
+                if (-not $t) {
+                    $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
+                    $o = $null
+                    if ($p -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o }
+                }
                 $want = if ($action -eq 'toggle-on') { 'On' } else { 'Off' }
                 if ($t -and [string]$t.Current.ToggleState -ne $want) { $t.Toggle() }
                 $result.value = if ($t) { [string]$t.Current.ToggleState } else { $null }
