@@ -364,6 +364,10 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $s.device = Wait-RdpTab 90
                 Menu 'Connect' -Node 'Device2'
                 $s.device2 = Wait-RdpTab 90
+                # what the second session shows before Windows drops it: its arbitration waited 32 s and the session
+                # went (run 20261022-112607, LSM 41 then 40 reason 12) - a question on its screen nobody answered?
+                Start-Sleep -Seconds 5
+                Shot 'device2-connected'
                 Menu 'Connect' -Node 'Ghost'
                 Start-Sleep -Seconds 3
                 $s.sessions = Wait-DeviceRdp 2; $s.quser = $script:quser
@@ -437,6 +441,8 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Open additional session'
                 $a.tabs2 = Wait-RdpTabCount 2 60
                 $a.second = Wait-RdpTab 90
+                Start-Sleep -Seconds 5
+                Shot 'additional-second-connected'   # as 'device2-connected' above
                 $a.sessions2 = Wait-DeviceRdp 2; $a.quser2 = $script:quser
                 Shot 'additional-tree'
             }
