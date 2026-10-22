@@ -124,6 +124,13 @@ BeforeAll {
                 $t = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -ErrorAction SilentlyContinue
                 $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-LocalSessionManager/Operational'; Id = 21, 23, 24, 25, 39, 40; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction SilentlyContinue |
                         Sort-Object TimeCreated | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) LSM $($_.Id): $(($_.Message -replace '\s+', ' ').Trim())" })
+                # who ended the second session (run 20261022-092309: LSM 40 reason 12, "logoff by user", with no sign-in
+                # recorded for it): the connection manager's view, and Winlogon's and the Security log's logoff entries
+                $ev += @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 20 -ErrorAction SilentlyContinue |
+                        Sort-Object TimeCreated | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) RCM $($_.Id): $((($_.Message -replace '\s+', ' ').Trim()).Substring(0, [Math]::Min(200, ($_.Message -replace '\s+', ' ').Trim().Length)))" })
+                $ev += @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4624, 4625, 4634, 4647; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 30 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Message -match 'PSAdmin' } | Sort-Object TimeCreated |
+                        ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) SEC $($_.Id) type $(if ($_.Message -match 'Logon Type:\s+(\d+)') { $Matches[1] })" })
                 @(quser 2>$null) + @("fSingleSessionPerUser: policy $(if ($p) { $p.fSingleSessionPerUser }), registry $(if ($t) { $t.fSingleSessionPerUser })") + $ev
             } | ForEach-Object { "$_".Trim() })
         $ids
@@ -360,6 +367,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Connect' -Node 'Ghost'
                 Start-Sleep -Seconds 3
                 $s.sessions = Wait-DeviceRdp 2; $s.quser = $script:quser
+                if (@($s.sessions).Count -lt 2) { Shot 'switch-one-session' }   # PSAdmin's active RDP session ids
             }
             Step $s next {
                 # back on Device's tab, a click into its session, then Ctrl+Alt+< (left Alt; VK_OEM_102 = the "<" key).
