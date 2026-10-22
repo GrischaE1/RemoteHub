@@ -181,7 +181,9 @@ BeforeAll {
         $null = WaitFor 30 { @(@((Ui '*' -Value list -Optional -TimeoutSec 5).items) | Where-Object { "$_" -match '^Window\|(Save As|Speichern unter)\|' }).Count }
         Send-LabText -Name $VmName -Text $Path
         Send-LabKey -Name $VmName -Key Enter
-        "$(WaitFor 30 { Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) if (Test-Path $p) { Get-Content $p -Raw } } })"
+        # a file that goes between Test-Path and the read (saved through a temporary one and moved into place - run
+        # 20261022-154825: "Could not find file") counts as not there yet: read again at the next turn
+        "$(WaitFor 30 { Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) try { if (Test-Path $p) { [IO.File]::ReadAllText($p) } } catch { $null } } })"
     }
     # the agent's request at this VM's own console (the agent desktop of the console session): Allow, by OCR and the
     # console mouse; tried again until -TimeoutSec
