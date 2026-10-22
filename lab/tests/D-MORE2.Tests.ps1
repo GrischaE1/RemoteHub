@@ -31,7 +31,15 @@ BeforeAll {
     function Begin([string]$Name, [object[]]$Steps, [string]$Answer = 'Allow') {
         $job = Start-LabDesktop -Name $VmName -Pin $pin -Out (Out $Name) -Steps (@(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 90 }) + $Steps)
-        if ($Answer) { $null = Invoke-LabPerson -Name $VmName -Do click -Text $Answer -TimeoutSec 60 }
+        # the click is tried again when it missed or the person server failed (as D-CADHIDE's Allow; run
+        # 20261021-222745: one lost click let the question run out - Denied)
+        if ($Answer) {
+            for ($i = 0; $i -lt 3; $i++) {
+                $c = try { Invoke-LabPerson -Name $VmName -Do click -Text $Answer -TimeoutSec 40 } catch { $null }
+                if ($c -and $c.clicked) { break }
+                Start-Sleep -Seconds 2
+            }
+        }
         $job
     }
     function Get-Vdd { Invoke-LabGuest -Name $VmName -ScriptBlock { $d = Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Select-Object -First 1; if ($d) { [string]$d.Status } } }

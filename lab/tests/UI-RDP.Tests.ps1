@@ -310,7 +310,13 @@ function Dw([string]$n) { try { $d = $o.GetData($n) } catch { return $null }; if
 $sha = if ($t) { [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($t))).Replace('-', '') } else { '' }
 'JSON:' + (ConvertTo-Json -Compress -InputObject @{ length = $t.Length; sha256 = $sha; formats = @(if ($o) { $o.GetFormats() }); history = (Dw 'CanIncludeInClipboardHistory'); cloud = (Dw 'CanUploadToCloudClipboard') })
 '@
-    # a test picture (96 x 64, pattern by __SEED__) and the hash of a picture's pixels (RGB)
+    # a test picture (96 x 64, pattern by __SEED__) and the hash of a picture's pixels (RGB). The picture goes on the
+    # clipboard as a plain 24-bit DIB (BI_RGB), as Paint puts one, and is read back from the DIB with its header honoured.
+    # Lab runs 20261021-222745 and 20261022-061254: put there with Clipboard.SetImage and read with GetImage, it arrived
+    # moved 3 pixels to the right both ways (shiftedEqual "-3=5952/5952") - 12 bytes, the size of the three colour masks
+    # of a 32-bit BI_BITFIELDS DIB. SetImage leaves Windows to make the DIB from a 32-bit screen bitmap (BI_BITFIELDS),
+    # and somewhere between the RDP clipboard and the bitmap Windows made back from it on the other side the masks were
+    # taken for pixels. RemoteHub has no part in that: the RDP tab's clipboard is the RDP control's and rdpclip's.
     $imgLib = @'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 function New-TestImage([int]$Seed) {
@@ -318,39 +324,91 @@ function New-TestImage([int]$Seed) {
     for ($y = 0; $y -lt 64; $y++) { for ($x = 0; $x -lt 96; $x++) { $b.SetPixel($x, $y, [System.Drawing.Color]::FromArgb(($x * 7 + $y * 3 + $Seed) % 256, ($x * 2 + $y * 11 + $Seed) % 256, ($x * 13 + $y * 5 + $Seed) % 256)) } }
     $b
 }
-function Get-PixelHash($img) {
-    if (-not $img) { return '' }
+# pixels as 0xRRGGBB, top row first
+function Get-Pixels($img) {
     $b = New-Object System.Drawing.Bitmap $img
+    $px = New-Object int[] ($b.Width * $b.Height)
+    for ($y = 0; $y -lt $b.Height; $y++) { for ($x = 0; $x -lt $b.Width; $x++) { $px[$y * $b.Width + $x] = $b.GetPixel($x, $y).ToArgb() -band 0xFFFFFF } }
+    @{ w = $b.Width; h = $b.Height; px = $px }
+}
+function Get-Hash($p) {
+    if (-not $p -or -not $p.px) { return '' }
     $sb = New-Object System.Text.StringBuilder
-    for ($y = 0; $y -lt $b.Height; $y++) { for ($x = 0; $x -lt $b.Width; $x++) { $c = $b.GetPixel($x, $y); [void]$sb.Append($c.R).Append(',').Append($c.G).Append(',').Append($c.B).Append(';') } }
-    "$($b.Width)x$($b.Height)-" + [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::ASCII.GetBytes($sb.ToString()))).Replace('-', '')
+    foreach ($c in $p.px) { [void]$sb.Append(($c -shr 16) -band 0xFF).Append(',').Append(($c -shr 8) -band 0xFF).Append(',').Append($c -band 0xFF).Append(';') }
+    "$($p.w)x$($p.h)-" + [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::ASCII.GetBytes($sb.ToString()))).Replace('-', '')
+}
+function Get-PixelHash($img) { if (-not $img) { return '' }; Get-Hash (Get-Pixels $img) }
+# a 24-bit bottom-up DIB (BITMAPINFOHEADER, BI_RGB, rows padded to 4 bytes)
+function ConvertTo-Dib($img) {
+    $p = Get-Pixels $img
+    $stride = [int]([Math]::Floor(($p.w * 3 + 3) / 4) * 4)
+    $d = New-Object byte[] (40 + $stride * $p.h)
+    [BitConverter]::GetBytes([int]40).CopyTo($d, 0); [BitConverter]::GetBytes([int]$p.w).CopyTo($d, 4); [BitConverter]::GetBytes([int]$p.h).CopyTo($d, 8)
+    [BitConverter]::GetBytes([uint16]1).CopyTo($d, 12); [BitConverter]::GetBytes([uint16]24).CopyTo($d, 14); [BitConverter]::GetBytes([int]($stride * $p.h)).CopyTo($d, 20)
+    for ($y = 0; $y -lt $p.h; $y++) {
+        $o = 40 + ($p.h - 1 - $y) * $stride
+        for ($x = 0; $x -lt $p.w; $x++) { $c = $p.px[$y * $p.w + $x]; $d[$o + $x * 3] = $c -band 0xFF; $d[$o + $x * 3 + 1] = ($c -shr 8) -band 0xFF; $d[$o + $x * 3 + 2] = ($c -shr 16) -band 0xFF }
+    }
+    , $d
+}
+# a DIB's pixels (24 or 32 bit; after a BITMAPINFOHEADER with BI_BITFIELDS come the three masks) and its header
+function Read-Dib([byte[]]$d) {
+    if (-not $d -or $d.Length -lt 40) { return @{ header = "$(if ($d) { $d.Length } else { 0 }) bytes"; px = $null } }
+    $hs = [BitConverter]::ToInt32($d, 0); $w = [BitConverter]::ToInt32($d, 4); $h = [BitConverter]::ToInt32($d, 8)
+    $bits = [int][BitConverter]::ToUInt16($d, 14); $comp = [BitConverter]::ToInt32($d, 16)
+    $off = $hs
+    if ($hs -eq 40 -and $comp -eq 3) { $off += 12 }
+    $top = $h -lt 0; $h = [Math]::Abs($h)
+    $stride = [int]([Math]::Floor(($w * $bits + 31) / 32) * 4)
+    $r = @{ w = $w; h = $h; px = $null; header = "size $hs, ${w}x$(if ($top) { -$h } else { $h }), $bits bit, compression $comp, $($d.Length) bytes (pixels from $off, $($stride * $h) wanted)" }
+    if (($bits -ne 24 -and $bits -ne 32) -or $d.Length -lt $off + $stride * $h) { return $r }
+    $bpp = $bits / 8
+    $px = New-Object int[] ($w * $h)
+    for ($y = 0; $y -lt $h; $y++) {
+        $o = $off + $(if ($top) { $y } else { $h - 1 - $y }) * $stride
+        for ($x = 0; $x -lt $w; $x++) { $i = $o + $x * $bpp; $px[$y * $w + $x] = ([int]$d[$i + 2] -shl 16) -bor ([int]$d[$i + 1] -shl 8) -bor [int]$d[$i] }
+    }
+    $r.px = $px
+    $r
+}
+function Get-ClipboardDib {
+    $s = [System.Windows.Forms.Clipboard]::GetData([System.Windows.Forms.DataFormats]::Dib)
+    if ($s -is [IO.MemoryStream]) { return , $s.ToArray() }
+    $null
 }
 '@
     $code.imageSet = $imgLib + @'
 $i = New-TestImage __SEED__
-[System.Windows.Forms.Clipboard]::SetImage($i)
-'JSON:' + (ConvertTo-Json -Compress -InputObject @{ hash = (Get-PixelHash $i) })
+$o = New-Object System.Windows.Forms.DataObject
+$o.SetData([System.Windows.Forms.DataFormats]::Dib, $false, (New-Object IO.MemoryStream (, (ConvertTo-Dib $i))))
+[System.Windows.Forms.Clipboard]::SetDataObject($o, $true)
+$back = Read-Dib (Get-ClipboardDib)
+'JSON:' + (ConvertTo-Json -Compress -InputObject @{ hash = (Get-PixelHash $i); onClipboard = (Get-Hash $back); header = $back.header })
 '@
     # waits until the clipboard holds the picture with the wanted pixels (or 30 s). When another one is there, also how it
     # differs from the picture sent (made again from __SEED__): the clipboard's formats, the pixels changed, the largest
     # difference in one colour, and whether it is the picture upside down or moved sideways (lab run 20261017-054704:
     # 96 x 64 arrived both ways with other pixels, nothing recorded to tell why)
     $code.imageGet = $imgLib + @'
-$want = '__WANT__'; $got = ''; $img = $null
+$want = '__WANT__'; $got = ''; $dib = $null; $err = $null
 $until = (Get-Date).AddSeconds(30)
 do {
-    try { $img = [System.Windows.Forms.Clipboard]::GetImage(); $got = Get-PixelHash $img } catch { }
+    try { $dib = Read-Dib (Get-ClipboardDib); $got = Get-Hash $dib } catch { $err = "$_" }
     if ($got -ne $want) { Start-Sleep -Milliseconds 700 }
 } while ($got -ne $want -and (Get-Date) -lt $until)
 $info = [ordered]@{ formats = @(try { [System.Windows.Forms.Clipboard]::GetDataObject().GetFormats() } catch { "error: $_" }) }
-if ($got -ne $want -and $img) {
-    $a = New-TestImage __SEED__
-    $b = New-Object System.Drawing.Bitmap $img
-    $info.size = "$($b.Width)x$($b.Height) $($img.PixelFormat)"
-    if ($a.Width -eq $b.Width -and $a.Height -eq $b.Height) {
-        $w = $a.Width; $h = $a.Height
-        $pa = New-Object int[] ($w * $h); $pb = New-Object int[] ($w * $h)
-        for ($y = 0; $y -lt $h; $y++) { for ($x = 0; $x -lt $w; $x++) { $pa[$y * $w + $x] = $a.GetPixel($x, $y).ToArgb() -band 0xFFFFFF; $pb[$y * $w + $x] = $b.GetPixel($x, $y).ToArgb() -band 0xFFFFFF } }
+if ($got -ne $want) {
+    $info.dib = $(if ($dib) { $dib.header } else { 'none' })
+    if ($err) { $info.error = $err }
+    # the bitmap Windows makes from the DIB (Clipboard.GetImage), for comparison
+    $info.imageHash = try { Get-PixelHash ([System.Windows.Forms.Clipboard]::GetImage()) } catch { "error: $_" }
+}
+if ($got -ne $want -and $dib -and $dib.px) {
+    $a = Get-Pixels (New-TestImage __SEED__)
+    $info.size = "$($dib.w)x$($dib.h)"
+    if ($a.w -eq $dib.w -and $a.h -eq $dib.h) {
+        $w = $a.w; $h = $a.h
+        $pa = $a.px; $pb = $dib.px
         $changed = 0; $max = 0; $flipped = 0
         for ($i = 0; $i -lt $pa.Length; $i++) {
             $p = $pa[$i]; $q = $pb[$i]
@@ -518,10 +576,17 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Shot 'connected'
             }
             Step $c resolution {
-                $c.res1 = InSession $device.Name Admin $code.resolution
+                # asked again once in a new task before the step fails: in lab run 20261022-061254 the first query's task
+                # in PSAdmin's RDP session started and gave no answer in 120 s ("task Running"), while whoami just before
+                # and the clipboard queries later in the same session answered - the resize was never tried
+                function Resolution([string]$Name) {
+                    try { InSession $device.Name Admin $code.resolution -TimeoutSec 60 }
+                    catch { $c["$Name-first"] = "$_"; InSession $device.Name Admin $code.resolution -TimeoutSec 90 }
+                }
+                $c.res1 = Resolution res1
                 $c.resize = InSession $VmName Console $code.resize @{ W = 860; H = 640 }
                 Start-Sleep -Seconds 8
-                $c.res2 = InSession $device.Name Admin $code.resolution
+                $c.res2 = Resolution res2
                 Shot 'resized'
             }
             Step $c focus {
@@ -604,6 +669,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
         }
 
         It 'R-RDP-06 dynamic resolution: the device session follows the resized window (even width, not larger than the window)' -Tag 'R-RDP-06' {
+            $c['resolution-error'] | Should -BeNullOrEmpty
             $c.resize.resized | Should -BeTrue
             "$($c.res2.w)x$($c.res2.h)" | Should -Not -Be "$($c.res1.w)x$($c.res1.h)"
             $c.res2.w % 2 | Should -Be 0
@@ -740,12 +806,15 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $x.filesBackIn = @($x.pasteBack.files)
             }
             Step $x image {
-                $x.imgOut = (InSession $VmName Console $code.imageSet @{ SEED = 1 }).hash
+                # (each side's own DIB read back too: onClipboard equals hash when the picture went on as meant)
+                $x.imgSet = InSession $VmName Console $code.imageSet @{ SEED = 1 }
+                $x.imgOut = $x.imgSet.hash
                 # (not $r: that is Step's $R - names ignore case, and it only takes a dictionary; lab run 20261019-193627:
                 # "Cannot convert ... to type System.Collections.IDictionary", the pictures were never compared)
                 $got = InSession $device.Name Admin $code.imageGet @{ WANT = $x.imgOut; SEED = 1 }
                 $x.imgIn = $got.hash; $x.imgInInfo = $got.info
-                $x.imgBack = (InSession $device.Name Admin $code.imageSet @{ SEED = 77 }).hash
+                $x.imgBackSet = InSession $device.Name Admin $code.imageSet @{ SEED = 77 }
+                $x.imgBack = $x.imgBackSet.hash
                 $got = InSession $VmName Console $code.imageGet @{ WANT = $x.imgBack; SEED = 77 }
                 $x.imgBackIn = $got.hash; $x.imgBackInfo = $got.info
             }
@@ -849,6 +918,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
     Context 'the agent installed through the clipboard into the RDP session' {
         BeforeAll {
             $a = [ordered]@{}
+            # the audit entry of the claim (MainWindow.AgentClaim.cs Pin)
+            $claimed = 'Claimed\W+installed by hand, certificate SHA-256'
             $a.tab = Ensure-RdpTab
             Install-LabSigningCertificate -Name $device.Name
             Step $a copy {
@@ -867,9 +938,12 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $a.pasted = @($a.paste.files)
                 $a.msi = InSession $device.Name Admin $code.msiInSession @{ DIR = 'C:\ProgramData\RemoteHubLab\session\agent-clip' } -Elevated -TimeoutSec 600
                 $a.state = Get-LabAgentState -Name $device.Name
-                # RemoteHub asks every 10 s (WaitForManualInstall) and writes the audit entry when the agent answers
+                # RemoteHub claims the agent every 10 s (MainWindow.AgentClaim.cs WaitForClaim) and writes "Agent installed"
+                # with "Claimed - installed by hand, certificate SHA-256 ..." when it has (the "answered as RemoteHub Agent"
+                # entry went with enrollment without a shared device key - lab run 20261022-061254 found the new entry and
+                # waited 150 s for the old one)
                 $until = (Get-Date).AddSeconds(150)
-                do { Start-Sleep -Seconds 15; $a.audit = AuditText } while ($a.audit -notmatch 'answered as RemoteHub Agent' -and (Get-Date) -lt $until)
+                do { Start-Sleep -Seconds 15; $a.audit = AuditText } while ($a.audit -notmatch $claimed -and (Get-Date) -lt $until)
             }
             Step $a exit {
                 $a.beforeExit = Staged
@@ -904,7 +978,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             @($a.pasted).Count | Should -Be 2 -Because "the device's clipboard offered: $(@($a.paste.formats) -join ', ') ($($a.paste.apartment))"
             "$($a.msi.exit)" | Should -BeIn '0', '3010'
             $a.state.Service.State | Should -Be 'Running'
-            $a.audit | Should -Match 'Installed\W+answered as RemoteHub Agent'
+            $a.audit | Should -Match $claimed
         }
 
         It 'A-CLIP-02 the staging folder stays while RemoteHub runs, is gone after a normal exit and after the start that follows a crash' -Tag 'A-CLIP-02' {

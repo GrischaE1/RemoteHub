@@ -111,9 +111,14 @@ BeforeAll {
         # Ctrl+Alt+Del required) sent it before the ticket arrived and the curtain was still up 3 minutes later, no Result.
         $ticketSent = Wait-ServerLog 'sent Ticket|error ' 90
         Send-LabCtrlAltDel -Name $VmName
+        # Server 2025 may load the providers only once Ctrl+Alt+Del is pressed: the ticket can go out right after it (run
+        # 20261021-222745: LogonUI came 88 s in, at the end of the wait above, and the Ctrl+Alt+Del below was skipped)
+        if (-not $ticketSent) { $ticketSent = Wait-ServerLog 'sent Ticket|error ' 60 }
         # no Result yet: the curtain may have come back (it returns after a while without input) - once more
         if ($ticketSent -and -not (Wait-ServerLog 'result |error ' 45)) { Send-LabCtrlAltDel -Name $VmName }
-        try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 120 }
+        # the account's first sign-in on the VM prepares its profile: LogonUI let go of the tile 2 min after the result
+        # (run 20261022-061254, W11), as the 120 s wait ended
+        try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 300 }
         catch { $signInError = "$_" }
         Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-prov-after-signin.png') | Out-Null
         $serverLog = Invoke-LabGuest -Name $VmName -ArgumentList $guestDir -ScriptBlock {

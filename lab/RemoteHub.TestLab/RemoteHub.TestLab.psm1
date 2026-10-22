@@ -102,8 +102,9 @@ function Test-LabVmReady {
 }
 
 # What a scenario file needs, from its header (see Invoke-LabTests.ps1): its role, whether it uses other VMs (LabNeeds:
-# lane - found by itself when it calls Get-LabDevice) and of which kinds, the jump host, its time limit, and whether a
-# quick run still takes it on every kind (LabQuick: every kind).
+# lane - found by itself when it calls Get-LabDevice) and of which kinds, the jump host, its time limit, whether a
+# quick run still takes it on every kind (LabQuick: every kind), and whether it runs only after every other file of its
+# kind (LabNeeds: last - D-ZAUDIT reads what the others left).
 function Get-LabFileNeeds {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$File, [int]$DefaultLimitMin = 60)
@@ -122,19 +123,29 @@ function Get-LabFileNeeds {
         JumpHost  = ($head -match '(?m)^#\s*LabNeeds:.*\bjumphost\b') -or ($text -match 'Move-LabVmBehindJump|Use-LabJump|Start-LabJumpHost')
         Limit     = $limit
         EveryKind = $head -match '(?m)^#\s*LabQuick:\s*every kind'
+        Last      = $head -match '(?m)^#\s*LabNeeds:.*\blast\b'
     }
 }
 
 # How long each file took on each kind in the last -Runs finished runs (the "done" lines of results\<run>\console.log):
 # "<file>|<kind>" -> Median, Max (minutes) and Count. Runs where a file was ended at its time limit don't count. Only
 # finished runs (done.json): the run going on writes its console.log, which can't be opened then - and a log that can't
-# be read is left out, never a reason to fail the run.
+# be read is left out, never a reason to fail the run. Only runs of whole files: a run with -Tag runs some of a file's
+# cases, and its shorter times made the time limit too short for the whole file (run 20261021-222745: UI-RDP ended
+# after 34 min, from single-case runs of 7-17 min).
 function Get-LabFileTimes {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ResultsRoot, [int]$Runs = 20)
     $all = @{}
+    $whole = {
+        param($dir)
+        $json = Join-Path $dir 'run.json'
+        if (-not (Test-Path $json)) { return $false }
+        try { $r = Get-Content $json -Raw | ConvertFrom-Json } catch { return $false }
+        -not ($r.PSObject.Properties['Tags'] -and @($r.Tags | Where-Object { $_ }).Count)
+    }
     $dirs = @(Get-ChildItem $ResultsRoot -Directory -ErrorAction SilentlyContinue | Where-Object Name -match '^\d{8}-\d{6}$' |
-            Where-Object { Test-Path (Join-Path $_.FullName 'done.json') } | Sort-Object Name -Descending | Select-Object -First $Runs)
+            Where-Object { (Test-Path (Join-Path $_.FullName 'done.json')) -and (& $whole $_.FullName) } | Sort-Object Name -Descending | Select-Object -First $Runs)
     foreach ($d in $dirs) {
         $log = Join-Path $d.FullName 'console.log'
         if (-not (Test-Path $log)) { continue }
@@ -181,6 +192,13 @@ function Select-LabNextRun {
     $best = $null
     foreach ($item in @($Queue)) {
         if ($item.Needs.JumpHost -and $JumpBusy) { continue }
+        # a "last" file waits until no other file of its kind is queued and no VM of its kind runs or is held for one
+        # (run 20261021-222745: D-ZAUDIT started while the kind's other lane still ran files whose audit it checks)
+        if ($item.PSObject.Properties['Needs'] -and $item.Needs.PSObject.Properties['Last'] -and $item.Needs.Last) {
+            $others = @($Queue | Where-Object { $_.Kind -eq $item.Kind -and -not $_.Needs.Last })
+            $busyOfKind = @($LabVms | Where-Object { $_.BaseId -eq $item.Kind -and $Busy -contains $_.Name })
+            if ($others.Count -or $busyOfKind.Count) { continue }
+        }
         $t = $Times["$($item.Name)|$($item.Kind)"]
         $min = if ($t) { $t.Median } else { 10 }
         if ($best -and $min -le $best.Minutes) { continue }
@@ -1506,7 +1524,15 @@ function Invoke-LabInSession {
                     $st = (Get-ScheduledTask -TaskName $task -ErrorAction Stop).State
                     $sessions = (@(quser.exe 2>&1 | ForEach-Object { ("$_" -replace '\s+', ' ').Trim() }) -join '; ')
                     $logonUi = (@(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId) -join ', ')
-                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' })"
+                    # whether the task's PowerShell started at all and is busy or stuck (run 20261022-061254, Server: the
+                    # task ran, no result, the person server's PowerShell in the same session too)
+                    $now = Get-Date
+                    $procs = (@(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='conhost.exe'" | ForEach-Object {
+                                $p = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+                                $cpu = if ($p -and $null -ne $p.CPU) { [int]$p.CPU } else { '?' }
+                                "$($_.Name)#$($_.ProcessId) s$($_.SessionId) $([int]($now - $_.CreationDate).TotalSeconds)s old cpu ${cpu}s$(if ($_.CommandLine -like "*$enc*") { ' (this task)' })"
+                            }) -join ', ')
+                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' }); processes: $procs"
                 }
                 catch { "no task details: $($_.Exception.Message)" }
                 throw "no result from the session task after $timeout s (is $u signed in?) - $why"
@@ -1881,13 +1907,39 @@ function Invoke-LabBannerClick {
 # Windows' OCR of a picture file on this PC (a decoded frame, a console screenshot): text and lines.
 function Get-LabOcr {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path)
+    param([Parameter(Mandatory)][string]$Path, [ValidateRange(1, 4)][int]$Scale = 1)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Get-LabOcr: no picture at $Path (the step that should have written it failed or didn't run - see its result.json)." }
     $script = Join-Path $PSScriptRoot '..\guest\RhPerson.ps1'
-    $out = Join-Path ([IO.Path]::GetTempPath()) "rhlab-ocr-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
-    $null = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Do ocr-file -Value $Path -Out $out
-    # RhPerson writes UTF-8 without a BOM: 5.1 would read it as ANSI and turn an en dash into three characters
-    try { Get-Content $out -Raw -Encoding UTF8 | ConvertFrom-Json } finally { Remove-Item $out -ErrorAction SilentlyContinue }
+    $tag = [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $out = Join-Path ([IO.Path]::GetTempPath()) "rhlab-ocr-$tag.json"
+    # -Scale: the picture enlarged first. Windows' OCR drops short words in a small picture - in run 20261022-061254 it
+    # read every option of the agent tab's 537x402 Ctrl+Alt+Del screen but the one-word "Lock", twice; twice as large
+    # it reads them all. Coordinates in the answer are then in the enlarged picture's pixels.
+    $read = $Path
+    if ($Scale -gt 1) {
+        Add-Type -AssemblyName System.Drawing
+        $read = Join-Path ([IO.Path]::GetTempPath()) "rhlab-ocr-$tag.png"
+        $img = [Drawing.Image]::FromFile($Path)
+        try {
+            $big = New-Object Drawing.Bitmap ($img.Width * $Scale), ($img.Height * $Scale)
+            try {
+                $g = [Drawing.Graphics]::FromImage($big)
+                try { $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic; $g.DrawImage($img, 0, 0, $big.Width, $big.Height) } finally { $g.Dispose() }
+                $big.Save($read, [Drawing.Imaging.ImageFormat]::Png)
+            }
+            finally { $big.Dispose() }
+        }
+        finally { $img.Dispose() }
+    }
+    try {
+        $null = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -Do ocr-file -Value $read -Out $out
+        # RhPerson writes UTF-8 without a BOM: 5.1 would read it as ANSI and turn an en dash into three characters
+        Get-Content $out -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    finally {
+        Remove-Item $out -ErrorAction SilentlyContinue
+        if ($read -ne $Path) { Remove-Item $read -ErrorAction SilentlyContinue }
+    }
 }
 
 # Where a word is in a picture (OCR, exact match, case-insensitive; -Last for the last one): "x,y" of its middle,
@@ -2283,7 +2335,7 @@ function Invoke-LabHarness {
     $hostAt = [array]::IndexOf(@($Arguments), '--host')
     # (the "jump" command always goes through it - also to the jump host's own address, J-27)
     $toJump = $Arguments[0] -ne 'jump' -and $hostAt -ge 0 -and $hostAt + 1 -lt @($Arguments).Count -and $Arguments[$hostAt + 1] -eq $script:JumpAddress
-    if ($script:JumpArgs -and -not $toJump -and $Arguments[0] -notin 'install', 'enrollment', 'seed', 'share-conflict', 'probe') { $Arguments = @($Arguments) + $script:JumpArgs }
+    if ($script:JumpArgs -and -not $toJump -and $Arguments[0] -notin 'install', 'enrollment', 'seed', 'old-backup', 'share-conflict', 'probe') { $Arguments = @($Arguments) + $script:JumpArgs }
     $psi = New-Object Diagnostics.ProcessStartInfo $exe
     # quote like the C runtime expects (arguments may contain spaces and quotes)
     $psi.Arguments = ($Arguments | ForEach-Object {
@@ -3424,12 +3476,47 @@ function Start-LabClient {
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [switch]$KeepFirstStart)
     $argText = ($Arguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
     $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
-    $main = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec $TimeoutSec
-    # (error: the person server's search didn't finish - it names the windows that don't respond)
-    if (-not $main.found) { throw "${Name}: RemoteHub's main window didn't appear$(if ($main.PSObject.Properties['error'] -and $main.error) { ' - ' + $main.error }) (windows: $($main.windows -join ', '))." }
+    # The main window is up: its New button, or - when RemoteHub opens in the view used last, Notes or Scripts, which
+    # have none (UI-NOTE-07, run 20261021-222745) - the rail's Remote Control, which every view has
+    function Wait-Main([int]$Sec) {
+        $until = (Get-Date).AddSeconds($Sec)
+        do {
+            $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'New' -Value exists -TimeoutSec 5
+            if ($m.found) { return $m }
+            $m = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'Remote Control' -Value exists -TimeoutSec 2
+            if ($m.found) { return $m }
+        } while ((Get-Date) -lt $until)
+        $m
+    }
+    $started = Get-Date
+    $main = Wait-Main $TimeoutSec
+    if (-not $main.found) {
+        # No window (run 20261021-222745, C-FIRST on a fresh install: only "Program Manager" after 120 s): RemoteHub
+        # not running is started once more, a RemoteHub still starting gets the time again
+        $running = Invoke-LabGuest -Name $Name -ScriptBlock { [bool](Get-Process RemoteHub -ErrorAction SilentlyContinue) }
+        if (-not $running) {
+            Stop-LabInSession -Name $Name -Task $task
+            $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
+        }
+        $main = Wait-Main $TimeoutSec
+        if (-not $main.found) {
+            # what Windows recorded about RemoteHub since the start: a crash or a .NET runtime error
+            $crash = @(Invoke-LabGuest -Name $Name -ArgumentList $started.AddMinutes(-1) -ScriptBlock {
+                    param($since)
+                    Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1026; StartTime = $since } -MaxEvents 5 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Message -match 'RemoteHub' } | ForEach-Object { ($_.Message -replace '\s+', ' ').Substring(0, [Math]::Min(300, ($_.Message -replace '\s+', ' ').Length)) }
+                }) | Select-Object -First 1
+            # (error: the person server's search didn't finish - it names the windows that don't respond)
+            $searchError = if ($main.PSObject.Properties['error'] -and $main.error) { ' - ' + $main.error } else { '' }
+            $state = if ($running) { 'RemoteHub was running' } else { 'RemoteHub was not running and was started again' }
+            if ($crash) { $state += '; Application log: ' + $crash }
+            throw "${Name}: RemoteHub's main window didn't appear$searchError (windows: $($main.windows -join ', '); $state)."
+        }
+    }
     if (-not $KeepFirstStart) { $null = Close-LabFirstStart -Name $Name -Account $Account }
     # it may open partly off the screen (seen at x < 0): moved into it, so real clicks reach every part
-    $null = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 10
+    $fit = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'Remote Control' -Value fit -TimeoutSec 10   # (the rail: in every view)
+    if (-not $fit.found) { $null = Invoke-LabPerson -Name $Name -Account $Account -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 5 }   # an older build without the rail
     $task
 }
 

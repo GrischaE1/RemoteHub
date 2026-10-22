@@ -105,7 +105,10 @@ Describe 'T2 <VmName>' -Tag Tools, 'T' {
                 $until = (Get-Date).AddSeconds(60)
                 while (-not (Test-Path $ready) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
                 if (-not (Test-Path $ready)) { throw "the process holding $t\f001.txt didn't open it within 60 s" }
-                Remove-Item $ready
+                # the marker can still be open while the other process writes it (run 20261021-222745: "being used by
+                # another process"): removed once it is free, at most 5 s - it is only tidying up
+                $gone = (Get-Date).AddSeconds(5)
+                while ((Test-Path $ready) -and (Get-Date) -lt $gone) { try { Remove-Item $ready -ErrorAction Stop } catch { Start-Sleep -Milliseconds 200 } }
                 $hash
             }
             $up = T fs-upload @{ files = (Join-Path $small 'f001.txt'); remote = $target; overwrite = 1 }

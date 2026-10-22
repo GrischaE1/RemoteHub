@@ -168,6 +168,7 @@ namespace rhcp
         size_t PasswordBytes = 0;      // a multiple of CRYPTPROTECTMEMORY_BLOCK_SIZE
 
         bool ResultPending = false;
+        bool ChangeMissed = false;      // a CredentialsChanged found LogonUI not advised (NotifyOnAdvise)
         bool NotOfferedPending = false; // instead of a result: LogonUI won't take the ticket (Result.Nonce holds it)
         ULONGLONG NotListedAt = 0;      // when LogonUI's list was first seen without the account; 0: listed or no list
         ResultMessage Result;
@@ -238,17 +239,21 @@ namespace rhcp
         ICredentialProviderEvents* old = _s->Events;
         _s->Events = events;
         _s->EventsContext = context;
+        const bool wake = events != nullptr && NotifyOnAdvise(_s->ChangeMissed, _s->Ticket && !_s->Taken);
         ReleaseSRWLockExclusive(&_s->Lock);
         if (old) old->Release();
+        // the pipe thread sends it (SendMissedChange): LogonUI isn't called back from within its own Advise
+        if (wake) SetEvent(_s->ResultEvent.Value);
     }
 
     void Channel::NotifyChanged()
     {
-        AcquireSRWLockShared(&_s->Lock);
+        AcquireSRWLockExclusive(&_s->Lock);
         ICredentialProviderEvents* events = _s->Events;
         const UINT_PTR context = _s->EventsContext;
         if (events) events->AddRef();
-        ReleaseSRWLockShared(&_s->Lock);
+        _s->ChangeMissed = events == nullptr;
+        ReleaseSRWLockExclusive(&_s->Lock);
         if (events)
         {
             const HRESULT hr = events->CredentialsChanged(context);
@@ -256,6 +261,17 @@ namespace rhcp
             Trace("provider %ld: CredentialsChanged -> 0x%08lX", _id, static_cast<unsigned long>(hr));
         }
         else Trace("provider %ld: CredentialsChanged not sent, LogonUI isn't advised", _id);
+    }
+
+    void Channel::SendMissedChange()
+    {
+        AcquireSRWLockExclusive(&_s->Lock);
+        const bool send = _s->Events != nullptr && NotifyOnAdvise(_s->ChangeMissed, _s->Ticket && !_s->Taken);
+        if (send) _s->ChangeMissed = false;
+        ReleaseSRWLockExclusive(&_s->Lock);
+        if (!send) return;
+        Trace("provider %ld: LogonUI advised after the ticket came, telling it again", _id);
+        NotifyChanged();
     }
 
     bool Channel::HasTicket()
@@ -481,6 +497,7 @@ namespace rhcp
                 }
                 if (wake == Wake::Result)
                 {
+                    SendMissedChange(); // also woken by Advise when a CredentialsChanged went nowhere
                     bool sent = false;
                     if (!SendPendingResult(pipe, sent)) break;
                     if (sent) phase = Phase::Idle;

@@ -5876,6 +5876,11 @@ P3 · How: U S · Needs: 2VM · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 2. Copy a test image in the session; paste on the admin's PC.
 3. Compare pixels.
 
+The automated test puts the image on the clipboard as a 24-bit DIB (as Paint copies one) and reads the pixels from the
+DIB on the other side, honouring its header. Put there with `Clipboard.SetImage` and read with `GetImage`, it arrived
+3 pixels to the right both ways – the colour masks of a 32-bit DIB read as pixels somewhere in Windows' RDP clipboard,
+not in RemoteHub.
+
 **Expected:**
 - Pixels equal both ways.
 

@@ -62,6 +62,7 @@ namespace rhcp
         bool ReportNotOffered();    // the grace is over and the ticket untaken: used up and wiped, NotOffered queued
         void ClearTicket(bool notify);
         void NotifyChanged();
+        void SendMissedChange();    // the CredentialsChanged LogonUI missed before Advise (NotifyOnAdvise), once
 
         struct State;
         std::unique_ptr<State> _s;
@@ -92,6 +93,13 @@ namespace rhcp
     // sent: after a failed sign-in, or a ticket LogonUI didn't take, so the tile goes instead of staying selected with
     // "Signing in ..." (lab C-END-13). Not after a success: LogonUI releases the provider then.
     inline bool TileGoesAfterResult(bool notOffered, NTSTATUS status) { return notOffered || status != 0; }
+
+    // Whether LogonUI is told to enumerate again once it advises (Advise): a ticket came while it wasn't advised, so its
+    // CredentialsChanged went nowhere, and the ticket is still unused. Server 2025 enumerated after Advise, saw the tile
+    // with auto sign-in and never asked for it until the service gave up (lab C-PROV-03, run 20261022-061254); the
+    // enumeration a CredentialsChanged starts is the one LogonUI signs in from. Sent by the pipe thread, never from
+    // within Advise.
+    inline bool NotifyOnAdvise(bool changeMissed, bool ticketUnused) { return changeMissed && ticketUnused; }
 
     // The module handle of this DLL (set in DllMain); used to find the agent's folder.
     extern HMODULE Module;

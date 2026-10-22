@@ -384,6 +384,17 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Copy-LabFile -Name $VmName -Path $rebuilt.FullName -Destination 'C:\LabClient\swap'
             Start-LabMockServer -Name $VmName -Files $current, $rebuilt.FullName
             function Consent { Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) } }
+            # Windows' approval prompt answered (Alt+Y yes, Alt+N no) until it is gone - a key can be lost on the secure
+            # desktop (run 20261021-222745: after the swap RemoteHub still waited for approval 90 s later); true when it went
+            function Answer-Consent([int[]]$Keys) {
+                for ($i = 0; $i -lt 3; $i++) {
+                    Send-LabKeyCombo -Name $VmName -Codes $Keys
+                    $until = (Get-Date).AddSeconds(10)
+                    do { Start-Sleep -Seconds 1 } while ((Consent) -and (Get-Date) -lt $until)
+                    if (-not (Consent)) { return $true }
+                }
+                $false
+            }
             function Install-Now {
                 Settings-Page 'Updates & privacy'
                 $null = Ui 'Check for updates now' -Title 'Settings'
@@ -401,6 +412,9 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                         who       = @($acl.Access | ForEach-Object { try { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { "$($_.IdentityReference)" } } | Sort-Object -Unique)
                         msi       = @(Get-ChildItem $stage -Filter *.msi -Force -ErrorAction SilentlyContinue).Count
                         results   = @(Get-ChildItem (Join-Path $stage 'results') -Filter *.txt -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | ForEach-Object { (Get-Content $_.FullName -Raw).Trim() })
+                        # msiexec's log of the last install: its errors and the action that returned 3 (failed)
+                        logErrors = @(Get-ChildItem (Join-Path $stage 'results') -Filter *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 |
+                                ForEach-Object { Get-Content $_.FullName | Where-Object { $_ -match 'Error \d{4}|Return value 3|error code 16' } | Select-Object -First 12 })
                     }
                 }
             }
@@ -421,7 +435,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 if (Consent) { $u.unsignedConsent = $true }
                 $u.unsigned = WinText 'RemoteHub updates'
             } while ("$($u.unsigned)" -notmatch 'won''t be installed' -and (Get-Date) -lt $until)
-            if (Consent) { $u.unsignedConsent = $true; Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x4E }   # Alt+N: never install it
+            if (Consent) { $u.unsignedConsent = $true; $null = Answer-Consent 0x12, 0x4E }   # Alt+N: never install it
             $u.unsignedFiles = Invoke-LabGuest -Name $VmName -ArgumentList $updates -ScriptBlock { param($d) @(Get-ChildItem $d -Filter *.msi -ErrorAction SilentlyContinue).Count }
             Shot 'sec-upd-01'
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
@@ -440,39 +454,50 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 Copy-Item 'C:\LabClient\swap\RemoteHub-99.0.0-x64.msi' $msi.FullName -Force
                 (Get-FileHash $msi.FullName).Hash
             }
-            if ($u.swapConsent) { Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59 }   # Alt+Y: approve
+            if ($u.swapConsent) { $u.swapApproved = Answer-Consent 0x12, 0x59 }   # Alt+Y: approve
             $u.swapRestarted = Wait-Restarted
             $until = (Get-Date).AddSeconds(90)
-            do { Start-Sleep -Seconds 3; $u.swapMessage = WinText 'RemoteHub updates' } while ("$($u.swapMessage)" -notmatch 'wasn''t installed' -and (Get-Date) -lt $until)
+            # the outcome comes as a message inside RemoteHub's main window after the restart (run 20261022-061254: on
+            # screen, but not a window of its own for the title search), so the main window is read too
+            do { Start-Sleep -Seconds 3; $u.swapMessage = "$(WinText 'RemoteHub updates')`n$(WinText 'RemoteHub')" } while ("$($u.swapMessage)" -notmatch 'wasn''t installed' -and (Get-Date) -lt $until)
             Shot 'sec-upd-02'
             $null = Ui 'OK' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
+            $null = Ui 'OK' -Title 'RemoteHub' -Optional -TimeoutSec 5
             $u.swapStaging = Staging
             $u.swapVersion = InstalledVersion
 
-            # the same without the swap: the elevated step installs its own checked copy and RemoteHub starts again
+            # the same without the swap: the elevated step installs its own checked copy and RemoteHub starts again.
+            # Nothing of the swap left: no prompt still open, no elevated step still waiting for RemoteHub
+            if (Consent) { $null = Answer-Consent 0x12, 0x4E }
+            $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'RemoteHub Updates' } |
+                    ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 120 -ErrorAction SilentlyContinue }
+            }
             Close-Rh
             Restart-Client
             Install-Now
             $until = (Get-Date).AddSeconds(180)
             while (-not (Consent) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
             $u.okConsent = Consent
-            if ($u.okConsent) { Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x59 }
+            if ($u.okConsent) { $u.okApproved = Answer-Consent 0x12, 0x59 }
             $u.okRestarted = Wait-Restarted
             $until = (Get-Date).AddSeconds(120)
             do { Start-Sleep -Seconds 5; $u.okStaging = Staging } while (@($u.okStaging.results).Count -lt 2 -and (Get-Date) -lt $until)
-            $u.okMessage = WinText 'RemoteHub updates'
+            $u.okMessage = "$(WinText 'RemoteHub updates')`n$(WinText 'RemoteHub')"
             Close-Rh
+            try { Get-LabFile -Name $VmName -Path 'C:\Program Files\RemoteHub Updates\results\*.log' -Destination (Join-Path $EvidenceDir 'c-polupd2-sec-upd-msi-logs') } catch { }
             Save 'sec-upd' $u
         }
 
         It 'SEC-UPD-01 an installer whose signature doesn''t match is refused before Windows asks; nothing is kept' -Tag 'SEC-UPD-01' {
-            $u.unsigned | Should -Match 'signature doesn''t match the file or that this PC doesn''t trust\. It was deleted and won''t be installed\.'
+            $u.unsigned | Should -Match 'signature that doesn''t match the file or that this PC doesn''t trust\. It was deleted and won''t be installed\.'
             $u.unsignedConsent | Should -BeFalse -Because 'the refusal comes before the administrator approval'
             $u.unsignedFiles | Should -Be 0
         }
 
         It 'SEC-UPD-02 a download swapped while Windows asks for approval isn''t installed; the step''s folder is for administrators only' -Tag 'SEC-UPD-02' {
             $u.swapConsent | Should -BeTrue -Because 'Windows asks for approval before RemoteHub exits'
+            $u.swapApproved | Should -BeTrue -Because 'the approval prompt closes once answered'
             $u.swapRestarted | Should -BeTrue -Because 'the restart helper starts RemoteHub again after the elevated step'
             $u.swapMessage | Should -Match 'the downloaded file changed after RemoteHub had checked it'
             @($u.swapStaging.results)[0] | Should -Be 'refused changed'
@@ -485,7 +510,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
         It 'SEC-UPD-02 without a swap the elevated step installs its own checked copy and RemoteHub starts again' -Tag 'SEC-UPD-02' {
             $u.okConsent | Should -BeTrue
             $u.okRestarted | Should -BeTrue
-            @($u.okStaging.results)[-1] | Should -Match '^installed (0|3010)$' -Because "the step's outcomes: $(@($u.okStaging.results) -join ' / ')"
+            $u.okApproved | Should -BeTrue -Because 'the approval prompt closes once answered'
+            @($u.okStaging.results)[-1] | Should -Match '^installed (0|3010)$' -Because "the step's outcomes: $(@($u.okStaging.results) -join ' / '); msiexec: $(@($u.okStaging.logErrors) -join ' | ')"
             $u.okStaging.msi | Should -Be 0
             "$($u.okMessage)" | Should -Not -Match 'wasn''t installed|couldn''t be installed'
         }

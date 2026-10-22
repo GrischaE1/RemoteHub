@@ -197,7 +197,9 @@ function Get-PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; i
             $s = Ui 'Signed in as *' -Value exists -Optional -TimeoutSec 3
             if ($s.found) { return $s }
             if ((Ui '*' -Title '*Remote desktop*RemoteHub' -Value exists -Optional -TimeoutSec 1).found) { throw 'Connect opened an RDP tab, not the agent desktop (the connection does not use the agent)' }
-            if ((Ui 'Use RDP instead' -Value exists -Optional -TimeoutSec 1).found) { throw "the agent desktop ended before its connect page: $(@(Lines (TabTexts) | Where-Object { $_ -like 'Text|?*' } | Select-Object -Last 6) -join ' / ')" }
+            # "Use RDP instead" is on the connect page too: an ended page only when "Signed in as" doesn't follow within
+            # 10 s (run 20261021-222745: the button was read a moment before the text, the page counted as ended)
+            if ((Ui 'Use RDP instead' -Value exists -Optional -TimeoutSec 1).found -and -not ($s = Ui 'Signed in as *' -Value exists -Optional -TimeoutSec 10).found) { throw "the agent desktop ended before its connect page: $(@(Lines (TabTexts) | Where-Object { $_ -like 'Text|?*' } | Select-Object -Last 6) -join ' / ')" }
         } while ((Get-Date) -lt $until)
         throw 'no connect page ("Signed in as ...") within 90 s'
     }
@@ -557,7 +559,9 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     $null = SetFileList $VmName 'Console' @('C:\lab\big\big99.bin')
                     Start-Sleep -Seconds 4
                     $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create((PasteCode 'cp15')))
-                    $R.cp15Progress = WaitFor -TimeoutSec 90 -Every 1 { @(Notices $mark | Where-Object { $_ -match 'Copying 1 file to the device' }).Count -gt 0 }
+                    # the notice's first text, or its progress line for the 99 MB file: the text watcher can miss the first
+                    # (run 20261021-222745 saw only "18,3 MB of 99 MB . 1,2 MB/s . about 2 min left")
+                    $R.cp15Progress = WaitFor -TimeoutSec 90 -Every 1 { @(Notices $mark | Where-Object { $_ -match 'Copying 1 file to the device|\d[\d.,]* MB of 99 MB' }).Count -gt 0 }
                     if (-not $R.cp15Progress) {
                         $R.cp15Notices = @(Notices $mark)
                         # Where the paste stopped: the device's log (ui-more-device-logs) says the paste asked ("... comes

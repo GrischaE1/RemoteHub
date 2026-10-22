@@ -297,6 +297,9 @@ public class UpdateTelemetryTests
         // the copy is checked, never the user's download
         Assert.Contains("Get-FileHash -LiteralPath $target", command);
         Assert.Contains("Get-AuthenticodeSignature -LiteralPath $target", command);
+        // msiexec writes its log next to the outcome, so a failed install says why
+        Assert.Contains("'/l*v', ('\"' + $log + '\"')", command);
+        Assert.Contains("$log = Join-Path $results ($id + '.log')", command);
     }
 
     /// <summary>Runs the elevated step's script without elevation, in a temp folder instead of Program Files.</summary>

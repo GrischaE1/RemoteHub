@@ -5,6 +5,7 @@
 # See docs/test-lab-cases.md section 9.11.
 # The VM itself isn't touched (only the evidence folder is read): no Initialize-LabVm, its reuse state stays as it is.
 # LabRole: device
+# LabNeeds: last
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir

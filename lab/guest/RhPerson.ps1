@@ -190,7 +190,9 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
     $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
     $null = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
     $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
-    function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $task.Wait(); $task.Result }
+    # at most 20 s a step: a recognizer that never answers would hold the person server and every request after it
+    # (lab run 20261021-222745, D-MORE2 on Server 2025: a click took the request and gave no answer for 140 s)
+    function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); if (-not $task.Wait(20000)) { throw "OCR: $($t.Name) didn't finish within 20 s" }; $task.Result }
     # small text reads better enlarged
     $scale = 2
     $big = New-Object Drawing.Bitmap ($Bitmap.Width * $scale), ($Bitmap.Height * $scale)
@@ -203,10 +205,23 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
     $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
     if (-not $engine) { throw 'No OCR engine for the user''s languages.' }
     $r = Await ($engine.RecognizeAsync($soft)) ([Windows.Media.Ocr.OcrResult])
+    # When OCR takes the text to be rotated (TextAngle, degrees around the picture's centre), the word boxes are where
+    # the words would be with the text straightened: each box's centre is turned back by that angle. Lab run
+    # 20261021-222745 (D-RES-06): a sloping dune gave -7.5 degrees, the sign-in tiles at the left edge came out 54 px
+    # too high and the click chose the tile above Admin's.
+    $angle = if ($null -ne $r.TextAngle) { [double]$r.TextAngle * [math]::PI / 180 } else { 0 }
+    $cx = $soft.PixelWidth / 2; $cy = $soft.PixelHeight / 2
     $words = foreach ($line in $r.Lines) {
         foreach ($w in $line.Words) {
-            [pscustomobject]@{ Text = $w.Text; X = [int]($w.BoundingRect.X / $scale); Y = [int]($w.BoundingRect.Y / $scale)
-                W = [int]($w.BoundingRect.Width / $scale); H = [int]($w.BoundingRect.Height / $scale); Line = $line.Text }
+            $b = $w.BoundingRect
+            $mx = $b.X + $b.Width / 2; $my = $b.Y + $b.Height / 2
+            if ($angle -ne 0) {
+                $dx = $mx - $cx; $dy = $my - $cy
+                $mx = $cx + $dx * [math]::Cos($angle) - $dy * [math]::Sin($angle)
+                $my = $cy + $dx * [math]::Sin($angle) + $dy * [math]::Cos($angle)
+            }
+            [pscustomobject]@{ Text = $w.Text; X = [int](($mx - $b.Width / 2) / $scale); Y = [int](($my - $b.Height / 2) / $scale)
+                W = [int]($b.Width / $scale); H = [int]($b.Height / $scale); Line = $line.Text }
         }
     }
     [pscustomobject]@{ Text = $r.Text; Lines = @($r.Lines | ForEach-Object Text); Words = @($words) }
@@ -395,7 +410,8 @@ switch ($Do) {
             foreach ($w in $wins) {
                 Start-Sleep -Milliseconds 400   # fade-in
                 $bmp = [RhNative]::Capture($w.X, $w.Y, $w.Width, $w.Height)
-                try { $ocr = Get-Ocr $bmp } finally { $bmp.Dispose() }
+                # an OCR that failed or took too long counts as nothing read this pass; the next pass tries again
+                try { $ocr = Get-Ocr $bmp } catch { $ocr = [pscustomobject]@{ Text = ''; Lines = @(); Words = @() }; $seen["ocr error"] = "$($_.Exception.Message)" } finally { $bmp.Dispose() }
                 $seen["$($w.Title) $($w.Width)x$($w.Height)@$($w.X),$($w.Y)$(if ([RhNative]::Excluded($w.Handle)) { ' (kept out of captures)' }): $(@($ocr.Lines | Select-Object -First 2) -join ' / ')"] = $true
                 if (@($ocr.Lines).Count) { $lastLines = @($ocr.Lines) }
                 # OCR may glue punctuation or a countdown to the label ("Allow(29)", "Deny."): compare the letters only

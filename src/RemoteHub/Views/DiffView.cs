@@ -65,7 +65,7 @@ public sealed class DiffView : Grid
 
     private static TextEditor Side(string name)
     {
-        var e = new TextEditor
+        var e = new CodeEditor
         {
             IsReadOnly = true, ShowLineNumbers = false, FontFamily = NoteMarkdown.MonoFont, FontSize = 13, WordWrap = false,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,

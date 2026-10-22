@@ -1656,17 +1656,18 @@ public partial class MainWindow : FluentWindow
                         report($"Claimed – its own certificate: SHA-256 …{AgentInstaller.Tail(device.Fingerprint, 16)}.");
                     }
                     var endpoint = EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint);
-                    var health = enrollment is null
-                        ? await AgentInstaller.WaitForRestartAsync(c.Host, endpoint, expected, report, System.Threading.CancellationToken.None)
-                        : await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token);
+                    // With a new identity the agent was seen going away above (it answers with its new certificate).
+                    var (health, wentDown) = enrollment is null
+                        ? await AgentInstaller.WaitForUpdateAsync(c.Host, endpoint, expected, report, System.Threading.CancellationToken.None)
+                        : (await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token), true);
                     if (health is null)
                     {
                         report("The agent didn't answer again within a few minutes. " + logs);
                         return false;
                     }
-                    if (expected is not null && health.Version != expected)
+                    if (AgentInstaller.UpdateNotInstalled(c.Agent?.Version, expected, health, wentDown) is { } notInstalled)
                     {
-                        report($"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expected}). " + logs);
+                        report(notInstalled + " " + logs);
                         return false;
                     }
                     device.Version = health.Version;

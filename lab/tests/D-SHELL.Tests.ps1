@@ -147,6 +147,13 @@ public static class RhTok {
     foreach ($mode in 'off', 'on') {
         # Notepad to the front: the taskbar loses the keyboard and a thumbnail the last mode left open goes (run
         # 20261019-193627: the 'on' base already showed the thumbnail, so opening it changed nothing in the picture)
+        # On Server 2025 bringing Notepad to the front left the thumbnail open (run 20261021-222745, as on 19 Oct: the
+        # 'on' base showed it, D-SHELL-06 thumbnail measured no change): Notepad is started again, which closes any
+        # thumbnail of its window; its taskbar button keeps its place (after the pinned ones)
+        Stop-LabInSession -Name $VmName -Task $notepad
+        $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
+        $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
+        Start-Sleep -Seconds 4
         $null = Invoke-LabInSession -Name $VmName -ScriptBlock { $null = (New-Object -ComObject WScript.Shell).AppActivate('Untitled - Notepad') }
         Set-LabAgentPolicy -Name $VmName -Clear -Values @{ PrivacyScreen = 2; HelperUIAccess = $(if ($mode -eq 'on') { 1 } else { 0 }) }
         $o = Out $mode
@@ -157,7 +164,9 @@ public static class RhTok {
         }
         # the device's user clicks Disconnect on the banner (over the overlays, through the input block)
         $steps += @((Mark $o 'banner'), @{ do = 'wait'; anyOf = @('Ended'); timeout = 90 }, @{ do = 'close' })
-        $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps $steps
+        # eight surfaces at about 80 s each on the host (screenshot, z-order, brightness): more than the default 600 s
+        # (run 20261022-061254 ended at the thumbnail)
+        $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps $steps -TimeoutSec 1800
         $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
         $m = [ordered]@{}
         Reached $o 'base'

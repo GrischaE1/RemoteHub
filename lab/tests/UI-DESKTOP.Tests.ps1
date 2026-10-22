@@ -166,10 +166,13 @@ Add-Type -TypeDefinition 'using System; using System.Text; using System.Collecti
     # Notepad's text by WM_GETTEXT (when UI Automation doesn't answer): the classic Notepad's Edit control, or the text
     # box (RichEditD2DPT) of the Store Notepad, which also has empty Edit controls of its own - in lab run
     # 20261019-193627 the first Edit answered '' while the typed text was on the screen. The text of the first edit
-    # control that has any, else ''.
+    # control that has any, else ''. The window is found inside the C# (Find): PowerShell passes $null to a string
+    # parameter as "", so FindWindowW('Notepad', $null) looked for a Notepad with an empty title and never found one -
+    # NP-NONE, and every Notepad read came back $null in run 20261022-061254 (UI-AD-02, UI-CP-01) although the device's
+    # screenshot shows the text.
     $npCode = @'
-Add-Type -TypeDefinition 'using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices; public static class RhN { public delegate bool P(IntPtr h, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t); [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, P f, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, int m, IntPtr w, StringBuilder l); public static List<IntPtr> Edits(IntPtr p) { var l = new List<IntPtr>(); EnumChildWindows(p, (h, x) => { var c = new StringBuilder(256); GetClassNameW(h, c, 256); var n = c.ToString(); if (n == "Edit" || n.StartsWith("RichEdit")) l.Add(h); return true; }, IntPtr.Zero); return l; } }'
-$h = [RhN]::FindWindowW('Notepad', $null)
+Add-Type -TypeDefinition 'using System; using System.Text; using System.Collections.Generic; using System.Runtime.InteropServices; public static class RhN { public delegate bool P(IntPtr h, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string t); public static IntPtr Find(string c) { return FindWindowW(c, null); } [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, P f, IntPtr l); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n); [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, int m, IntPtr w, StringBuilder l); public static List<IntPtr> Edits(IntPtr p) { var l = new List<IntPtr>(); EnumChildWindows(p, (h, x) => { var c = new StringBuilder(256); GetClassNameW(h, c, 256); var n = c.ToString(); if (n == "Edit" || n.StartsWith("RichEdit")) l.Add(h); return true; }, IntPtr.Zero); return l; } }'
+$h = [RhN]::Find('Notepad')
 $edits = if ($h -ne [IntPtr]::Zero) { @([RhN]::Edits($h)) } else { @() }
 if (-not $edits.Count) { 'NP-NONE' } else {
     $text = ''
@@ -405,7 +408,7 @@ public static class RhRes {
         $null = Ui 'Save' -Title 'Edit connection'
         Start-Sleep -Seconds 2
     }
-    # the newest agent update log on the device: its msiexec command line. Read shared (msiexec may still write it) and
+    # the newest agent update log on the device: its msiexec command line and its end. Read shared (msiexec may still write it) and
     # as UTF-16 when it is one; without a command line: the log's path, size and last lines instead.
     function UpdateCommandLine {
         Invoke-LabGuest -Name $dn -ScriptBlock {
@@ -421,7 +424,11 @@ public static class RhRes {
             else { [Text.Encoding]::Default.GetString($b) }
             $l = @($t -split "`r?`n")
             $cmd = @($l | Where-Object { $_ -match 'Command Line:' } | Select-Object -First 3)
-            if ($cmd.Count) { $cmd -join "`n" } else { "no command line in $($log.FullName) ($($b.Length) bytes), last lines:`n" + (@($l | Select-Object -Last 15) -join "`n") }
+            # and how it ended: in run 20261022-061254 both updates of the same build were reported done, but the agent
+            # never restarted and the provider stayed (the provider's install from the menu ended in 1603, "SecureRepair
+            # Failed") - only the log tells whether msiexec installed anything
+            $end = @($l | Where-Object { $_ -match 'SECUREREPAIR|Configuration (completed|failed)|Installation (completed|failed)|exit status' } | Select-Object -Last 4)
+            if ($cmd.Count) { ($cmd + $end) -join "`n" } else { "no command line in $($log.FullName) ($($b.Length) bytes), last lines:`n" + (@($l | Select-Object -Last 15) -join "`n") }
         }
     }
     # after an update that didn't end with "Done": what the device shows of it (msiexec still running, Windows
@@ -445,6 +452,11 @@ public static class RhRes {
     $newVer = Get-LabMsiVersion (Get-LabAgentMsi)
     $prevMsi = Get-LabAgentMsi -Previous
     $prevVer = Get-LabMsiVersion $prevMsi
+    # The agent installed by hand: the previous release, for the update below - unless it predates enrollment without
+    # a device key (#63, 0.21.3): it can't read the enrollment file this RemoteHub writes and never pairs (run
+    # 20261021-222745: "didn't notice the agent installed by hand"). Then this release, and the update reinstalls it.
+    $handMsi = if ([version](($prevVer -split '[^\d.]')[0]) -lt [version]'0.21.3') { Get-LabAgentMsi } else { $prevMsi }
+    $handVer = Get-LabMsiVersion $handMsi
     # the test texts (multi-line, Unicode - written with character codes, the file stays ASCII)
     $uni = 'Zeile 1 ' + [char]0xE4 + [char]0xF6 + [char]0xFC + "`r`nLine 2 " + [char]0x2713 + ' ' + [char]0x65E5 + [char]0x672C
     $uni2 = 'Vom Ger' + [char]0xE4 + 't ' + [char]0xDF + "`r`nZweite Zeile " + [char]0x20AC + ' ' + [char]0x2713
@@ -486,15 +498,15 @@ public static class RhRes {
         $setup.clip = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
         $enrollment = @($setup.clip.files | Where-Object { $_ -like '*.rhagent' })[0]
         if (-not $enrollment) { throw "RemoteHub put no enrollment file on the clipboard (files: $(@($setup.clip.files) -join ', '))" }
-        # the admin installs it on the device by hand - here the previous release, for the update below
+        # the admin installs it on the device by hand - the previous release where it can read the enrollment ($handMsi)
         $hostDir = Join-Path ([IO.Path]::GetTempPath()) "rhlab-enroll-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
         Get-LabFile -Name $VmName -Path $enrollment -Destination $hostDir
         try {
             Install-LabSigningCertificate -Name $dn
-            Copy-LabFile -Name $dn -Path @((Join-Path $hostDir (Split-Path $enrollment -Leaf)), $prevMsi) -Destination 'C:\LabSetup\agent'
+            Copy-LabFile -Name $dn -Path @((Join-Path $hostDir (Split-Path $enrollment -Leaf)), $handMsi) -Destination 'C:\LabSetup\agent'
         }
         finally { Remove-Item $hostDir -Recurse -Force -ErrorAction SilentlyContinue }
-        $setup.msiexec = Invoke-LabGuest -Name $dn -ArgumentList (Split-Path $prevMsi -Leaf), (Split-Path $enrollment -Leaf) -ScriptBlock {
+        $setup.msiexec = Invoke-LabGuest -Name $dn -ArgumentList (Split-Path $handMsi -Leaf), (Split-Path $enrollment -Leaf) -ScriptBlock {
             param($msi, $enr)
             $p = Start-Process msiexec.exe -ArgumentList "/i `"C:\LabSetup\agent\$msi`" /qn /norestart /l*v C:\LabSetup\agent\install.log ENROLLMENT=`"C:\LabSetup\agent\$enr`" VIRTUALDISPLAY=1" -Wait -PassThru
             $p.ExitCode
@@ -568,7 +580,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
 
         It 'UI-AG-06 Update RemoteHub Agent... through the running agent: "Updated - RemoteHub Agent [new] is running.", the new version on the shield, same certificate' -Tag 'UI-AG-06' {
             NoError 'update'
-            $R.versionBefore | Should -Match "^$([regex]::Escape($prevVer))" -Because 'the previous release was installed first'
+            $R.versionBefore | Should -Match "^$([regex]::Escape($handVer))" -Because "the agent installed by hand ($(Split-Path $handMsi -Leaf)) was there first"
             $R.updateDone.found | Should -BeTrue
             ($R.updateRows -join "`n") | Should -Match "Updated . RemoteHub Agent $([regex]::Escape($newVer))\S* is running"
             $R.versionAfter | Should -Match "^$([regex]::Escape($newVer))"
@@ -746,6 +758,12 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                     Start-Sleep -Seconds 2
                     $R.sasOptionsFirst = $R.sasOptions
                     $R.sasOptions = "$($R.sasOptions) $(Ocr (TabPicture 'sas-options-moved'))"
+                }
+                # In run 20261022-061254 (Server device) "Lock" was in both pictures, unframed in the second, and OCR still
+                # missed it - a one-word line in a small picture. Read twice as large then.
+                if ($R.sasOptions -notmatch 'Lock') {
+                    $p = Join-Path $EvidenceDir 'ui-desktop-sas-options-tab.png'
+                    $R.sasOptions = "$($R.sasOptions) $((Get-LabOcr -Path $p -Scale 2).text)"
                 }
                 # Esc for the device: the tab has the focus (in the run of 16.10.2026 it went to another window and the
                 # security options stayed on the device through the Fit to window step)

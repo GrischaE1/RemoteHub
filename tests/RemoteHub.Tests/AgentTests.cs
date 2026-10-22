@@ -253,6 +253,20 @@ public class AgentTests
     }
 
     [Fact]
+    public void An_update_counts_as_installed_only_with_the_new_version_or_after_a_restart()
+    {
+        static AgentHealth Health(string version) => new("RemoteHub Agent", version, 1, "device");
+        // an upgrade: the version decides
+        Assert.Null(AgentInstaller.UpdateNotInstalled("0.21.0", "0.21.3", Health("0.21.3"), wentDown: true));
+        Assert.Contains("still runs RemoteHub Agent 0.21.0", AgentInstaller.UpdateNotInstalled("0.21.0", "0.21.3", Health("0.21.0"), wentDown: true));
+        // the same build again (lab run 20261022-061254: msiexec failed, the old agent went on answering)
+        Assert.Contains("without a restart", AgentInstaller.UpdateNotInstalled("0.21.3", "0.21.3", Health("0.21.3"), wentDown: false));
+        Assert.Null(AgentInstaller.UpdateNotInstalled("0.21.3", "0.21.3", Health("0.21.3"), wentDown: true));
+        // the version before not known: only the version is checked
+        Assert.Null(AgentInstaller.UpdateNotInstalled(null, "0.21.3", Health("0.21.3"), wentDown: false));
+    }
+
+    [Fact]
     public void Sign_in_gate_blocks_after_repeated_failures_and_forgets_after_the_window()
     {
         var now = DateTime.UtcNow;

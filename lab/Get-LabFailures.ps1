@@ -66,7 +66,14 @@ if ((Test-Path $summary) -and -not $PassThru) {
 # the failed (and with -Skipped the skipped) cases from every pester XML; the same message for several cases of one
 # file and VM (a BeforeAll that failed) is shown once with the count
 $rows = foreach ($xml in @(Get-ChildItem $dir -Recurse -Filter 'pester-*.xml')) {
-    [xml]$x = Get-Content $xml.FullName -Raw
+    # an XML that can't be read (cut off - run 20261022-061254, UI-RDP) is one row, not the end of the list
+    $x = $null
+    try { [xml]$x = Get-Content $xml.FullName -Raw }
+    catch {
+        [pscustomobject]@{ Result = 'FAIL'; Id = '(xml)'; Vm = $xml.Directory.Name; File = $xml.Name -replace '^pester-|\.xml$', ''
+            Message = Short "pester XML unreadable: $($_.Exception.InnerException.Message)" $Width; Xml = $xml.FullName; Evidence = $xml.DirectoryName }
+        continue
+    }
     foreach ($c in @($x.SelectNodes('//test-case'))) {
         $result = $c.GetAttribute('result')
         if ($result -eq 'Success' -or ($result -ne 'Failure' -and -not $Skipped)) { continue }

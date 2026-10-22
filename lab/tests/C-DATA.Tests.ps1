@@ -1440,12 +1440,18 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             }
             $null = Close-Rh
             $b.admin = Dump
-            # the old format: RDP Manager's .rdpmbackup is the same envelope with Format "rdpmanager-backup"
-            $b.files = Invoke-LabGuest -Name $VmName -ScriptBlock {
-                $f = 'C:\lab\rh.rhbackup'
-                if (Test-Path $f) { [IO.File]::WriteAllText('C:\lab\old.rdpmbackup', ((Get-Content $f -Raw) -replace '"remotehub-backup"', '"rdpmanager-backup"')) }
-                @(Get-ChildItem 'C:\lab' -File | ForEach-Object Name)
+            # the old format: RDP Manager's .rdpmbackup - format "rdpmanager-backup", version 1, sealed without associated
+            # data. The harness writes it from this backup's settings: relabelling the current file isn't an old file -
+            # since version 4 its sections are bound to the format and a relabelled one is refused on purpose (#63; run
+            # 20261021-222745: no import question came)
+            Step $b 'oldfile' {
+                $hostDir = Join-Path $EvidenceDir 'c-data-backups'
+                $null = New-Item -ItemType Directory -Path $hostDir -Force
+                Get-LabFile -Name $VmName -Path 'C:\lab\rh.rhbackup' -Destination $hostDir
+                $b.oldMade = Invoke-LabHarness @('old-backup', '--in', (Join-Path $hostDir 'rh.rhbackup'), '--out', (Join-Path $hostDir 'old.rdpmbackup'), '--password', $backupPw) -TimeoutSec 120
+                Copy-LabFile -Name $VmName -Path (Join-Path $hostDir 'old.rdpmbackup') -Destination 'C:\lab'
             }
+            $b.files = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\lab' -File | ForEach-Object Name) }
             Save 'bak-admin' @{ exported = $b.exported; files = $b.files; nodes = $b.admin.nodes; credentials = $b.admin.credentials; audit = $b.admin.audit; error = $b['export-error'] }
 
             # normaluser signed in from here on

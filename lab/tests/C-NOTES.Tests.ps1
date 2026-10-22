@@ -404,8 +404,17 @@ Describe 'C-NOTES <VmName>' -Tag Client, UI, 'C-NOTE' -Skip:(-not $isClient) {
             # C-NOTE-03: Markdown typed at the start of a line and Ctrl+B (SendKeys in the session), saved without a Save
             Step $v 'typed' {
                 Add-Page 'Typed C3'
-                $null = Ui 'Page' -Value 'keys:- alpha item{ENTER}beta item{ENTER}^.'
-                $null = Ui 'Page' -Value "keys:^b$($tok.body)^b and plain{ENTER}# Typed heading"
+                # the marker and its space each sent on their own: the editor formats when a space arrives after "-" or
+                # "#" at a line start, as when typed. "- " and "# " stayed text in runs 20261021-222745 and
+                # 20261022-061254 because the app formatted only on a text input event, which a keyboard space doesn't
+                # raise in a RichTextBox (fixed in the app: the Space key formats)
+                $null = Ui 'Page' -Value 'keys:-'
+                $null = Ui 'Page' -Value 'keys: '
+                $null = Ui 'Page' -Value 'keys:alpha item{ENTER}beta item{ENTER}^.'
+                $null = Ui 'Page' -Value "keys:^b$($tok.body)^b and plain{ENTER}"
+                $null = Ui 'Page' -Value 'keys:#'
+                $null = Ui 'Page' -Value 'keys: '
+                $null = Ui 'Page' -Value 'keys:Typed heading'
                 $v.c3 = Wait-Page 'Typed C3' 'Typed heading'
                 $null = Ui 'Copy page as Markdown'
                 $v.c3Copy = Get-ClipText
@@ -442,8 +451,12 @@ Describe 'C-NOTES <VmName>' -Tag Client, UI, 'C-NOTE' -Skip:(-not $isClient) {
                 $null = Ui 'Page' -Value 'keys:^v'
                 $v.c6a = Wait-Page 'Image C6' 'note-file:'
                 Set-ClipJpegFile $metaMark
+                # the formats on the clipboard, noted: a copied file holds no text or picture, which the page's Paste
+                # dropped without a message (runs 20261021-222745 and 20261022-061254: one picture, fixed in the app)
+                $v.c6clip = Invoke-LabInSessionJson -Name $VmName -Code 'Add-Type -AssemblyName System.Windows.Forms; @([Windows.Forms.Clipboard]::GetDataObject().GetFormats())'
                 $null = Ui 'Page' -Value 'keys:^{END}^v'
                 $v.c6 = Wait-Page 'Image C6' '(?s)note-file:.*note-file:'
+                if ("$($v.c6.body)" -notmatch '(?s)note-file:.*note-file:') { Shot 'c6-one-picture' }
             }
             Shot 'c-note-pages'
             $v.before = Snapshot
@@ -463,7 +476,10 @@ Describe 'C-NOTES <VmName>' -Tag Client, UI, 'C-NOTE' -Skip:(-not $isClient) {
                 $v.afterListed = [ordered]@{}
                 foreach ($t in @($pageC2, 'Typed C3', 'Round trip C4', 'Script C5', 'Image C6')) { $v.afterListed[$t] = Shown $t 5 }
                 $null = Ui 'Round trip C4'
-                $v.c4Ui = "$((Ui 'Page' -Value read).value)"
+                # read until the editor shows the page; " " in runs 20261021-222745 and 20261022-061254 was the app's
+                # text pattern reading the editor's first, empty document (fixed in the app), not a slow load
+                $readUntil = (Get-Date).AddSeconds(20)
+                do { $v.c4Ui = "$((Ui 'Page' -Value read).value)"; if ($v.c4Ui -match [regex]::Escape($tok.cell)) { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $readUntil)
                 $null = Ui 'Copy page as Markdown'
                 $v.c4Copy = Get-ClipText
                 $null = Ui 'Script C5'
@@ -627,12 +643,14 @@ Describe 'C-NOTES <VmName>' -Tag Client, UI, 'C-NOTE' -Skip:(-not $isClient) {
                 $x.c8 = Wait-Page 'Undo C8'
                 $null = Ui 'Undo C8' -Value 'menu:Delete'
                 $x.toast = Shown 'Page deleted' 5
-                $x.deleted = Page-Row 'Undo C8'
-                $null = Ui 'Undo'
+                # at once: the toast stays 8 s, and reading the database first took longer (run 20261021-222745)
+                $null = Ui 'Undo' -TimeoutSec 10
                 $x.listedAgain = Shown 'Undo C8' 10
                 $x.undone = Page-Row 'Undo C8'
                 $null = Ui 'Undo C8' -Value 'menu:Delete'
                 $x.toastGoneSec = Wait-Gone 'Page deleted' 30
+                # the deleted page's stamp, read now that no toast waits
+                $x.deleted = Page-Row 'Undo C8'
                 $null = Ui 'Recently deleted'
                 $x.bin = @((Ui '*' -Title 'Recently deleted' -Value list).items)
                 $null = Ui 'Undo C8' -Title 'Recently deleted' -Value realclick

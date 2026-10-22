@@ -205,7 +205,9 @@ BeforeAll {
             # while the first stayed connected, and quser listed one session.
             Set-ItemProperty $ts -Name fSingleSessionPerUser -Value 0
             $tsp = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-            $null = New-Item $tsp -Force
+            # created only when missing: New-Item -Force on an existing key empties it (run 20261021-222745: the step for
+            # fPromptForPassword wiped fSingleSessionPerUser, and the second session took over the first)
+            if (-not (Test-Path $tsp)) { $null = New-Item $tsp -Force }
             Set-ItemProperty $tsp -Name fSingleSessionPerUser -Value 0 -Type DWord
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
         }
@@ -244,7 +246,8 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             # "Always prompt for password upon connection" on the device: Windows asks although RemoteHub sends the password
             Invoke-LabGuest -Name $device.Name -ScriptBlock {
                 $k = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-                $null = New-Item $k -Force
+                # kept, not made again: New-Item -Force would empty it and drop fSingleSessionPerUser (set in the setup)
+                if (-not (Test-Path $k)) { $null = New-Item $k -Force }
                 Set-ItemProperty $k -Name fPromptForPassword -Value 1 -Type DWord
             }
             Restart-LabRdpService -Name $device.Name

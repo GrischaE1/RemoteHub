@@ -279,6 +279,22 @@ BeforeAll {
             ToolsReady 'PolLocal'
             ToolsReady 'PolWinRm'
         }
+        # RemoteHub's own record of a refused test (run 20261021-222745: WinRM refused PolWinRm's account although the
+        # same sign-in worked from the VM itself): its diagnostic log next to the evidence
+        if ($u['tools-error']) {
+            try { Get-LabFile -Name $VmName -Path "C:\Users\$($vm.ConsoleAccount)\AppData\Roaming\RemoteHub\logs\remotehub.log" -Destination (Join-Path $EvidenceDir 'pol-client-remotehub-log') } catch { }
+            # the account's own WinRM sign-in to 127.0.0.1 (its current logon, no password): refused too means the
+            # account lacks the right on this VM; accepted means RemoteHub's sign-in differs (run 20261022-061254: the
+            # log only said "Unavailable"). The session configuration's access list goes with it.
+            try {
+                $u.ownWinRm = "$(Invoke-LabInSession -Name $VmName -Account Console -TimeoutSec 90 -ScriptBlock {
+                    try { $s = New-PSSession -ComputerName 127.0.0.1 -ErrorAction Stop; "own sign-in: OK as $(Invoke-Command -Session $s { whoami })"; Remove-PSSession $s }
+                    catch { "own sign-in: $($_.Exception.Message.Split([char]10)[0])" }
+                })".Trim()
+                $u.winRmAccess = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-PSSessionConfiguration -Name Microsoft.PowerShell).Permission }
+            }
+            catch { $u.ownWinRm = "not checked: $_" }
+        }
         Shot 'setup'
         Save 'setup' $u
     }
