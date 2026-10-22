@@ -135,11 +135,14 @@ BeforeAll {
             } | ForEach-Object { "$_".Trim() })
         $ids
     }
+    # Every session on the device signed out - the console account's too: Windows Server without the Remote Desktop
+    # Session Host role allows two signed-in sessions, the console counts, and PSAdmin's second RDP session met "There
+    # are too many users signed in. Select a user to disconnect" and was dropped after 30 s (run 20261022-124318,
+    # R-RDP-12/13 - the console's Admin and PSAdmin's first session were the two).
     function Clear-DeviceSessions {
-        $null = Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
-            param($u)
+        $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
             foreach ($l in @(quser 2>$null | Select-Object -Skip 1)) {
-                if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)' -and $Matches.u -eq $u) { logoff $Matches.id }
+                if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)') { logoff $Matches.id }
             }
         }
         Start-Sleep -Seconds 5
