@@ -2249,6 +2249,9 @@ function Invoke-LabPersonServer {
             $sent = Get-Date
             $until = $sent.AddSeconds($wait)
             $ended = $false
+            # a handle held while waiting: an ended server's exit code can be read only through one opened before it ended
+            $serverProc = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
+            if ($serverProc) { try { $null = $serverProc.Handle } catch { } }
             while (-not (Test-Path $req.out) -and (Get-Date) -lt $until) {
                 Start-Sleep -Milliseconds 150
                 if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) { $ended = $true; break }
@@ -2276,7 +2279,10 @@ function Invoke-LabPersonServer {
                 $crash = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1026; StartTime = $sent.AddSeconds(-2) } -MaxEvents 10 -ErrorAction SilentlyContinue |
                         Where-Object { $_.Message -match 'powershell' } | Select-Object -First 1 |
                         ForEach-Object { ($_.Message -replace '\s+', ' ').Substring(0, [Math]::Min(400, ($_.Message -replace '\s+', ' ').Length)) })
-                $why = "the person server (process $serverPid) ended $secs s after taking the request, without an answer$(if ($crash) { '; Application log: ' + $crash[0] } else { ' (no crash in the Application log)' })"
+                # its exit code tells a native crash (0xC0000005), a stack overflow (0xC00000FD), Ctrl+C/Break
+                # (0xC000013A), an exit of its own or a kill from outside apart - and which request it was doing
+                $exit = try { if ($serverProc -and $serverProc.WaitForExit(2000)) { '0x{0:X8}' -f $serverProc.ExitCode } else { '?' } } catch { '?' }
+                $why = "the person server (process $serverPid, exit code $exit) ended $secs s after taking the request ($($req.do) '$($req.text)' $(if ("$($req.value)" -match '^set') { 'set...' } else { $req.value })), without an answer$(if ($crash) { '; Application log: ' + $crash[0] } else { ' (no crash in the Application log)' })"
                 # ended within seconds with no crash recorded (runs 20261022-092309 and -112607, both in
                 # New-LabClientConnection): Defender's behaviour monitoring stops a process without one - its detections
                 $defender = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117, 1121, 1122, 1123, 1126; StartTime = $sent.AddSeconds(-5) } -MaxEvents 5 -ErrorAction SilentlyContinue |
