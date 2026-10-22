@@ -29,6 +29,7 @@ public partial class MainWindow : FluentWindow
     private readonly Dictionary<SessionBase, FrameworkElement> _views = new();
     private readonly Dictionary<SessionBase, DetachedWindow> _detached = new();
     private readonly CredentialPromptWatcher _promptWatcher = new();
+    private readonly SwitchKeyHook _switchKeyHook;
     private ClipboardToast? _toast;
     private Point _dragStart;
     private NodeBase? _dragCandidate;
@@ -37,6 +38,7 @@ public partial class MainWindow : FluentWindow
     public MainWindow(MainViewModel vm)
     {
         _vm = vm;
+        _switchKeyHook = new(FocusedRdpSession, SwitchFromHook);
         InitializeComponent();
         AppIcon.Apply(TitleIcon, 18);
         AppIcon.ApplyTo(this);
@@ -274,6 +276,7 @@ public partial class MainWindow : FluentWindow
                 }
             }
         UpdateSessionVisibility();
+        UpdateSwitchKeyHook(); // a closed session that had the keyboard
     }
 
     private void UpdateSessionVisibility()
@@ -366,6 +369,13 @@ public partial class MainWindow : FluentWindow
         _views[s] = view;
         SessionPanel.Children.Add(view);
         s.FocusReleased += dir => SwitchFromSession(s, dir);
+        s.PropertyChanged += (_, e) =>
+        {
+            // Also when the session goes full screen or reconnects: the control may have installed its own keyboard
+            // hook again, and ours has to be in front of it.
+            if (e.PropertyName is nameof(RdpSession.HasKeyboardFocus) or nameof(RdpSession.IsFullScreen) or nameof(RdpSession.State))
+                UpdateSwitchKeyHook();
+        };
         s.LoggedIn += () =>
         {
             // Login done: the password is no longer needed on the clipboard.
@@ -392,7 +402,11 @@ public partial class MainWindow : FluentWindow
     /// <summary>AltGr is reported as Ctrl+Alt; it is "AltGr" when only the right Alt key is held.</summary>
     private static bool IsAltGr() => IsDown(VK_RMENU) && !IsDown(VK_LMENU);
 
-    /// <summary>The switch hotkey was pressed inside a session: the control handed focus back, we switch tabs.</summary>
+    /// <summary>
+    /// The switch hotkey was pressed inside a session and the RDP control handed focus back (OnFocusReleased). Only a
+    /// fallback: <see cref="_switchKeyHook"/> takes the keys first, and a key it swallowed never reaches the control,
+    /// so one press can't switch twice.
+    /// </summary>
     private void SwitchFromSession(RdpSession from, int direction)
     {
         // whether the control reported the hotkey at all, when switching "does nothing" (lab R-RDP-12)
@@ -409,6 +423,30 @@ public partial class MainWindow : FluentWindow
                   : IsDown(keys.PrevVk) ? -1
                   : IsDown(keys.NextVk) ? 1
                   : direction < 0 ? -1 : 1;
+        SwitchSession(from, delta);
+    }
+
+    /// <summary>The switch hotkey caught by <see cref="_switchKeyHook"/> while <paramref name="from"/> had the keyboard.</summary>
+    private void SwitchFromHook(RdpSession from, int delta)
+    {
+        DiagLog.Write($"Session switch hotkey caught before the RDP control (direction {delta})");
+        if (_vm.Sessions.Contains(from)) SwitchSession(from, delta);
+    }
+
+    /// <summary>
+    /// The switch-key hook is installed only while an RDP session has the keyboard, and (re)installed each time one gains
+    /// it, so it is called before a keyboard hook the control installed meanwhile.
+    /// </summary>
+    private void UpdateSwitchKeyHook()
+    {
+        if (_vm.Sessions.OfType<RdpSession>().Any(s => s.HasKeyboardFocus)) _switchKeyHook.Install();
+        else _switchKeyHook.Remove();
+    }
+
+    private RdpSession? FocusedRdpSession() => _vm.Sessions.OfType<RdpSession>().FirstOrDefault(s => s.ControlHasFocus());
+
+    private void SwitchSession(RdpSession from, int delta)
+    {
         var wasFullScreen = from.IsFullScreen;
         if (wasFullScreen) from.LeaveFullScreen();
         _vm.SelectNextSession(delta);
@@ -564,12 +602,11 @@ public partial class MainWindow : FluentWindow
         var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
         var alt = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        var sw = SwitchHotkeys.Current;
-        var altGr = Keyboard.IsKeyDown(Key.RightAlt) && !Keyboard.IsKeyDown(Key.LeftAlt);
-        if (ctrl && alt && !altGr && (key == sw.Prev || key == sw.Next))
+        var switchBy = alt ? SwitchHotkeys.Match(KeyInterop.VirtualKeyFromKey(key), ctrl, Keyboard.IsKeyDown(Key.LeftAlt), shift, SwitchHotkeys.Current) : 0;
+        if (switchBy != 0)
         {
             ShowView(RemoteViewId);
-            _vm.SelectNextSession(sw.ShiftReverses ? (shift ? -1 : 1) : key == sw.Prev ? -1 : 1);
+            _vm.SelectNextSession(switchBy);
             e.Handled = true;
             return;
         }
@@ -2919,6 +2956,7 @@ public partial class MainWindow : FluentWindow
         SecureClipboard.ClearIfOurs();
         _toast?.Close();
         _promptWatcher.Dispose();
+        _switchKeyHook.Dispose();
         foreach (var w in _detached.Values.ToList()) { w.ReleaseContent(); w.ForceClose(); }
         _detached.Clear();
         foreach (var t in _vm.Transfers) t.Cancel();
