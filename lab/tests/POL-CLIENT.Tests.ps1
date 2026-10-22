@@ -207,7 +207,10 @@ BeforeAll {
     # RemoteHub
     # - PolLocal: this VM by its name, the console account; the agent installed through RemoteHub's clipboard install
     #   (the lab's own agent from the start of the file removed first), so RemoteHub has paired with it and uses it;
-    # - PolWinRm: 127.0.0.1, the console account, WinRM ("Check automatically after RDP login" on);
+    # - PolWinRm: 127.0.0.1, the VM's other administrator (PSAdmin), WinRM ("Check automatically after RDP login" on).
+    #   Not the console account: WinRM back into the same machine as the signed-in account reuses its UAC-filtered
+    #   token - "Access is denied", and with Remote Management Users "could not launch a host process" (checked on the
+    #   VM after run 20261022-092309, where POL-14/15 failed so); another account is a real network sign-in;
     # - PolRdp: an address that never answers (TEST-NET-1), with an account - an RDP tab that tries without a prompt;
     # - PolOffline: another such address, no account - for redirection, .rdp export and Connect;
     # - PolFolder: a folder, for its editor.
@@ -230,7 +233,7 @@ BeforeAll {
         Restart-Client
         Step $u connections {
             New-LabClientConnection -Name $VmName -Display 'PolLocal' -TargetHost $u.computer -User $vm.ConsoleAccount -Password $password
-            New-LabClientConnection -Name $VmName -Display 'PolWinRm' -TargetHost '127.0.0.1' -User $vm.ConsoleAccount -Password $password
+            New-LabClientConnection -Name $VmName -Display 'PolWinRm' -TargetHost '127.0.0.1' -User $vm.AdminAccount -Password $password
             New-LabClientConnection -Name $VmName -Display 'PolRdp' -TargetHost '192.0.2.10' -User $vm.ConsoleAccount -Password $password
             New-LabClientConnection -Name $VmName -Display 'PolOffline' -TargetHost '192.0.2.11'
             # selected first: the folder lands at the top level, next to it

@@ -166,7 +166,7 @@ Out of scope for v1. The design keeps it possible:
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/v1/health` | none | `{product, version, protocol, deviceId, features}` – nothing sensitive. `features`: `powershell` always, `desktop` when the remote desktop is on (`DesktopEnabled`), `tunnel` when `TunnelEnabled` (older agents send none = PowerShell only) |
+| GET | `/v1/health` | none | `{product, version, protocol, deviceId, features}` – nothing sensitive. `features`: `powershell` always, `desktop` when the remote desktop is on (`DesktopEnabled`), `tunnel` when `TunnelEnabled` (older agents send none = PowerShell only). `instance` (since 0.21.4): a random id new at every start of the agent – RemoteHub tells by it that an update of the same build restarted the agent |
 | GET | `/v1/enrollment?nonce=…` | none | The claim (§5.5): `{deviceId, fingerprint, keyId, computerName, dnsHostName, proof}` – the proof is only of use to whoever holds the enrollment secret. 404 without a secret, 400 for a malformed nonce |
 | GET (WebSocket) | `/v1/powershell` | Basic (Windows account, right `PowerShell`) | One PowerShell session. Each text message is one line of the out-of-process remoting protocol, in both directions. |
 | GET (WebSocket) | `/v1/desktop` | Basic (Windows account, right `Desktop` or `DesktopViewOnly`) | Remote desktop (§12, `Desktop/DesktopProtocol.cs`). 404 when `DesktopEnabled` = 0. |

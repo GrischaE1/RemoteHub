@@ -34,9 +34,12 @@ public static class AgentProtocol
 /// GET /v1/health – no credentials needed, nothing sensitive. Features: what this agent offers (older agents list none,
 /// which means PowerShell only; since 0.18.12 PowerShell is missing when the policy PowerShellEnabled turns it off).
 /// Managed: which of RemoteHub's device actions the device's policy decides (<see cref="AgentManaged"/>) – names only,
-/// never values or other policies.
+/// never values or other policies. Instance: a random id the agent picks each time it starts (since 0.21.4) – RemoteHub
+/// tells by it that a reinstall of the same build restarted the agent, which a version can't show. It says nothing about
+/// the device or when it started.
 /// </summary>
-public sealed record AgentHealth(string Product, string Version, int Protocol, string DeviceId, string[]? Features = null, string[]? Managed = null);
+public sealed record AgentHealth(string Product, string Version, int Protocol, string DeviceId, string[]? Features = null, string[]? Managed = null,
+    string? Instance = null);
 
 /// <summary>What IT sets on the device that RemoteHub's install and update options would otherwise change.</summary>
 public static class AgentManaged

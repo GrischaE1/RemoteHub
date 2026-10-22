@@ -361,22 +361,26 @@ public static class AgentInstaller
     /// </summary>
     public static async Task<AgentHealth?> WaitForRestartAsync(string host, AgentEndpoint endpoint, string? expectedVersion,
         Action<string> progress, CancellationToken ct) =>
-        (await WaitForUpdateAsync(host, endpoint, expectedVersion, progress, ct)).Health;
+        (await WaitForUpdateAsync(host, endpoint, expectedVersion, null, progress, ct)).Health;
 
     /// <summary>
-    /// <see cref="WaitForRestartAsync"/>, and whether the agent was seen going away at all. A reinstall of the very same
-    /// build answers with the version it had before even when msiexec failed, so only the restart tells it installed
+    /// <see cref="WaitForRestartAsync"/>, and whether the agent restarted: it was seen going away, or it answers as
+    /// another instance than <paramref name="before"/> (its health before the update). A reinstall of the very same build
+    /// answers with the version it had before even when msiexec failed, so only the restart tells it installed
     /// (<see cref="UpdateNotInstalled"/>).
     /// </summary>
     public static async Task<(AgentHealth? Health, bool WentDown)> WaitForUpdateAsync(string host, AgentEndpoint endpoint, string? expectedVersion,
-        Action<string> progress, CancellationToken ct)
+        AgentHealth? before, Action<string> progress, CancellationToken ct)
     {
         progress("Waiting for the agent to restart…");
         var wentDown = false;
         var downBy = DateTime.UtcNow.AddSeconds(90);
         while (DateTime.UtcNow < downBy)
         {
-            try { await HealthAsync(host, endpoint, ct); }
+            // Seeing it down isn't enough: in lab run 20261022-092309 the service was gone for 4 s and no poll failed (a
+            // connection attempt to the closed port is dropped, not refused, and its retry reached the new agent), so the
+            // successful reinstall looked like none. The new instance id shows the restart either way.
+            try { if (IsNewInstance(before, await HealthAsync(host, endpoint, ct))) { wentDown = true; break; } }
             catch (Exception) when (!ct.IsCancellationRequested) { wentDown = true; break; } // it went down (or answers with the new certificate)
             await Task.Delay(1500, ct);
         }
@@ -387,6 +391,7 @@ public static class AgentInstaller
             try
             {
                 last = await HealthAsync(host, endpoint, ct);
+                if (IsNewInstance(before, last)) wentDown = true;
                 if (expectedVersion is null || last.Version == expectedVersion) return (last, wentDown);
             }
             catch (Exception) when (!ct.IsCancellationRequested) { wentDown = true; }
@@ -394,6 +399,10 @@ public static class AgentInstaller
         }
         return (last, wentDown);
     }
+
+    /// <summary>The agent answers as another instance than before (it restarted); false when either doesn't say (agents before 0.21.4).</summary>
+    public static bool IsNewInstance(AgentHealth? before, AgentHealth now) =>
+        before?.Instance is { Length: > 0 } a && now.Instance is { Length: > 0 } b && !string.Equals(a, b, StringComparison.Ordinal);
 
     /// <summary>
     /// Why an update through the agent didn't install, or null when it did: the agent answers with another version than

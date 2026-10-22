@@ -1618,6 +1618,11 @@ public partial class MainWindow : FluentWindow
                     var previous = KnownTarget(c) is { Agent: not null } known ? known : null;
                     if (BuildTarget(c, previous, viaAgent: true) is not { } t) { report("Cancelled."); return false; }
                     report($"Connecting to {t.Target.Display}…");
+                    // the running agent's instance: after a reinstall of the same build only a new one shows it restarted
+                    AgentHealth? before = null;
+                    if (enrollment is null && c.Agent is { } running && (EndpointOf(c, running) ?? new AgentEndpoint(running.Port, running.Fingerprint)) is var was)
+                        try { before = await AgentInstaller.HealthAsync(c.Host, was, new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token); }
+                        catch (Exception) { /* not known: only the version and a seen outage count */ }
                     try
                     {
                         await Task.Run(() =>
@@ -1658,7 +1663,7 @@ public partial class MainWindow : FluentWindow
                     var endpoint = EndpointOf(c, device) ?? new AgentEndpoint(device.Port, device.Fingerprint);
                     // With a new identity the agent was seen going away above (it answers with its new certificate).
                     var (health, wentDown) = enrollment is null
-                        ? await AgentInstaller.WaitForUpdateAsync(c.Host, endpoint, expected, report, System.Threading.CancellationToken.None)
+                        ? await AgentInstaller.WaitForUpdateAsync(c.Host, endpoint, expected, before, report, System.Threading.CancellationToken.None)
                         : (await AgentInstaller.HealthAsync(c.Host, endpoint, new System.Threading.CancellationTokenSource(c.JumpHost is null ? 10_000 : 30_000).Token), true);
                     if (health is null)
                     {
