@@ -1369,21 +1369,30 @@ function Send-LabKeyCombo {
 # A key combination as keyboard scan codes (set 1), for keys PressKey rejects: Hyper-V's virtual-key table is the US
 # 101-key one, so VK_OEM_102 (226, the ISO "<" key) fails with 32773 "Invalid parameter". Make codes pressed in order,
 # break codes (make + 0x80) in reverse, in one TypeScancodes call. Extended keys as 0xE0nn (0xE046 = Break with Ctrl).
-# Ctrl 0x1D, left Alt 0x38, left Shift 0x2A, "<" 0x56: Ctrl+Alt+< = 0x1D, 0x38, 0x56.
+# Ctrl 0x1D, left Alt 0x38, left Shift 0x2A, "<" 0x56: Ctrl+Alt+< = 0x1D, 0x38, 0x56. -HoldMs: the keys are held that
+# long before they are let go (two calls), as a person holds them - in one call all of them are down and up again at once.
 function Send-LabScancodes {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][int[]]$Codes)
-    $bytes = New-Object System.Collections.Generic.List[byte]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][int[]]$Codes, [int]$HoldMs = 0)
+    $down = New-Object System.Collections.Generic.List[byte]
     foreach ($c in $Codes) {
-        if ($c -gt 0xFF) { $bytes.Add(0xE0) }
-        $bytes.Add([byte]($c -band 0x7F))
+        if ($c -gt 0xFF) { $down.Add(0xE0) }
+        $down.Add([byte]($c -band 0x7F))
     }
+    $up = New-Object System.Collections.Generic.List[byte]
     foreach ($c in $Codes[($Codes.Count - 1)..0]) {
-        if ($c -gt 0xFF) { $bytes.Add(0xE0) }
-        $bytes.Add([byte](($c -band 0x7F) -bor 0x80))
+        if ($c -gt 0xFF) { $up.Add(0xE0) }
+        $up.Add([byte](($c -band 0x7F) -bor 0x80))
     }
-    $r = Invoke-CimMethod -InputObject (Get-LabKeyboard $Name) -MethodName TypeScancodes -Arguments @{ Scancodes = [byte[]]$bytes.ToArray() }
-    Assert-CimResult $r "${Name}: TypeScancodes $(($bytes | ForEach-Object { '{0:X2}' -f $_ }) -join ' ')"
+    $calls = New-Object System.Collections.Generic.List[object]
+    if ($HoldMs -gt 0) { $calls.Add([byte[]]$down.ToArray()); $calls.Add([byte[]]$up.ToArray()) }
+    else { $down.AddRange($up); $calls.Add([byte[]]$down.ToArray()) }
+    for ($i = 0; $i -lt $calls.Count; $i++) {
+        if ($i -gt 0) { Start-Sleep -Milliseconds $HoldMs }
+        [byte[]]$bytes = $calls[$i]
+        $r = Invoke-CimMethod -InputObject (Get-LabKeyboard $Name) -MethodName TypeScancodes -Arguments @{ Scancodes = $bytes }
+        Assert-CimResult $r "${Name}: TypeScancodes $(($bytes | ForEach-Object { '{0:X2}' -f $_ }) -join ' ')"
+    }
 }
 
 function Send-LabCtrlAltDel {

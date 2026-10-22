@@ -165,7 +165,17 @@ BeforeAll {
     # "Save as .rdp file..." of a connection to -Path in the guest; answers the file's text ('' when none was written)
     function Export-Rdp([string]$Node, [string]$Path) {
         Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) $null = New-Item (Split-Path $p) -ItemType Directory -Force; Remove-Item $p -ErrorAction SilentlyContinue }
-        $null = Ui $Node -Value 'menu:More>Save as .rdp file*'
+        # opened right after an editor closed, the menu came up with no entries at all (run 20261022-132024,
+        # drivesAfter): opened again, for up to 10 s
+        $until = (Get-Date).AddSeconds(10)
+        while ($true) {
+            try { $null = Ui $Node -Value 'menu:More>Save as .rdp file*'; break }
+            catch {
+                if ("$_" -notmatch 'no menu entry' -or (Get-Date) -gt $until) { throw }
+                try { Send-LabScancodes -Name $VmName -Codes 0x01 } catch { }   # Esc: the empty menu closed
+                Start-Sleep -Seconds 2
+            }
+        }
         # Windows' Save As dialog has no usable UIA patterns here (as in UI-RDP): once it is listed, its file name box has
         # the focus with the proposed name selected - typed over at the console keyboard
         $null = WaitFor 30 { @(@((Ui '*' -Value list -Optional -TimeoutSec 5).items) | Where-Object { "$_" -match '^Window\|(Save As|Speichern unter)\|' }).Count }

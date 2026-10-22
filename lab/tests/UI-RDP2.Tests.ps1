@@ -384,15 +384,20 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Wait-RdpTab 30
                 $s.before = SelectedTab
                 ClickIntoSession
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 3
                 $s.afterNext = SelectedTab
                 Shot 'switch-next'
+                # held for 300 ms as a person would (run 20261022-132024: all keys down and up in one burst, no switch);
+                # RemoteHub's log says whether the RDP control reported the hotkey at all
+                $s.hotkeyLog = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                        param($u) Select-String -Path "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Pattern 'Session switch hotkey' -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
+                    })
             }
             Step $s previous {
                 # in Device2's session: Ctrl+Alt+Shift+< goes back to Device (next would be Ghost)
                 ClickIntoSession
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 3
                 $s.afterPrevious = SelectedTab
                 Shot 'switch-previous'
@@ -402,7 +407,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Ui 'Full screen'
                 Start-Sleep -Seconds 3
                 $s.fsBefore = TopWindows
-                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56
+                Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
                 Start-Sleep -Seconds 4
                 $s.fsAfter = TopWindows
                 $s.fsSelected = SelectedTab
@@ -420,7 +425,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
             $s.device2 | Should -BeTrue
             @($s.sessions).Count | Should -Be 2 -Because "Device and Device2 each have their own session (device: $(@($s.quser) -join ' / '))"
             $s.before | Should -Be 'Device'
-            $s.afterNext | Should -Be 'Device2'
+            $s.afterNext | Should -Be 'Device2' -Because "the RDP control's hotkey reached RemoteHub: $(if (@($s.hotkeyLog).Count) { @($s.hotkeyLog)[-1] } else { 'no - nothing in its log' })"
             $s.afterPrevious | Should -Be 'Device'
             @($s.fsBefore | Where-Object { $_ -eq 'Device' }).Count | Should -BeGreaterThan 0 -Because 'Device was in full screen'
             @($s.fsAfter | Where-Object { $_ -eq 'Device' }).Count | Should -Be 0 -Because 'full screen is left first'

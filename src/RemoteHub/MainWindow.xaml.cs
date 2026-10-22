@@ -395,6 +395,8 @@ public partial class MainWindow : FluentWindow
     /// <summary>The switch hotkey was pressed inside a session: the control handed focus back, we switch tabs.</summary>
     private void SwitchFromSession(RdpSession from, int direction)
     {
+        // whether the control reported the hotkey at all, when switching "does nothing" (lab R-RDP-12)
+        DiagLog.Write($"Session switch hotkey from the RDP control (direction {direction})");
         var keys = SwitchHotkeys.Current;
         if (IsAltGr())
         {
