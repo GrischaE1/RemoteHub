@@ -376,8 +376,13 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Reset-LabVm -Name $VmName
             $current = Get-LabClientMsi
             $updates = 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates'
-            # Install-LabClient makes the VM trust the lab certificate, which signed the build under test
-            $null = Install-LabClient -Name $VmName -Network
+            # Install-LabClient makes the VM trust the lab certificate, which signed the build under test. Installed is a
+            # rebuild of the build under test (the same files, another ProductCode), so the signed package offered below
+            # is a real (same-version) upgrade, as every release is (WiX gives each build its own ProductCode). The
+            # package over itself was a maintenance run of the installed product, which needs the package it was installed
+            # from and failed with 1603 "SecureRepair Failed" (run 20261022-112607, msiexec log).
+            $installed = New-LabRebuiltMsi -Source $current -Path (Join-Path $EvidenceDir 'installed\RemoteHub-installed-x64.msi')
+            $null = Install-LabClient -Name $VmName -Network -Msi $installed.FullName
             $u.versionBefore = InstalledVersion
             # the same package rebuilt (New-LabRebuiltMsi changes the ProductCode): its signature no longer matches it
             $rebuilt = New-LabRebuiltMsi -Source $current -Path (Join-Path $EvidenceDir 'RemoteHub-99.0.0-x64.msi')

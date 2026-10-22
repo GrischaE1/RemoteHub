@@ -2268,6 +2268,11 @@ function Invoke-LabPersonServer {
                         Where-Object { $_.Message -match 'powershell' } | Select-Object -First 1 |
                         ForEach-Object { ($_.Message -replace '\s+', ' ').Substring(0, [Math]::Min(400, ($_.Message -replace '\s+', ' ').Length)) })
                 $why = "the person server (process $serverPid) ended $secs s after taking the request, without an answer$(if ($crash) { '; Application log: ' + $crash[0] } else { ' (no crash in the Application log)' })"
+                # ended within seconds with no crash recorded (runs 20261022-092309 and -112607, both in
+                # New-LabClientConnection): Defender's behaviour monitoring stops a process without one - its detections
+                $defender = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Windows Defender/Operational'; Id = 1116, 1117, 1121, 1122, 1123, 1126; StartTime = $sent.AddSeconds(-5) } -MaxEvents 5 -ErrorAction SilentlyContinue |
+                        ForEach-Object { "$($_.Id): $((($_.Message -replace '\s+', ' ').Trim()).Substring(0, [Math]::Min(300, ($_.Message -replace '\s+', ' ').Trim().Length)))" })
+                $why += "; Defender: $(if ($defender) { $defender -join ' | ' } else { 'nothing' })"
             }
             else {
                 # a server stuck in a request (a UI Automation call that never returns) would hold every later one: ended,

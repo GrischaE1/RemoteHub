@@ -28,6 +28,20 @@ public class CodeEditorTests
     });
 
     [Fact]
+    public void Its_children_name_it_as_their_parent() => Sta.Run(w =>
+    {
+        var editor = new CodeEditor { Text = "Get-Date\nGet-Service", Height = 100 };
+        w.Content = editor;
+        Sta.Pump();
+        var peer = UIElementAutomationPeer.CreatePeerForElement(editor);
+
+        // a client walking the tree goes down through the children and up through their parent: the same peer both ways
+        var children = peer.GetChildren() ?? [];
+        Assert.NotEmpty(children);
+        foreach (var child in children) Assert.Same(peer, child.GetParent());
+    });
+
+    [Fact]
     public void Its_text_is_still_read_through_the_value_pattern() => Sta.Run(w =>
     {
         var editor = new CodeEditor { Text = "Get-Service" };
