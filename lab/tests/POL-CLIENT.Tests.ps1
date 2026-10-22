@@ -767,7 +767,13 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
                 Restart-Client
                 $s.conflictPage = Policies-Text
                 $null = Ui 'PolOffline' -Value 'menu:Connect'
-                $s.conflictConnect = Message 'RemoteHub Agent' -TimeoutSec 30
+                # the refusal is a dialog owned by the main window, which UI Automation lists inside that window - not
+                # as a window titled "RemoteHub Agent" (run 20261022-152400: on screen, the title search found nothing)
+                $s.conflictConnect = Message 'RemoteHub Agent' -TimeoutSec 10
+                if (-not $s.conflictConnect) {
+                    $s.conflictConnect = "$((Ui 'Remote desktop through the RemoteHub Agent*' -Value exists -Optional -TimeoutSec 20).name)"
+                    $null = Ui 'OK' -Optional -TimeoutSec 5
+                }
                 $s.conflictTab = (Ui 'Reconnect' -Value exists -Optional -TimeoutSec 3).found
             }
             Policy @{ AllowAgentDesktop = $null }
