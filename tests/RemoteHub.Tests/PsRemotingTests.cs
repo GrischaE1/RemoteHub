@@ -26,7 +26,7 @@ public class PsRemotingTests
         Assert.Null(PsRemoting.UserName(new CredentialSet(), "srv01"));
         Assert.False(PsRemoting.NeedsPassword(new CredentialSet()));
         Assert.True(PsRemoting.NeedsPassword(new CredentialSet { Username = "a" }));
-        Assert.False(PsRemoting.NeedsPassword(new CredentialSet { Username = "a", Password = "x" }));
+        Assert.False(PsRemoting.NeedsPassword(new CredentialSet { Username = "a", Password = Secret.From("x") }));
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class PsRemotingTests
         var http = (WSManConnectionInfo)PsRemoting.ConnectionInfo(new PsTarget("srv01", false, new CredentialSet()));
         Assert.Equal("http://srv01:5985/wsman", http.ConnectionUri.ToString());
         Assert.Null(http.Credential);
-        var https = (WSManConnectionInfo)PsRemoting.ConnectionInfo(new PsTarget("srv01", true, new CredentialSet { Username = "u", Domain = "D", Password = "p" }));
+        var https = (WSManConnectionInfo)PsRemoting.ConnectionInfo(new PsTarget("srv01", true, new CredentialSet { Username = "u", Domain = "D", Password = Secret.From("p") }));
         Assert.Equal("https://srv01:5986/wsman", https.ConnectionUri.ToString());
         Assert.Equal(@"D\u", https.Credential.UserName);
         Assert.Equal("p", https.Credential.GetNetworkCredential().Password);

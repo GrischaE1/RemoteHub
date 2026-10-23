@@ -247,9 +247,17 @@
                               ToolTip="Signs in with a local account of whichever computer you connect to – useful for one folder of standalone (non-domain) servers." />
                     <StackPanel Grid.Row="2" Grid.ColumnSpan="2">
                         <TextBlock Text="Password" Margin="0,0,0,4" />
-                        <ui:PasswordBox x:Name="PasswordInput" PlaceholderText="Leave empty to be asked when connecting" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ui:PasswordBox x:Name="PasswordInput" PlaceholderText="{Binding PasswordPlaceholder}" />
+                            <ui:Button Grid.Column="1" Content="Remove stored password" Margin="8,0,0,0" Click="RemovePassword_Click"
+                                       Visibility="{Binding HasStoredPassword, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
                         <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,4,0,0"
-                                   Text="Stored encrypted with Windows DPAPI for your user account. If left empty, Windows asks for the password when connecting – credentials of the parent folder are NOT used in this mode." />
+                                   Text="Stored encrypted in this PC's database and never shown again – type a new password to replace it. With no password stored, Windows asks for it when connecting – credentials of the parent folder are NOT used in this mode." />
                     </StackPanel>
                 </Grid>
                 </StackPanel>

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using RemoteHub.Services;
 
 namespace RemoteHub.Models;
 
@@ -301,7 +302,7 @@ public sealed partial class SavedCredential : ObservableObject
     [ObservableProperty] private string _name = "";
     [ObservableProperty] private string? _username;
     [ObservableProperty] private string? _domain;
-    public string? Password { get; set; }
+    public Secret? Password { get; set; }
 
     [JsonIgnore] public string Display => string.IsNullOrEmpty(Domain) ? (Username ?? "") : $"{Domain}\\{Username}";
     partial void OnUsernameChanged(string? value) => OnPropertyChanged(nameof(Display));

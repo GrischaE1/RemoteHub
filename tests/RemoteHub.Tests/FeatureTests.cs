@@ -16,20 +16,20 @@ public class FeatureTests
         o.ForwardWindowsKeys = false; o.Audio = AudioMode.PlayRemote; o.ColorDepth = 24;
         try
         {
-            RdpFileWriter.Write(path, c, o, new CredentialSet { Username = "jdoe", Domain = "LAB", Password = "Pa55!" }, includePassword: true);
+            RdpFileWriter.Write(path, c, o, new CredentialSet { Username = "jdoe", Domain = "LAB", Password = Secret.From("Pa55!") }, includePassword: true);
             var back = RdpFileParser.Parse(path);
             Assert.Equal("app01.lab.local", back.Host);
             Assert.Equal(3391, back.Port);
             Assert.Equal("jdoe", back.Credentials.Username);
             Assert.Equal("LAB", back.Credentials.Domain);
-            Assert.Equal("Pa55!", back.Credentials.Password);
+            Assert.Equal("Pa55!", back.Credentials.Password?.Reveal());
             Assert.Equal("2560x1440", back.Options.FixedResolution);
             Assert.True(back.Options.RedirectDrives);
             Assert.False(back.Options.ForwardWindowsKeys);
             Assert.Equal(AudioMode.PlayRemote, back.Options.Audio);
             Assert.Equal(24, back.Options.ColorDepth);
 
-            RdpFileWriter.Write(path, c, o, new CredentialSet { Username = "jdoe", Password = "Pa55!" }, includePassword: false);
+            RdpFileWriter.Write(path, c, o, new CredentialSet { Username = "jdoe", Password = Secret.From("Pa55!") }, includePassword: false);
             Assert.DoesNotContain("password 51", File.ReadAllText(path));
             Assert.Null(RdpFileParser.Parse(path).Credentials.Password);
         }
@@ -40,7 +40,7 @@ public class FeatureTests
     public void Saved_credentials_resolve_and_survive_backup()
     {
         var data = new AppData();
-        var admin = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CORP", Password = "x" };
+        var admin = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CORP", Password = Secret.From("x") };
         data.SavedCredentials.Add(admin);
         var folder = new Folder { Name = "Servers", InheritCredentials = false, CredentialId = admin.Id };
         var conn = new Connection { Name = "s1", Host = "s1", Parent = folder };
@@ -50,8 +50,8 @@ public class FeatureTests
         Assert.Equal("adm", cred.Username);
         Assert.Contains("Domain admin", src);
 
-        admin.Password = "changed"; // editing the saved credential updates every user
-        Assert.Equal("changed", Inheritance.ResolveCredentials(conn, data).Credentials.Password);
+        admin.Password = Secret.From("changed"); // editing the saved credential updates every user
+        Assert.Equal("changed", Inheritance.ResolveCredentials(conn, data).Credentials.Password?.Reveal());
         Assert.Equal(1, Inheritance.UsageCount(data, admin.Id, data.Items.OfType<Folder>().SelectMany(f => f.Descendants()).Append(folder)));
 
         var path = Path.Combine(Path.GetTempPath(), $"rdpm-{Guid.NewGuid():N}.rdpmbackup");
@@ -60,7 +60,7 @@ public class FeatureTests
             Backup.Export(data, path, "backup-password");
             var back = Backup.Import(path, "backup-password");
             var c2 = ((Folder)back.Items[0]).Children[0];
-            Assert.Equal("changed", Inheritance.ResolveCredentials(c2, back).Credentials.Password);
+            Assert.Equal("changed", Inheritance.ResolveCredentials(c2, back).Credentials.Password?.Reveal());
         }
         finally { File.Delete(path); }
 
@@ -218,11 +218,11 @@ public class CredentialPromptMatcherTests
     [Fact]
     public void Picks_only_when_unambiguous()
     {
-        var a = new S("a", new() { Username = "admin", Password = "pw-a" }, T0);
-        var b = new S("b", new() { Username = "ops", Password = "pw-b" }, T0.AddSeconds(5));
-        var a2 = new S("a2", new() { Username = "admin", Password = "pw-other" }, T0.AddSeconds(9));
-        var a3 = new S("a3", new() { Username = "admin", Password = "pw-a" }, T0.AddSeconds(9));
-        var old = new S("old", new() { Username = "admin", Password = "pw" }, T0.AddMinutes(-5));
+        var a = new S("a", new() { Username = "admin", Password = Secret.From("pw-a") }, T0);
+        var b = new S("b", new() { Username = "ops", Password = Secret.From("pw-b") }, T0.AddSeconds(5));
+        var a2 = new S("a2", new() { Username = "admin", Password = Secret.From("pw-other") }, T0.AddSeconds(9));
+        var a3 = new S("a3", new() { Username = "admin", Password = Secret.From("pw-a") }, T0.AddSeconds(9));
+        var old = new S("old", new() { Username = "admin", Password = Secret.From("pw") }, T0.AddMinutes(-5));
 
         // readable dialog text: match by username
         Assert.Same(a, Pick([a, b], PromptOwner.Ours, "Your credentials did not work", "admin"));

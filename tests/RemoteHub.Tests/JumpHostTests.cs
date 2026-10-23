@@ -13,6 +13,7 @@ using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Remoting;
 using A = agent::RemoteHub.Agent;
+using RemoteHub.Services;
 
 namespace RemoteHub.Tests;
 
@@ -124,7 +125,7 @@ public class JumpHostTests : IAsyncLifetime
     private static JumpRoute Route(Agent jump, string password = "secret") => new("JUMP01", "127.0.0.1", jump.Endpoint(), Tester(password));
 
     private static PsTarget Target(Agent target, JumpRoute via) =>
-        new("127.0.0.1", false, new CredentialSet { Username = "tester", Password = "secret", Domain = "." }, target.Endpoint(via));
+        new("127.0.0.1", false, new CredentialSet { Username = "tester", Password = Secret.From("secret"), Domain = "." }, target.Endpoint(via));
 
     /// <summary>A TCP server on 127.0.0.1 that sends back what it receives.</summary>
     private static (TcpListener Listener, int Port) Echo()
@@ -674,7 +675,7 @@ public class JumpHostTests : IAsyncLifetime
     private static NetworkShare Share(ShareProtocol protocol, string host, int? port, string path) =>
         new() { Name = "files", Protocol = protocol, Host = host, Port = port, Path = path, WebDavHttps = false };
 
-    private static readonly CredentialSet ShareAccount = new() { Username = "tester", Password = "secret", Domain = "." };
+    private static readonly CredentialSet ShareAccount = new() { Username = "tester", Password = Secret.From("secret"), Domain = "." };
 
     [Fact]
     public async Task A_WebDAV_share_is_reached_through_the_jump_host_under_its_own_name()

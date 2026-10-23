@@ -14,7 +14,7 @@ public class CoreTests
     {
         var data = new AppData();
         data.Defaults.RedirectDrives = false;
-        var root = new Folder { Name = "Prod", InheritCredentials = false, Credentials = { Username = "admin", Domain = "CORP", Password = "pw" } };
+        var root = new Folder { Name = "Prod", InheritCredentials = false, Credentials = { Username = "admin", Domain = "CORP", Password = Secret.From("pw") } };
         root.Options.RedirectDrives = true;
         var sub = new Folder { Name = "Web", Parent = root };
         sub.Options.Resize = DisplayResize.SmartSizing;
@@ -96,7 +96,7 @@ public class CoreTests
         var data = new AppData();
         for (int f = 0; f < 10; f++)
         {
-            var folder = new Folder { Name = $"Site {f}", InheritCredentials = false, Credentials = { Username = $"svc{f}", Password = "S3cret!" } };
+            var folder = new Folder { Name = $"Site {f}", InheritCredentials = false, Credentials = { Username = $"svc{f}", Password = Secret.From("S3cret!") } };
             for (int i = 0; i < count / 10; i++)
                 folder.Children.Add(new Connection { Name = $"Server {f}-{i}", Host = $"srv{f}-{i}.lab.local", Parent = folder });
             data.Items.Add(folder);
@@ -116,7 +116,7 @@ public class CoreTests
             Assert.Equal(150, back.Items.OfType<Folder>().Sum(f => f.Children.Count));
             var c = (Connection)((Folder)back.Items[3]).Children[7];
             Assert.Same(back.Items[3], c.Parent);
-            Assert.Equal("S3cret!", Inheritance.ResolveCredentials(c, back).Credentials.Password);
+            Assert.Equal("S3cret!", Inheritance.ResolveCredentials(c, back).Credentials.Password?.Reveal());
             Assert.Throws<UnauthorizedAccessException>(() => Backup.Import(path, "wrong"));
         }
         finally { File.Delete(path); }

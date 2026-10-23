@@ -60,7 +60,7 @@ public sealed partial class EditorViewModel : ObservableObject
               : CredMode.Custom;
         _username = cred.Username;
         _domain = cred.Domain;
-        Password = cred.Password;
+        _password = cred.Password;
 
         var (inh, src) = Inheritance.ResolveCredentials(node, data, includeSelf: false);
         InheritedCredentialsText = inh.IsEmpty
@@ -102,7 +102,25 @@ public sealed partial class EditorViewModel : ObservableObject
     [ObservableProperty] private string? _domain;
     [ObservableProperty] private string? _error;
 
-    public string? Password { get; set; }
+    /// <summary>
+    /// The stored password. The editor never shows it: the box starts empty, a typed password replaces it and
+    /// <see cref="RemovePassword"/> clears it.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasStoredPassword), nameof(PasswordPlaceholder))]
+    private Secret? _password;
+
+    public bool HasStoredPassword => Password is not null;
+    public string PasswordPlaceholder => HasStoredPassword ? "A password is stored – type a new one to replace it" : "Leave empty to be asked when connecting";
+
+    /// <summary>A password typed into the editor replaces the stored one; an empty box keeps it.</summary>
+    public void ReplacePassword(string? typed)
+    {
+        if (Secret.From(typed) is { } s) Password = s;
+    }
+
+    public void RemovePassword() => Password = null;
+
     public string InheritedCredentialsText { get; }
     /// <summary>"Local account on the target computer": stored as domain "." (sent as .\\user).</summary>
     public bool LocalAccount
@@ -402,7 +420,7 @@ public sealed partial class EditorViewModel : ObservableObject
         {
             Username = string.IsNullOrWhiteSpace(Username) ? null : Username.Trim(),
             Domain = string.IsNullOrWhiteSpace(Domain) ? null : Domain.Trim(),
-            Password = string.IsNullOrEmpty(Password) ? null : Password,
+            Password = Password,
         };
         // Allow "DOMAIN\user" in the username field.
         if (cred.Username is { } u && u.IndexOf('\\') is var i and > 0 && cred.Domain is null)

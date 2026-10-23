@@ -68,7 +68,7 @@ internal static class ShareHarness
     private static object Scenario(Dictionary<string, string> o)
     {
         var share = ShareFrom(o);
-        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = o.GetValueOrDefault("password") };
+        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = RemoteHub.Services.Secret.From(o.GetValueOrDefault("password")) };
         var accept = o.GetValueOrDefault("accept") == "1";
         var windowsUser = o.GetValueOrDefault("windows-user");
         var asked = new List<object>();
@@ -283,7 +283,7 @@ internal static class ShareHarness
 
     public static object Conflict(Dictionary<string, string> o)
     {
-        CredentialSet Cred(string user) => new() { Username = user, Password = o["password"] };
+        CredentialSet Cred(string user) => new() { Username = user, Password = RemoteHub.Services.Secret.From(o["password"]) };
         NetworkShare Share(string name) => new() { Name = name, Protocol = ShareProtocol.Smb, Host = o["host"], Path = name };
         static bool Never(TrustRequest _) => false;
         using var first = ShareConnector.Open(Share(o["share1"]), Cred(o["user1"]), Never, _ => { });
@@ -304,7 +304,7 @@ internal static class ShareHarness
     {
         var host = o["host"];
         var share = new NetworkShare { Name = "lab", Protocol = ShareProtocol.Smb, Host = host, Path = o["path"] };
-        var cred = new CredentialSet { Username = o["user"], Password = o["password"] };
+        var cred = new CredentialSet { Username = o["user"], Password = RemoteHub.Services.Secret.From(o["password"]) };
         var unc = $@"\\{host}\{ShareConnector.SplitSmbPath(share.Path).Share}";
         // the account as WindowsSmbShare.SmbUser writes it (no domain set): the same account as RemoteHub's, no conflict
         var user = cred.Username!.Trim();
@@ -328,7 +328,7 @@ internal static class ShareHarness
         if (existing)
         {
             var nr = new NETRESOURCE { dwType = 1 /* RESOURCETYPE_DISK */, lpRemoteName = unc };
-            var rc = WNetAddConnection2W(ref nr, cred.Password, user, 0);
+            var rc = WNetAddConnection2W(ref nr, cred.Password?.Reveal(), user, 0);
             if (rc == 0) existingMade = true;
             else existingError = $"{rc}: {new Win32Exception(rc).Message}";
             Note("afterExisting");
@@ -468,7 +468,7 @@ internal static class ShareHarness
         var idleSec = int.Parse(o.GetValueOrDefault("idle-sec") ?? "5");
         ShareSession.IdleTime = TimeSpan.FromSeconds(idleSec); // a settable static property: no test seam needed
         var share = ShareFrom(o);
-        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = o.GetValueOrDefault("password") };
+        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = RemoteHub.Services.Secret.From(o.GetValueOrDefault("password")) };
         var accept = o.GetValueOrDefault("accept") == "1";
         var via = LabJump.Route(o);
         var asked = new List<object>();

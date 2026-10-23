@@ -64,7 +64,7 @@ public partial class MainWindow
                              "through it – it is kept in memory only.",
                     okText: "Connect") { Owner = this };
                 if (dlg.ShowDialog() != true) return false;
-                cred.Password = dlg.Password;
+                cred.Password = Secret.From(dlg.Password);
             }
             _jumpCredentials[j.Id] = cred;
         }

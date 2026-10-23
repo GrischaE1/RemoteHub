@@ -108,7 +108,7 @@ public sealed class SettingsOverviewWindow : FluentWindow
 
         var creds = new List<(string, string)>
         {
-            ("Saved credentials", d.SavedCredentials.Count == 0 ? "None" : $"{d.SavedCredentials.Count} ({d.SavedCredentials.Count(c => string.IsNullOrEmpty(c.Password))} without stored password)"),
+            ("Saved credentials", d.SavedCredentials.Count == 0 ? "None" : $"{d.SavedCredentials.Count} ({d.SavedCredentials.Count(c => c.Password is null)} without stored password)"),
             ("Folders / connections with own credentials", nodes.Count(n => !n.InheritCredentials).ToString()),
             ("Connections without any credentials", connections.Count(c => Inheritance.ResolveCredentials(c, d).Credentials.IsEmpty) is var none and > 0 ? $"{none} – Windows asks when connecting; PowerShell remoting uses your Windows account" : "0"),
         };

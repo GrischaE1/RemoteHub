@@ -38,7 +38,9 @@ public sealed class ShareEditorWindow : FluentWindow
     private readonly RadioButton _custom = new() { GroupName = "ShareCred", Content = "Enter an account for this share", Margin = new Thickness(0, 0, 0, 8) };
     private readonly TextBox _user = new() { PlaceholderText = "user or DOMAIN\\user" };
     private readonly TextBox _domain = new() { PlaceholderText = "Optional" };
-    private readonly PasswordBox _password = new() { PlaceholderText = "Leave empty to be asked when connecting" };
+    private readonly PasswordBox _password = new();
+    private readonly Button _removePassword = new() { Content = "Remove stored password", Margin = new Thickness(8, 0, 0, 0) };
+    private Secret? _storedPassword; // never shown: the box starts empty and a typed password replaces it
     private readonly Grid _customFields = new();
     private readonly TextBlock _accountHint = Caption();
     private readonly StackPanel _trustRow = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
@@ -88,7 +90,9 @@ public sealed class ShareEditorWindow : FluentWindow
         _custom.IsChecked = !share.InheritCredentials && share.CredentialId is null;
         _user.Text = share.Credentials.Username ?? "";
         _domain.Text = share.Credentials.Domain ?? "";
-        _password.Password = share.Credentials.Password ?? "";
+        _storedPassword = share.Credentials.Password;
+        ShowPasswordState();
+        _removePassword.Click += (_, _) => { _storedPassword = null; _password.Password = ""; ShowPasswordState(); };
         if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
 
         var (inherited, source) = server is null ? Inheritance.ResolveCredentials(share, data, includeSelf: false) : Inheritance.ResolveCredentials(server, data);
@@ -138,7 +142,13 @@ public sealed class ShareEditorWindow : FluentWindow
         domainCol.Children.Add(Label("Domain")); domainCol.Children.Add(_domain);
         Grid.SetColumn(domainCol, 1);
         var pwCol = new StackPanel();
-        pwCol.Children.Add(Label("Password")); pwCol.Children.Add(_password);
+        var pwRow = new Grid();
+        pwRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        pwRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        pwRow.Children.Add(_password);
+        Grid.SetColumn(_removePassword, 1);
+        pwRow.Children.Add(_removePassword);
+        pwCol.Children.Add(Label("Password")); pwCol.Children.Add(pwRow);
         Grid.SetRow(pwCol, 1);
         Grid.SetColumnSpan(pwCol, 2);
         _customFields.Children.Add(userCol);
@@ -304,7 +314,7 @@ public sealed class ShareEditorWindow : FluentWindow
         _share.Credentials = _custom.IsChecked == true
             // Policy AllowSavedPasswords = 0: the password box is greyed out and what was stored is kept (§14 Q2).
             ? new CredentialSet { Username = Null(_user.Text), Domain = Null(_domain.Text),
-                                  Password = Features.IsAllowed(Feature.SavedPasswords) ? Null(_password.Password) : _share.Credentials.Password }
+                                  Password = (Features.IsAllowed(Feature.SavedPasswords) ? Secret.From(_password.Password) : null) ?? _storedPassword }
             : new CredentialSet();
         // A key or certificate belongs to one machine: another host or type asks again.
         _share.TrustedFingerprint = changedTarget ? null : _trusted;
@@ -312,6 +322,12 @@ public sealed class ShareEditorWindow : FluentWindow
     }
 
     private static string? Null(string s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private void ShowPasswordState()
+    {
+        _password.PlaceholderText = _storedPassword is not null ? "A password is stored – type a new one to replace it" : "Leave empty to be asked when connecting";
+        _removePassword.Visibility = _storedPassword is not null ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 0, 0, 4) };
 

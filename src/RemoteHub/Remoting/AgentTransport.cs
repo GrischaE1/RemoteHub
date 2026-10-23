@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Security;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
@@ -68,6 +69,30 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
     private volatile bool _closing;
 
     /// <summary>
+    /// "user:password" in base64, read straight from the SecureString into a wiped buffer. The header itself has to be
+    /// a string (ClientWebSocket takes nothing else); it lives only until the socket has sent it.
+    /// </summary>
+    private static unsafe string BasicCredentials(string user, System.Security.SecureString password)
+    {
+        var p = Marshal.SecureStringToGlobalAllocUnicode(password);
+        byte[]? bytes = null;
+        try
+        {
+            var chars = new ReadOnlySpan<char>((char*)p, password.Length);
+            var prefix = user + ":";
+            bytes = GC.AllocateUninitializedArray<byte>(Encoding.UTF8.GetByteCount(prefix) + Encoding.UTF8.GetByteCount(chars), pinned: true);
+            var n = Encoding.UTF8.GetBytes(prefix, bytes);
+            Encoding.UTF8.GetBytes(chars, bytes.AsSpan(n));
+            return Convert.ToBase64String(bytes);
+        }
+        finally
+        {
+            Marshal.ZeroFreeGlobalAllocUnicode(p);
+            if (bytes is not null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    /// <summary>
     /// The out-of-process protocol waits for an acknowledgement after every fragment, so with the default 32 KB
     /// fragments throughput is capped at 32 KB per round trip (about 1 MB/s at 30 ms). Larger fragments lift that cap.
     /// </summary>
@@ -103,8 +128,7 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         if (via is null) ws.Options.RemoteCertificateValidationCallback = pinned;
         if (info.Credential is { } c)
         {
-            var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{c.UserName}:{c.GetNetworkCredential().Password}"));
-            ws.Options.SetRequestHeader("Authorization", "Basic " + basic);
+            ws.Options.SetRequestHeader("Authorization", "Basic " + BasicCredentials(c.UserName, c.Password));
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(info.OpenTimeout > 0 ? info.OpenTimeout : 20_000);

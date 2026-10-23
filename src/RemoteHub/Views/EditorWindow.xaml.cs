@@ -55,7 +55,7 @@ public partial class EditorWindow : FluentWindow
         _data = data;
         _host = host;
         DataContext = _vm = new EditorViewModel(node, data, isNew);
-        PasswordInput.Password = _vm.Password ?? "";
+        // The stored password is never put back into the box (it stays encrypted in memory); typing one replaces it.
         // Policy AllowSavedPasswords = 0: no password can be stored; the one there stays until it is removed (§14 Q2).
         if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(PasswordInput);
         BuildNav();
@@ -542,9 +542,16 @@ public partial class EditorWindow : FluentWindow
 
     private void RemoveIconImage_Click(object sender, RoutedEventArgs e) => _vm.IconImage = null;
 
+    private void RemovePassword_Click(object sender, RoutedEventArgs e)
+    {
+        _vm.RemovePassword();
+        PasswordInput.Password = "";
+    }
+
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        if (Features.IsAllowed(Feature.SavedPasswords)) _vm.Password = PasswordInput.Password;
+        if (Features.IsAllowed(Feature.SavedPasswords)) _vm.ReplacePassword(PasswordInput.Password);
+        PasswordInput.Password = "";
         if (!_vm.Apply())
         {
             // Show the page with the problem.

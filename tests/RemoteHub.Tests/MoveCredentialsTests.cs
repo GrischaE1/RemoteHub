@@ -11,7 +11,7 @@ public class MoveCredentialsTests
     public void Moving_out_of_a_folder_with_credentials_is_detected()
     {
         var data = new AppData();
-        var lab = new Folder { Name = "LAB", InheritCredentials = false, Credentials = new CredentialSet { Username = "[REDACTED]", Password = "x" } };
+        var lab = new Folder { Name = "LAB", InheritCredentials = false, Credentials = new CredentialSet { Username = "[REDACTED]", Password = Secret.From("x") } };
         var other = new Folder { Name = "Other" };
         var nuc = new Connection { Name = "NUC13", Host = "h", Parent = lab };
         lab.Children.Add(nuc);

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using RemoteHub.Models;
@@ -24,9 +25,14 @@ public static class RdpFileWriter
         if (!cred.IsEmpty)
         {
             S("username", string.IsNullOrEmpty(cred.Domain) ? cred.Username! : $"{cred.Domain}\\{cred.Username}");
-            if (includePassword && !string.IsNullOrEmpty(cred.Password))
+            if (includePassword && cred.Password is not null)
             {
-                var blob = ProtectedData.Protect(Encoding.Unicode.GetBytes(cred.Password), null, DataProtectionScope.CurrentUser);
+                var blob = cred.Password.Use(v =>
+                {
+                    var plain = MemoryMarshal.AsBytes(v).ToArray();
+                    try { return ProtectedData.Protect(plain, null, DataProtectionScope.CurrentUser); }
+                    finally { CryptographicOperations.ZeroMemory(plain); }
+                });
                 sb.Append("password 51:b:").Append(Convert.ToHexString(blob)).Append("\r\n");
             }
         }

@@ -15,7 +15,7 @@ public static class SavedPasswords
         var count = 0;
         void Clear(CredentialSet c)
         {
-            if (string.IsNullOrEmpty(c.Password)) return;
+            if (c.Password is null) return;
             c.Password = null;
             count++;
         }
@@ -26,7 +26,7 @@ public static class SavedPasswords
         }
         Clear(data.DefaultCredentials);
         foreach (var s in data.SavedCredentials)
-            if (!string.IsNullOrEmpty(s.Password)) { s.Password = null; count++; }
+            if (s.Password is not null) { s.Password = null; count++; }
         return count;
     }
 }

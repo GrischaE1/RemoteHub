@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using RemoteHub.Models;
@@ -98,15 +99,17 @@ public static class RdpFileParser
     }
 
     /// <summary>"password 51:b:" is DPAPI-protected by mstsc for the current user; only readable on the same account.</summary>
-    private static string? TryDecryptPassword(string? hex)
+    private static Secret? TryDecryptPassword(string? hex)
     {
         if (hex is null) return null;
+        byte[]? plain = null;
         try
         {
-            var plain = ProtectedData.Unprotect(Convert.FromHexString(hex), null, DataProtectionScope.CurrentUser);
-            return Encoding.Unicode.GetString(plain).TrimEnd('\0');
+            plain = ProtectedData.Unprotect(Convert.FromHexString(hex), null, DataProtectionScope.CurrentUser);
+            return Secret.From(MemoryMarshal.Cast<byte, char>(plain.AsSpan(0, plain.Length & ~1)).TrimEnd('\0'));
         }
         catch { return null; }
+        finally { if (plain is not null) CryptographicOperations.ZeroMemory(plain); }
     }
 
     public static (string Host, int Port) SplitAddress(string address)

@@ -30,7 +30,7 @@ public sealed class FtpShare : ShareFileSystem
     {
         var anonymous = credentials.IsEmpty;
         var user = anonymous ? "anonymous" : SftpShare.UserName(credentials);
-        var password = anonymous ? "anonymous@" : credentials.Password ?? "";
+        var password = anonymous ? "anonymous@" : credentials.Password?.Reveal() ?? "";
         var config = new FtpConfig
         {
             EncryptionMode = security switch { FtpSecurity.Implicit => FtpEncryptionMode.Implicit, FtpSecurity.None => FtpEncryptionMode.None, _ => FtpEncryptionMode.Explicit },

@@ -45,8 +45,8 @@ there (§6 schema, notes per connection or folder), this document wins, and §9.
 - **Fonts, font sizes and text colours.** Pages use the theme's styles, so they look the same everywhere and stay
   plain Markdown.
 - **Sharing notes with other users.** This waits for a server, as connections do.
-- **Sync between the user's devices.** This comes with device sync (local-db-design.md §8, phase 4 there). Until
-  then, notes stay on the PC, also in shared-folder mode.
+- **Sync between the user's devices.** Device sync is not planned (local-db-design.md §8): notes stay on the PC,
+  also in shared-folder mode.
 - **Section groups** (sections inside sections). Notebooks and sections are enough for v1.
 - **Secret fields in notes** (hidden values, copying through `SecureClipboard`). Notes are protected as a whole (§9).
 - **Import from OneNote.** Copying and pasting a page's text works. A Markdown file can be imported (§4.7).
@@ -649,7 +649,7 @@ A new console feature in `SOFTWARE\Policies\RemoteHub` (admx-design.md §5):
 
 In shared-folder mode (`SettingsFolder`), the connections live in `RemoteHub.settings`. Notes stay in this PC's
 database. The Notes view says so once, at the top: "Notes are stored on this PC only. They aren't in the shared
-settings folder." This lasts until device sync (local-db-design.md §8) is built.
+settings folder." Device sync, which would change that, is not planned (local-db-design.md §8).
 
 ### 9.3 Changes to other documents
 
@@ -668,7 +668,7 @@ settings folder." This lasts until device sync (local-db-design.md §8) is built
 | 4 | **Integration:** backup export/import, links to connections, `remotehub://note/` links, `AllowNotes` policy, audit events | Backup round trip with notes and images; the policy hides the view |
 | 5 | Print / PDF, text highlighting colours | – |
 | Later | Scripts and Logs as views (§3.8), each with its own design | – |
-| Later | Sync with device sync (local-db-design.md phase 4) | – |
+| – | Sync with device sync (local-db-design.md phase 4) | Not planned (local-db-design.md §8) |
 
 ## 11. Tests
 

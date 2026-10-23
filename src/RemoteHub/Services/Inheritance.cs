@@ -78,7 +78,7 @@ public static class Inheritance
     /// </summary>
     private static CredentialSet WithoutBlockedPassword(CredentialSet c)
     {
-        if (string.IsNullOrEmpty(c.Password) || Features.IsAllowed(Feature.SavedPasswords)) return c;
+        if (c.Password is null || Features.IsAllowed(Feature.SavedPasswords)) return c;
         var copy = c.Clone();
         copy.Password = null;
         return copy;

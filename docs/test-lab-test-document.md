@@ -4774,6 +4774,23 @@ P1 · How: U PS · Needs: – · Status: ✅ Automated – `C-DATA.Tests.ps1`
 - `db.key` starts with `RHDK` + 0x01 (DPAPI-protected, no startup protection).
 - The lab password is found in no file.
 
+#### C-DB-14 · No stored password in memory
+P1 · How: PS U · Needs: – · Status: ◐ Written – `C-DATA.Tests.ps1`
+
+**Preconditions:** C-DB-01 done (`Admin` has the connection `LabTarget` with the lab password stored); RemoteHub closed.
+
+**Steps:**
+1. FlaUI in `Admin`'s session: start RemoteHub and wait for the main window. Don't open or connect `LabTarget`.
+2. PS Direct as `PSAdmin`: write a full memory dump of `RemoteHub.exe` (`MiniDumpWriteDump`, full memory) to `C:\lab`.
+3. Count the lab password in the dump as UTF-8 and as UTF-16LE, and the host name `labtarget.lab.test` as UTF-16LE.
+4. Delete the dump; close RemoteHub.
+
+**Expected:**
+- The dump is written (more than 10 MB).
+- The host name is found (the dump and the search work).
+- The lab password is found neither as UTF-8 nor as UTF-16LE: a stored password stays encrypted in memory until a
+  connection uses it (local-db-design.md §17).
+
 #### C-DB-02 · Other Windows user
 P1 · How: PS · Needs: – · Status: ✅ Automated – `C-DATA.Tests.ps1`
 

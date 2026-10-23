@@ -83,7 +83,7 @@ Sync folder (OneDrive):  sync.key = sync master key (256-bit random) wrapped wit
 |---|---|
 | Stolen laptop or disk image, copied DB file | Whole-file encryption; the key needs this Windows account (DPAPI) and, if on, the startup password or Windows Hello |
 | Another local user, or malware running as another user | Folder ACL: only the user and SYSTEM. DPAPI is bound to the account |
-| Malware running as the same user while RemoteHub is unlocked | Can't be prevented locally. Limited by field-level secret encryption (passwords decrypted only when used) and the startup lock with auto-lock |
+| Malware running as the same user while RemoteHub is unlocked | Can't be prevented locally. Limited by field-level secret encryption, passwords kept encrypted in memory and decrypted only for the call that uses them (section 17), and the startup lock with auto-lock |
 | Tampering with the DB file | Per-page authentication (Poly1305): a changed page fails to read – no silent corruption |
 | Tampering with sync items (swapped, replayed, rolled back) | AES-GCM with AAD binding id, kind and version; each device ignores versions older than the highest it has seen |
 | Plain-text leftovers | `temp_store = MEMORY`; `secure_delete = ON`; the old `settings.dat` is deleted after a verified migration (section 9); backups are encrypted with the same key |
@@ -158,6 +158,11 @@ The relative overhead of bulk operations is higher than the 15 % assumed earlier
 a factor of 3 to 150. The relative target is dropped; the absolute ones stay as regression limits.
 
 ## 8. Sync across the user's devices (OneDrive)
+
+**Not planned** (decided 2026-10-23). The shared settings folder (`RemoteHub.settings` in a OneDrive or network
+folder, section 15) already gives the same connections on several PCs; record-by-record sync, a synced audit log and
+sync conflicts aren't worth their complexity for that. Each PC keeps its own database, audit log and notes. The
+design below is kept for reference only.
 
 The same user on a workstation and a notebook. The DB stays local on each device; the sync folder holds one encrypted
 file per record:
@@ -235,8 +240,8 @@ Events (`AuditEvents`, grouped as in the viewer's filter):
 | Files, recordings and agents | Files transferred (`files.transferred`), Recording started / saved (`recording.started` / `recording.stopped`), Agent installed (`agent.installed`), Credential provider installed or removed (`agent.credential_provider`), Automatic sign-in (`agent.auto_sign_in`: requested, signed in, failed) |
 | Backups and storage | Backup exported / imported (`backup.exported` / `backup.imported`), Settings moved to the database (`storage.migrated`), Database check failed (`storage.check_failed`), Database restored (`storage.restored`), Settings location changed (`storage.location_changed`) |
 
-Not built: "password shown" (RemoteHub logs copying a password, there is no separate show event), sync conflict
-(phase 4). Scripts (phase 5) brought `script.run`, `script.deployed` and the other script events
+Not built: "password shown" (RemoteHub logs copying a password; it never shows a stored one, section 17). "Sync
+conflict" isn't needed: device sync is not planned (section 8). Scripts (phase 5) brought `script.run`, `script.deployed` and the other script events
 (scripts-view-design.md §10), and `node.restored` / `node.purged` for the connection tree's "Recently deleted".
 
 - Append-only in the database: triggers reject every UPDATE ("The audit log is append-only.") and every DELETE of an
@@ -259,7 +264,7 @@ Not built: "password shown" (RemoteHub logs copying a password, there is no sepa
 | 1 | `DataStore` replacing `SettingsStore.Load/Save`; key handling; migration; backups. No visible change | **Done** (0.14.0) – see section 15. Migration on real data: still to be checked on a real install |
 | 2 | Audit log + connection history (+ "unused connections" filter on real history) | **Done** (0.14.0) – see section 15 |
 | 3 | Notes: notebooks, sections and pages (Markdown), images, links to folders and connections, full-text search | **Built** on `notes-view` (schema version 2) – see [notes-view-design.md](notes-view-design.md) |
-| 4 | Device sync with item files; migrating the sync file; audit log sync; sync-conflict audit event; recovery from the sync folder | Two-device tests pass |
+| 4 | Device sync with item files; migrating the sync file; audit log sync; sync-conflict audit event; recovery from the sync folder | **Not planned** – see section 8 |
 | 5 | Scripts | **Built** on `scripts-view-design` (schema version 3) – see [scripts-view-design.md](scripts-view-design.md) |
 
 Tests: wrong key fails, tampered page fails, AAD swap fails, migration round-trip, kill during write, two simulated
@@ -268,7 +273,7 @@ devices with one folder (conflict, delete, OneDrive conflict copy, offline devic
 ## 13. Decided
 
 1. Encrypted SQLite: SQLite3 Multiple Ciphers with ChaCha20-Poly1305 (section 3).
-2. The audit log is per user and syncs across the user's devices (section 8).
+2. The audit log is per user and per device; it isn't synced (device sync is not planned, section 8).
 3. Audit retention: 365 days by default, adjustable by policy.
 4. Note attachments: max. 25 MB per file – mainly text and pictures.
 
@@ -311,10 +316,10 @@ What differs from the plan above, and why:
 | Separate `folders` and `connections` tables | One `nodes` table (kind = folder/connection); `credentials` and `settings` have the same columns | One code path for all records; queried fields (name, host, parent) are columns |
 | Schema version 1 as in §6 | Tables `meta`, `nodes`, `credentials`, `settings`, `secrets` (key: owner_kind, owner_id, `path` in the record), `audit` (with `device_name`), `connection_history` (`kind` instead of `via`); no `notes`, `sync_items` or `conflicts` yet | Only what phases 1–2 use; the rest comes with phases 3–4 |
 | Key passed with `PRAGMA hexkey` | `sqlite3_key` with the key bytes | The key never exists as a string |
-| Passwords decrypted only when used | Decrypted when loading, into the existing in-memory model | The app's model holds passwords today; changing that is a larger refactor (open) |
+| Passwords decrypted only when used | Done after 0.21.0: passwords stay encrypted in memory and are decrypted only for the call that uses them – section 17 | At first they were decrypted when loading, into the in-memory model |
 | Folder ACL: only the user and SYSTEM | The profile's default ACL (user, SYSTEM, Administrators) | Administrators can take any file anyway; the protection is DPAPI and the startup lock |
 | Rekey: new DB key and new secret key | New DB key only | Passwords are only reachable through the newly encrypted pages; one key file write keeps it crash-safe (`db.key.next`) |
-| Sync of the audit log (phase 4) | Not yet – per device until phase 4 | Phase 4 |
+| Sync of the audit log (phase 4) | Per device | Device sync is not planned (section 8) |
 | "Unused" filter on the history table | Still uses the last connection time | The same event sets both; the history adds counts and durations (shown in the audit viewer for one connection) |
 | One writer on a background queue, separate read connections (§7) | One writer connection under a lock on the caller's thread; read-only connections of their own for long reads (`LocalDb.Read`: audit viewer, verify, history summary, daily check + backup) | Writes take well under a millisecond, so a queue adds nothing; the long reads were what made saves wait. Reads hold a shared "lifetime" lock so the key can't change under them (0.15.0) |
 | Startup lock with auto-lock (§5) | Auto-lock (only with the startup lock on) after 1, 5, 15, 30 or 60 min without mouse or keyboard input on the PC – default Never; checked every 15 s, and not while a modal dialog is open (it locks once that is closed): windows hidden, the startup-lock key wiped from memory; the DB key stays for the running sessions | A UI lock: sessions keep running behind it (0.15.0) |
@@ -322,7 +327,7 @@ What differs from the plan above, and why:
 Audit log additions (0.14.4): a batch that fails to write is kept and tried again; each device's newest entry (id, time,
 hash) is recorded in `meta`, so removing entries from the end is detected too.
 
-Shared-folder mode (phase 4 open): connections stay in `RemoteHub.settings` as before; the database holds this PC's own
+Shared-folder mode: connections stay in `RemoteHub.settings` as before; the database holds this PC's own
 settings (the fallback when the shared file is unavailable), the audit log and the history. A save with no changes
 no longer rewrites the shared file.
 - The shared file is `RemoteHub.settings` in the chosen folder (`RdpManager.settings` only when that is the only one
@@ -359,9 +364,48 @@ database can't be opened); the audit log is tamper-evident, not tamper-proof (se
 
 ## 16. Not done yet
 
-- Device sync, audit sync, sync conflicts and recovery from the sync
-  folder (phase 4).
-- Passwords decrypted only when used (today: when loading – section 15).
-- Audit events planned but not built: "password shown", "sync conflict" (section 11).
+- Audit event planned but not built: "password shown" (section 11).
+- (Not planned: device sync, audit sync, sync conflicts and recovery from the sync folder – section 8.)
+- (Done after 0.21.0: passwords decrypted only when used – section 17.)
 - (Done with schema version 3: the Scripts tables and "Recently deleted" for connections, scripts-view-design.md §7.)
 - (Done with schema version 2: numbered migration steps, each in its own transaction, with a backup before the first one.)
+
+## 17. Passwords in memory
+
+Stored passwords – of connections, folders, shares, the global defaults and saved credentials – no longer sit in the
+app's model as strings. Each is a `Secret` (`src/RemoteHub/Services/Secret.cs`):
+
+- **Encrypted while held:** AES-256-GCM with a key made at random when RemoteHub starts, kept in pinned memory (the
+  GC can't leave copies of it behind). Equal passwords are compared by an HMAC of the value with the same key, in
+  constant time and without decrypting – for change detection and the "same password" checks.
+- **Decrypted only for the call:** `Use` decrypts into a pinned buffer, hands it to the caller as a span and wipes it
+  afterwards. `ToSecureString` builds PowerShell's credential straight from that buffer.
+- **Loaded without plain text:** each row of `secrets` is opened (`SecretBox.OpenSecret`) straight into a `Secret`; the
+  record's JSON only carries a placeholder for it, filled in while the record is read. Saving works the other way
+  round: the JSON gets a placeholder, the `Secret` is sealed for its row from its own buffer. The settings and backup
+  files (shared file, `settings.dat` during the move, `.rhbackup`) still hold the password as a JSON string inside
+  their encrypted payload; that buffer is wiped once the file is encrypted.
+- **Never shown again:** the connection editor, *Saved credentials* and the share editor start with an empty
+  password box that says a password is stored. Typing replaces it, an empty box keeps it, and *Remove stored
+  password* clears it.
+
+Where a plain copy still exists, and for how long:
+
+| Use | What it gets | Why |
+|---|---|---|
+| RDP control (`SetClearTextPassword`), SMB (SMBLibrary), SFTP (SSH.NET), FTP (FluentFTP) | A string for the call | These APIs take nothing else. The string can't be wiped; it stays until the GC reuses its memory |
+| WebDAV | A `SecureString` in `NetworkCredential` | The HTTP handler reads it as a string when it signs in |
+| Windows SMB (`WNetAddConnection2`) | A pinned, null-terminated copy, wiped after the call | – |
+| RemoteHub Agent (WebSocket sign-in) | `user:password` in base64 in the request header | `ClientWebSocket` takes a header string only; built from the `SecureString` in a wiped buffer |
+| Auto sign-in through the agent | The sign-in frame, wiped once sent | – |
+| Windows Security prompt (copy to clipboard) | Written from the decrypted buffer straight to the clipboard memory | – |
+| Password typed into a dialog or editor | The WPF-UI password box's own string | The control keeps it as a string; it becomes a `Secret` as soon as it is taken from the box |
+
+The enrollment keys of the RemoteHub Agent (`AgentEnrollmentKey.Secret`) are keys, not passwords: they stay strings
+in the model and are stored in `secrets` as before.
+
+Test: `SecretMemoryTests` writes a full memory dump of the test process after the paths above have handled a random
+password (use, `SecureString`, sealing and opening, a database record, reading from JSON) and searches it for the
+password as UTF-8 and UTF-16. A second password made into a string is the control: it must be found, the stored one
+must not. The test never holds either password in one piece (two random halves, combined byte by byte while
+searching), so it can't find its own copy.

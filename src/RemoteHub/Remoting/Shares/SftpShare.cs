@@ -20,7 +20,7 @@ public sealed class SftpShare : ShareFileSystem
         if (credentials.IsEmpty) throw new ShareException("SFTP needs an account – set one for the share or its server.");
         _forward = forward;
         var user = UserName(credentials);
-        var password = credentials.Password ?? "";
+        var password = credentials.Password?.Reveal() ?? "";
         var keyboard = new KeyboardInteractiveAuthenticationMethod(user);
         keyboard.AuthenticationPrompt += (_, e) =>
         {

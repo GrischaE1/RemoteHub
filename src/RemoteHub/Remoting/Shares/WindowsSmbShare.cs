@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using RemoteHub.Models;
+using RemoteHub.Services;
 
 namespace RemoteHub.Remoting.Shares;
 
@@ -136,18 +137,32 @@ public sealed class WindowsSmbShare : ShareFileSystem
     /// Connects the share for the account (once per share, counted). A connection Windows already had (Explorer,
     /// "net use") is used but never disconnected. The account is checked by Windows on every new connection.
     /// </summary>
-    private static void Acquire(string unc, string user, string? password)
+    private static void Acquire(string unc, string user, Secret? password)
     {
         lock (Gate)
         {
             if (Uses.TryGetValue(unc, out var u)) { Uses[unc] = u with { Count = u.Count + 1 }; return; }
             var existed = IsConnected(unc);
             var nr = new NETRESOURCE { dwType = 1 /* RESOURCETYPE_DISK */, lpRemoteName = unc };
-            var rc = WNetAddConnection2W(ref nr, password, user, 0);
+            var rc = password is null ? AddConnection(ref nr, [], user) : password.Use(v => AddConnection(ref nr, v, user));
             if (rc == ErrorSessionCredentialConflict) throw new CredentialConflictException();
             if (rc != 0) throw new ShareException($"{unc}: {new Win32Exception(rc).Message}");
             Uses[unc] = new Use(1, Owned: !existed);
         }
+    }
+
+    /// <summary>WNetAddConnection2 with the password from a wiped, null-terminated copy (an empty one: no password).</summary>
+    private static unsafe int AddConnection(ref NETRESOURCE nr, ReadOnlySpan<char> password, string user)
+    {
+        if (password.IsEmpty) return WNetAddConnection2W(ref nr, null, user, 0);
+        var buffer = GC.AllocateUninitializedArray<char>(password.Length + 1, pinned: true);
+        try
+        {
+            password.CopyTo(buffer);
+            buffer[^1] = '\0';
+            fixed (char* p = buffer) return WNetAddConnection2W(ref nr, p, user, 0);
+        }
+        finally { Array.Clear(buffer); }
     }
 
     private static void Release(string unc)
@@ -212,7 +227,7 @@ public sealed class WindowsSmbShare : ShareFileSystem
         public string? lpLocalName, lpRemoteName, lpComment, lpProvider;
     }
 
-    [DllImport("mpr.dll", CharSet = CharSet.Unicode)] private static extern int WNetAddConnection2W(ref NETRESOURCE netResource, string? password, string? userName, int flags);
+    [DllImport("mpr.dll", CharSet = CharSet.Unicode)] private static extern unsafe int WNetAddConnection2W(ref NETRESOURCE netResource, char* password, string? userName, int flags);
     [DllImport("mpr.dll", CharSet = CharSet.Unicode)] private static extern int WNetCancelConnection2W(string name, int flags, bool force);
     [DllImport("mpr.dll", CharSet = CharSet.Unicode)] private static extern int WNetOpenEnumW(int scope, int type, int usage, IntPtr netResource, out IntPtr handle);
     [DllImport("mpr.dll", CharSet = CharSet.Unicode)] private static extern int WNetEnumResourceW(IntPtr handle, ref int count, IntPtr buffer, ref int bufferSize);

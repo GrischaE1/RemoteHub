@@ -30,7 +30,7 @@ public sealed class ManagedSmbShare : ShareFileSystem
         try
         {
             var (domain, user) = Split(credentials, host);
-            var status = _client.Login(domain, user, credentials.Password ?? "");
+            var status = _client.Login(domain, user, credentials.Password?.Reveal() ?? "");
             if (status != NTStatus.STATUS_SUCCESS) throw new ShareException(Explain(status, $"{host}: sign-in failed"));
             if (!RequireSigning(_client))
                 throw new ShareException($"{host} signed the account in as a guest, whose connection can't be signed – nothing was read or written. " +

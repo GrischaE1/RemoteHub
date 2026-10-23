@@ -118,6 +118,31 @@ internal static class SecretBox
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
 
+    /// <summary>Seals a password straight from its encrypted in-memory form; the plain bytes exist only during the call.</summary>
+    public static byte[] Seal(byte[] key, Secret value, string place) => value.UseUtf8((plain, length) =>
+    {
+        var nonce = RandomNumberGenerator.GetBytes(12);
+        var tag = new byte[16];
+        var cipher = new byte[length];
+        using (var aes = new AesGcm(key, 16)) aes.Encrypt(nonce, plain.AsSpan(0, length), cipher, tag, Encoding.UTF8.GetBytes(place));
+        return (byte[])[.. nonce, .. tag, .. cipher];
+    });
+
+    /// <summary>Opens a sealed password into a <see cref="Secret"/>, without a plain string on the way.</summary>
+    public static Secret? OpenSecret(byte[] key, byte[] sealedValue, string place)
+    {
+        if (sealedValue.Length < 28) throw new InvalidDataException("A stored password is damaged.");
+        var plain = GC.AllocateUninitializedArray<byte>(sealedValue.Length - 28, pinned: true);
+        try
+        {
+            using var aes = new AesGcm(key, 16);
+            aes.Decrypt(sealedValue.AsSpan(0, 12), sealedValue.AsSpan(28), sealedValue.AsSpan(12, 16), plain, Encoding.UTF8.GetBytes(place));
+            return Secret.FromUtf8(plain);
+        }
+        catch (AuthenticationTagMismatchException) { throw new InvalidDataException("A stored password is damaged or was moved."); }
+        finally { CryptographicOperations.ZeroMemory(plain); }
+    }
+
     public static string Open(byte[] key, byte[] sealedValue, string place)
     {
         if (sealedValue.Length < 28) throw new InvalidDataException("A stored password is damaged.");
