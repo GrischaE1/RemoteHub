@@ -498,6 +498,7 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-VID-11 | RDP windows keep drawing | while connected `RemoteDesktop_SuppressWhenMinimized` = 2, restored afterwards (`rdp-minimized-<sid>.txt`), log line | H PS | 3 | ✅ | |
 | D-VID-12 | GPU picture stands still | Desktop Duplication frozen while the screen changes → GDI for the rest of the connection, log "… using GDI for this connection" | H PS | 3 | ✅ | |
 | D-VID-13 | Display kept on | the display doesn't turn off while connected | H PS | 3 | ✅ | |
+| D-VID-14 | Frame rate on a slow link | the D-VID-05 session (2 Mbit/s, random pixels, 30 fps and quality 80 asked): Stats carry `frameRateLimit` within the 30 s; every stat with a limit has quality ≤ 50 (the readable level comes first) and a limit between 5 and 29 fps | H N | 2 | ✅ |
 | D-FIT-01 | Fit to window | Settings Fit 1600×900 → guest resolution 1600×900 (or nearest listed), restored on disconnect | H PS | 2 | ✅ | |
 | D-FIT-02 | Unsupported size | 1234×777 → same shape smaller or nearest mode, Stats.fit says which | H | 3 | ✅ | |
 | D-FIT-03 | Restore after a crash | kill the helper → resolution restored, then fitted again by the restarted helper | H PS | 2 | ✅ | |
@@ -537,6 +538,10 @@ simulated with **S** (UIA on the agent's consent/PIN/banner windows) and **C** (
 | D-CLIP-20 | Long text | text over 1,000,000 characters truncated silently | H S | 3 | ✅ |
 | D-CLIP-21 | Too many files | 1001 single files → only 1000 offered, no message | H S | 3 | ✅ |
 | D-CLIP-22 | Bad image | a broken BMP to the device: receipt ok, the device's clipboard unchanged | H S | 3 | ✅ |
+| D-DROP-01 | Files dropped on the tab | a file and a folder (`dropFiles`) → saved in normaluser's `Desktop\From RemoteHub` with the same SHA-256, owner normaluser (written as the user); receipt folder "From RemoteHub"; event 1108 "saved 2 file(s)" without file names | H PS E | 2 | ✅ |
+| D-DROP-02 | Same names again | the same file dropped again → a folder `From RemoteHub\<yyyy-MM-dd HH.mm.ss>`; the first copy unchanged | H PS | 3 | ✅ |
+| D-DROP-03 | Junction in the folder's place | normaluser replaces `From RemoteHub` by a junction to `C:\Windows\System32\drivers\etc` → the next drop fails, nothing written there | H PS | 1 | ✅ |
+| D-DROP-04 | Policy | `DesktopClipboard` = 2 → a drop is refused with "Copying files isn't allowed on this device." | H PS | 2 | ✅ |
 
 ### 9.10 Idle, reconnect, robustness
 

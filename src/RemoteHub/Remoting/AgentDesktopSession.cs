@@ -520,6 +520,7 @@ public sealed partial class AgentDesktopSession : SessionBase
     private const long ProgressMinimum = 1024 * 1024;
     private int _outgoingId;
     private string _outgoingWhat = "";
+    private bool _outgoingDrop; // dropped on the tab: saved on the device's Desktop, not put on its clipboard
     private DispatcherTimer? _receiptTimer;
 
     public void CancelTransfer() => _sending?.Cancel();
@@ -584,11 +585,12 @@ public sealed partial class AgentDesktopSession : SessionBase
         _sending?.Cancel();
         var cancel = _sending = new CancellationTokenSource();
         var what = o.Transfer.Kind == DesktopTransferKind.Image ? "the image" : o.Transfer.Items.Count(i => !i.Folder) is var n && n == 1 ? "1 file" : $"{n} files";
+        var drop = o.Transfer.Kind == DesktopTransferKind.Drop;
         var total = o.Transfer.Total;
         var meter = new TransferMeter(total);
         var receipt = Supports(DesktopFeatures.TransferReceipt);
-        (_outgoingId, _outgoingWhat) = (o.Transfer.Id, what);
-        if (total >= ProgressMinimum) ShowTransfer($"Copying {what} to the device", 0, "Starting…", cancellable: true);
+        (_outgoingId, _outgoingWhat, _outgoingDrop) = (o.Transfer.Id, what, drop);
+        if (total >= ProgressMinimum) ShowTransfer(drop ? $"Saving {what} on the device" : $"Copying {what} to the device", 0, "Starting…", cancellable: true);
         else EndTransfer(null);
         Task.Run(async () =>
         {
@@ -603,7 +605,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                     if (cancel.IsCancellationRequested)
                     {
                         client.Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(o.Transfer.Id, false, "replaced"), DesktopJson.Default.DesktopTransferEnd));
-                        _ = _ui.BeginInvoke(() => { if (_outgoingId == o.Transfer.Id) EndTransfer("Cancelled – nothing was copied to the device."); });
+                        _ = _ui.BeginInvoke(() => { if (_outgoingId == o.Transfer.Id) EndTransfer(drop ? "Cancelled – nothing was saved on the device." : "Cancelled – nothing was copied to the device."); });
                         return;
                     }
                     client.Send(chunk);
@@ -625,7 +627,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                     // The device answers when the files are on its clipboard; no answer means they didn't get there.
                     _receiptTimer?.Stop();
                     _receiptTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-                    _receiptTimer.Tick += (_, _) => { if (_outgoingId == o.Transfer.Id) EndTransfer($"Failed – the device didn't confirm the copy of {what}; it may not have arrived."); };
+                    _receiptTimer.Tick += (_, _) => { if (_outgoingId == o.Transfer.Id) EndTransfer($"Failed – the device didn't confirm the {(drop ? "saving" : "copy")} of {what}; it may not have arrived."); };
                     _receiptTimer.Start();
                 });
             }
@@ -672,7 +674,42 @@ public sealed partial class AgentDesktopSession : SessionBase
             if (!end.Ok && _offered?.Transfer.Id == end.Id) ShowNotice("Failed – " + end.Reason); // the offer was refused
             return;
         }
-        EndTransfer(end.Ok ? $"Copied {_outgoingWhat} to the device – paste it there." : "Failed – " + end.Reason);
+        EndTransfer(!end.Ok ? "Failed – " + end.Reason
+            : _outgoingDrop ? DroppedText(_outgoingWhat, end.Folder)
+            : $"Copied {_outgoingWhat} to the device – paste it there.");
+    }
+
+    /// <summary>What the tab says once dropped files are saved: where, on the Desktop of whoever is signed in there.</summary>
+    internal static string DroppedText(string what, string folder) =>
+        $"Saved {what} on the device's Desktop, in “{(folder.Length > 0 ? folder : DesktopProtocol.DropFolder)}”.";
+
+    /// <summary>Why files can't be dropped on the tab now, or null when they can.</summary>
+    public string? DropRefusal =>
+        Phase != DesktopPhase.Live ? "Files can be dropped once the remote desktop is connected."
+        : ViewOnly ? "Viewing only – no files can be dropped on the device."
+        : !Supports(DesktopFeatures.DropFiles) ? "The device's RemoteHub Agent is too old to take dropped files – update it, or copy and paste them."
+        : ClipboardLevel < DesktopClipboardLevel.Files ? RefusedCopyNotice(ClipboardLevel)
+        : null;
+
+    /// <summary>
+    /// Files dropped on the tab: sent now (not offered for pasting) and saved on the device's Desktop, in
+    /// “From RemoteHub” – with the same right as copying files (the device checks it too).
+    /// </summary>
+    public void DropFiles(IReadOnlyList<string> paths)
+    {
+        if (paths.Count == 0) return;
+        if (DropRefusal is { } why) { ShowNotice(why); return; }
+        var id = ++_transferIds;
+        var files = paths.ToList();
+        Task.Run(() => ClipboardTransfer.Files(id, files, out var error) is { } o ? (o, (string?)null) : (null, error))
+            .ContinueWith(t =>
+            {
+                if (!t.IsCompletedSuccessfully) return;
+                var (o, error) = t.Result;
+                if (o is null) { ShowNotice(error ?? "The dropped files can't be sent."); return; }
+                Services.DiagLog.Write($"Agent desktop: {o.Transfer.Items.Length} dropped item(s), {o.Transfer.Total} bytes, go to the device's Desktop");
+                SendTransfer(o with { Transfer = o.Transfer with { Kind = DesktopTransferKind.Drop } });
+            }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     // ---- from the device: an image or files, put together here, then on this PC's clipboard
@@ -876,16 +913,26 @@ public sealed partial class AgentDesktopSession : SessionBase
             _infoClock.Restart();
             var fps = Interlocked.Exchange(ref _framesShown, 0) / seconds;
             var mbit = Interlocked.Exchange(ref _videoBytes, 0) * 8 / seconds / 1_000_000;
-            var parts = new List<string> { $"{fps:0} fps", $"{mbit:0.0} Mbit/s", _roundTripMs >= 0 ? $"{_roundTripMs:0} ms round trip" : "round trip: Data unavailable" };
-            if (_stats is { } st)
-            {
-                parts.Add($"quality {st.Quality}");
-                if (st.Width > 0) parts.Add($"{st.Width}×{st.Height}");
-                if (st.Capture.Length > 0) parts.Add(st.Capture);
-            }
-            ConnectionInfo = string.Join("  ·  ", parts) + (_stats is { Fit.Length: > 0 } s2 ? $"\nResolution: {s2.Fit}" : "");
+            ConnectionInfo = InfoText(fps, mbit, _roundTripMs, _stats);
         };
         _infoTimer.Start();
+    }
+
+    /// <summary>The connection info line: what arrives here, and what the device says about its picture.</summary>
+    internal static string InfoText(double fps, double mbit, double roundTripMs, DesktopStats? stats)
+    {
+        var parts = new List<string> { $"{fps:0} fps", $"{mbit:0.0} Mbit/s", roundTripMs >= 0 ? $"{roundTripMs:0} ms round trip" : "round trip: Data unavailable" };
+        if (stats is { } st)
+        {
+            parts.Add($"quality {st.Quality}");
+            if (st.Width > 0) parts.Add($"{st.Width}×{st.Height}");
+            if (st.Capture.Length > 0) parts.Add(st.Capture);
+        }
+        var text = string.Join("  ·  ", parts);
+        // The device lowered the frame rate because the network can't carry more (DesktopHelper.Adapted).
+        if (stats is { FrameRateLimit: > 0 } slow) text += $"\nSlow network: the device sends at most {slow.FrameRateLimit} fps to keep the picture sharp.";
+        if (stats is { Fit.Length: > 0 } fit) text += $"\nResolution: {fit.Fit}";
+        return text;
     }
 
     // ---- messages from the agent (receive thread)

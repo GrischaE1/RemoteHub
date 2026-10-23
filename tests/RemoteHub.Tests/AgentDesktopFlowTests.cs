@@ -299,6 +299,8 @@ public partial class AgentDesktopFlowTests
         public readonly ConcurrentQueue<DesktopPrivacy> Privacy = new();
         public readonly MemoryStream TransferBytes = new();
         public readonly ConcurrentQueue<int> Qualities = new();
+        /// <summary>Each stat's <see cref="DesktopStats.FrameRateLimit"/> (0: the frame rate wasn't lowered).</summary>
+        public readonly ConcurrentQueue<int> FrameRateLimits = new();
         public int CursorShapes, CursorMoves, Pongs, Stats;
         /// <summary>Above 0: frames are acknowledged this much later, as over a slow network.</summary>
         public volatile int AckDelayMs;
@@ -323,7 +325,9 @@ public partial class AgentDesktopFlowTests
                     case DesktopMessage.Clipboard: Clipboard.Enqueue(DesktopWire.ReadText(m)); break;
                     case DesktopMessage.Pong: Interlocked.Increment(ref Pongs); break;
                     case DesktopMessage.Stats:
-                        Qualities.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopStats).Quality);
+                        var stats = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopStats);
+                        Qualities.Enqueue(stats.Quality);
+                        FrameRateLimits.Enqueue(stats.FrameRateLimit);
                         Interlocked.Increment(ref Stats);
                         break;
                     case DesktopMessage.TransferStart: Transfers.Enqueue(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer)); break;
@@ -1051,17 +1055,60 @@ public partial class AgentDesktopFlowTests
         Assert.True(v.Qualities.Last() < DesktopProtocol.DefaultQuality, $"qualities: {string.Join(", ", v.Qualities)}");
     }
 
+    [Fact]
+    public async Task On_a_slow_network_the_frame_rate_goes_down_once_the_quality_is_at_the_readable_level()
+    {
+        // Acks 600 ms late: the quality steps to the readable level first, then the frame rate goes down - and the stats say so
+        await using var d = await StartDevice(screens: _ => new Screen(changing: int.MaxValue));
+        using var v = await Connect(d);
+        v.AckDelayMs = 600;
+        v.Start(ActiveUser.Id, DesktopConsent.None);
+        v.Next(DesktopStatusState.Connected);
+        Assert.True(SpinWait.SpinUntil(() => v.FrameRateLimits.Any(l => l > 0), TimeSpan.FromSeconds(30)),
+            $"qualities: {string.Join(", ", v.Qualities)}; frame-rate limits: {string.Join(", ", v.FrameRateLimits)}");
+        var limit = v.FrameRateLimits.First(l => l > 0);
+        Assert.InRange(limit, A.DesktopHelperSession.LowestFrameRate, DesktopProtocol.DefaultFramesPerSecond - 1);
+        // the frame rate only went down once the quality had reached the readable level, not before
+        var stats = v.Qualities.Zip(v.FrameRateLimits).ToList();
+        Assert.All(stats.Where(s => s.Second > 0), s => Assert.True(s.First <= A.DesktopHelperSession.ReadableQuality, $"quality {s.First} with limit {s.Second}"));
+    }
+
     [Theory]
-    [InlineData(60, 60, 1500, 2000, 50)]   // most of the time waiting for acks: 10 lower
-    [InlineData(60, 60, 500, 2000, 50)]    // a quarter
-    [InlineData(25, 60, 2000, 2000, 20)]   // not below 20
-    [InlineData(20, 60, 2000, 2000, 20)]
-    [InlineData(50, 60, 499, 2000, 50)]    // some waiting: stays
-    [InlineData(50, 60, 0, 2000, 55)]      // the acks keep up: 5 higher
-    [InlineData(58, 60, 0, 2000, 60)]      // up to what was asked for
-    [InlineData(80, 60, 0, 2000, 60)]      // the viewer asked for less
-    public void The_quality_follows_the_time_spent_waiting_for_acks(int current, int requested, long waitedMs, long windowMs, int expected) =>
-        Assert.Equal(expected, A.DesktopHelperSession.AdaptedQuality(current, requested, waitedMs, windowMs));
+    // slow (a quarter or more of the time waiting for acks): quality to the readable level, then the frame rate, then quality
+    [InlineData(80, 30, 80, 30, 1500, 2000, 70, 30)]
+    [InlineData(60, 30, 80, 30, 500, 2000, 50, 30)]    // a quarter
+    [InlineData(55, 30, 80, 30, 1500, 2000, 50, 30)]   // not below the readable level while the frame rate can go down
+    [InlineData(50, 30, 80, 30, 1500, 2000, 50, 20)]   // the frame rate by a third
+    [InlineData(50, 20, 80, 30, 1500, 2000, 50, 13)]
+    [InlineData(50, 8, 80, 30, 1500, 2000, 50, 5)]     // not below 5 fps
+    [InlineData(50, 5, 80, 30, 1500, 2000, 40, 5)]     // then the quality again
+    [InlineData(25, 5, 80, 30, 1500, 2000, 20, 5)]     // not below 20
+    [InlineData(20, 5, 80, 30, 2000, 2000, 20, 5)]
+    [InlineData(40, 30, 40, 30, 1500, 2000, 40, 20)]   // asked below the readable level: the frame rate goes first
+    [InlineData(50, 3, 80, 3, 1500, 2000, 40, 3)]      // asked for fewer than 5 fps: that rate is the lowest
+    [InlineData(50, 20, 80, 30, 499, 2000, 50, 20)]    // some waiting: stays
+    // the acks keep up: back up in the reverse order
+    [InlineData(40, 5, 80, 30, 0, 2000, 45, 5)]        // quality to the readable level first
+    [InlineData(50, 5, 80, 30, 0, 2000, 50, 7)]        // then the frame rate by half
+    [InlineData(50, 22, 80, 30, 0, 2000, 50, 30)]      // up to what was asked for
+    [InlineData(50, 30, 80, 30, 0, 2000, 55, 30)]      // then the quality, 5 at a time
+    [InlineData(78, 30, 80, 30, 0, 2000, 80, 30)]
+    [InlineData(80, 60, 60, 30, 0, 2000, 60, 30)]      // the viewer asked for less of both
+    public void Quality_and_frame_rate_follow_the_time_spent_waiting_for_acks(int quality, int rate, int askedQuality, int askedRate, long waitedMs, long windowMs,
+        int expectedQuality, int expectedRate) =>
+        Assert.Equal((expectedQuality, expectedRate), A.DesktopHelperSession.Adapted(quality, rate, askedQuality, askedRate, waitedMs, windowMs));
+
+    [Fact]
+    public void The_info_line_says_when_the_device_lowered_the_frame_rate()
+    {
+        var plain = AgentDesktopSession.InfoText(30, 2.5, 12, new DesktopStats(30, 60, "Desktop Duplication", 1920, 1080));
+        Assert.Equal("30 fps  ·  2.5 Mbit/s  ·  12 ms round trip  ·  quality 60  ·  1920×1080  ·  Desktop Duplication", plain);
+        var slow = AgentDesktopSession.InfoText(8, 0.4, -1, new DesktopStats(8, 50, "GDI", 1280, 720, "1280×720", FrameRateLimit: 8));
+        Assert.Contains("round trip: Data unavailable", slow);
+        Assert.Contains("\nSlow network: the device sends at most 8 fps to keep the picture sharp.", slow);
+        Assert.EndsWith("\nResolution: 1280×720", slow);
+        Assert.DoesNotContain("Slow network", AgentDesktopSession.InfoText(30, 1, 5, null));
+    }
 
     [Fact]
     public async Task All_monitors_are_shown_in_one_picture()
@@ -1471,6 +1518,162 @@ public partial class AgentDesktopFlowTests
         v.Start(ActiveUser.Id, DesktopConsent.Ask);
         v.Next(DesktopStatusState.Denied);
         WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopRefused), "refusal audited");
+    }
+
+    /// <summary>Sends <paramref name="paths"/> as files dropped on the tab, as RemoteHub does; returns the device's receipt.</summary>
+    private static DesktopTransferEnd DropFiles(Viewer v, int id, params string[] paths)
+    {
+        var files = ClipboardTransfer.Files(id, paths, out var error)!;
+        Assert.Null(error);
+        var dropped = files with { Transfer = files.Transfer with { Kind = DesktopTransferKind.Drop } };
+        v.Client.Send(DesktopWire.Json(DesktopMessage.TransferStart, dropped.Transfer, DesktopJson.Default.DesktopTransfer));
+        foreach (var chunk in ClipboardTransfer.Chunks(dropped)) v.Client.Send(chunk);
+        WaitFor(() => v.TransferEnds.Any(e => e.Id == id && e.ToDevice), $"receipt for drop {id} (ends: {string.Join("; ", v.TransferEnds)})");
+        return v.TransferEnds.First(e => e.Id == id && e.ToDevice);
+    }
+
+    [Fact]
+    public async Task Files_dropped_on_the_tab_are_saved_on_the_users_Desktop_and_audited()
+    {
+        var desktop = Path.Combine(Path.GetTempPath(), "rh-desktop-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(desktop);
+        Directory.CreateDirectory(Path.Combine(source, "logs"));
+        File.WriteAllText(Path.Combine(source, "report.txt"), "first");
+        File.WriteAllText(Path.Combine(source, "logs", "a.log"), "log");
+        A.SessionUser.DesktopForTests = desktop;
+        try
+        {
+            await using var d = await StartDevice();
+            using var v = await Connect(d);
+            Assert.Contains(DesktopFeatures.DropFiles, v.Client.Hello.Features!);
+            v.Start(ActiveUser.Id, DesktopConsent.None);
+            v.Next(DesktopStatusState.Connected);
+
+            // A file and a folder: saved in "From RemoteHub" on the Desktop, not put on the clipboard
+            var receipt = DropFiles(v, 1, Path.Combine(source, "report.txt"), Path.Combine(source, "logs"));
+            Assert.True(receipt.Ok, receipt.Reason);
+            Assert.Equal(DesktopProtocol.DropFolder, receipt.Folder);
+            var saved = Path.Combine(desktop, DesktopProtocol.DropFolder);
+            Assert.Equal("first", File.ReadAllText(Path.Combine(saved, "report.txt")));
+            Assert.Equal("log", File.ReadAllText(Path.Combine(saved, "logs", "a.log")));
+            Assert.Null(d.Helpers.Uis[0].Files);
+            WaitFor(() => d.AuditTexts.Any(a => a.Id == A.AuditEvent.DesktopFilesSaved), "the 1108");
+            var audit = d.AuditTexts.First(a => a.Id == A.AuditEvent.DesktopFilesSaved).Text;
+            Assert.Contains("saved 2 file(s)", audit);
+            Assert.DoesNotContain("report.txt", audit); // counts and size only, no names
+
+            // The same names again: a dated folder in it, nothing overwritten
+            File.WriteAllText(Path.Combine(source, "report.txt"), "second");
+            var again = DropFiles(v, 2, Path.Combine(source, "report.txt"));
+            Assert.True(again.Ok, again.Reason);
+            Assert.StartsWith(DesktopProtocol.DropFolder + Path.DirectorySeparatorChar, again.Folder);
+            Assert.Equal("first", File.ReadAllText(Path.Combine(saved, "report.txt")));
+            Assert.Equal("second", File.ReadAllText(Path.Combine(desktop, again.Folder, "report.txt")));
+
+            // Never offered for pasting: an offer of dropped files is refused, nothing goes on the clipboard
+            var offer = ClipboardTransfer.Files(3, [Path.Combine(source, "report.txt")], out _)!;
+            v.Client.Send(DesktopWire.Json(DesktopMessage.TransferOffer, offer.Transfer with { Kind = DesktopTransferKind.Drop }, DesktopJson.Default.DesktopTransfer));
+            WaitFor(() => v.TransferEnds.Any(e => e is { Id: 3, Ok: false, ToDevice: true }), "the refused offer");
+            Assert.Null(d.Helpers.Uis[0].Offered);
+        }
+        finally
+        {
+            A.SessionUser.DesktopForTests = null;
+            Directory.Delete(desktop, true);
+            Directory.Delete(source, true);
+        }
+    }
+
+    [Fact]
+    public async Task Dropping_files_needs_the_right_to_copy_files()
+    {
+        var desktop = Path.Combine(Path.GetTempPath(), "rh-desktop-" + Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N") + ".txt");
+        Directory.CreateDirectory(desktop);
+        File.WriteAllText(source, "x");
+        A.SessionUser.DesktopForTests = desktop;
+        try
+        {
+            // DesktopClipboard = 2 (images): copying files is refused, and so are dropped ones
+            var policy = new A.AgentPolicy
+            {
+                Rights = new Dictionary<A.AgentRight, IReadOnlyList<string>> { [A.AgentRight.Desktop] = [Admins], [A.AgentRight.ConsentBypass] = [Admins] },
+                Clipboard = DesktopClipboardLevel.Images,
+            };
+            await using var d = await StartDevice(policy: policy);
+            using var v = await Connect(d);
+            v.Start(ActiveUser.Id, DesktopConsent.None);
+            v.Next(DesktopStatusState.Connected);
+            var refused = DropFiles(v, 1, source);
+            Assert.False(refused.Ok);
+            Assert.Equal("Copying files isn't allowed on this device.", refused.Reason);
+            Assert.Empty(Directory.GetFileSystemEntries(desktop));
+            Assert.DoesNotContain(d.AuditTexts, a => a.Id == A.AuditEvent.DesktopFilesSaved);
+        }
+        finally
+        {
+            A.SessionUser.DesktopForTests = null;
+            Directory.Delete(desktop, true);
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public void An_unfinished_drop_removes_only_what_it_created()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), "rh-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "earlier.txt"), "keep");
+        try
+        {
+            // "From RemoteHub" already holds the user's earlier files: a drop that stops halfway takes away only its own
+            var r = new TransferReceiver(new DesktopTransfer(1, DesktopTransferKind.Drop,
+                [new DesktopTransferItem("new", 0, Folder: true), new DesktopTransferItem("new/a.txt", 4), new DesktopTransferItem("b.txt", 4)], 8), folder, ownsFolder: false);
+            r.Add(0, [1, 2, 3, 4, 5]);
+            Assert.True(File.Exists(Path.Combine(folder, "b.txt")));
+            r.Dispose();
+            Assert.Equal(["earlier.txt"], Directory.GetFileSystemEntries(folder).Select(Path.GetFileName));
+            Assert.Equal("keep", File.ReadAllText(Path.Combine(folder, "earlier.txt")));
+        }
+        finally { Directory.Delete(folder, true); }
+    }
+
+    [Fact]
+    public void Dropped_files_go_into_From_RemoteHub_or_a_dated_folder_in_it()
+    {
+        var desktop = Path.Combine(Path.GetTempPath(), "rh-desktop-" + Guid.NewGuid().ToString("N"));
+        var now = new DateTime(2026, 10, 22, 9, 5, 7);
+        var saved = Path.Combine(desktop, DesktopProtocol.DropFolder);
+        try
+        {
+            Assert.Equal(saved, A.SessionUser.NewDropFolder(desktop, ["report.txt"], now)); // not there yet
+            Directory.CreateDirectory(saved);
+            File.WriteAllText(Path.Combine(saved, "other.txt"), "x");
+            Assert.Equal(saved, A.SessionUser.NewDropFolder(desktop, ["report.txt"], now)); // other names don't matter
+            File.WriteAllText(Path.Combine(saved, "Report.TXT"), "x");
+            Assert.Equal(Path.Combine(saved, "2026-10-22 09.05.07"), A.SessionUser.NewDropFolder(desktop, ["report.txt"], now));
+            Directory.CreateDirectory(Path.Combine(saved, "logs"));
+            Assert.Equal(Path.Combine(saved, "2026-10-22 09.05.07"), A.SessionUser.NewDropFolder(desktop, ["logs"], now));
+        }
+        finally { if (Directory.Exists(desktop)) Directory.Delete(desktop, true); }
+    }
+
+    [Fact]
+    public void The_tab_says_where_dropped_files_go_and_why_not()
+    {
+        Assert.Equal("Saved 3 files on the device's Desktop, in “From RemoteHub”.", AgentDesktopSession.DroppedText("3 files", "From RemoteHub"));
+        Assert.Equal(@"Saved 1 file on the device's Desktop, in “From RemoteHub\2026-10-22 09.05.07”.", AgentDesktopSession.DroppedText("1 file", @"From RemoteHub\2026-10-22 09.05.07"));
+        Assert.Equal("Saved 1 file on the device's Desktop, in “From RemoteHub”.", AgentDesktopSession.DroppedText("1 file", ""));
+
+        Assert.Equal((System.Windows.DragDropEffects.None, "", false), RemoteHub.Views.AgentDesktopView.DragState(files: false, refusal: null));
+        Assert.Equal((System.Windows.DragDropEffects.Copy, "Drop to save on the device's Desktop, in “From RemoteHub”.", true), RemoteHub.Views.AgentDesktopView.DragState(files: true, refusal: null));
+        Assert.Equal((System.Windows.DragDropEffects.None, "Viewing only – no files can be dropped on the device.", true),
+            RemoteHub.Views.AgentDesktopView.DragState(files: true, refusal: "Viewing only – no files can be dropped on the device."));
+
+        // Not connected yet: nothing can be dropped (the agent's answer decides the rest)
+        var s = new AgentDesktopSession(new RemoteHub.Models.Connection { Name = "pc", Host = "pc.contoso.local" });
+        Assert.Equal("Files can be dropped once the remote desktop is connected.", s.DropRefusal);
     }
 
     [Fact]
@@ -2099,7 +2302,9 @@ public partial class AgentDesktopFlowTests
             auto.Dropped(3, helper, log);
             WaitFor(() => s.Disconnects.Contains(3), "locked when the sign-out is refused");
             WaitFor(() => helper.Disposed, "the cover ends once the session is locked");
-            Assert.Null(auto.Owned(3));
+            // the record goes right after the cover (AutoSignInSessions disposes, then forgets): waited for, not checked at
+            // once - CI (PR #69) looked in between
+            WaitFor(() => auto.Owned(3) is null, "the session's record forgotten");
         }
         finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(60); }
     }

@@ -6715,6 +6715,19 @@ P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-MORE2.Tests.ps1`
 **Expected:**
 - the display doesn't turn off while connected
 
+#### D-VID-14 · Frame rate on a slow link
+P2 · How: H N · Needs: – · Status: ✅ Automated – `D-VIDEO.Tests.ps1`
+
+**Preconditions:** the D-VID-05 session: the VM's adapter limited to 2 Mbit/s, a window of random pixels changing all the time, 30 fps and quality 80 asked.
+
+**Steps:**
+1. Read every `Stats` of the 30 s session: quality and `frameRateLimit`.
+
+**Expected:**
+- at least one stat has a `frameRateLimit` above 0 – the device lowered the frame rate
+- every stat with a limit has quality 50 or less: the quality reached the readable level before the frame rate went down
+- every limit is between 5 and 29 fps
+
 #### D-FIT-04 · Fit bounds
 P3 · How: H · Needs: – · Status: ✅ Automated – `D-MORE2.Tests.ps1`
 
@@ -6762,6 +6775,52 @@ P3 · How: H S · Needs: – · Status: ✅ Automated – `D-MORE2.Tests.ps1`
 
 **Expected:**
 - a broken BMP to the device: receipt ok, the device's clipboard unchanged
+
+#### D-DROP-01 · Files dropped on the tab
+P2 · How: H PS E · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
+
+**Preconditions:** normaluser signed in at the console and allowing the connection (the D-CLIP setup); the host's test files `file1.txt` and `folder\sub\inner.txt`.
+
+**Steps:**
+1. The harness drops `file1.txt` and `folder` on the tab (`dropFiles`, as RemoteHub's drag and drop sends them).
+2. Read `C:\Users\normaluser\Desktop\From RemoteHub` (files, hashes, owner) and the Application log's events 1108 since the start.
+
+**Expected:**
+- the receipt is ok and names the folder "From RemoteHub"
+- `file1.txt` and `folder\sub\inner.txt` are there with the host's SHA-256
+- the owner of `file1.txt` is normaluser – written with the user's rights, not the agent's
+- an event 1108 says "saved 2 file(s)" and names no file
+
+#### D-DROP-02 · Same names again
+P3 · How: H PS · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
+
+**Steps:**
+1. In the same connection, drop `file1.txt` again.
+
+**Expected:**
+- the receipt names a folder `From RemoteHub\<yyyy-MM-dd HH.mm.ss>`
+- the first `file1.txt` is still there, unchanged; the second is in the dated folder
+
+#### D-DROP-03 · Junction in the folder's place
+P1 · How: H PS · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
+
+**Steps:**
+1. As normaluser, move `From RemoteHub` aside and create a junction with that name to `C:\Windows\System32\drivers\etc`.
+2. Drop `file2.txt` on the tab.
+
+**Expected:**
+- the junction is in place (control)
+- the drop fails – written as normaluser, it can't go through the junction
+- no `file2.txt` in `drivers\etc`
+
+#### D-DROP-04 · Policy
+P2 · How: H PS · Needs: – · Status: ✅ Automated – `D-CLIP.Tests.ps1`
+
+**Steps:**
+1. Set the agent policy `DesktopClipboard` = 2 (images), connect, drop `file3.txt`.
+
+**Expected:**
+- refused with "Copying files isn't allowed on this device."
 
 ### 9.10 Idle, reconnect, robustness
 

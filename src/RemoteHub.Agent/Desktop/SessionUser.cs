@@ -46,6 +46,37 @@ internal static class SessionUser
         return Path.Combine(root, DateTime.Now.ToString("yyyyMMdd-HHmmss-fff"));
     }
 
+    /// <summary>Tests: the folder that stands for the user's Desktop, so nothing lands on the real one.</summary>
+    internal static string? DesktopForTests { get; set; }
+
+    /// <summary>
+    /// The signed-in user's Desktop (also when it is redirected, e.g. to OneDrive). Call it as LocalSystem, before
+    /// <see cref="Run"/>, like <see cref="ClipboardRoot"/>. Not running as LocalSystem (tests): the current account's.
+    /// </summary>
+    public static string DesktopFolder()
+    {
+        if (DesktopForTests is { } forTests) return forTests;
+        using var token = Token();
+        if (token is null) return Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var id = new Guid("B4BFCC3A-DB2C-424C-B029-7FE99A87C641"); // FOLDERID_Desktop
+        if (SHGetKnownFolderPath(ref id, 0, token.DangerousGetHandle(), out var path) != 0) throw new IOException("The signed-in user's Desktop can't be found.");
+        try { return Marshal.PtrToStringUni(path)!; }
+        finally { Marshal.FreeCoTaskMem(path); }
+    }
+
+    /// <summary>
+    /// Where dropped files go: <see cref="DesktopProtocol.DropFolder"/> on <paramref name="desktop"/> – or, when something there
+    /// already has the name of a dropped file or folder, a new folder in it named after <paramref name="now"/>, so nothing
+    /// is overwritten. Call inside <see cref="Run"/>: the folder belongs to the user, as their own would.
+    /// </summary>
+    public static string NewDropFolder(string desktop, IEnumerable<string> topNames, DateTime now)
+    {
+        var folder = Path.Combine(desktop, DesktopProtocol.DropFolder);
+        if (Directory.Exists(folder) && topNames.Any(n => File.Exists(Path.Combine(folder, n)) || Directory.Exists(Path.Combine(folder, n))))
+            folder = Path.Combine(folder, now.ToString("yyyy-MM-dd HH.mm.ss", System.Globalization.CultureInfo.InvariantCulture));
+        return folder;
+    }
+
     /// <summary>The SID of the user signed in to this session (as LocalSystem), or null when nobody is.</summary>
     public static string? Sid()
     {
@@ -74,4 +105,5 @@ internal static class SessionUser
     [DllImport("kernel32.dll")] private static extern bool ProcessIdToSessionId(uint pid, out uint session);
     [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSQueryUserToken(uint session, out IntPtr token);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern unsafe bool GetUserProfileDirectoryW(IntPtr token, char* dir, ref uint size);
+    [DllImport("shell32.dll")] private static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
 }

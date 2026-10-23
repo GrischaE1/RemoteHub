@@ -400,6 +400,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         {
             // Files are written as the signed-in user, into their own temp folder – never with the helper's LocalSystem rights.
             if (t.Kind == DesktopTransferKind.Image) _receiving = new TransferReceiver(t, null);
+            else if (t.Kind == DesktopTransferKind.Drop)
+            {
+                // Dropped on the tab: onto the user's Desktop, as the user – a link they planted there can only lead where
+                // they may write anyway.
+                var desktop = SessionUser.DesktopFolder();
+                var names = t.Items.Select(i => DesktopWire.SafeRelativePath(i.Path)?.Split('\\', '/')[0]).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                _receiving = SessionUser.Run(() =>
+                {
+                    var folder = SessionUser.NewDropFolder(desktop, names, DateTime.Now);
+                    _dropFolder = Path.GetRelativePath(desktop, folder);
+                    return new TransferReceiver(t, folder, ownsFolder: false);
+                });
+            }
             else
             {
                 var root = SessionUser.ClipboardRoot(); // looked up as LocalSystem, then used as the user
@@ -430,10 +443,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         }
     }
 
+    /// <summary>Where the files dropped now go, relative to the user's Desktop (for the receipt).</summary>
+    private string _dropFolder = "";
+
     private void Finish(TransferReceiver r)
     {
         _receiving = null;
         r.Dispose(); // the files are closed before they go on the clipboard
+        if (r.Transfer.Kind == DesktopTransferKind.Drop)
+        {
+            // Saved on the Desktop, nothing for the clipboard; the receipt says where (RemoteHub shows it, the service audits it).
+            _ = Send(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(r.Transfer.Id, true, "", ToDevice: true, Folder: _dropFolder), DesktopJson.Default.DesktopTransferEnd));
+            return;
+        }
         var content = r.Transfer.Kind == DesktopTransferKind.Image ? new HelperClipboard(r.Image, r.IsPng) : new HelperClipboard(Files: r.TopLevel, Items: r.Targets);
         // Asked for by a paste: the waiting paste gets it. Else (an older RemoteHub sends right away): onto the clipboard.
         if (_pasting is { } p && p.Id == r.Transfer.Id) p.Done.TrySetResult(content);
@@ -466,6 +488,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
 
     private void Offer(DesktopTransfer t)
     {
+        // Dropped files are saved, never offered for pasting (the service refuses that already).
+        if (t.Kind == DesktopTransferKind.Drop) { TransferFailed(t.Id, "The copied items are incomplete.", toDevice: true); return; }
         var need = t.Kind == DesktopTransferKind.Image ? DesktopClipboardLevel.Images : DesktopClipboardLevel.Files;
         if (Level < need) { TransferFailed(t.Id, "Not allowed on this device.", toDevice: true); return; }
         if (t.Kind == DesktopTransferKind.Files && VirtualFiles.SecurityResult != 0)
@@ -745,6 +769,10 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         H264Encoder? encoder = null;
         // The quality the viewer asked for last; the encoder's own may be lower while the network is slow.
         var requested = _quality;
+        // The frame rate the viewer asked for last, and the one the loop runs at: lower while the network is slow. The
+        // encoder keeps the asked rate – fed fewer frames, it sends fewer bits, and no new key frame is needed per step.
+        var askedRate = _fps;
+        var frameRate = askedRate;
         var lastSync = Stopwatch.StartNew();
         var lastChange = Stopwatch.StartNew();
         var lastAdapt = Stopwatch.StartNew();
@@ -768,7 +796,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             SendLayout(out _);
             while (!ct.IsCancellationRequested)
             {
-                var interval = 1000 / Math.Max(1, _fps);
+                if (_fps != askedRate) frameRate = askedRate = _fps; // the viewer asked for another rate: start from it
+                var interval = 1000 / Math.Max(1, frameRate);
                 var loopStart = Stopwatch.GetTimestamp();
 
                 if (dark.ElapsedMilliseconds >= 3000 && wakes < 3 && (wakes == 0 || lastWake.ElapsedMilliseconds >= 2000))
@@ -1010,18 +1039,24 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     var seconds = lastStats.Elapsed.TotalSeconds;
                     lastStats.Restart();
                     SendSync(DesktopWire.Json(DesktopMessage.Stats, new DesktopStats((int)Math.Round(_sent / seconds), encoder?.Quality ?? _quality,
-                        screen.CaptureMethod + (encoder?.Kind == "hardware" ? ", GPU encoder" : ""), encoder?.Width ?? 0, encoder?.Height ?? 0, screen.FitInfo),
+                        screen.CaptureMethod + (encoder?.Kind == "hardware" ? ", GPU encoder" : ""), encoder?.Width ?? 0, encoder?.Height ?? 0, screen.FitInfo,
+                        FrameRateLimit: frameRate < askedRate ? frameRate : 0),
                         DesktopJson.Default.DesktopStats));
                     _sent = 0;
                 }
 
-                // Slow network: lower the quality step by step; raise it again when the acks keep up.
+                // Slow network: lower the quality, then the frame rate, step by step; raise them again when the acks keep up.
                 if (lastAdapt.ElapsedMilliseconds >= 2000)
                 {
                     var window = lastAdapt.ElapsedMilliseconds;
                     lastAdapt.Restart();
                     var waited = (long)Stopwatch.GetElapsedTime(0, waitedTicks).TotalMilliseconds;
-                    if (encoder is not null && AdaptedQuality(encoder.Quality, requested, waited, window) is var next && next != encoder.Quality) encoder.TrySetQuality(next);
+                    if (encoder is not null)
+                    {
+                        var (quality, rate) = Adapted(encoder.Quality, frameRate, requested, askedRate, waited, window);
+                        if (quality != encoder.Quality) encoder.TrySetQuality(quality);
+                        frameRate = rate;
+                    }
                     waitedTicks = 0;
                 }
 
@@ -1101,19 +1136,40 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         }
     }
 
+    /// <summary>Quality the slow-network steps keep before they lower the frame rate: text on the device stays readable.</summary>
+    internal const int ReadableQuality = 50;
+    /// <summary>The lowest quality and frame rate the slow-network steps go to.</summary>
+    internal const int LowestQuality = 20, LowestFrameRate = 5;
+
     /// <summary>
-    /// The encoder's quality after <paramref name="windowMs"/> in which the capture loop spent <paramref name="waitedMs"/>
-    /// waiting for the viewer's acks: a quarter of the time or more means the network can't keep up – 10 lower, not below
-    /// 20; no wait at all – 5 higher, up to what the viewer asked for. Counting waits rather than blocked loops matters:
-    /// on a saturated link every wait is followed by exactly one capture, so the counts stay equal while the time is
-    /// nearly all spent waiting.
+    /// Quality and frame rate after <paramref name="windowMs"/> in which the capture loop spent <paramref name="waitedMs"/>
+    /// waiting for the viewer's acks. A quarter of the time or more means the network can't keep up, and one step goes
+    /// down: the quality by 10 to <see cref="ReadableQuality"/>, then the frame rate by a third to
+    /// <see cref="LowestFrameRate"/>, then the quality to <see cref="LowestQuality"/> – an admin reads text, so a sharp
+    /// picture that moves less often comes before a blurred one. No wait at all: one step back up, in the same order
+    /// reversed, up to what the viewer asked for. Counting waits rather than blocked loops matters: on a saturated link
+    /// every wait is followed by exactly one capture, so the counts stay equal while the time is nearly all spent waiting.
     /// </summary>
-    internal static int AdaptedQuality(int current, int requested, long waitedMs, long windowMs)
+    internal static (int Quality, int FrameRate) Adapted(int quality, int frameRate, int askedQuality, int askedFrameRate, long waitedMs, long windowMs)
     {
-        if (current > requested) return requested;
-        if (windowMs > 0 && waitedMs * 4 >= windowMs) return current > 20 ? Math.Max(20, current - 10) : current;
-        if (waitedMs <= 0 && current < requested) return Math.Min(requested, current + 5);
-        return current;
+        askedFrameRate = Math.Max(1, askedFrameRate);
+        quality = Math.Min(quality, askedQuality);
+        frameRate = Math.Clamp(frameRate, 1, askedFrameRate);
+        var readable = Math.Min(ReadableQuality, askedQuality);
+        var lowestRate = Math.Min(LowestFrameRate, askedFrameRate);
+        if (windowMs > 0 && waitedMs * 4 >= windowMs)
+        {
+            if (quality > readable) return (Math.Max(readable, quality - 10), frameRate);
+            if (frameRate > lowestRate) return (quality, Math.Max(lowestRate, frameRate * 2 / 3));
+            return (quality > LowestQuality ? Math.Max(LowestQuality, quality - 10) : quality, frameRate);
+        }
+        if (waitedMs <= 0)
+        {
+            if (quality < readable) return (Math.Min(readable, quality + 5), frameRate);
+            if (frameRate < askedFrameRate) return (quality, Math.Min(askedFrameRate, Math.Max(frameRate + 1, frameRate * 3 / 2)));
+            if (quality < askedQuality) return (Math.Min(askedQuality, quality + 5), frameRate);
+        }
+        return (quality, frameRate);
     }
 
     /// <summary>All of a 16×16 grid of samples is (nearly) black: a display that went dark, a blank screen saver.</summary>

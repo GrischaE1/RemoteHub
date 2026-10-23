@@ -33,10 +33,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
 
     // Clipboard transfers on their way, by id: bytes still allowed. Both directions are checked here, not only in the helper.
     private readonly ConcurrentDictionary<int, long> _toDevice = new(), _fromDevice = new();
+    // Files dropped on the tab and on their way: audited once the helper reports them saved.
+    private readonly ConcurrentDictionary<int, DesktopTransfer> _drops = new();
 
     private static readonly string[] Features =
         [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer, DesktopFeatures.TransferReceipt, DesktopFeatures.TransferOnPaste,
-         DesktopFeatures.UserPrivacy, DesktopFeatures.HideApps];
+         DesktopFeatures.UserPrivacy, DesktopFeatures.HideApps, DesktopFeatures.DropFiles];
 
     // Privacy: what the admin may do, and what is hidden now (as the helper last reported it).
     private bool _privacyRight, _privacyInputRight;
@@ -283,6 +285,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 _helper = null;
                 old?.Dispose();
                 _toDevice.Clear();
+                _drops.Clear();
                 _fromDevice.Clear();
                 try { await fromHelper.WaitAsync(TimeSpan.FromSeconds(3), ct); } catch { /* ended with the old pipe */ }
                 if (!userDesktop) await Task.Delay(TimeSpan.FromSeconds(1.5), ct); // let the new session or desktop settle
@@ -779,13 +782,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
                 case DesktopMessage.TransferStart when _live:
                     var t = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransfer);
-                    if (TransferAllowed(t) is { } refused)
+                    if (TransferAllowed(t, drop: true) is { } refused)
                     {
                         await SendWs(DesktopWire.Json(DesktopMessage.TransferEnd, new DesktopTransferEnd(t.Id, false, refused, ToDevice: true), DesktopJson.Default.DesktopTransferEnd), ct);
                         break;
                     }
                     Touch();
                     _toDevice[t.Id] = t.Total;
+                    if (t.Kind == DesktopTransferKind.Drop) _drops[t.Id] = t;
                     await SendPipe(m, ct);
                     break;
                 case DesktopMessage.TransferData when _live:
@@ -794,6 +798,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 case DesktopMessage.TransferEnd:
                     var end = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd);
                     if (_toDevice.TryRemove(end.Id, out _)) await SendPipe(m, ct);
+                    _drops.TryRemove(end.Id, out _); // RemoteHub ended it (cancelled): nothing to audit
                     break;
                 case DesktopMessage.SecureAttention when _live && !_viewOnly:
                     Touch();
@@ -925,14 +930,25 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private static int? TransferId(byte[] m) =>
         int.TryParse(DesktopWire.ReadText(m), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) ? id : null;
 
-    /// <summary>Null if this clipboard transfer may go through, else why not.</summary>
-    private string? TransferAllowed(DesktopTransfer t)
+    /// <summary>
+    /// Null if this clipboard transfer may go through, else why not. <paramref name="drop"/>: a TransferStart from
+    /// RemoteHub, the only place files dropped on the tab may come in – they are never offered for pasting, and the device
+    /// never sends any.
+    /// </summary>
+    internal string? TransferAllowed(DesktopTransfer t, bool drop = false)
     {
-        var need = t.Kind switch { DesktopTransferKind.Image => DesktopClipboardLevel.Images, DesktopTransferKind.Files => DesktopClipboardLevel.Files, _ => int.MaxValue };
+        if (t.Kind == DesktopTransferKind.Drop && !drop) return "The copied items are incomplete.";
+        // Dropped files need the same right as copied ones: they leave the admin's PC for the device's disk.
+        var need = t.Kind switch
+        {
+            DesktopTransferKind.Image => DesktopClipboardLevel.Images,
+            DesktopTransferKind.Files or DesktopTransferKind.Drop => DesktopClipboardLevel.Files,
+            _ => int.MaxValue,
+        };
         if (_clipboard < need)
-            return t.Kind == DesktopTransferKind.Files ? "Copying files isn't allowed on this device." : "Copying images isn't allowed on this device.";
+            return t.Kind == DesktopTransferKind.Image ? "Copying images isn't allowed on this device." : "Copying files isn't allowed on this device.";
         if (ClipboardClosed()) return ClipboardClosedReason;
-        if (t.Items is null || t.Items.Any(i => i is null || t.Kind == DesktopTransferKind.Files && string.IsNullOrEmpty(i.Path)))
+        if (t.Items is null || t.Items.Any(i => i is null || t.Kind != DesktopTransferKind.Image && string.IsNullOrEmpty(i.Path)))
             return "The copied items are incomplete.";
         if (t.Items.Length == 0 || t.Items.Length > DesktopProtocol.MaxTransferItems || t.Total < 0 || t.Total > DesktopProtocol.MaxTransferBytes ||
             t.Items.Any(i => i.Size < 0 || i.Folder && i.Size != 0) || t.Items.Sum(i => i.Size) != t.Total ||
@@ -1095,6 +1111,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var te = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopTransferEnd);
                         // The device's own transfer ended – or one to the device arrived there (receipt) or failed there.
                         if ((te.ToDevice ? _toDevice.TryRemove(te.Id, out _) : _fromDevice.TryRemove(te.Id, out _)) || !te.Ok) await SendWs(m, ct);
+                        if (te.ToDevice && _drops.TryRemove(te.Id, out var dropped) && te.Ok)
+                        {
+                            var files = dropped.Items.Count(i => !i.Folder);
+                            o.Log.Audit(AuditEvent.DesktopFilesSaved,
+                                $"Desktop: {identity.Account} from {source} saved {files} file(s), {dropped.Total:N0} bytes, on the desktop of the user in session {_helperSession} (folder \"{te.Folder}\")");
+                        }
                         break;
                 }
             }

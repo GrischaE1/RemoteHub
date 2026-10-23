@@ -90,6 +90,8 @@ public enum AuditEvent
     AutoSignInSucceeded = 1106,
     /// <summary>A session created by automatic sign-in was locked or signed out.</summary>
     AutoSignInEnded = 1107,
+    /// <summary>Files the admin dropped on the remote desktop were saved on the signed-in user's Desktop (count and size, no names).</summary>
+    DesktopFilesSaved = 1108,
     /// <summary>A jump connection signed in (this device as a jump host).</summary>
     TunnelStarted = 1200,
     /// <summary>A connection through this jump host ended: where to, how long, how much.</summary>

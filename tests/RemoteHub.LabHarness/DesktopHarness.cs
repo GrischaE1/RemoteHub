@@ -499,6 +499,17 @@ internal static class DesktopHarness
                     return await SendOutgoing(o2, s, ct);
                 }
 
+                case "dropFiles":
+                {
+                    // {paths: [..], offer (false), waitReceipt}: files dropped on the tab - sent at once, saved on the device's Desktop
+                    Need();
+                    var paths = s.TryGetProperty("paths", out var p) ? Strs(p) : [];
+                    var o2 = ClipboardTransfer.Files(Interlocked.Increment(ref _transferIds), paths, out var error);
+                    if (o2 is null) return (false, new D { ["failed"] = error });
+                    o2 = o2 with { Transfer = o2.Transfer with { Kind = DesktopTransferKind.Drop } };
+                    return await SendOutgoing(o2, s, ct, offerByDefault: false);
+                }
+
                 case "requestFiles":
                     return await RequestFiles(s, ct);
 
@@ -765,12 +776,12 @@ internal static class DesktopHarness
         /// agent has transferReceipt)}. Mirrors AgentDesktopSession.OfferOrSend: offered (names and sizes), sent when the device asks
         /// for it - also later, after this step - or sent at once without offer; then the device's receipt.
         /// </summary>
-        private async Task<(bool, D)> SendOutgoing(ClipboardTransfer.Outgoing t, JsonElement s, CancellationToken ct)
+        private async Task<(bool, D)> SendOutgoing(ClipboardTransfer.Outgoing t, JsonElement s, CancellationToken ct, bool? offerByDefault = null)
         {
             var c = Need();
             var id = t.Transfer.Id;
             var detail = new D { ["id"] = id, ["kind"] = t.Transfer.Kind, ["items"] = t.Transfer.Items.Length, ["total"] = t.Transfer.Total };
-            var offer = Bool(s, "offer", Supports(DesktopFeatures.TransferOnPaste));
+            var offer = Bool(s, "offer", offerByDefault ?? Supports(DesktopFeatures.TransferOnPaste));
             var ok = true;
             var stepStart = Ms;
             var request = _requests.GetOrAdd(id, _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
@@ -801,7 +812,7 @@ internal static class DesktopHarness
                 var receipt = _receipts.GetOrAdd(id, _ => new(TaskCreationOptions.RunContinuationsAsynchronously));
                 if (await Until(() => receipt.Task.IsCompleted, waitReceipt, ct))
                 {
-                    detail["receipt"] = new { receipt.Task.Result.Ok, receipt.Task.Result.Reason };
+                    detail["receipt"] = new { receipt.Task.Result.Ok, receipt.Task.Result.Reason, receipt.Task.Result.Folder };
                     ok = receipt.Task.Result.Ok;
                 }
                 else { detail["receipt"] = null; detail["receiptTimedOut"] = true; ok = false; }
