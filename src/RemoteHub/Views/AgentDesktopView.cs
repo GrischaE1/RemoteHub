@@ -51,7 +51,8 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly Button _keysButton;
     private readonly System.Windows.Threading.DispatcherTimer _resizeDebounce = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly Border _choosePanel = new(), _waitPanel = new(), _pinPanel = new(), _endPanel = new(), _securePanel = new(), _noticePanel = new(),
-        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new(), _transferPanel = new();
+        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new(), _transferPanel = new(), _dropPanel = new() { Visibility = Visibility.Collapsed };
+    private readonly TextBlock _dropText = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 520, Foreground = Brushes.White };
     private readonly TextBlock _selfViewWarning = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
     private bool _showInfo, _keyCombinations = true;
     private Action<bool, bool> _savePreferences = (_, _) => { };
@@ -136,7 +137,21 @@ public sealed class AgentDesktopView : Border, IRecordableView
         BuildInfoPanel();
         BuildReconnectPanel();
         BuildPausedPanel();
-        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _transferPanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel }) _content.Children.Add(p);
+        BuildDropPanel();
+        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _transferPanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel, _dropPanel }) _content.Children.Add(p);
+
+        // Files dragged onto the picture: saved on the device's Desktop (AgentDesktopSession.DropFiles). While dragging,
+        // the panel says where they go – or why they can't.
+        _content.AllowDrop = true;
+        _content.DragEnter += (_, e) => OnDrag(e);
+        _content.DragOver += (_, e) => OnDrag(e);
+        _content.DragLeave += (_, _) => _dropPanel.Visibility = Visibility.Collapsed;
+        _content.Drop += (_, e) =>
+        {
+            _dropPanel.Visibility = Visibility.Collapsed;
+            if (DroppedFiles(e) is { Length: > 0 } files) _session.DropFiles(files);
+            e.Handled = true;
+        };
 
         _picture.MouseMove += OnMouseMove;
         _picture.MouseDown += OnMouseDown;
@@ -525,6 +540,35 @@ public sealed class AgentDesktopView : Border, IRecordableView
         if (AppPolicy.AgentDesktopFitToWindow is not null) PolicyLock.Apply(_fit);
         if (AppPolicy.AgentDesktopQuality is not null) PolicyLock.Apply(_quality);
     }
+
+    /// <summary>Shown while files are dragged over the picture: where they will be saved, or why they can't be.</summary>
+    private void BuildDropPanel()
+    {
+        _dropPanel.Child = new Border { Child = _dropText, Background = new SolidColorBrush(Color.FromArgb(0xE0, 0x30, 0x30, 0x30)), Padding = new Thickness(14, 8, 14, 8),
+            CornerRadius = new CornerRadius(6), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        _dropPanel.IsHitTestVisible = false;
+    }
+
+    internal static string[] DroppedFiles(DragEventArgs e) =>
+        e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] f ? f : [];
+
+    /// <summary>A drag over the picture: copy when the files may go, with the panel saying where to; else why not.</summary>
+    private void OnDrag(DragEventArgs e)
+    {
+        var files = e.Data.GetDataPresent(DataFormats.FileDrop);
+        (e.Effects, var text, var show) = DragState(files, files ? _session.DropRefusal : null);
+        _dropText.Text = text;
+        _dropPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        e.Handled = true;
+    }
+
+    /// <summary>What a drag over the picture does: files that may go are copied, with the hint; else none, with why.</summary>
+    internal static (DragDropEffects Effects, string Text, bool Show) DragState(bool files, string? refusal) =>
+        !files ? (DragDropEffects.None, "", false)
+        : refusal is null ? (DragDropEffects.Copy, DropHint, true)
+        : (DragDropEffects.None, refusal, true);
+
+    internal static readonly string DropHint = $"Drop to save on the device's Desktop, in “{DesktopProtocol.DropFolder}”.";
 
     private void BuildNoticePanel()
     {

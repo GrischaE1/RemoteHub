@@ -1,7 +1,8 @@
 # D-CLIP - the clipboard of the agent's remote desktop, both ways: text, images and files (virtual files on the device,
 # fetched only when something pastes; pasted with the shell's own "paste" verb in normaluser's session, as Explorer
 # does), the limits, names that try to leave the clipboard folder, reparse points, broken transfers, the user's own
-# rights, the policy levels and view-only. normaluser is signed in and allows PSAdmin. See docs/test-lab-cases.md
+# rights, the policy levels and view-only, and files dropped on the tab (D-DROP: saved on normaluser's Desktop).
+# normaluser is signed in and allows PSAdmin. See docs/test-lab-cases.md
 # section 9.9.
 # LabRole: device
 param(
@@ -440,6 +441,92 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
 
         It 'D-CLIP-18 clipboard folders older than today are removed at the next transfer' -Tag 'D-CLIP-18' {
             $n.oldGone | Should -BeTrue
+        }
+    }
+
+    # Files dragged onto the agent desktop tab (harness step dropFiles = AgentDesktopSession.DropFiles): saved on the
+    # signed-in user's Desktop, folder "From RemoteHub", written as that user, audited as 1108.
+    Context 'files dropped on the tab' {
+        BeforeAll {
+            $dr = [ordered]@{}
+            $since = Get-Date
+            $o = Out 'drop'
+            $job = Begin 'drop' @(
+                @{ do = 'dropFiles'; paths = @("$data\file1.txt", "$data\folder"); waitReceipt = 30 }
+                @{ do = 'dropFiles'; paths = @("$data\file1.txt"); waitReceipt = 30 }
+                (Mark $o 'saved'), (Park $o 'junction'), @{ do = 'dropFiles'; paths = @("$data\file2.txt"); waitReceipt = 30 })
+            Reached $o 'saved'
+            $dr.saved = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
+                param($u)
+                $f = "C:\Users\$u\Desktop\From RemoteHub"
+                [pscustomobject]@{
+                    files = @(Get-ChildItem $f -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ path = $_.FullName.Substring($f.Length + 1); hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash } })
+                    owner = $(try { (Get-Acl -LiteralPath "$f\file1.txt").Owner } catch { '' })
+                }
+            }
+            # normaluser swaps the folder for a junction to a folder only admins may write: the next drop, written as
+            # normaluser, can't go through it
+            $dr.planted = Invoke-LabGuest -Name $VmName -Account User -ArgumentList $vm.UserAccount -ScriptBlock {
+                param($u)
+                $f = "C:\Users\$u\Desktop\From RemoteHub"
+                Rename-Item -LiteralPath $f -NewName 'From RemoteHub (moved)'
+                cmd /c mklink /J "$f" 'C:\Windows\System32\drivers\etc' | Out-Null
+                "$((Get-Item -LiteralPath $f -Force).Attributes)"
+            }
+            Release $o 'junction'
+            $dr.r = Receive-LabDesktop $job
+            $dr.etc = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Windows\System32\drivers\etc' -Filter 'file2.txt' -ErrorAction SilentlyContinue).Count }
+            $dr.events = @(Invoke-LabGuest -Name $VmName -ArgumentList $since -ScriptBlock {
+                    param($s) @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'RemoteHub Agent'; Id = 1108; StartTime = $s } -ErrorAction SilentlyContinue | ForEach-Object Message)
+                })
+            # DesktopClipboard = 2 (images): dropped files are refused like copied ones
+            Set-LabAgentPolicy -Name $VmName -Clear -Values @{ DesktopClipboard = 2 }
+            $dr.refused = Receive-LabDesktop (Begin 'drop-policy' @(@{ do = 'dropFiles'; paths = @("$data\file3.txt"); waitReceipt = 20 }))
+            Set-LabAgentPolicy -Name $VmName -Clear
+            Save 'drop' $dr
+        }
+
+        AfterAll {
+            Set-LabAgentPolicy -Name $VmName -Clear
+            # the junction as a link only, then the folders the drops made
+            $null = Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
+                param($u)
+                $f = "C:\Users\$u\Desktop\From RemoteHub"
+                if ([IO.Directory]::Exists($f) -and ([IO.File]::GetAttributes($f) -band [IO.FileAttributes]::ReparsePoint)) { [IO.Directory]::Delete($f) }
+                foreach ($p in $f, "$f (moved)") { if ([IO.Directory]::Exists($p)) { cmd /c rd /s /q "$p" } }
+            }
+        }
+
+        It 'D-DROP-01 dropped files and folders are saved on normaluser''s Desktop in "From RemoteHub", as normaluser, and audited (1108)' -Tag 'D-DROP-01' {
+            $first = @($dr.r.steps | Where-Object do -eq 'dropFiles')[0]
+            $first.ok | Should -BeTrue -Because (JsonText $first)
+            $first.detail.receipt.folder | Should -Be 'From RemoteHub'
+            ($dr.saved.files | Where-Object path -eq 'file1.txt').hash | Should -Be $hostHashes['file1.txt']
+            ($dr.saved.files | Where-Object path -eq 'folder\sub\inner.txt').hash | Should -Be $hostHashes['inner.txt']
+            $dr.saved.owner | Should -Match ([regex]::Escape($vm.UserAccount)) -Because 'written with the user''s rights, not the agent''s'
+            @($dr.events).Count | Should -BeGreaterThan 0 -Because 'each saved drop is audited (event 1108)'
+            # Get-WinEvent answers newest first: the first drop's event is any of them, not [0] (lab run 20261023-152043)
+            @($dr.events | Where-Object { $_ -match 'saved 2 file\(s\)' -and $_ -match 'folder "From RemoteHub"' }).Count | Should -Be 1 -Because "the first drop's event (events: $(@($dr.events) -join ' | '))"
+            @($dr.events | Where-Object { $_ -match 'file1\.txt|inner\.txt' }) | Should -BeNullOrEmpty -Because 'the audit names counts and size, not the files'
+        }
+
+        It 'D-DROP-02 the same names again go into a dated folder in "From RemoteHub"; nothing is overwritten' -Tag 'D-DROP-02' {
+            $second = @($dr.r.steps | Where-Object do -eq 'dropFiles')[1]
+            $second.ok | Should -BeTrue -Because (JsonText $second)
+            $second.detail.receipt.folder | Should -Match '^From RemoteHub\\\d{4}-\d\d-\d\d \d\d\.\d\d\.\d\d$'
+            @($dr.saved.files | Where-Object path -eq 'file1.txt').Count | Should -Be 1
+            @($dr.saved.files | Where-Object { $_.path -like '*\file1.txt' -and $_.path -ne 'file1.txt' }).Count | Should -Be 1
+        }
+
+        It 'D-DROP-03 a junction normaluser put in the folder''s place leads nowhere they can''t write: refused, nothing written' -Tag 'D-DROP-03' {
+            $dr.planted | Should -Match 'ReparsePoint' -Because 'the junction must be in place (control)'
+            $third = @($dr.r.steps | Where-Object do -eq 'dropFiles')[2]
+            $third.ok | Should -BeFalse
+            $dr.etc | Should -Be 0 -Because 'nothing may land in drivers\etc'
+        }
+
+        It 'D-DROP-04 DesktopClipboard = 2: dropped files are refused with "Copying files isn''t allowed on this device."' -Tag 'D-DROP-04' {
+            JsonText $dr.refused | Should -Match "Copying files isn't allowed on this device"
         }
     }
 }

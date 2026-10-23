@@ -50,6 +50,8 @@ public static class DesktopProtocol
     /// <summary>Clipboard images and files: at most this much per copy, sent in chunks of <see cref="TransferChunkBytes"/>.</summary>
     public const long MaxTransferBytes = 100L * 1024 * 1024;
     public const int MaxTransferItems = 1000;
+    /// <summary>The folder on the signed-in user's Desktop that files dropped on the tab are saved in (<see cref="DesktopTransferKind.Drop"/>).</summary>
+    public const string DropFolder = "From RemoteHub";
     public const int TransferChunkBytes = 256 * 1024;
 }
 
@@ -76,6 +78,8 @@ public static class DesktopFeatures
     /// <see cref="DesktopStatusState.SignInReady"/> and <see cref="DesktopMessage.SignInRequest"/>).
     /// </summary>
     public const string AutoSignIn = "autoSignIn";
+    /// <summary>Files dropped on the tab are saved on the device's Desktop (<see cref="DesktopTransferKind.Drop"/>).</summary>
+    public const string DropFiles = "dropFiles";
 }
 
 /// <summary>What may go through the clipboard (policy <c>DesktopClipboard</c>).</summary>
@@ -255,7 +259,8 @@ public sealed record DesktopStatus(string State, string Message, int PinAttempts
 
 /// <summary>What the device sends: frames in the last 2 s per second, the encoder's current quality, how it captures.</summary>
 /// <param name="Fit">The last resolution change for the window: asked and what the monitor runs at now ("" when none).</param>
-public sealed record DesktopStats(int FramesPerSecond, int Quality, string Capture, int Width, int Height, string Fit = "");
+/// <param name="FrameRateLimit">The frame rate the slow-network steps allow now, when it is below what the viewer asked for (0: not lowered).</param>
+public sealed record DesktopStats(int FramesPerSecond, int Quality, string Capture, int Width, int Height, string Fit = "", int FrameRateLimit = 0);
 
 /// <summary>A file or folder of a clipboard transfer; <see cref="Path"/> is relative, with '/' between folders.</summary>
 public sealed record DesktopTransferItem(string Path, long Size, bool Folder = false);
@@ -265,12 +270,18 @@ public static class DesktopTransferKind
     /// <summary>One item: a PNG or BMP file (by its name's extension).</summary>
     public const string Image = "image";
     public const string Files = "files";
+    /// <summary>
+    /// Files dropped on the agent desktop tab: sent right away (never offered) and saved in the signed-in user's
+    /// Desktop, folder <c>From RemoteHub</c> – not put on the clipboard. Same right as copying files.
+    /// </summary>
+    public const string Drop = "drop";
 }
 
 public sealed record DesktopTransfer(int Id, string Kind, DesktopTransferItem[] Items, long Total);
 
 /// <param name="ToDevice">About a transfer to the device (its receipt, or why it failed there) – the two directions number their transfers separately.</param>
-public sealed record DesktopTransferEnd(int Id, bool Ok, string Reason = "", bool ToDevice = false);
+/// <param name="Folder">With a receipt for dropped files: where they were saved, relative to the user's Desktop ("From RemoteHub", or a dated folder in it).</param>
+public sealed record DesktopTransferEnd(int Id, bool Ok, string Reason = "", bool ToDevice = false, string Folder = "");
 
 public sealed record DesktopPin(string Pin);
 

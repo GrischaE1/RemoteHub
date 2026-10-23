@@ -116,9 +116,18 @@ public sealed class TransferReceiver : IDisposable
     private int _item = -1;
     private long _received, _itemLeft;
     private FileStream? _file;
+    private readonly bool _ownsFolder;
+    // What this transfer created, in order – what an unfinished one removes when the folder isn't its own.
+    private readonly List<string> _created = [];
 
-    public TransferReceiver(DesktopTransfer t, string? folder)
+    /// <param name="ownsFolder">
+    /// The folder is this transfer's own (a new clipboard folder): an unfinished transfer removes all of it. False for a
+    /// folder that may hold other files (files dropped into the Desktop's "From RemoteHub"): only what this transfer
+    /// created is removed again.
+    /// </param>
+    public TransferReceiver(DesktopTransfer t, string? folder, bool ownsFolder = true)
     {
+        _ownsFolder = ownsFolder;
         // Checked on the receiving side too, whatever the sender (or the service in between) checked.
         if (t.Items is null || t.Items.Length == 0 || t.Items.Length > DesktopProtocol.MaxTransferItems || t.Total < 0 || t.Total > DesktopProtocol.MaxTransferBytes ||
             t.Items.Any(i => i is null || i.Size < 0 || i.Folder && i.Size != 0) || t.Items.Sum(i => i.Size) != t.Total ||
@@ -134,7 +143,7 @@ public sealed class TransferReceiver : IDisposable
         else
         {
             if (folder is null) throw new InvalidOperationException("No folder for the copied files.");
-            Directory.CreateDirectory(folder);
+            CreateDirectory(folder);
             var root = Path.GetFullPath(folder) + Path.DirectorySeparatorChar;
             _targets = t.Items.Select(i =>
             {
@@ -193,9 +202,10 @@ public sealed class TransferReceiver : IDisposable
         {
             var item = _t.Items[_item];
             var target = _targets[_item];
-            if (item.Folder) { Directory.CreateDirectory(target); continue; }
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            if (item.Folder) { CreateDirectory(target); continue; }
+            CreateDirectory(Path.GetDirectoryName(target)!);
             _file = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            _created.Add(target);
             _itemLeft = item.Size;
             if (_itemLeft > 0) return;
             _file.Dispose();
@@ -206,13 +216,40 @@ public sealed class TransferReceiver : IDisposable
     /// <summary>The image is a PNG (else BMP bytes), by the name the sender gave it.</summary>
     public bool IsPng => _t.Items is [{ Path: var p }] && p.EndsWith(".png", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Ends the transfer. Unfinished files are removed again – the folder is this transfer's own.</summary>
+    /// <summary>Creates <paramref name="path"/> and the folders above it that are missing, noting each one it made.</summary>
+    private void CreateDirectory(string path)
+    {
+        var missing = new Stack<string>();
+        for (var p = Path.GetFullPath(path); !Directory.Exists(p); p = Path.GetDirectoryName(p)!)
+        {
+            missing.Push(p);
+            if (Path.GetDirectoryName(p) is null) break;
+        }
+        Directory.CreateDirectory(path);
+        _created.AddRange(missing);
+    }
+
+    /// <summary>
+    /// Ends the transfer. An unfinished one is removed again: the whole folder when it is this transfer's own, else only
+    /// the files and folders it created (newest first; a folder only when it is empty).
+    /// </summary>
     public void Dispose()
     {
         _file?.Dispose();
         _file = null;
         _image?.Dispose();
-        if (_folder is not null && !Complete)
+        if (_folder is null || Complete) return;
+        if (_ownsFolder)
+        {
             try { if (Directory.Exists(_folder)) Directory.Delete(_folder, recursive: true); } catch { /* in use: the temp folder's own clean-up */ }
+            return;
+        }
+        for (var i = _created.Count - 1; i >= 0; i--)
+            try
+            {
+                if (File.Exists(_created[i])) File.Delete(_created[i]);
+                else if (Directory.Exists(_created[i]) && !Directory.EnumerateFileSystemEntries(_created[i]).Any()) Directory.Delete(_created[i]);
+            }
+            catch { /* in use: left for the user */ }
     }
 }

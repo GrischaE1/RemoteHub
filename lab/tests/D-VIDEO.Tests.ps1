@@ -156,6 +156,15 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             ($q | Measure-Object -Minimum).Minimum | Should -BeLessThan 80 -Because "the link was loaded (~$kbits kbit/s of video arrived, $($slow.frames.count) frames; stats fps: $((Fps $slow) -join ', '); quality: $($q -join ', ')) - see the D-VID-05 note in the header"
             $slow.frames.count | Should -BeGreaterThan 20
         }
+
+        It 'D-VID-14 on a 2 Mbit/s link the frame rate goes down only once the quality is at the readable level (50)' -Tag 'D-VID-14' {
+            # quality 80 -> 70 -> 60 -> 50 (three steps of 2 s), then the frame rate: within the 30 s it is lowered
+            $s = @($slow.stats | ForEach-Object { $_.stats })
+            $limited = @($s | Where-Object { $_.frameRateLimit -gt 0 })
+            $limited.Count | Should -BeGreaterThan 0 -Because "the stats say when the device lowered the frame rate (quality: $(($s | ForEach-Object quality) -join ', '); limits: $(($s | ForEach-Object frameRateLimit) -join ', '))"
+            @($limited | Where-Object { $_.quality -gt 50 }) | Should -BeNullOrEmpty -Because 'the picture stays readable (quality 50) before it moves less often'
+            @($limited | Where-Object { $_.frameRateLimit -ge 30 -or $_.frameRateLimit -lt 5 }) | Should -BeNullOrEmpty -Because 'between 5 fps and less than the 30 asked for'
+        }
     }
 
     Context 'dark display' {

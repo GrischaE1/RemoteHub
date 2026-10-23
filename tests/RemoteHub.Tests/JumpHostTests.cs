@@ -542,8 +542,20 @@ public class JumpHostTests : IAsyncLifetime
         Assert.Contains(secret, error); // the user still learns what couldn't be reached
         var line = $"Jump host forwarder {forward.Forwarder.LogId}: not connected – unreachable";
         var log = "";
-        await WaitFor(() => (log = File.ReadAllText(RemoteHub.Services.DiagLog.FilePath)).Contains(line), "the forwarder's log line");
+        await WaitFor(() => (log = ReadShared(RemoteHub.Services.DiagLog.FilePath)).Contains(line), "the forwarder's log line");
         Assert.DoesNotContain(secret, log);
+    }
+
+    /// <summary>The whole file, while other tests may be writing to it (DiagLog appends from many threads).</summary>
+    private static string ReadShared(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        catch (IOException) { return ""; } // being rotated or created: the next look reads it
     }
 
     [Fact]
