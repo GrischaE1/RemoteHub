@@ -685,8 +685,9 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             # until a connection uses it, local-db-design.md section 17). The connection's host name is the control
             # that the dump and the search work. Only the counts go to the evidence; the dump is deleted.
             Start-Client
-            $d.db14 = Invoke-LabGuest -Name $VmName -ArgumentList $password, 'labtarget.lab.test' -ScriptBlock {
-                param($pw, $control)
+            $controlHost = 'labtarget.lab.test'
+            $d.db14 = Invoke-LabGuest -Name $VmName -ArgumentList $controlHost, $password -ScriptBlock {
+                param($control, $pw)
                 Add-Type -TypeDefinition @'
 using System;
 using System.Diagnostics;

@@ -15,6 +15,7 @@ public class NetworkShareTests : IDisposable
 {
     private const string Marker = "Sh4re-plain-text-marker";
     private static string TestSecret(string name) => string.Concat(name, "-", Marker);
+    private static Secret StoredPassword(string name) => Secret.From(TestSecret(name))!;
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "rh-share-" + Guid.NewGuid().ToString("N")[..8]);
 
     public NetworkShareTests()
@@ -36,7 +37,7 @@ public class NetworkShareTests : IDisposable
     {
         var data = new AppData();
         var nuc = new Connection { Name = "NUC10", Host = "hv02" };
-        nuc.Shares.Add(new NetworkShare { Name = "share", Path = "share", InheritCredentials = false, Credentials = { Username = "lab", Password = Secret.From(TestSecret("Share")) } });
+        nuc.Shares.Add(new NetworkShare { Name = "share", Path = "share", InheritCredentials = false, Credentials = { Username = "lab", Password = StoredPassword("Share") } });
         nuc.Shares.Add(new NetworkShare { Name = "nas", Protocol = ShareProtocol.Sftp, Host = "nas.lab", Port = 2222, TrustedFingerprint = "SHA256:abc" });
         data.Items.Add(nuc);
         SettingsStore.RelinkParents(data.Items, null);
@@ -94,7 +95,7 @@ public class NetworkShareTests : IDisposable
     {
         var data = new AppData();
         var folder = new Folder { Name = "NAS" };
-        folder.Children.Add(new NetworkShare { Name = "media", Host = "nas", Path = "media", InheritCredentials = false, Credentials = { Username = "lab", Password = Secret.From(TestSecret("Alone")) } });
+        folder.Children.Add(new NetworkShare { Name = "media", Host = "nas", Path = "media", InheritCredentials = false, Credentials = { Username = "lab", Password = StoredPassword("Alone") } });
         folder.Children.Add(new Connection { Name = "HV02", Host = "hv02" });
         data.Items.Add(folder);
         data.Items.Add(new NetworkShare { Name = "files", Protocol = ShareProtocol.Sftp, Host = "files.lab", Path = "/data" });
