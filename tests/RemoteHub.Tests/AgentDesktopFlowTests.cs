@@ -366,7 +366,8 @@ public partial class AgentDesktopFlowTests
 
     private static void WaitFor(Func<bool> condition, string what)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(15);
+        // Only the ceiling: a wait ends as soon as its condition holds. 15 s ran out on a busy CI runner (main after #71).
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         while (!condition())
         {
             Assert.True(DateTime.UtcNow < deadline, "timed out waiting for " + what);
@@ -2272,7 +2273,8 @@ public partial class AgentDesktopFlowTests
     [Fact]
     public void A_dropped_connection_keeps_the_screen_covered_then_signs_out_even_with_lock_chosen()
     {
-        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(400);
+        // A hold well past the 150 ms look below, so a slow runner doesn't reach the sign-out before the test looks.
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(1500);
         try
         {
             var (s, auto, log) = AutoSignedSession();
@@ -2284,7 +2286,8 @@ public partial class AgentDesktopFlowTests
             WaitFor(() => s.LogOffs.Contains(3), "sign-out after the hold");
             WaitFor(() => helper.Disposed, "the cover ends once the session is gone");
             Assert.Empty(s.Disconnects);   // not the end action: a drop always signs out
-            Assert.Null(auto.Owned(3));
+            // the record goes right after the cover, as in the refused sign-out below: waited for, not checked at once
+            WaitFor(() => auto.Owned(3) is null, "the session's record forgotten");
         }
         finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
     }
