@@ -98,9 +98,54 @@ public class ClipboardOfferTests
         encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
         using var png = new MemoryStream();
         encoder.Save(png);
-        var dib = ClipboardOffer.PngToDib(png.ToArray())!;
+        var dib = DeviceImage.ToDib(DeviceImage.Decode(png.ToArray())!);
         Assert.Equal(40 + 16, dib.Length);
         Assert.Equal(2, BitConverter.ToInt32(dib, 8)); // height positive: bottom-up
         Assert.Equal(new byte[] { 7, 8, 9, 255 }, dib[40..44]); // first stored row = bottom row of the picture
+    }
+
+    /// <summary>What a paste of an offered image gets: (width of the image, the PNG format's bytes).</summary>
+    private static (int Width, byte[]? Png) PasteImage()
+    {
+        (int, byte[]?) result = default;
+        var t = new Thread(() =>
+        {
+            var png = System.Windows.Clipboard.GetData("PNG") is MemoryStream s ? s.ToArray() : null;
+            result = (System.Windows.Clipboard.GetImage()?.PixelWidth ?? 0, png);
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return result;
+    }
+
+    [SkippableFact]
+    public void A_pasted_image_is_made_from_its_pixels_never_the_devices_bytes()
+    {
+        // A BMP with bytes after the picture: a program reading the device's file would get them, the paste mustn't.
+        var bmp = DeviceImageTests.Encode(new System.Windows.Media.Imaging.BmpBitmapEncoder(), 3, 2);
+        byte[] crafted = [.. bmp, .. "trailing bytes of the device"u8];
+        var offer = new RemoteHub.Agent.DesktopTransfer(7, RemoteHub.Agent.DesktopTransferKind.Image, [new RemoteHub.Agent.DesktopTransferItem("image.bmp", crafted.Length)], crafted.Length);
+        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: crafted));
+        Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
+
+        var (width, png) = PasteImage();
+        Assert.Equal(3, width);
+        Assert.NotNull(png);
+        Assert.Equal(DeviceImage.Kind.Png, DeviceImage.Header(png)!.Value.Kind); // a PNG RemoteHub made, from a BMP
+        Assert.Equal(DeviceImage.Decode(crafted)!.Bgra, DeviceImage.Decode(png)!.Bgra);
+    }
+
+    [SkippableFact]
+    public void An_offered_image_in_another_format_pastes_as_nothing()
+    {
+        var gif = DeviceImageTests.Encode(new System.Windows.Media.Imaging.GifBitmapEncoder(), 2, 2);
+        var offer = new RemoteHub.Agent.DesktopTransfer(8, RemoteHub.Agent.DesktopTransferKind.Image, [new RemoteHub.Agent.DesktopTransferItem("image.png", gif.Length)], gif.Length);
+        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: gif, Png: true));
+        Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
+
+        var (width, png) = PasteImage();
+        Assert.Equal(0, width);
+        Assert.Null(png);
     }
 }

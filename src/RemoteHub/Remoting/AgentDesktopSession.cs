@@ -812,14 +812,18 @@ public sealed partial class AgentDesktopSession : SessionBase
         var png = r.IsPng;
         var items = r.Transfer.Kind == DesktopTransferKind.Files ? r.Targets : null;
         r.Dispose();
+        // Decoded here, on the receiving thread, and only as PNG, BMP or JPEG within the size limit (DeviceImage).
+        var pixels = image is not null ? DeviceImage.Decode(image) : null;
+        var refused = $"The image copied on the device can't be taken – only PNG, BMP and JPEG up to {DeviceImage.MaxSide} × {DeviceImage.MaxSide} pixels are.";
         // Asked for by a paste on this PC: the waiting paste gets it (it's on the clipboard through that paste).
         if (_pastingFromDevice is { } p && p.Id == r.Transfer.Id)
         {
-            p.Done.TrySetResult(new OfferedContent(files, image, png, items));
+            p.Done.TrySetResult(image is not null && pixels is null ? null : new OfferedContent(files, image, png, items, pixels));
             _ui.BeginInvoke(() =>
             {
                 if (!TransferCancellable) TransferActive = false;
-                ShowNotice(image is not null ? "Pasted the image from the device." : count == 1 ? "Pasted 1 file from the device." : $"Pasted {count} files from the device.");
+                ShowNotice(image is not null ? (pixels is null ? refused : "Pasted the image from the device.")
+                    : count == 1 ? "Pasted 1 file from the device." : $"Pasted {count} files from the device.");
             });
             return;
         }
@@ -828,10 +832,11 @@ public sealed partial class AgentDesktopSession : SessionBase
             if (!TransferCancellable) TransferActive = false; // the progress of this copy, not of one to the device
             try
             {
-                if (image is not null)
+                if (image is not null && pixels is null)
+                    ShowNotice(refused);
+                else if (pixels is not null)
                 {
-                    var decoded = BitmapDecoder.Create(new MemoryStream(image), BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
-                    Clipboard.SetImage(decoded);
+                    Clipboard.SetImage(DeviceImage.ToBitmapSource(pixels)); // made from the pixels, not the device's bytes
                     ShowNotice("Copied the image from the device – paste it here.");
                 }
                 else if (files is not null)
@@ -1239,6 +1244,21 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     private FrameDecoder? _decoder;
 
+    /// <summary>
+    /// Why a video message can't go to the decoder (too short for its header, or a picture size outside the protocol's
+    /// limits), or null when it can. <paramref name="h"/> is read whenever the header is complete.
+    /// </summary>
+    internal static string? CheckVideo(ReadOnlySpan<byte> m, out VideoHeader h)
+    {
+        h = default;
+        if (m.Length < DesktopWire.VideoHeaderSize) return $"{m.Length} bytes, shorter than its header";
+        h = DesktopWire.ReadVideo(m);
+        if (h.Width is < 1 or > DesktopProtocol.MaxVideoWidth || h.Height is < 1 or > DesktopProtocol.MaxVideoHeight)
+            return $"picture size {h.Width}×{h.Height} outside 1×1 – {DesktopProtocol.MaxVideoWidth}×{DesktopProtocol.MaxVideoHeight}";
+        if (m.Length == DesktopWire.VideoHeaderSize) return "no picture data";
+        return null;
+    }
+
     private sealed class FrameDecoder : IDisposable
     {
         private readonly AgentDesktopSession _session;
@@ -1269,7 +1289,16 @@ public sealed partial class AgentDesktopSession : SessionBase
                 decoder = new H264Decoder();
                 foreach (var m in _queue.GetConsumingEnumerable())
                 {
-                    var h = DesktopWire.ReadVideo(m);
+                    // The device chooses every byte: a message it got wrong is a bad frame, not the end of the session.
+                    if (CheckVideo(m, out var h) is { } bad)
+                    {
+                        Services.DiagLog.Write("Agent desktop: video message refused – " + bad);
+                        try { decoder.Flush(); } catch { /* new decoder below */ }
+                        _waitForKeyFrame = true;
+                        _session._client?.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                        if (m.Length >= DesktopWire.VideoHeaderSize) _session._client?.Send(DesktopWire.Ack(h.FrameId)); // its id is readable
+                        continue;
+                    }
                     try
                     {
                         if (_waitForKeyFrame && !h.KeyFrame) continue;
@@ -1296,6 +1325,7 @@ public sealed partial class AgentDesktopSession : SessionBase
 
         private unsafe void Publish(byte* bgra, int w, int h)
         {
+            if (w is < 1 or > DesktopProtocol.MaxVideoWidth || h is < 1 or > DesktopProtocol.MaxVideoHeight) return; // (CheckVideo bounds it already)
             lock (_lock)
             {
                 if (_back.Length < w * h * 4) _back = new byte[w * h * 4];

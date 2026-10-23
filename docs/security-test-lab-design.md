@@ -183,8 +183,8 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 
 | Threat | Verified today | Existing cases | SEC case |
 |---|---|---|---|
-| T9.1 Crafted H.264 to Media Foundation in-process | True; no isolation | D-VID-* (well-formed only) | SEC-DEC-01 |
-| T9.2 Crafted PNG to WPF `BitmapDecoder` | True | D-CLIP-22 (device side only) | SEC-DEC-02 |
+| T9.1 Crafted H.264 to Media Foundation in-process | True; no isolation yet. The picture size and message length are checked before the decoder (decoder-isolation-design.md §3.6); the decoder process is phases 2–4 there | D-VID-* (well-formed only); unit tests `DeviceImageTests` (video checks) | SEC-DEC-01 |
+| T9.2 Crafted PNG to WPF `BitmapDecoder` | Narrowed, still in-process: PNG, BMP and JPEG only with their own decoders, the size read from the header first (≤ 8192 × 8192), the clipboard data rebuilt from pixels (decoder-isolation-design.md §3.5, §3.6) | D-CLIP-22 (device side only); unit tests `DeviceImageTests`, `ClipboardOfferTests` | SEC-DEC-02 |
 | T9.3 Clipboard path traversal on the console | `SafeRelativePath` + `GetFullPath` under `%TEMP%\RemoteHub\Clipboard` (`AgentDesktopSession.cs:667`) | D-CLIP-09/10 (device side) | SEC-DEC-03 |
 | T9.4 Oversized / one-byte-at-a-time clipboard | 100 MB, 1000 items, 256 KB chunks | D-CLIP-08/20/21, D-ROB-08 | SEC-DEC-04 |
 | (new) Hostile Hello / session list | – | – | SEC-DEC-05 |

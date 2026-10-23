@@ -13,7 +13,8 @@ using RemoteHub.Agent;
 namespace RemoteHub.Services;
 
 /// <summary>What a paste gets: files already on this PC (top level, and every item in the transfer's order), or an image (PNG or BMP bytes).</summary>
-public sealed record OfferedContent(IReadOnlyList<string>? Files = null, byte[]? Image = null, bool Png = false, IReadOnlyList<string>? Items = null);
+public sealed record OfferedContent(IReadOnlyList<string>? Files = null, byte[]? Image = null, bool Png = false, IReadOnlyList<string>? Items = null,
+                                    DeviceImagePixels? Pixels = null);
 
 /// <summary>
 /// Files or an image copied on a device, offered on this PC's clipboard without their data (delayed rendering): only a
@@ -34,6 +35,7 @@ public sealed class ClipboardOffer
     private HwndSource _window = null!;
     private Func<string, OfferedContent?>? _fetch;
     private OfferedContent? _rendered;
+    private DeviceImagePixels? _pixels; // the rendered image, decoded once for both formats
 
     private ClipboardOffer()
     {
@@ -81,7 +83,7 @@ public sealed class ClipboardOffer
         try
         {
             EmptyClipboard(); // the previous offer ends here (WM_DESTROYCLIPBOARD)
-            (_fetch, _rendered) = (fetch, null);
+            (_fetch, _rendered, _pixels) = (fetch, null, null);
             SetClipboardData(PngFormat, IntPtr.Zero);
             SetClipboardData(CF_DIB, IntPtr.Zero);
         }
@@ -100,7 +102,7 @@ public sealed class ClipboardOffer
                 handled = true;
                 break;
             case WM_DESTROYCLIPBOARD:
-                (_fetch, _rendered) = (null, null);
+                (_fetch, _rendered, _pixels) = (null, null, null);
                 handled = true;
                 break;
         }
@@ -113,9 +115,12 @@ public sealed class ClipboardOffer
         _rendered ??= fetch(Paster());
         if (_rendered is not { } r) return;
         if (format == CF_HDROP && r.Files is { } files) SetData(CF_HDROP, DropFiles(files));
-        else if (format == PngFormat && r is { Image: { } png, Png: true }) SetData(PngFormat, png);
-        else if (format == CF_DIB && r.Image is { } image && (r.Png ? PngToDib(image) : image is [(byte)'B', (byte)'M', ..] && image.Length > 14 ? image[14..] : null) is { } dib)
-            SetData(CF_DIB, dib);
+        else if ((format == PngFormat || format == CF_DIB) && r.Image is { } image)
+        {
+            // Both formats are made from the decoded pixels: the device's own bytes never reach the clipboard.
+            _pixels ??= r.Pixels ?? DeviceImage.Decode(image);
+            if (_pixels is { } pixels) SetData(format, format == CF_DIB ? DeviceImage.ToDib(pixels) : DeviceImage.ToPng(pixels));
+        }
     }
 
     /// <summary>
@@ -160,28 +165,6 @@ public sealed class ClipboardOffer
         return drop;
     }
 
-    /// <summary>A PNG as a 32-bit packed DIB (bottom-up); null if it can't be read.</summary>
-    internal static byte[]? PngToDib(byte[] png)
-    {
-        try
-        {
-            var frame = BitmapDecoder.Create(new MemoryStream(png), BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
-            var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
-            int w = bgra.PixelWidth, h = bgra.PixelHeight, stride = w * 4;
-            var pixels = new byte[stride * h];
-            bgra.CopyPixels(pixels, stride, 0);
-            var dib = new byte[40 + pixels.Length];
-            BitConverter.GetBytes(40).CopyTo(dib, 0);
-            BitConverter.GetBytes(w).CopyTo(dib, 4);
-            BitConverter.GetBytes(h).CopyTo(dib, 8);   // positive: bottom-up
-            BitConverter.GetBytes((ushort)1).CopyTo(dib, 12);
-            BitConverter.GetBytes((ushort)32).CopyTo(dib, 14);
-            BitConverter.GetBytes(pixels.Length).CopyTo(dib, 20);
-            for (var y = 0; y < h; y++) Buffer.BlockCopy(pixels, y * stride, dib, 40 + (h - 1 - y) * stride, stride);
-            return dib;
-        }
-        catch { return null; }
-    }
 
     private static void SetData(uint format, byte[] bytes)
     {

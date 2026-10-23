@@ -1,6 +1,7 @@
 # RemoteHub – Decoding a device's data outside the console
 
-Status: draft for review (2026-10-22). Nothing is built yet. The decisions to make are in §9.
+Status: phase 0 built, phase 1 (spike) done – 2026-10-23. Phases 2–4 (the decoder process) are next; see §10 for the
+phases and §11 for what the spike found. The decisions in §9 are made.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -23,9 +24,9 @@ the wire framing, file names). That code is memory-safe and stays where it is.
 | Data | Where | Decoder | Risk |
 |---|---|---|---|
 | Video | `AgentDesktopSession.cs` `FrameDecoder` (thread "Desktop decoder") → `VideoCodec.cs` `H264Decoder` | Microsoft's software H.264 MFT (`CLSID_MSH264DecoderMFT`), driven through COM vtables; NV12 → BGRA in managed code | **High** – native parser of a stream the device writes, every frame |
-| Clipboard image, pushed | `AgentDesktopSession.FinishReceiving` | WPF `BitmapDecoder.Create` (WIC; any format WIC recognises) on the UI thread | **High** – native parser, and WIC tries every installed codec |
-| Clipboard image, offered | `ClipboardOffer.PngToDib` | `BitmapDecoder` + `FormatConvertedBitmap` on the offer's STA thread | **High** – same |
-| Clipboard BMP | `ClipboardOffer` | Not parsed by RemoteHub: the bytes go on the clipboard as CF_DIB | Medium – parsed later by whatever program the user pastes into |
+| Clipboard image, pushed | `AgentDesktopSession.FinishReceiving` | Was: WPF `BitmapDecoder.Create` (WIC; any format WIC recognises) on the UI thread. Since phase 0: `DeviceImage` on the receiving thread (§3.6) | **High** – native parser; phase 0 narrows it to three decoders after a size check |
+| Clipboard image, offered | `ClipboardOffer.Render` | Was: `BitmapDecoder` + `FormatConvertedBitmap` on the offer's STA thread (`PngToDib`). Since phase 0: `DeviceImage` | **High** – same |
+| Clipboard BMP | `ClipboardOffer` | Was: not parsed – the bytes went on the clipboard as CF_DIB. Since phase 0: decoded and rebuilt from pixels | Was medium – parsed later by whatever program the user pastes into |
 | Cursor shape | `OnMessage` → `CursorFiles.Create` | BGRA pixels (checked, ≤ 1024²); RemoteHub builds the `.cur` itself | Low – RemoteHub's own header around checked pixels |
 | JSON messages, framing, transfer metadata | `DesktopProtocol`, `ClipboardTransfer` | System.Text.Json, managed readers with length checks | Low – managed |
 
@@ -102,12 +103,22 @@ itself is unchanged.
 - Files from the device are unchanged: they are written to `%TEMP%\RemoteHub\Clipboard\…` and never opened by
   RemoteHub.
 
-### 3.6 Small fixes that don't need the process
+### 3.6 Small fixes that don't need the process (built, phase 0)
 
-- Check the video width and height against `MaxVideoWidth/Height` on the console side (the console doesn't check them
-  today).
-- A `Video` message shorter than its header ends the session through an exception outside the decoder's handler.
-  Treat it as a bad frame instead.
+- The console checks a video message before the decoder sees it (`AgentDesktopSession.CheckVideo`): a picture size
+  outside 1 × 1 – `MaxVideoWidth` × `MaxVideoHeight`, a message shorter than its header or one with no picture data
+  is a bad frame – logged, the decoder flushed, a key frame asked for – instead of ending the session (a short message
+  used to end it through an exception outside the decoder's handler). Before, a header of 65535 × 65535 reached the
+  conversion, where `w × h × 4` overflows `int`.
+- The decoder's output is only converted when a row fits its stride (`VideoCodec.cs`), and the console takes no frame
+  larger than the protocol's limit.
+- Clipboard images are decoded as §3.5 describes, still in RemoteHub's process until phase 3
+  (`Services/DeviceImage.cs`): PNG, BMP and JPEG only, each with its own WIC decoder (`PngBitmapDecoder`,
+  `BmpBitmapDecoder`, `JpegBitmapDecoder`); the size read from the header by RemoteHub's own code first (at most
+  8192 × 8192, PNG IHDR, both BMP headers, the JPEG frame header), and the decoded frame must have that size; colour
+  profiles ignored. What reaches this PC's clipboard – the pushed image, and both formats of an offered one (PNG and
+  CF_DIB) – is built from the pixels; the device's bytes, BMP included, never are. An image that doesn't pass shows
+  "The image copied on the device can't be taken – only PNG, BMP and JPEG up to 8192 × 8192 pixels are."
 
 ## 4. What changes for the user
 
@@ -157,11 +168,62 @@ The spike decides whether the AppContainer works as planned. If .NET can't start
 - **Keep decoding in-process, add a restricted thread or CFG/ACG:** this doesn't confine anything; the decoder runs
   with the console's rights.
 
-## 9. Decisions to make
+## 9. Decisions (made 2026-10-23)
 
-1. **One decoder per session (proposed) or one for all sessions.** Per session confines a take-over to one device,
-   and costs ~25–40 MB per open session.
-2. **When no sandbox can be created:** (a) fall back to a low-integrity restricted token, and if that also fails, refuse
-   to show the picture with a message (proposed); or (b) fall back to decoding in-process with a warning.
-3. **Re-encode every clipboard image from pixels, including BMP (proposed).** This changes what other programs receive
-   when pasting: always a fresh PNG/DIB, never the device's bytes.
+1. **One decoder per session.** Per session confines a take-over to one device. The spike measured 21 MB private
+   memory at 640 × 360, 42 MB at 1080p and 112 MB at 4K per decoder (§11).
+2. **When no sandbox can be created:** fall back to a low-integrity restricted token, and if that also fails, refuse to
+   show the picture with a message. Never decode in-process with a warning.
+3. **Re-encode every clipboard image from pixels, including BMP.** Built in phase 0: other programs receive a fresh PNG
+   or DIB, never the device's bytes.
+
+## 10. Phases
+
+| Phase | Content | State |
+|---|---|---|
+| 0 | §3.6, and §3.5's clipboard rules in RemoteHub's process | **Built** |
+| 1 | Spike: .NET, Media Foundation and WIC in an AppContainer with no capabilities, job, handle list, section | **Done** – §11 |
+| 2 | `RemoteHubDecoder.exe` for video: protocol, section, the console's checks, restarts and limit, audit, view tests | Next |
+| 3 | Clipboard images through the session's decoder (phase 0's `DeviceImage` moves into it) | – |
+| 4 | Integration, sandbox probe, fuzz (SEC-DEC-01/02 with the rogue agent), lab cases, MSI, docs; D-VID within today's results | – |
+
+## 11. Spike results (phase 1)
+
+A throwaway program (not in the repository) started itself the way §3.2 describes: `CreateAppContainerProfile` with
+no capabilities, `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES` and `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (two anonymous
+pipe ends and one section), `CREATE_SUSPENDED`, assigned to a job (`KILL_ON_JOB_CLOSE`, one active process, 1 GB per
+process, all UI limits), then resumed. The program was in a folder `ALL APPLICATION PACKAGES` can read, as Program
+Files is. Windows Server 2025, .NET 10.0.12 framework-dependent (`C:\Program Files\dotnet`), the software H.264
+decoder of Media Foundation, WPF's WIC decoders. Not yet tried on Windows 11 – phase 4's lab cases run there too.
+
+**It works as designed.** The framework-dependent .NET program starts in the AppContainer with no extra file access
+(ready after ~300 ms), Media Foundation's H.264 decoder and WIC's PNG, BMP and JPEG decoders work, and the inherited
+section maps. No change to §3 is needed, and the C++ alternative (§8) isn't.
+
+| Measured | Result |
+|---|---|
+| Start to "ready" | 283–324 ms |
+| H.264, 60 frames, decode in the container + write to the section, round trip from the console | 640 × 360: 1.5 ms median · 1080p: 9.4 ms (in-process today: 9.9 ms) · 4K: 34.2 ms (in-process: 34.8 ms). The pipe and section add nothing measurable, as the console no longer copies the frame |
+| Picture | Mean difference from the source 1.2–1.4 of 255 (H.264 at quality 80), the same as in-process |
+| Images | PNG 53–58 ms for the first (WIC starting), BMP 0.3 ms, JPEG 0.5 ms |
+| Memory per decoder | 640 × 360: 51 MB working set / 21 MB private · 1080p: 87 / 42 · 4K: 204 / 112 |
+| A decoder that hangs | Ended by closing the job (`KILL_ON_JOB_CLOSE`) |
+
+What the decoder can't do (each tried from inside):
+
+| Probe | Result |
+|---|---|
+| Token | AppContainer, low integrity (S-1-16-4096) |
+| TCP to the console's loopback listener, TCP to 1.1.1.1:443, DNS | Blocked |
+| Read a file in the user's profile, list the profile, list `%LOCALAPPDATA%\RemoteHub` (the database) | Access denied |
+| Write `%TEMP%`, write `C:\Users\Public` | Access denied |
+| Write HKCU | Access denied |
+| Read the clipboard | Access denied (job UI limit) |
+| Start a process | Refused (job: one active process) |
+| Open RemoteHub's process for reading its memory | Access denied |
+| Use another process's window (`Shell_TrayWnd`) | Found by `FindWindow`, but `GetWindowText` fails with 1400 (invalid handle: job UI limit) |
+| Read `C:\Windows\System32\drivers\etc\hosts`, read HKCU `…\Explorer` | Allowed – world-readable system data, nothing of the user's |
+
+Left for phase 2: the section's pages are committed with `PAGE_READWRITE` here; `SEC_RESERVE` and committing as used
+(§3.3) is to be checked there. The low-integrity fallback (§9, decision 2) wasn't needed on this PC and gets its own
+test in phase 4.

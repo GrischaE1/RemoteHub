@@ -359,7 +359,7 @@ public sealed unsafe class H264Decoder : IDisposable
                     {
                         int w = Math.Min(width, _planeWidth), h = Math.Min(height, _planeHeight);
                         var stride = _stride > 0 ? _stride : _planeWidth;
-                        if (w <= 0 || h <= 0 || (long)stride * _planeHeight * 3 / 2 > length) continue;
+                        if (w <= 0 || h <= 0 || stride < w || (long)stride * _planeHeight * 3 / 2 > length) continue; // (a row must fit its stride)
                         if (_bgra.Length < w * h * 4) _bgra = new byte[w * h * 4];
                         fixed (byte* bgra = _bgra)
                         {
