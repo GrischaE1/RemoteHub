@@ -170,10 +170,102 @@ public class NoteEditorTests
         WithEditor(Page, (editor, _) =>
         {
             var box = Find<RichTextBox>(editor);
-            var before = box.Document;
+            var before = box.Document.Blocks.FirstBlock;
             editor.SetMarkdownView(true);
             editor.SetMarkdownView(false);
-            Assert.Same(before, box.Document); // not rebuilt: the formatted page's own undo history is kept
+            Assert.Same(before, box.Document.Blocks.FirstBlock); // not rebuilt: the formatted page's own undo history is kept
         });
+    }
+
+    [SkippableFact]
+    public void Markdown_typed_at_a_line_start_formats_on_the_Space_key()
+    {
+        Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");
+        WithEditor("\\-\n\n\\#\n", (editor, _) => // two paragraphs with the text "-" and "#"
+        {
+            var box = Find<RichTextBox>(editor);
+            // The box types a keyboard space through its Space command, without a text input event: the key is what counts.
+            void Space(Paragraph p)
+            {
+                box.CaretPosition = p.ContentEnd;
+                var key = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(box), 0, Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+                box.RaiseEvent(key);
+                Assert.True(key.Handled);
+            }
+            Space((Paragraph)box.Document.Blocks.FirstBlock);
+            Space((Paragraph)box.Document.Blocks.LastBlock);
+            Assert.IsType<List>(box.Document.Blocks.FirstBlock);
+            Assert.Equal(NoteMarkdown.H1, ((Paragraph)box.Document.Blocks.LastBlock).Tag);
+            Assert.DoesNotContain("\\", editor.Markdown());
+        });
+    }
+
+    [SkippableFact]
+    public void A_screen_reader_reads_the_page_that_is_shown()
+    {
+        Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");
+        WithEditor("First page\n", (editor, _) =>
+        {
+            var box = Find<RichTextBox>(editor);
+            // The peer is made once per control; it must follow every page loaded after it, not the first document.
+            var text = (System.Windows.Automation.Provider.ITextProvider)System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(box)
+                .GetPattern(System.Windows.Automation.Peers.PatternInterface.Text);
+            Assert.Contains("First page", text.DocumentRange.GetText(-1));
+            editor.Load("| Host | Note |\n| --- | --- |\n| srv-01 | Cell42 |\n", []);
+            Pump();
+            Assert.Contains("Cell42", text.DocumentRange.GetText(-1));
+            editor.Clear();
+            Pump();
+            Assert.DoesNotContain("Cell42", text.DocumentRange.GetText(-1));
+        });
+    }
+
+    [SkippableFact]
+    public void A_screen_reader_finds_an_image_by_its_alternative_text()
+    {
+        Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");
+        WithEditor("First page\n", (editor, _) =>
+        {
+            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(System.Windows.Media.Imaging.BitmapSource.Create(8, 6, 96, 96, PixelFormats.Bgra32, null, new byte[8 * 6 * 4], 8 * 4)));
+            using var ms = new MemoryStream();
+            png.Save(ms);
+            const string id = "0123456789abcdef0123456789abcdef";
+            editor.Load($"![Pasted image](note-file:{id})\n\nAfter\n", [new RemoteHub.Data.NoteImage(id, "", "image/png", 8, 6, ms.ToArray())]);
+            Pump();
+            static IEnumerable<System.Windows.Automation.Peers.AutomationPeer> All(System.Windows.Automation.Peers.AutomationPeer p) =>
+                (p.GetChildren() ?? []).SelectMany(c => All(c).Prepend(c));
+            var page = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(Find<RichTextBox>(editor));
+            Assert.Contains(All(page), p => p.GetName() == "Pasted image" && p.GetAutomationControlType() == System.Windows.Automation.Peers.AutomationControlType.Image);
+        });
+    }
+
+    [SkippableFact]
+    public void A_copied_image_file_is_pasted_as_a_picture()
+    {
+        Skip.IfNot(Environment.UserInteractive, "needs a desktop to show a window");
+        var file = Path.Combine(Path.GetTempPath(), $"rh-note-paste-{Guid.NewGuid():N}.png");
+        try
+        {
+            var pixels = new byte[8 * 6 * 4];
+            var png = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(System.Windows.Media.Imaging.BitmapSource.Create(8, 6, 96, 96, PixelFormats.Bgra32, null, pixels, 8 * 4)));
+            using (var s = File.Create(file)) png.Save(s);
+            // Explorer's Copy: file names only, no format the RichTextBox pastes by itself (so the page must).
+            var data = new DataObject();
+            data.SetData(DataFormats.FileDrop, new[] { file });
+            Assert.False(NoteEditor.RichTextBoxPastes(data));
+            Assert.True(NoteEditor.RichTextBoxPastes(new DataObject(DataFormats.UnicodeText, "text")));
+            WithEditor("Text.\n", (editor, _) =>
+            {
+                var stored = 0;
+                editor.StoreImage = _ => { stored++; return "0123456789abcdef0123456789abcdef"; };
+                editor.PasteData(data);
+                Assert.Equal(1, stored);
+                Assert.Contains($"(note-file:0123456789abcdef0123456789abcdef)", editor.Markdown());
+                Assert.Contains("rh-note-paste-", editor.Markdown());
+            });
+        }
+        finally { File.Delete(file); }
     }
 }

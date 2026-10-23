@@ -34,6 +34,9 @@ public static class AgentHost
     public static string AgentVersion =>
         typeof(AgentHost).Assembly.GetName().Version is { } v ? $"{v.Major}.{v.Minor}.{v.Build}" : "0.0.0";
 
+    /// <summary>A new random id for each start of the agent (<see cref="AgentHealth.Instance"/>).</summary>
+    public static readonly string Instance = Guid.NewGuid().ToString("N");
+
     /// <summary>Whether any program listens on TCP <paramref name="port"/>, on any address and either IP version.</summary>
     internal static bool PortInUse(int port) =>
         IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(l => l.Port == port);
@@ -84,7 +87,7 @@ public static class AgentHost
             if (o.Desktop is not null && policy.DesktopEnabled) features.Add(AgentFeatures.Desktop);
             if (policy.TunnelEnabled) features.Add(AgentFeatures.Tunnel);
             var health = new AgentHealth("RemoteHub Agent", AgentVersion, AgentProtocol.Version, o.Config.DeviceId, [.. features],
-                policy.Managed.Count > 0 ? [.. policy.Managed] : null);
+                policy.Managed.Count > 0 ? [.. policy.Managed] : null, Instance);
             return ctx.Response.WriteAsJsonAsync(health, AgentJson.Default.AgentHealth);
         }));
 

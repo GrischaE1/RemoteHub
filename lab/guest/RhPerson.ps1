@@ -190,7 +190,9 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
     $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
     $null = [Windows.Storage.Streams.InMemoryRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
     $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
-    function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); $task.Wait(); $task.Result }
+    # at most 20 s a step: a recognizer that never answers would hold the person server and every request after it
+    # (lab run 20261021-222745, D-MORE2 on Server 2025: a click took the request and gave no answer for 140 s)
+    function Await($op, [Type]$t) { $task = $asTask.MakeGenericMethod($t).Invoke($null, @($op)); if (-not $task.Wait(20000)) { throw "OCR: $($t.Name) didn't finish within 20 s" }; $task.Result }
     # small text reads better enlarged
     $scale = 2
     $big = New-Object Drawing.Bitmap ($Bitmap.Width * $scale), ($Bitmap.Height * $scale)
@@ -203,10 +205,23 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
     $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
     if (-not $engine) { throw 'No OCR engine for the user''s languages.' }
     $r = Await ($engine.RecognizeAsync($soft)) ([Windows.Media.Ocr.OcrResult])
+    # When OCR takes the text to be rotated (TextAngle, degrees around the picture's centre), the word boxes are where
+    # the words would be with the text straightened: each box's centre is turned back by that angle. Lab run
+    # 20261021-222745 (D-RES-06): a sloping dune gave -7.5 degrees, the sign-in tiles at the left edge came out 54 px
+    # too high and the click chose the tile above Admin's.
+    $angle = if ($null -ne $r.TextAngle) { [double]$r.TextAngle * [math]::PI / 180 } else { 0 }
+    $cx = $soft.PixelWidth / 2; $cy = $soft.PixelHeight / 2
     $words = foreach ($line in $r.Lines) {
         foreach ($w in $line.Words) {
-            [pscustomobject]@{ Text = $w.Text; X = [int]($w.BoundingRect.X / $scale); Y = [int]($w.BoundingRect.Y / $scale)
-                W = [int]($w.BoundingRect.Width / $scale); H = [int]($w.BoundingRect.Height / $scale); Line = $line.Text }
+            $b = $w.BoundingRect
+            $mx = $b.X + $b.Width / 2; $my = $b.Y + $b.Height / 2
+            if ($angle -ne 0) {
+                $dx = $mx - $cx; $dy = $my - $cy
+                $mx = $cx + $dx * [math]::Cos($angle) - $dy * [math]::Sin($angle)
+                $my = $cy + $dx * [math]::Sin($angle) + $dy * [math]::Cos($angle)
+            }
+            [pscustomobject]@{ Text = $w.Text; X = [int](($mx - $b.Width / 2) / $scale); Y = [int](($my - $b.Height / 2) / $scale)
+                W = [int]($b.Width / $scale); H = [int]($b.Height / $scale); Line = $line.Text }
         }
     }
     [pscustomobject]@{ Text = $r.Text; Lines = @($r.Lines | ForEach-Object Text); Words = @($words) }
@@ -299,6 +314,11 @@ switch ($Do) {
         $self = $PSCommandPath
         $stamp = (Get-Item $self).LastWriteTimeUtc
         [RhNative]::WatchCrash()
+        # an error that ends the server is written down for the host (Invoke-LabPersonServer quotes it) before it ends
+        trap {
+            try { Set-Content -Path (Join-Path $q 'last-error.txt') -Value "$((Get-Date).ToString('HH:mm:ss')) $($_.Exception.Message) at $($_.InvocationInfo.PositionMessage)" -Encoding UTF8 } catch { }
+            break
+        }
         $idleUntil = (Get-Date).AddMinutes(30)
         while ((Get-Date) -lt $idleUntil) {
             Set-Content -Path (Join-Path $q 'alive.txt') -Value "$PID $((Get-Date).ToUniversalTime().ToString('o'))"
@@ -317,19 +337,34 @@ switch ($Do) {
             # stuck call can't be stopped (the host's next request starts a new server). The deadline is
             # max(5, timeout) + 50 s; the host (Invoke-LabPersonServer) waits 30 s longer, for the window list below
             # and the write. A crash on the way is written to the answer file too (RhNative.WatchCrash).
-            if (-not $worker) {
-                $worker = [runspacefactory]::CreateRunspace()
-                $worker.ApartmentState = 'STA'
-                $worker.ThreadOptions = 'ReuseThread'
-                $worker.Open()
+            # A worker left broken by an earlier action is replaced, and an error while starting the action is the
+            # request's answer: thrown here, it ended the whole server with exit code 1 a second after taking the
+            # request (runs 20261022-092309 to -150024, POL-CLIENT and UI-RDP: "ended 1 s after taking the request")
+            $h = $null
+            try {
+                if ($worker -and $worker.RunspaceStateInfo.State -ne 'Opened') { try { $worker.Dispose() } catch { }; $worker = $null }
+                if (-not $worker) {
+                    $worker = [runspacefactory]::CreateRunspace()
+                    $worker.ApartmentState = 'STA'
+                    $worker.ThreadOptions = 'ReuseThread'
+                    $worker.Open()
+                }
+                $ps = [powershell]::Create()
+                $ps.Runspace = $worker
+                $null = $ps.AddCommand($self)
+                foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
+                $limit = [Math]::Max(5, $a.TimeoutSec) + 50
+                [RhNative]::CrashOut = $req.out
+                $h = $ps.BeginInvoke()
             }
-            $ps = [powershell]::Create()
-            $ps.Runspace = $worker
-            $null = $ps.AddCommand($self)
-            foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
-            $limit = [Math]::Max(5, $a.TimeoutSec) + 50
-            [RhNative]::CrashOut = $req.out
-            $h = $ps.BeginInvoke()
+            catch {
+                [RhNative]::CrashOut = $null
+                $why = "the action couldn't start: $($_.Exception.Message)"
+                try { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $why } -Compress)) } catch { }
+                if ($worker) { try { $worker.Dispose() } catch { }; $worker = $null }
+                $idleUntil = (Get-Date).AddMinutes(30)
+                continue
+            }
             if ($h.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($limit))) {
                 [RhNative]::CrashOut = $null
                 try {
@@ -395,7 +430,8 @@ switch ($Do) {
             foreach ($w in $wins) {
                 Start-Sleep -Milliseconds 400   # fade-in
                 $bmp = [RhNative]::Capture($w.X, $w.Y, $w.Width, $w.Height)
-                try { $ocr = Get-Ocr $bmp } finally { $bmp.Dispose() }
+                # an OCR that failed or took too long counts as nothing read this pass; the next pass tries again
+                try { $ocr = Get-Ocr $bmp } catch { $ocr = [pscustomobject]@{ Text = ''; Lines = @(); Words = @() }; $seen["ocr error"] = "$($_.Exception.Message)" } finally { $bmp.Dispose() }
                 $seen["$($w.Title) $($w.Width)x$($w.Height)@$($w.X),$($w.Y)$(if ([RhNative]::Excluded($w.Handle)) { ' (kept out of captures)' }): $(@($ocr.Lines | Select-Object -First 2) -join ' / ')"] = $true
                 if (@($ocr.Lines).Count) { $lastLines = @($ocr.Lines) }
                 # OCR may glue punctuation or a countdown to the label ("Allow(29)", "Deny."): compare the letters only
@@ -796,17 +832,24 @@ switch ($Do) {
                 $v = & $pat ([Windows.Automation.ValuePattern]::Pattern)
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
                 $tp = & $pat ([Windows.Automation.TextPattern]::Pattern)
-                # the label text inside a CheckBox (WPF lists both with the same name, either may be found first): the
-                # CheckBox's state, as check / uncheck use its parent's pattern
+                # the label text inside a CheckBox or a toggle switch (WPF lists both with the same name, either may be
+                # found first): the parent's state - any parent that toggles (run 20261022-143904, POL-15: WPF-UI's
+                # ToggleSwitch is a toggle button, not a CheckBox, and the label's own name was read instead)
                 if (-not $v -and -not $tp -and -not $t) {
                     $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
                     $o = $null
-                    if ($p -and $p.Current.ControlType.ProgrammaticName -eq 'ControlType.CheckBox' -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o; $result.enabled = $p.Current.IsEnabled }
+                    if ($p -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o; $result.enabled = $p.Current.IsEnabled }
                 }
                 $result.value = if ($v) { $v.Current.Value } elseif ($tp) { $tp.DocumentRange.GetText(200000) } elseif ($t) { [string]$t.Current.ToggleState } else { $found.Current.Name }
             }
             'toggle-*' {
                 $t = & $pat ([Windows.Automation.TogglePattern]::Pattern)
+                # the label inside the switch found first: the switch itself (as 'read' above)
+                if (-not $t) {
+                    $p = [Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($found)
+                    $o = $null
+                    if ($p -and $p.TryGetCurrentPattern([Windows.Automation.TogglePattern]::Pattern, [ref]$o)) { $t = $o }
+                }
                 $want = if ($action -eq 'toggle-on') { 'On' } else { 'Off' }
                 if ($t -and [string]$t.Current.ToggleState -ne $want) { $t.Toggle() }
                 $result.value = if ($t) { [string]$t.Current.ToggleState } else { $null }

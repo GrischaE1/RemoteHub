@@ -27,7 +27,13 @@ BeforeAll {
     function Begin([string]$Name, [object[]]$Steps, [string]$Account = 'Admin', [bool]$ViewOnly = $false) {
         $first = @(@{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; viewOnly = $ViewOnly }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 90 })
         $job = Start-LabDesktop -Name $VmName -Pin $pin -Account $Account -Out (Out $Name) -Steps ($first + $Steps)
-        $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
+        # the click is tried again when it missed or the person server failed (as D-MORE2's Begin; run 20261022-061254,
+        # D-IN-08 on Server: one lost click let the question run out - Denied)
+        for ($i = 0; $i -lt 3; $i++) {
+            $c = try { Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 40 } catch { $null }
+            if ($c -and $c.clicked) { break }
+            Start-Sleep -Seconds 2
+        }
         $job
     }
     # the agent's banner as the person at the device sees it (window bounds; Title "RemoteHub")

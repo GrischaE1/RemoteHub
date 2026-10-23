@@ -112,6 +112,9 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
             # the user's desktop up before the consent question is answered (run 20261021-062735: "'Allow' not found",
             # the connection Denied after 30 s, so no privacy screen)
             Wait-LabDesktop -Name $VmName -Account User -TimeoutSec 180
+            # the person server and Windows' OCR started in the new session before a question's 30 s run: the first
+            # clicks after the sign-in took about 2 minutes each in run 20261021-222745, and the question ran out (Denied)
+            $null = try { Invoke-LabPerson -Name $VmName -Do screen-read -TimeoutSec 120 } catch { $null }
             function Heading([string]$Name) {
                 $o = Out $Name
                 $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
@@ -119,7 +122,7 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
                     @{ do = 'privacy'; style = 'Message' }, @{ do = 'sleep'; seconds = 4 }, @{ do = 'markFile'; path = (Join-Path $o 'on.txt') },
                     @{ do = 'waitFile'; path = (Join-Path $o 'shot.txt'); timeout = 120 }, @{ do = 'close' })
                 # the click is tried again when it missed (as D-CADHIDE's Allow)
-                for ($i = 0; $i -lt 3; $i++) { if ((Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60).clicked) { break }; Start-Sleep -Seconds 3 }
+                for ($i = 0; $i -lt 3; $i++) { $c = try { Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 25 } catch { $null }; if ($c -and $c.clicked) { break }; Start-Sleep -Seconds 2 }
                 Wait-LabHostFile (Join-Path $o 'on.txt') -TimeoutSec 180
                 $png = Join-Path $o 'console.png'
                 $null = Get-LabScreenshot -Name $VmName -Path $png

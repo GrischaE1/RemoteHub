@@ -27,7 +27,7 @@ namespace RemoteHub.Views;
 public sealed partial class ScriptEditor : Border
 {
     private static readonly TimeSpan CheckDelay = TimeSpan.FromSeconds(1);
-    private readonly TextEditor _editor = new();
+    private readonly CodeEditor _editor = new();
     private readonly ErrorRenderer _errors;
     private readonly DispatcherTimer _checkTimer = new() { Interval = CheckDelay };
     private FoldingManager? _folding;

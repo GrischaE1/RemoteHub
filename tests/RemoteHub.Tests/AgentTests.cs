@@ -253,6 +253,42 @@ public class AgentTests
     }
 
     [Fact]
+    public void An_update_counts_as_installed_only_with_the_new_version_or_after_a_restart()
+    {
+        static AgentHealth Health(string version) => new("RemoteHub Agent", version, 1, "device");
+        // an upgrade: the version decides
+        Assert.Null(AgentInstaller.UpdateNotInstalled("0.21.0", "0.21.3", Health("0.21.3"), wentDown: true));
+        Assert.Contains("still runs RemoteHub Agent 0.21.0", AgentInstaller.UpdateNotInstalled("0.21.0", "0.21.3", Health("0.21.0"), wentDown: true));
+        // the same build again (lab run 20261022-061254: msiexec failed, the old agent went on answering)
+        Assert.Contains("without a restart", AgentInstaller.UpdateNotInstalled("0.21.3", "0.21.3", Health("0.21.3"), wentDown: false));
+        Assert.Null(AgentInstaller.UpdateNotInstalled("0.21.3", "0.21.3", Health("0.21.3"), wentDown: true));
+        // the version before not known: only the version is checked
+        Assert.Null(AgentInstaller.UpdateNotInstalled(null, "0.21.3", Health("0.21.3"), wentDown: false));
+    }
+
+    [Fact]
+    public void A_restart_shows_as_a_new_agent_instance_even_when_no_poll_saw_it_down()
+    {
+        static AgentHealth Health(string? instance) => new("RemoteHub Agent", "0.21.4", 1, "device", Instance: instance);
+        // lab run 20261022-092309: the reinstall restarted the agent within 4 s and every poll got an answer
+        Assert.True(AgentInstaller.IsNewInstance(Health("a"), Health("b")));
+        // msiexec failed (run 20261022-061254): the same instance goes on answering
+        Assert.False(AgentInstaller.IsNewInstance(Health("a"), Health("a")));
+        // an agent before 0.21.4 doesn't say, nor does an unknown "before": no claim either way
+        Assert.False(AgentInstaller.IsNewInstance(Health(null), Health("b")));
+        Assert.False(AgentInstaller.IsNewInstance(null, Health("b")));
+    }
+
+    [Fact]
+    public void The_health_answer_carries_the_agent_instance()
+    {
+        var web = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var json = System.Text.Json.JsonSerializer.Serialize(new AgentHealth("RemoteHub Agent", "0.21.4", 1, "device", Instance: "abc"), web);
+        Assert.Equal("abc", System.Text.Json.JsonSerializer.Deserialize<AgentHealth>(json, web)!.Instance);
+        Assert.Equal(32, A.AgentHost.Instance.Length);
+    }
+
+    [Fact]
     public void Sign_in_gate_blocks_after_repeated_failures_and_forgets_after_the_window()
     {
         var now = DateTime.UtcNow;

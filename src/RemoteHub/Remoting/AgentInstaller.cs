@@ -360,14 +360,28 @@ public static class AgentInstaller
     /// install (compare <see cref="AgentHealth.Version"/>) – or null if it never answered again.
     /// </summary>
     public static async Task<AgentHealth?> WaitForRestartAsync(string host, AgentEndpoint endpoint, string? expectedVersion,
-        Action<string> progress, CancellationToken ct)
+        Action<string> progress, CancellationToken ct) =>
+        (await WaitForUpdateAsync(host, endpoint, expectedVersion, null, progress, ct)).Health;
+
+    /// <summary>
+    /// <see cref="WaitForRestartAsync"/>, and whether the agent restarted: it was seen going away, or it answers as
+    /// another instance than <paramref name="before"/> (its health before the update). A reinstall of the very same build
+    /// answers with the version it had before even when msiexec failed, so only the restart tells it installed
+    /// (<see cref="UpdateNotInstalled"/>).
+    /// </summary>
+    public static async Task<(AgentHealth? Health, bool WentDown)> WaitForUpdateAsync(string host, AgentEndpoint endpoint, string? expectedVersion,
+        AgentHealth? before, Action<string> progress, CancellationToken ct)
     {
         progress("Waiting for the agent to restart…");
+        var wentDown = false;
         var downBy = DateTime.UtcNow.AddSeconds(90);
         while (DateTime.UtcNow < downBy)
         {
-            try { await HealthAsync(host, endpoint, ct); }
-            catch (Exception) when (!ct.IsCancellationRequested) { break; } // it went down (or answers with the new certificate)
+            // Seeing it down isn't enough: in lab run 20261022-092309 the service was gone for 4 s and no poll failed (a
+            // connection attempt to the closed port is dropped, not refused, and its retry reached the new agent), so the
+            // successful reinstall looked like none. The new instance id shows the restart either way.
+            try { if (IsNewInstance(before, await HealthAsync(host, endpoint, ct))) { wentDown = true; break; } }
+            catch (Exception) when (!ct.IsCancellationRequested) { wentDown = true; break; } // it went down (or answers with the new certificate)
             await Task.Delay(1500, ct);
         }
         AgentHealth? last = null;
@@ -377,12 +391,33 @@ public static class AgentInstaller
             try
             {
                 last = await HealthAsync(host, endpoint, ct);
-                if (expectedVersion is null || last.Version == expectedVersion) return last;
+                if (IsNewInstance(before, last)) wentDown = true;
+                if (expectedVersion is null || last.Version == expectedVersion) return (last, wentDown);
             }
-            catch (Exception) when (!ct.IsCancellationRequested) { }
+            catch (Exception) when (!ct.IsCancellationRequested) { wentDown = true; }
             await Task.Delay(2000, ct); // a short answer from the old agent before msiexec stops it, or not up yet
         }
-        return last;
+        return (last, wentDown);
+    }
+
+    /// <summary>The agent answers as another instance than before (it restarted); false when either doesn't say (agents before 0.21.4).</summary>
+    public static bool IsNewInstance(AgentHealth? before, AgentHealth now) =>
+        before?.Instance is { Length: > 0 } a && now.Instance is { Length: > 0 } b && !string.Equals(a, b, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Why an update through the agent didn't install, or null when it did: the agent answers with another version than
+    /// the package's, or – a reinstall of the build it already runs – it never went away. msiexec stops and starts the
+    /// service whenever it installs; when it fails (on Server 2025 in lab run 20261022-061254: 1603, "SecureRepair
+    /// Failed") the old agent just goes on answering with the same version, and the update was reported as done while
+    /// the device kept what it had, the credential provider too.
+    /// </summary>
+    public static string? UpdateNotInstalled(string? versionBefore, string? expectedVersion, AgentHealth health, bool wentDown)
+    {
+        if (expectedVersion is not null && health.Version != expectedVersion)
+            return $"The update didn't install: the device still runs RemoteHub Agent {health.Version} (expected {expectedVersion}).";
+        if (!wentDown && versionBefore is not null && string.Equals(versionBefore, health.Version, StringComparison.OrdinalIgnoreCase))
+            return $"The update didn't install: RemoteHub Agent {health.Version} kept running without a restart, so the installer didn't run or failed.";
+        return null;
     }
 
     // ------------------------------------------------------------------ uninstall

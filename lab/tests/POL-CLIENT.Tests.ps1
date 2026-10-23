@@ -3,10 +3,11 @@
 # settings and connection settings by policy (sections 6 and 7, POL-15). RemoteHub and the agent are installed on the
 # same client VM; RemoteHub runs in the console account's session, driven by UI Automation. Console values are written
 # the way the template writes them (HKLM, or the console account's HKCU). POL-14 and POL-15 pair RemoteHub with the agent
-# on this VM itself and use WinRM to 127.0.0.1, so they need no second VM; the RDP session's own drives can't be looked
-# at here (no RDP target), the .rdp file RemoteHub writes for the connection is checked instead. Client VMs only. See
-# docs/test-lab-cases.md section 10.7.
+# on this VM itself and use WinRM to the lane's device (WinRM from a standard session into the same machine is refused,
+# so 127.0.0.1 can't stand in for it); the RDP session's own drives can't be looked at here (no RDP target), the .rdp
+# file RemoteHub writes for the connection is checked instead. Client VMs only. See docs/test-lab-cases.md section 10.7.
 # LabRole: console
+# LabNeeds: lane
 param(
     [Parameter(Mandatory)][string]$VmName,
     [Parameter(Mandatory)][string]$EvidenceDir
@@ -164,13 +165,25 @@ BeforeAll {
     # "Save as .rdp file..." of a connection to -Path in the guest; answers the file's text ('' when none was written)
     function Export-Rdp([string]$Node, [string]$Path) {
         Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) $null = New-Item (Split-Path $p) -ItemType Directory -Force; Remove-Item $p -ErrorAction SilentlyContinue }
-        $null = Ui $Node -Value 'menu:More>Save as .rdp file*'
+        # opened right after an editor closed, the menu came up with no entries at all (run 20261022-132024,
+        # drivesAfter): opened again, for up to 10 s
+        $until = (Get-Date).AddSeconds(10)
+        while ($true) {
+            try { $null = Ui $Node -Value 'menu:More>Save as .rdp file*'; break }
+            catch {
+                if ("$_" -notmatch 'no menu entry' -or (Get-Date) -gt $until) { throw }
+                try { Send-LabScancodes -Name $VmName -Codes 0x01 } catch { }   # Esc: the empty menu closed
+                Start-Sleep -Seconds 2
+            }
+        }
         # Windows' Save As dialog has no usable UIA patterns here (as in UI-RDP): once it is listed, its file name box has
         # the focus with the proposed name selected - typed over at the console keyboard
         $null = WaitFor 30 { @(@((Ui '*' -Value list -Optional -TimeoutSec 5).items) | Where-Object { "$_" -match '^Window\|(Save As|Speichern unter)\|' }).Count }
         Send-LabText -Name $VmName -Text $Path
         Send-LabKey -Name $VmName -Key Enter
-        "$(WaitFor 30 { Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) if (Test-Path $p) { Get-Content $p -Raw } } })"
+        # a file that goes between Test-Path and the read (saved through a temporary one and moved into place - run
+        # 20261022-154825: "Could not find file") counts as not there yet: read again at the next turn
+        "$(WaitFor 30 { Invoke-LabGuest -Name $VmName -ArgumentList $Path -ScriptBlock { param($p) try { if (Test-Path $p) { [IO.File]::ReadAllText($p) } } catch { $null } } })"
     }
     # the agent's request at this VM's own console (the agent desktop of the console session): Allow, by OCR and the
     # console mouse; tried again until -TimeoutSec
@@ -207,7 +220,10 @@ BeforeAll {
     # RemoteHub
     # - PolLocal: this VM by its name, the console account; the agent installed through RemoteHub's clipboard install
     #   (the lab's own agent from the start of the file removed first), so RemoteHub has paired with it and uses it;
-    # - PolWinRm: 127.0.0.1, the console account, WinRM ("Check automatically after RDP login" on);
+    # - PolWinRm: the lane's device by its address, its administrator (PSAdmin), WinRM ("Check automatically after RDP
+    #   login" on). Not this VM: WinRM from a standard (non-elevated) session back into the same machine is refused
+    #   ("Access is denied") for every account and every address of it - 127.0.0.1, its own IP, by name - while the same
+    #   sign-in from an elevated process works (checked on the VM after runs 20261022-092309 and -124318);
     # - PolRdp: an address that never answers (TEST-NET-1), with an account - an RDP tab that tries without a prompt;
     # - PolOffline: another such address, no account - for redirection, .rdp export and Connect;
     # - PolFolder: a folder, for its editor.
@@ -217,20 +233,25 @@ BeforeAll {
         $u = [ordered]@{}
         $script:setup = $u
         Step $u winrm {
-            $u.winrm = Invoke-LabGuest -Name $VmName -ScriptBlock {
+            # WinRM on the device, for its administrator over the network (a local administrator's full token:
+            # LocalAccountTokenFilterPolicy, which Enable-PSRemoting sets only on client Windows)
+            $u.winrm = Invoke-LabGuest -Name $device.Name -ScriptBlock {
                 Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null
-                # an IP address and explicit credentials over HTTP need the address in TrustedHosts
-                Set-Item WSMan:\localhost\Client\TrustedHosts -Value '127.0.0.1' -Force
-                # a local administrator's full token over the network (Enable-PSRemoting sets it on client Windows)
                 Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name LocalAccountTokenFilterPolicy -Value 1 -Type DWord
                 "$((Get-Service WinRM).Status)"
+            }
+            # an IP address and explicit credentials over HTTP need the address in TrustedHosts on this PC
+            $null = Invoke-LabGuest -Name $VmName -ArgumentList $deviceIp -ScriptBlock {
+                param($ip)
+                Set-Service WinRM -StartupType Manual; Start-Service WinRM
+                Set-Item WSMan:\localhost\Client\TrustedHosts -Value $ip -Force
             }
         }
         $u.computer = Invoke-LabGuest -Name $VmName -ScriptBlock { $env:COMPUTERNAME }
         Restart-Client
         Step $u connections {
             New-LabClientConnection -Name $VmName -Display 'PolLocal' -TargetHost $u.computer -User $vm.ConsoleAccount -Password $password
-            New-LabClientConnection -Name $VmName -Display 'PolWinRm' -TargetHost '127.0.0.1' -User $vm.ConsoleAccount -Password $password
+            New-LabClientConnection -Name $VmName -Display 'PolWinRm' -TargetHost $deviceIp -User $device.AdminAccount -Password $password
             New-LabClientConnection -Name $VmName -Display 'PolRdp' -TargetHost '192.0.2.10' -User $vm.ConsoleAccount -Password $password
             New-LabClientConnection -Name $VmName -Display 'PolOffline' -TargetHost '192.0.2.11'
             # selected first: the folder lands at the top level, next to it
@@ -279,11 +300,20 @@ BeforeAll {
             ToolsReady 'PolLocal'
             ToolsReady 'PolWinRm'
         }
+        # RemoteHub's own record of a refused test (run 20261021-222745: WinRM refused PolWinRm's account although the
+        # same sign-in worked from the VM itself): its diagnostic log next to the evidence
+        if ($u['tools-error']) {
+            try { Get-LabFile -Name $VmName -Path "C:\Users\$($vm.ConsoleAccount)\AppData\Roaming\RemoteHub\logs\remotehub.log" -Destination (Join-Path $EvidenceDir 'pol-client-remotehub-log') } catch { }
+        }
         Shot 'setup'
         Save 'setup' $u
     }
 
     if ((Test-LabConsoleVm -Name $VmName)) {
+        # the lane's device: PolWinRm's WinRM target
+        $device = Get-LabDevice -For $VmName
+        Reset-LabVm -Name $device.Name
+        $deviceIp = Get-LabVmAddress -Name $device.Name
         Reset-LabVm -Name $VmName
         $install = Install-LabAgent -Name $VmName
         $pin = $install.pin
@@ -300,6 +330,7 @@ AfterAll {
         Save-LabAgentEvidence -Name $VmName -Destination (Join-Path $EvidenceDir 'pol-client-agent-logs')
         # WinRM, TrustedHosts and the agent RemoteHub paired with (POL-14 / POL-15): not for the next file
         Set-LabVmDirty -Name $VmName
+        if ($device) { Set-LabVmDirty -Name $device.Name }
     }
 }
 
@@ -738,7 +769,13 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
                 Restart-Client
                 $s.conflictPage = Policies-Text
                 $null = Ui 'PolOffline' -Value 'menu:Connect'
-                $s.conflictConnect = Message 'RemoteHub Agent' -TimeoutSec 30
+                # the refusal is a dialog owned by the main window, which UI Automation lists inside that window - not
+                # as a window titled "RemoteHub Agent" (run 20261022-152400: on screen, the title search found nothing)
+                $s.conflictConnect = Message 'RemoteHub Agent' -TimeoutSec 10
+                if (-not $s.conflictConnect) {
+                    $s.conflictConnect = "$((Ui 'Remote desktop through the RemoteHub Agent*' -Value exists -Optional -TimeoutSec 20).name)"
+                    $null = Ui 'OK' -Optional -TimeoutSec 5
+                }
                 $s.conflictTab = (Ui 'Reconnect' -Value exists -Optional -TimeoutSec 3).found
             }
             Policy @{ AllowAgentDesktop = $null }

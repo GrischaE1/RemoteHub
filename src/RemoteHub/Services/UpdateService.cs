@@ -293,7 +293,10 @@ public static class UpdateService
             "    $sig = Get-AuthenticodeSignature -LiteralPath $target",
             "    if ($sig.Status -ne 'Valid' -or -not $sig.SignerCertificate -or $sig.SignerCertificate.Subject -cne $publisher) { Result 'refused signature'; return }",
             "  }",
-            "  $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\msiexec.exe\" -ArgumentList '/i', ('\"' + $target + '\"'), '/passive', '/norestart' -Wait -PassThru",
+            // msiexec's log next to the outcome (readable by users like it, gone after 7 days): an exit code like 1603
+            // alone doesn't say why the install failed (lab SEC-UPD-02, run 20261021-222745)
+            "  $log = Join-Path $results ($id + '.log')",
+            "  $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\msiexec.exe\" -ArgumentList '/i', ('\"' + $target + '\"'), '/passive', '/norestart', '/l*v', ('\"' + $log + '\"') -Wait -PassThru",
             "  Result ('installed ' + $p.ExitCode)",
             "}",
             "catch { try { Result ('failed ' + $_.Exception.Message) } catch { } }",

@@ -194,7 +194,9 @@ BeforeAll {
             (Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', 'C:\LabAgentByHand\install.log' -Wait -PassThru).ExitCode
         }
         $until = (Get-Date).AddSeconds(150)
-        do { Start-Sleep -Seconds 15; $o.audit = AuditText $Node } while ($o.audit -notmatch 'answered as RemoteHub Agent' -and (Get-Date) -lt $until)
+        # since enrollment without a shared device key RemoteHub records "Claimed - installed by hand, certificate
+        # SHA-256 ..." (the old "answered as RemoteHub Agent" is gone; run 20261022-061254, A-CLIP-01)
+        do { Start-Sleep -Seconds 15; $o.audit = AuditText $Node } while ($o.audit -notmatch 'Claimed\W+installed by hand' -and (Get-Date) -lt $until)
         $o
     }
     # share of yellow pixels (the graphics capture border) in a screenshot - every pixel, the border is thin
@@ -592,14 +594,21 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 RecButton 'Stop recording and save the video'
                 $r5.span = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
                 # taken once the stop click has returned: no frame may show a later time
-                $r5.deviceStop = (Get-LabGuestTime -Name $device.Name).ToString('HH:mm:ss')
+                # formatted on the device: the clock in the picture is its local time, and a time brought over to the lab host is
+                # shown in the host's time zone (run 20261021-222745: 15:59 in the frame, 00:59 here)
+                $r5.deviceStop = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-Date).ToString('HH:mm:ss') }
                 $r5.saved = Message -Button 'Close' -TimeoutSec 60
                 $null = Ui 'Stop the running command (Ctrl+C)' -Optional -TimeoutSec 5
                 $thumb = 'C:\ProgramData\RemoteHubLab\session\c-rec-last.img'
                 $r5.video = @(VideoInfo @(@(Videos)[-1].Path) -Thumb $thumb)[0]
                 Get-LabFile -Name $VmName -Path $thumb -Destination $EvidenceDir
                 $r5.ocr = "$((Get-LabOcr -Path (Join-Path $EvidenceDir 'c-rec-last.img')).text)"
-                $r5.times = @([regex]::Matches($r5.ocr, '\b([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b') | ForEach-Object Value)
+                # OCR splits the clock's separators into spaces, dots and bullets ("22: 48:35", "22. *48*.38" with a
+                # bullet; run 20261022-061254): any of them between the parts, the time rebuilt as HH:mm:ss
+                $sep = "[\s:.$([char]0x2022)]"
+                $clock = "(?<!\d)([01]\d|2[0-3])$sep*?[:.$([char]0x2022)]$sep*([0-5]\d)$sep*?[:.$([char]0x2022)]$sep*([0-5]\d)(?!\d)"
+                function ClockTimes([string]$Text) { @([regex]::Matches($Text, $clock) | ForEach-Object { '{0}:{1}:{2}' -f $_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value }) }
+                $r5.times = ClockTimes $r5.ocr
                 if (-not $r5.times.Count) {
                     # Windows OCR missed the console's clock lines at the frame's own size while the frame showed them
                     # (runs 20261019-193627 and 20261021-062735): read again from a copy twice as large
@@ -612,8 +621,13 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                     }
                     finally { $img.Dispose() }
                     $r5.ocr2 = "$((Get-LabOcr -Path $big).text)"
-                    $r5.times = @([regex]::Matches($r5.ocr2, '\b([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b') | ForEach-Object Value)
+                    $r5.times = ClockTimes $r5.ocr2
                 }
+                # fragments of neighbouring lines can make a time ("22. 22. 48" -> 22:22:48): only times from the
+                # recording on are kept; one after the stop still counts (that is what C-REC-05 looks for)
+                $r5.timesRead = $r5.times
+                $from = [TimeSpan]::Parse("$($r5.deviceStop)") - [TimeSpan]::FromSeconds($r5.span + 30)
+                $r5.times = @($r5.times | Where-Object { [TimeSpan]::Parse($_) -ge $from })
             }
             Shot 'clock'
             Save 'stop-time' $r5

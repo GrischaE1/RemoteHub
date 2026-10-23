@@ -37,7 +37,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     private Dictionary<string, Data.NoteImage> _imageData = [];
     private bool _loading;
     // "View Markdown": the page's Markdown as text, editable; the format buttons are off while it shows.
-    private readonly ICSharpCode.AvalonEdit.TextEditor _source = new() { Visibility = Visibility.Collapsed };
+    private readonly CodeEditor _source = new() { Visibility = Visibility.Collapsed };
     private readonly System.Windows.Controls.Primitives.ToggleButton _markdownToggle = new() { Margin = new Thickness(0, 0, 2, 0), Padding = new Thickness(8, 4, 8, 4) };
     private readonly List<UIElement> _formatButtons = [];
     private bool _sourceMode;
@@ -85,6 +85,8 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
                 if (FindHyperlink(e.OriginalSource as DependencyObject) is { } h) { OpenLink(h); e.Handled = true; }
         };
         DataObject.AddPastingHandler(_box, OnPaste);
+        CommandManager.AddPreviewCanExecuteHandler(_box, Box_PreviewCanPaste);
+        CommandManager.AddPreviewExecutedHandler(_box, Box_PreviewPaste);
         // Subscribed while shown, like the script blocks, so a closed editor isn't kept alive by the event.
         Loaded += (_, _) => { AppChrome.PaletteChanged -= OnPaletteChanged; AppChrome.PaletteChanged += OnPaletteChanged; };
         Unloaded += (_, _) => AppChrome.PaletteChanged -= OnPaletteChanged;
@@ -141,8 +143,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
             _imageData = images.ToDictionary(i => i.Id);
             _images.Clear();
             _box.IsUndoEnabled = false;
-            _box.Document = NoteMarkdown.ToFlowDocument(markdown, this);
-            StyleDocument(_box.Document);
+            ShowDocument(NoteMarkdown.ToFlowDocument(markdown, this));
             _box.IsUndoEnabled = true;
             UpdateImageWidths();
             // In View Markdown the next page shows as Markdown too; its undo history starts empty as well.
@@ -159,8 +160,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         _imageData = [];
         _images.Clear();
         _box.IsUndoEnabled = false;
-        _box.Document = new FlowDocument(new Paragraph());
-        StyleDocument(_box.Document);
+        ShowDocument(new FlowDocument(new Paragraph()));
         _box.IsUndoEnabled = true;
         _source.Text = "";
         _source.Document.UndoStack.ClearAll();
@@ -257,8 +257,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
                 {
                     _images.Clear();
                     _box.IsUndoEnabled = false;
-                    _box.Document = NoteMarkdown.ToFlowDocument(md, this);
-                    StyleDocument(_box.Document);
+                    ShowDocument(NoteMarkdown.ToFlowDocument(md, this));
                     _box.IsUndoEnabled = true;
                     UpdateImageWidths();
                 }
@@ -272,6 +271,23 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         foreach (var b in _formatButtons) b.IsEnabled = !on;
         Dispatcher.BeginInvoke(() => Focus(), System.Windows.Threading.DispatcherPriority.Input);
         MarkdownViewChanged?.Invoke(on);
+    }
+
+    /// <summary>
+    /// Shows <paramref name="next"/>'s blocks in the box's own document instead of replacing the document: the
+    /// RichTextBox's automation peer keeps reading the document it was created with, so after a replaced document a
+    /// screen reader (UI Automation's text pattern) got an empty page (lab run 20261022-061254, C-NOTE-04).
+    /// </summary>
+    private void ShowDocument(FlowDocument next)
+    {
+        var blocks = next.Blocks.ToList();
+        next.Blocks.Clear();
+        var doc = _box.Document;
+        doc.Blocks.Clear();
+        doc.Blocks.AddRange(blocks);
+        StyleDocument(doc);
+        _box.CaretPosition = doc.ContentStart;
+        _box.ScrollToHome();
     }
 
     private static void StyleDocument(FlowDocument d)
@@ -461,6 +477,7 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         else if (ctrl && !shift && key == Key.OemPeriod) Do(() => EditingCommands.ToggleBullets.Execute(null, _box));
         else if (ctrl && !shift && key is Key.OemQuestion or Key.Divide) Do(() => EditingCommands.ToggleNumbering.Execute(null, _box));
         else if (ctrl && !shift && key == Key.K) Do(AddLink);
+        else if (mods is ModifierKeys.None or ModifierKeys.Shift && key == Key.Space && TryLineStartMarkdown()) e.Handled = true;
         else if (mods == ModifierKeys.None && key == Key.Enter && TryEnterShortcut()) e.Handled = true;
         else if (key == Key.Tab && CurrentCell() is { } cell) Do(() => MoveCell(cell, shift ? -1 : 1));
         else if (mods == ModifierKeys.None && key == Key.Enter && CurrentCell() is { } c2) Do(() => MoveRow(c2));
@@ -481,13 +498,23 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
         return line is null || line.Paragraph != p ? sb : null;
     }
 
-    /// <summary>Markdown typed at the start of a line becomes its format (§4.5.2): "# ", "- ", "1. ", "[] ", "> ".</summary>
     private void Box_PreviewTextInput(object sender, TextCompositionEventArgs e)
     {
-        if (FromEmbedded(e.OriginalSource)) return;
-        if (e.Text != " " || _box.Selection.IsEmpty is false) return;
+        if (FromEmbedded(e.OriginalSource) || e.Text != " ") return;
+        if (TryLineStartMarkdown()) e.Handled = true;
+    }
+
+    /// <summary>
+    /// Markdown typed at the start of a line becomes its format (§4.5.2) when the space after it is typed: "# ", "- ",
+    /// "1. ", "[] ", "> ". Called for the Space key as well as for a typed space: the RichTextBox types a space from
+    /// the keyboard through its own Space command, without a text input event, so "- " and "# " stayed text (lab run
+    /// 20261022-061254, C-NOTE-03).
+    /// </summary>
+    private bool TryLineStartMarkdown()
+    {
+        if (_box.Selection.IsEmpty is false) return false;
         var caret = _box.CaretPosition;
-        if (caret.Paragraph is not { } p || CurrentCell() is not null) return;
+        if (caret.Paragraph is not { } p || CurrentCell() is not null) return false;
         var before = new TextRange(p.ContentStart, caret).Text;
         var inList = p.Parent is ListItem;
         Action? apply = before switch
@@ -501,10 +528,10 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
             ">" when p.Parent is not Section => ToggleQuote,
             _ => null,
         };
-        if (apply is null) return;
-        e.Handled = true;
+        if (apply is null) return false;
         new TextRange(p.ContentStart, caret).Text = "";
         apply();
+        return true;
     }
 
     /// <summary>Enter after "```lang", "---" or "| a | b |" on a line of its own.</summary>
@@ -965,7 +992,42 @@ public sealed partial class NoteEditor : DockPanel, INoteElementFactory
     private void PasteIntoPage(DataObjectPastingEventArgs e)
     {
         e.CancelCommand();
-        var data = e.DataObject;
+        PasteData(e.DataObject);
+    }
+
+    /// <summary>
+    /// The clipboard formats the RichTextBox pastes by itself. Without one of them its Paste command does nothing and
+    /// raises no Pasting event: a copied file (Explorer's Copy holds only file names) was dropped without a message (lab
+    /// run 20261022-061254, C-NOTE-06), so the page pastes such a clipboard itself.
+    /// </summary>
+    internal static bool RichTextBoxPastes(IDataObject data) =>
+        new[] { DataFormats.XamlPackage, DataFormats.Xaml, DataFormats.Rtf, DataFormats.UnicodeText, DataFormats.Text, DataFormats.Bitmap }.Any(data.GetDataPresent);
+
+    /// <summary>The page pastes this clipboard (see <see cref="PasteData"/>): our Markdown, HTML, files or what the box pastes.</summary>
+    private static bool PagePastes(IDataObject data) =>
+        RichTextBoxPastes(data) || data.GetDataPresent(MarkdownFormat) || data.GetDataPresent(DataFormats.Html) || data.GetDataPresent(DataFormats.FileDrop);
+
+    private static IDataObject? ClipboardData()
+    {
+        try { return Clipboard.GetDataObject(); }
+        catch (System.Runtime.InteropServices.ExternalException) { return null; }
+    }
+
+    private void Box_PreviewCanPaste(object sender, CanExecuteRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste || _box.IsReadOnly || FromEmbedded(e.OriginalSource)) return;
+        if (ClipboardData() is { } data && !RichTextBoxPastes(data) && PagePastes(data)) { e.CanExecute = true; e.Handled = true; }
+    }
+
+    private void Box_PreviewPaste(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste || _box.IsReadOnly || FromEmbedded(e.OriginalSource)) return;
+        if (ClipboardData() is { } data && !RichTextBoxPastes(data) && PagePastes(data)) { e.Handled = true; PasteData(data); }
+    }
+
+    /// <summary>Inserts the clipboard's content at the caret, in the order of <see cref="OnPaste"/>.</summary>
+    internal void PasteData(IDataObject data)
+    {
         try
         {
             if (CurrentCell() is not null)
