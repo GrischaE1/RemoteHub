@@ -117,12 +117,12 @@ public partial class MainWindow : FluentWindow
     private void OnCredentialPrompt(IntPtr dialog, PromptOwner owner, IReadOnlyList<string> texts)
     {
         foreach (var s in _vm.Sessions.OfType<RdpSession>())
-            DiagLog.Write($"  session {s.GetHashCode():x8}: state={s.State}, passwordStored={!string.IsNullOrEmpty(s.UsedCredentials.Password)}, " +
+            DiagLog.Write($"  session {s.GetHashCode():x8}: state={s.State}, passwordStored={s.UsedCredentials.Password is not null}, " +
                           $"ageSeconds={(int)(DateTime.UtcNow - s.ConnectStartedUtc).TotalSeconds}, action={s.PasswordPrompt}, " +
                           $"userShownInDialog={texts.Any(t => CredentialPromptMatcher.UserMatches(t, s.UsedCredentials))}");
         var candidates = _vm.Sessions.OfType<RdpSession>()
             .Where(s => s.State == SessionState.Connecting
-                     && !string.IsNullOrEmpty(s.UsedCredentials.Password)
+                     && s.UsedCredentials.Password is not null
                      && DateTime.UtcNow - s.ConnectStartedUtc < TimeSpan.FromMinutes(3))
             .ToList();
         var pick = CredentialPromptMatcher.Pick(candidates, s => s.UsedCredentials, s => s.ConnectStartedUtc, owner, texts, DateTime.UtcNow);
@@ -137,7 +137,7 @@ public partial class MainWindow : FluentWindow
         CopyPasswordForPrompt(dialog, name, password, pick);
     }
 
-    private void CopyPasswordForPrompt(IntPtr dialog, string connectionName, string password, RdpSession session)
+    private void CopyPasswordForPrompt(IntPtr dialog, string connectionName, Secret password, RdpSession session)
     {
         var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         if (!SecureClipboard.CopySecret(hwnd, password, TimeSpan.FromSeconds(ClipboardSeconds))) return;
@@ -1159,11 +1159,11 @@ public partial class MainWindow : FluentWindow
                     message: $"No password is stored for {PsRemoting.UserName(cred, c.Host)}. Enter it to connect to {c.Name} – it is kept in memory only.",
                     okText: "Connect") { Owner = this };
                 if (dlg.ShowDialog() != true) return null;
-                cred.Password = dlg.Password;
+                cred.Password = Secret.From(dlg.Password);
                 source += ", password entered";
             }
         }
-        if (previous?.Credentials is { } same && same.Username == cred.Username && same.Domain == cred.Domain && same.Password == cred.Password) cred = same;
+        if (previous?.Credentials is { } same && same.Username == cred.Username && same.Domain == cred.Domain && Secret.AreEqual(same.Password, cred.Password)) cred = same;
         return (MakeTarget(c, cred, agent)!, source);
     }
 
@@ -2139,7 +2139,7 @@ public partial class MainWindow : FluentWindow
             folder = dlg.FolderName;
         }
 
-        var withPw = conns.Any(x => !string.IsNullOrEmpty(Inheritance.ResolveCredentials(x, _vm.Data).Credentials.Password))
+        var withPw = conns.Any(x => Inheritance.ResolveCredentials(x, _vm.Data).Credentials.Password is not null)
             && await Dialogs.Ask(this, "Save as .rdp",
                 "Include saved passwords? They are encrypted for your Windows account, so the file only works for you on this PC (mstsc can use it). Without a password, mstsc asks when connecting.",
                 "Without passwords", "Include passwords") == Wpf.Ui.Controls.MessageBoxResult.Secondary;

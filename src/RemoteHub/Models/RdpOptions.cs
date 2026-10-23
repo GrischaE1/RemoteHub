@@ -1,3 +1,5 @@
+using RemoteHub.Services;
+
 namespace RemoteHub.Models;
 
 public enum DisplayResize { DynamicResolution, SmartSizing, Fixed }
@@ -116,7 +118,7 @@ public sealed class CredentialSet
 {
     public string? Username { get; set; }
     public string? Domain { get; set; }
-    public string? Password { get; set; }
+    public Secret? Password { get; set; }
 
     /// <summary>Domain value meaning "local account on the computer being connected to" (".\user").</summary>
     public const string LocalComputerDomain = ".";

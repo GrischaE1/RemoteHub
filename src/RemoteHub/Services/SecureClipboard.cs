@@ -20,13 +20,23 @@ public static class SecureClipboard
 
     public static bool HoldsSecret => _ourSequence != 0 && GetClipboardSequenceNumber() == _ourSequence;
 
-    public static bool CopySecret(IntPtr ownerHwnd, string secret, TimeSpan clearAfter)
+    public static bool CopySecret(IntPtr ownerHwnd, string secret, TimeSpan clearAfter) => CopySecret(ownerHwnd, secret.AsSpan(), clearAfter);
+
+    /// <summary>Copies a stored password; it is decrypted only while it is written to the clipboard.</summary>
+    public static bool CopySecret(IntPtr ownerHwnd, Secret secret, TimeSpan clearAfter)
+    {
+        var done = false;
+        secret.Use(v => done = CopySecret(ownerHwnd, v, clearAfter));
+        return done;
+    }
+
+    private static bool CopySecret(IntPtr ownerHwnd, ReadOnlySpan<char> secret, TimeSpan clearAfter)
     {
         if (!OpenWithRetry(ownerHwnd)) return false;
         try
         {
             if (!EmptyClipboard()) return false;
-            SetData(CF_UNICODETEXT, (secret + "\0").ToCharArray().SelectMany(BitConverter.GetBytes).ToArray());
+            SetText(secret);
             SetData(RegisterClipboardFormat("ExcludeClipboardContentFromMonitorProcessing"), [0]);
             SetData(RegisterClipboardFormat("CanIncludeInClipboardHistory"), BitConverter.GetBytes(0));
             SetData(RegisterClipboardFormat("CanUploadToCloudClipboard"), BitConverter.GetBytes(0));
@@ -68,6 +78,26 @@ public static class SecureClipboard
             System.Threading.Thread.Sleep(20); // another process may hold the clipboard briefly
         }
         return false;
+    }
+
+    /// <summary>CF_UNICODETEXT straight from the span, with no managed copy of the text.</summary>
+    private static unsafe void SetText(ReadOnlySpan<char> text)
+    {
+        var size = (text.Length + 1) * sizeof(char);
+        var h = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)size);
+        if (h == IntPtr.Zero) return;
+        var p = (char*)GlobalLock(h);
+        text.CopyTo(new Span<char>(p, text.Length));
+        p[text.Length] = '\0';
+        GlobalUnlock(h);
+        if (SetClipboardData(CF_UNICODETEXT, h) == IntPtr.Zero)
+        {
+            // Not handed over: wipe it before freeing, as the system would never see it.
+            p = (char*)GlobalLock(h);
+            new Span<byte>(p, size).Clear();
+            GlobalUnlock(h);
+            GlobalFree(h);
+        }
     }
 
     private static void SetData(uint format, byte[] bytes)

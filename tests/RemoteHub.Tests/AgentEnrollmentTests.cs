@@ -208,7 +208,7 @@ public class AgentEnrollmentTests
         var key = data.AgentEnrollment.EnsureCurrent(DateTime.UtcNow);
         var record = AppDataRecords.From(data).Single(r => r.Id == nameof(AppData.AgentEnrollment));
         Assert.DoesNotContain(key.Secret, record.Data);
-        Assert.Contains(record.Secrets, s => s.Item2 == key.Secret);
+        Assert.Contains(record.Secrets, s => s.Item2.Reveal() == key.Secret);
         Assert.Contains(key.Id.ToString(), record.Data);
     }
 

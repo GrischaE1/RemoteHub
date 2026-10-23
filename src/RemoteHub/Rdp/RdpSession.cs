@@ -176,7 +176,7 @@ public sealed partial class RdpSession : SessionBase
         c.ConnectingText = "Connecting…";
         c.UserName = _cred.Username ?? "";
         c.Domain = _cred.Domain ?? "";
-        if (!string.IsNullOrEmpty(_cred.Password)) _host.NonScriptable.SetClearTextPassword(_cred.Password);
+        if (_cred.Password is not null) _host.NonScriptable.SetClearTextPassword(_cred.Password.Reveal()); // the control takes nothing but a string
         else Try(() => _host.NonScriptable.ResetPassword());
 
         var (w, h) = InitialSize();
@@ -236,8 +236,8 @@ public sealed partial class RdpSession : SessionBase
                    : !string.IsNullOrEmpty(c.Domain) ? "DOMAIN\\user"
                    : user.Contains('\\') ? "DOMAIN\\user (in username)"
                    : "user only (no domain)";
-        var pw = string.IsNullOrEmpty(c.Password) ? "no password stored – Windows will ask"
-               : c.Password != c.Password.Trim() ? "password sent – WARNING: it starts or ends with a space"
+        var pw = c.Password is null ? "no password stored – Windows will ask"
+               : c.Password.HasOuterWhiteSpace ? "password sent – WARNING: it starts or ends with a space"
                : "password sent";
         return $"Credentials from {source} · {format} · {pw}";
     }

@@ -26,7 +26,7 @@ public class SharedSettingsTests
         {
             var data = new AppData();
             data.Ui.SidebarWidth = 333;
-            var f = new Folder { Name = "Prod", InheritCredentials = false, Credentials = { Username = "adm", Password = "S3cret!" } };
+            var f = new Folder { Name = "Prod", InheritCredentials = false, Credentials = { Username = "adm", Password = Secret.From("S3cret!") } };
             f.Children.Add(new Connection { Name = "web01", Host = "web01", Parent = f });
             data.Items.Add(f);
 
@@ -52,7 +52,7 @@ public class SharedSettingsTests
             SettingsStore.PasswordPrompt = _ => { prompts++; return answers.Dequeue(); };
             loaded = SettingsStore.Load();
             Assert.Equal(2, prompts);
-            Assert.Equal("S3cret!", Inheritance.ResolveCredentials(((Folder)loaded.Items[0]).Children[0], loaded).Credentials.Password);
+            Assert.Equal("S3cret!", Inheritance.ResolveCredentials(((Folder)loaded.Items[0]).Children[0], loaded).Credentials.Password?.Reveal());
 
             // cancel -> OperationCanceledException (app then falls back to local settings)
             SettingsStore.ForgetRememberedPasswords();

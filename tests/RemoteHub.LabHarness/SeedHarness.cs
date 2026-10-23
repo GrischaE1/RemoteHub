@@ -29,13 +29,13 @@ internal static class SeedHarness
         for (var i = 0; i < connections; i++)
         {
             var c = new Connection { Name = $"server-{i + 1:000}", Host = $"server-{i + 1:000}.lab.test", InheritCredentials = i % 3 != 0 };
-            if (!c.InheritCredentials) c.Credentials = new CredentialSet { Username = $@"lab\user{i}", Password = $"pw-{Guid.NewGuid():N}" };
+            if (!c.InheritCredentials) c.Credentials = new CredentialSet { Username = $@"lab\user{i}", Password = Secret.From($"pw-{Guid.NewGuid():N}") };
             for (var s = 0; s < shares; s++)
                 c.Shares.Add(new NetworkShare
                 {
                     Name = $"share{s}", Protocol = (ShareProtocol)(s % 4), Path = s % 4 == 0 ? $"share{s}" : $"/data/{s}",
                     InheritCredentials = s % 2 == 0,
-                    Credentials = s % 2 == 0 ? new CredentialSet() : new CredentialSet { Username = $"share{s}", Password = $"pw-{Guid.NewGuid():N}" },
+                    Credentials = s % 2 == 0 ? new CredentialSet() : new CredentialSet { Username = $"share{s}", Password = Secret.From($"pw-{Guid.NewGuid():N}") },
                 });
             folders[i % folderCount].Children.Add(c);
         }

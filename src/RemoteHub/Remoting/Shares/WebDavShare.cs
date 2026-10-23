@@ -52,7 +52,7 @@ public sealed class WebDavShare : ShareFileSystem
             var domain = credentials.IsLocalAccount ? host : credentials.Domain ?? "";
             var i = user.IndexOf('\\');
             if (i > 0) { domain = user[..i]; user = user[(i + 1)..]; }
-            handler.Credentials = new NetworkCredential(user, credentials.Password ?? "", domain);
+            handler.Credentials = new NetworkCredential(user, credentials.Password?.ToSecureString() ?? new System.Security.SecureString(), domain);
         }
         _http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("RemoteHub");

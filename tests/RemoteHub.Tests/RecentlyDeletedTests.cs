@@ -1,6 +1,7 @@
 using RemoteHub.Data;
 using RemoteHub.Models;
 using RemoteHub.ViewModels;
+using RemoteHub.Services;
 
 namespace RemoteHub.Tests;
 
@@ -24,7 +25,7 @@ public class RecentlyDeletedTests : IDisposable
     {
         var data = new AppData();
         var lab = new Folder { Name = "LAB" };
-        var dc = new Connection { Name = "DC01", Host = "dc01.lab", Parent = lab, InheritCredentials = false, Credentials = new CredentialSet { Username = "admin", Password = "S3cret!" } };
+        var dc = new Connection { Name = "DC01", Host = "dc01.lab", Parent = lab, InheritCredentials = false, Credentials = new CredentialSet { Username = "admin", Password = Secret.From("S3cret!") } };
         lab.Children.Add(dc);
         data.Items.Add(lab);
         data.Items.Add(new Connection { Name = "WEB01", Host = "web01" });
@@ -45,7 +46,7 @@ public class RecentlyDeletedTests : IDisposable
         var back = Assert.IsType<Folder>(vm.RestoreDeleted(entry.Id));
         var restored = Assert.IsType<Connection>(Assert.Single(back.Children));
         Assert.Same(back, restored.Parent);
-        Assert.Equal(("DC01", "S3cret!"), (restored.Name, restored.Credentials.Password));
+        Assert.Equal(("DC01", "S3cret!"), (restored.Name, restored.Credentials.Password?.Reveal()));
         Assert.Equal([dc.Id], vm.Data.Ui.FavoriteConnections);
         Assert.Empty(DeletedNodeStore.List());
     }

@@ -35,16 +35,16 @@ public class LocalDbTests : IDisposable
         var data = new AppData();
         data.Defaults.ColorTag = "Blue";
         data.Tools.ProcessRefreshSeconds = 7;
-        var cred = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CONTOSO", Password = TestSecret("Saved") };
+        var cred = new SavedCredential { Name = "Domain admin", Username = "adm", Domain = "CONTOSO", Password = Secret.From(TestSecret("Saved")) };
         data.SavedCredentials.Add(cred);
         data.DefaultCredentialId = cred.Id;
-        var prod = new Folder { Name = "Prod " + Marker, InheritCredentials = false, Credentials = { Username = "fadm", Password = TestSecret("Folder") } };
+        var prod = new Folder { Name = "Prod " + Marker, InheritCredentials = false, Credentials = { Username = "fadm", Password = Secret.From(TestSecret("Folder")) } };
         var web = new Folder { Name = "Web" };
         web.Children.Add(new Connection { Name = "web01", Host = "web01." + Marker, Port = 3390 });
         web.Children.Add(new Connection { Name = "web02", Host = "web02.contoso.test", InheritCredentials = false, CredentialId = cred.Id });
         prod.Children.Add(web);
         prod.Children.Add(new Connection { Name = "db01", Host = "db01.contoso.test", Notes = "Notes " + Marker,
-                                           Credentials = { Username = "sa", Password = TestSecret("Conn") }, InheritCredentials = false });
+                                           Credentials = { Username = "sa", Password = Secret.From(TestSecret("Conn")) }, InheritCredentials = false });
         data.Items.Add(prod);
         data.Items.Add(new Connection { Name = "jump", Host = "jump.contoso.test" });
         SettingsStore.RelinkParents(data.Items, null);
@@ -165,8 +165,8 @@ public class LocalDbTests : IDisposable
         var prod = Assert.IsType<Folder>(back.Items[0]);
         Assert.Equal(["Web", "db01"], prod.Children.Select(n => n.Name));
         Assert.Same(prod, prod.Children[0].Parent);
-        Assert.Equal(TestSecret("Conn"), prod.Children[1].Credentials.Password);
-        Assert.Equal(TestSecret("Saved"), back.SavedCredentials[0].Password);
+        Assert.Equal(TestSecret("Conn"), prod.Children[1].Credentials.Password?.Reveal());
+        Assert.Equal(TestSecret("Saved"), back.SavedCredentials[0].Password?.Reveal());
         Assert.Equal(7, back.Tools.ProcessRefreshSeconds);
     }
 
@@ -241,7 +241,7 @@ public class LocalDbTests : IDisposable
         AuditLog.Flush();
         var db01 = (Connection)((Folder)data.Items[0]).Children[1];
         db01.Host = "db01-new." + Marker;
-        db01.Credentials.Password = TestSecret("New");
+        db01.Credentials.Password = Secret.From(TestSecret("New"));
         db01.LastConnectedUtc = DateTime.UtcNow; // just using it: not audited
         data.Items.Add(new Connection { Name = "new01", Host = "new01" });
         SettingsStore.Save(data);
@@ -435,7 +435,7 @@ public class LocalDbTests : IDisposable
             var folder = new Folder { Name = $"Folder {f}" };
             for (var i = 0; i < 100; i++)
                 folder.Children.Add(new Connection { Name = $"srv-{f}-{i}", Host = $"srv-{f}-{i}.contoso.test", Notes = new string('n', 300),
-                                                     InheritCredentials = i % 10 != 0, Credentials = { Username = "u", Password = i % 10 == 0 ? "p" + i : null } });
+                                                     InheritCredentials = i % 10 != 0, Credentials = { Username = "u", Password = i % 10 == 0 ? Secret.From("p" + i) : null } });
             data.Items.Add(folder);
         }
         SettingsStore.RelinkParents(data.Items, null);

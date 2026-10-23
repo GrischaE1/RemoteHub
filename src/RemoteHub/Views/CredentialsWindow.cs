@@ -27,10 +27,12 @@ public sealed class CredentialsWindow : FluentWindow
         Margin = new Thickness(0, 0, 0, 10),
         ToolTip = "Signs in with a local account of whichever computer you connect to.",
     };
-    private readonly PasswordBox _password = new() { PlaceholderText = "Leave empty to be asked when connecting" };
+    private readonly PasswordBox _password = new();
+    private readonly Button _removePassword = new() { Content = "Remove stored password", Margin = new Thickness(8, 0, 0, 0) };
     private readonly TextBlock _usage = new() { Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly StackPanel _details = new();
     private SavedCredential? _current;
+    private Secret? _storedPassword; // the selected credential's password when it was selected – an emptied box goes back to it
 
     public CredentialsWindow(AppData data, Func<IEnumerable<NodeBase>> allNodes)
     {
@@ -71,7 +73,15 @@ public sealed class CredentialsWindow : FluentWindow
         };
         _local.Checked += (_, _) => { if (_domain.Text != CredentialSet.LocalComputerDomain) _domain.Text = CredentialSet.LocalComputerDomain; };
         _local.Unchecked += (_, _) => { if (_domain.Text == CredentialSet.LocalComputerDomain) _domain.Text = ""; };
-        _password.PasswordChanged += (_, _) => { if (_current is not null) _current.Password = NullIfEmpty(_password.Password); };
+        // The stored password is never shown: the box starts empty, typing replaces it, emptying the box keeps it.
+        _password.PasswordChanged += (_, _) => { if (_current is not null) _current.Password = Secret.From(_password.Password) ?? _storedPassword; };
+        _removePassword.Click += (_, _) =>
+        {
+            if (_current is null) return;
+            _current.Password = _storedPassword = null;
+            _password.Password = "";
+            ShowPasswordState(_current);
+        };
         if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
         _usage.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
 
@@ -79,7 +89,13 @@ public sealed class CredentialsWindow : FluentWindow
         _details.Children.Add(Label("Username")); _details.Children.Add(_user);
         _details.Children.Add(Label("Domain")); _details.Children.Add(_domain);
         _details.Children.Add(_local);
-        _details.Children.Add(Label("Password")); _details.Children.Add(_password);
+        var passwordRow = new Grid();
+        passwordRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        passwordRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        passwordRow.Children.Add(_password);
+        Grid.SetColumn(_removePassword, 1);
+        passwordRow.Children.Add(_removePassword);
+        _details.Children.Add(Label("Password")); _details.Children.Add(passwordRow);
         _details.Children.Add(_usage);
 
         var hint = new TextBlock
@@ -144,10 +160,19 @@ public sealed class CredentialsWindow : FluentWindow
         _name.Text = c?.Name ?? "";
         _user.Text = c?.Username ?? "";
         _domain.Text = c?.Domain ?? "";
-        _password.Password = c?.Password ?? "";
+        _storedPassword = c?.Password;
+        _password.Password = "";
+        ShowPasswordState(c);
         _usage.Text = c is null ? "Click Add to create a credential."
             : $"Used by {Inheritance.UsageCount(_data, c.Id, _allNodes())} item(s).";
         _current = c;
+    }
+
+    private void ShowPasswordState(SavedCredential? c)
+    {
+        var stored = c?.Password is not null;
+        _password.PlaceholderText = stored ? "A password is stored – type a new one to replace it" : "Leave empty to be asked when connecting";
+        _removePassword.Visibility = stored ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void AddNew()

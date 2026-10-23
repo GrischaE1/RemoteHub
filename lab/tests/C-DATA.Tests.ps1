@@ -1,6 +1,6 @@
 # C-DB / C-LOCK / C-AUD / C-BAK / C-SHARE - RemoteHub's own data on the admin's PC (this client VM): the encrypted
-# database (DPAPI key, the move from a 0.13 settings.dat, daily backups, a damaged file), the startup protection
-# (password, auto-lock, Windows Hello, turning it off), the audit log (entries, append-only and hash chain, retention
+# database (DPAPI key, the move from a 0.13 settings.dat, daily backups, a damaged file, no stored password in
+# RemoteHub's memory), the startup protection (password, auto-lock, Windows Hello, turning it off), the audit log (entries, append-only and hash chain, retention
 # policy, CSV export), password-protected backups (.rhbackup round trip to normaluser, wrong password, old .rdpmbackup)
 # and the shared settings folder on an SMB share of the device VM (\\<device ip>\rhsettings, a second RemoteHub on the
 # device for the sync conflict, the share offline at start).
@@ -680,6 +680,76 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             }
             $d.plain = InSession 'Test-RhSql (Join-Path $env:LOCALAPPDATA "RemoteHub\remotehub.db") $null "SELECT * FROM nodes"'
             $d.keyed = InSession '@(Get-RhDump).nodes | ForEach-Object name'
+            # C-DB-14: RemoteHub started again - the password comes from the database, it isn't typed in this process -
+            # and its memory dumped in full: the password is in it neither as UTF-8 nor as UTF-16 (it stays encrypted
+            # until a connection uses it, local-db-design.md section 17). The connection's host name is the control
+            # that the dump and the search work. Only the counts go to the evidence; the dump is deleted.
+            Start-Client
+            $d.db14 = Invoke-LabGuest -Name $VmName -ArgumentList $password, 'labtarget.lab.test' -ScriptBlock {
+                param($pw, $control)
+                Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class RhMemDump {
+    [DllImport("dbghelp.dll", SetLastError = true)]
+    static extern bool MiniDumpWriteDump(IntPtr process, int processId, SafeFileHandle file, int type, IntPtr exception, IntPtr userStream, IntPtr callback);
+    // full memory, unreadable regions left out
+    public static string Write(int pid, string path) {
+        using (Process p = Process.GetProcessById(pid))
+        using (FileStream f = File.Create(path)) {
+            if (!MiniDumpWriteDump(p.Handle, pid, f.SafeFileHandle, 0x2 | 0x20000, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero))
+                return "MiniDumpWriteDump failed: error " + Marshal.GetLastWin32Error();
+        }
+        return null;
+    }
+    // how often each needle is in the file, read in 64 MB chunks that overlap by the longest needle
+    public static long[] Count(string path, byte[][] needles) {
+        long[] counts = new long[needles.Length];
+        int longest = 1;
+        foreach (byte[] n in needles) longest = Math.Max(longest, n.Length);
+        const int chunk = 64 << 20;
+        byte[] buf = new byte[chunk + longest];
+        int carried = 0, read;
+        using (FileStream f = File.OpenRead(path)) {
+            while ((read = f.Read(buf, carried, chunk)) > 0) {
+                int len = carried + read;
+                for (int k = 0; k < needles.Length; k++) {
+                    byte[] n = needles[k];
+                    for (int i = 0; i + n.Length <= len; i++) {
+                        if (buf[i] != n[0] || i + n.Length <= carried) continue; // (a match inside the carried part was counted)
+                        int j = 1;
+                        while (j < n.Length && buf[i + j] == n[j]) j++;
+                        if (j == n.Length) counts[k]++;
+                    }
+                }
+                carried = Math.Min(longest - 1, len);
+                Buffer.BlockCopy(buf, len - carried, buf, 0, carried);
+            }
+        }
+        return counts;
+    }
+}
+'@
+                $rh = @(Get-Process RemoteHub -ErrorAction SilentlyContinue)
+                if ($rh.Count -ne 1) { return [pscustomobject]@{ error = "$($rh.Count) RemoteHub processes"; size = 0; utf8 = -1; utf16 = -1; control = -1 } }
+                try { [Diagnostics.Process]::EnterDebugMode() } catch { }   # the console account's process, dumped from this (admin) session
+                $path = 'C:\lab\c-db-14.dmp'
+                $null = New-Item -ItemType Directory -Path 'C:\lab' -Force
+                try {
+                    $err = [RhMemDump]::Write($rh[0].Id, $path)
+                    $size = if (Test-Path $path) { (Get-Item $path).Length } else { 0 }
+                    $counts = if ($err) { @(-1, -1, -1) } else {
+                        [RhMemDump]::Count($path, [byte[][]]@([Text.Encoding]::UTF8.GetBytes($pw), [Text.Encoding]::Unicode.GetBytes($pw), [Text.Encoding]::Unicode.GetBytes($control)))
+                    }
+                    [pscustomobject]@{ error = $err; size = $size; utf8 = $counts[0]; utf16 = $counts[1]; control = $counts[2] }
+                }
+                finally { Remove-Item $path -Force -ErrorAction SilentlyContinue }
+            }
+            $d.closed14 = Close-Rh
+            Save 'db14' $d.db14
             # C-DB-02: Admin's database and key where normaluser can read them (opened later, in normaluser's session)
             $d.copy = Invoke-LabGuest -Name $VmName -ArgumentList $localDir, $vm.UserAccount -ScriptBlock {
                 param($local, $user)
@@ -781,6 +851,14 @@ Describe 'C-DATA <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-S
             @($d.keyed) | Should -Contain 'LabTarget' -Because 'the database opens with its key and holds the connection'
             @($d.db01.searched).Count | Should -BeGreaterThan 2
             @($d.db01.hits) | Should -BeNullOrEmpty
+        }
+
+        It 'C-DB-14 a stored password not in use: a full memory dump of RemoteHub holds it neither as UTF-8 nor as UTF-16' -Tag 'C-DB-14' {
+            $d.db14.error | Should -BeNullOrEmpty
+            $d.db14.size | Should -BeGreaterThan 10MB
+            $d.db14.control | Should -BeGreaterThan 0 -Because 'the connection''s host name is in memory - the dump and the search work'
+            $d.db14.utf8 | Should -Be 0
+            $d.db14.utf16 | Should -Be 0
         }
 
         It 'C-DB-03 0.13 settings.dat moved into the database: renamed .migrated, every field equal (passwords too), audit "Settings moved to the database"' -Tag 'C-DB-03' {

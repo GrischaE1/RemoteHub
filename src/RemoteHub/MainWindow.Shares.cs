@@ -234,7 +234,7 @@ public partial class MainWindow
             }
             return (cred, share.Protocol == ShareProtocol.Ftp ? "anonymous sign-in (no account set)" : "your Windows account (no account set)");
         }
-        if (string.IsNullOrEmpty(cred.Password))
+        if (cred.Password is null)
         {
             if (previous is { Password.Length: > 0 } p && p.Username == cred.Username && p.Domain == cred.Domain) cred.Password = p.Password;
             else
@@ -244,7 +244,7 @@ public partial class MainWindow
                     message: $"No password is stored for {user}. Enter it to open {ShareLabel(share)} – it is kept in memory only.",
                     okText: "Connect") { Owner = this };
                 if (dlg.ShowDialog() != true) return null;
-                cred.Password = dlg.Password;
+                cred.Password = Secret.From(dlg.Password);
                 source += ", password entered";
             }
         }

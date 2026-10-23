@@ -12,7 +12,8 @@ namespace RemoteHub.Data;
 /// <summary>
 /// One stored record: a folder or connection (table nodes), a saved credential (credentials) or one part of the global
 /// settings (settings). <see cref="Data"/> is the record's JSON without its passwords – those are in
-/// <see cref="Secrets"/> and stored encrypted a second time (table secrets).
+/// <see cref="Secrets"/> (still encrypted in memory, see <see cref="Secret"/>) and stored encrypted a second time
+/// (table secrets).
 /// </summary>
 internal sealed class Record
 {
@@ -24,7 +25,7 @@ internal sealed class Record
     public required string Name { get; init; }
     public string? Host { get; init; }
     public required string Data { get; init; }
-    public required IReadOnlyList<(string Path, string Value)> Secrets { get; init; }
+    public required IReadOnlyList<(string Path, Secret Value)> Secrets { get; init; }
 
     private byte[]? _hash;
 
@@ -41,7 +42,8 @@ internal sealed class Record
             h.AppendData(b);
         }
         Add(Table); Add(Id); Add(ParentId); Add(Sort.ToString()); Add(Data);
-        foreach (var (path, value) in Secrets) { Add(path); Add(value); }
+        // The fingerprint stands for the value: equal for equal passwords in this process, never the password itself.
+        foreach (var (path, value) in Secrets) { Add(path); h.AppendData(value.Fingerprint); }
         return h.GetHashAndReset();
     }
 }
@@ -162,19 +164,28 @@ internal static class AppDataRecords
 
     private static Record Make(string table, string id, string? parent, int sort, string kind, string name, string? host, object? value, Type type)
     {
-        var json = JsonSerializer.Serialize(value, type, RowJson);
-        var secrets = new List<(string, string)>();
+        // Passwords are written as placeholders (see SecretJsonConverter), so their values never enter the JSON text.
+        var captured = new List<Secret>();
+        string json;
+        SecretJsonConverter.Capture = captured;
+        try { json = JsonSerializer.Serialize(value, type, RowJson); }
+        finally { SecretJsonConverter.Capture = null; }
+        var secrets = new List<(string, Secret)>();
         // Fast path: most records carry no password (credentials are inherited or saved separately) and no enrollment secret.
-        if ((json.Contains("\"Password\":", StringComparison.Ordinal) || json.Contains("\"Secret\":", StringComparison.Ordinal)) && JsonNode.Parse(json) is { } node)
+        if ((captured.Count > 0 || json.Contains("\"Secret\":", StringComparison.Ordinal)) && JsonNode.Parse(json) is { } node)
         {
-            Extract(node, "", secrets);
+            Extract(node, "", captured, secrets);
             json = node.ToJsonString();
         }
         return new Record { Table = table, Id = id, ParentId = parent, Sort = sort, Kind = kind, Name = name, Host = host, Data = json, Secrets = secrets };
     }
 
-    /// <summary>Moves every "Password" and "Secret" string out of the JSON, remembering where it was ("Credentials/Password", "Keys/0/Secret").</summary>
-    private static void Extract(JsonNode? node, string path, List<(string, string)> secrets)
+    /// <summary>
+    /// Moves every "Password" and "Secret" out of the JSON, remembering where it was ("Credentials/Password",
+    /// "Keys/0/Secret"): a password's placeholder becomes the captured <see cref="Secret"/>; the enrollment key, a
+    /// plain string in the model, is wrapped in one.
+    /// </summary>
+    private static void Extract(JsonNode? node, string path, List<Secret> captured, List<(string, Secret)> secrets)
     {
         switch (node)
         {
@@ -184,14 +195,15 @@ internal static class AppDataRecords
                     var p = path.Length == 0 ? key : path + "/" + key;
                     if (key is "Password" or "Secret" && value is JsonValue v && v.TryGetValue<string>(out var s))
                     {
-                        secrets.Add((p, s));
+                        var secret = SecretJsonConverter.TryParsePlaceholder(s, out var i) && i >= 0 && i < captured.Count ? captured[i] : Secret.From(s);
+                        if (secret is not null) secrets.Add((p, secret));
                         o.Remove(key);
                     }
-                    else Extract(value, p, secrets);
+                    else Extract(value, p, captured, secrets);
                 }
                 break;
             case JsonArray a:
-                for (var i = 0; i < a.Count; i++) Extract(a[i], path + "/" + i, secrets);
+                for (var i = 0; i < a.Count; i++) Extract(a[i], path + "/" + i, captured, secrets);
                 break;
         }
     }
@@ -209,36 +221,54 @@ internal static class AppDataRecords
 
     public static AppData Load(SqliteConnection c, byte[] secretKey)
     {
-        var secrets = new Dictionary<(string, string), List<(string, string)>>();
+        // Each password goes from its sealed row straight into a Secret; the JSON only gets a placeholder for it.
+        var secrets = new Dictionary<(string, string), List<(string, Secret)>>();
         using (var cmd = LocalDb.Command(c, "SELECT owner_kind, owner_id, path, value FROM secrets", null))
         using (var r = cmd.ExecuteReader())
             while (r.Read())
             {
                 var (kind, id, path) = (r.GetString(0), r.GetString(1), r.GetString(2));
-                var value = SecretBox.Open(secretKey, (byte[])r.GetValue(3), Place(kind, id, path));
-                (secrets.TryGetValue((kind, id), out var l) ? l : secrets[(kind, id)] = []).Add((path, value));
+                if (SecretBox.OpenSecret(secretKey, (byte[])r.GetValue(3), Place(kind, id, path)) is { } value)
+                    (secrets.TryGetValue((kind, id), out var l) ? l : secrets[(kind, id)] = []).Add((path, value));
             }
 
+        var supply = new List<Secret>();
         string WithSecrets(string table, string id, string json)
         {
             if (!secrets.TryGetValue((table, id), out var list)) return json;
             var node = JsonNode.Parse(json)!;
-            foreach (var (path, value) in list) Insert(node, path, value);
+            foreach (var (path, value) in list)
+            {
+                // The enrollment key is a string in the model; a password is a Secret, filled in from its placeholder.
+                if (path == "Secret" || path.EndsWith("/Secret", StringComparison.Ordinal)) Insert(node, path, value.Reveal());
+                else
+                {
+                    supply.Add(value);
+                    Insert(node, path, SecretJsonConverter.Placeholder(supply.Count - 1));
+                }
+            }
             return node.ToJsonString();
+        }
+
+        object? Read(string table, string id, string json, Type type)
+        {
+            SecretJsonConverter.Supply = supply;
+            try { return JsonSerializer.Deserialize(WithSecrets(table, id, json), type, RowJson); }
+            finally { SecretJsonConverter.Supply = null; }
         }
 
         var data = new AppData();
         foreach (var (id, _, json) in Rows(c, Settings))
             if (SettingParts.FirstOrDefault(p => p.Key == id) is { Key: not null } part)
-                part.Set(data, JsonSerializer.Deserialize(WithSecrets(Settings, id, json), part.Type, RowJson));
+                part.Set(data, Read(Settings, id, json, part.Type));
 
         foreach (var (id, _, json) in Rows(c, Credentials))
-            if (JsonSerializer.Deserialize<SavedCredential>(WithSecrets(Credentials, id, json), RowJson) is { } sc) data.SavedCredentials.Add(sc);
+            if (Read(Credentials, id, json, typeof(SavedCredential)) is SavedCredential sc) data.SavedCredentials.Add(sc);
 
         // The tree: each node under its parent, in stored order. A node whose parent is missing goes to the top level.
         var nodes = new List<(NodeBase Node, string? Parent)>();
         foreach (var (id, parent, json) in Rows(c, Nodes))
-            if (JsonSerializer.Deserialize<NodeBase>(WithSecrets(Nodes, id, json), RowJson) is { } n) nodes.Add((n, parent));
+            if (Read(Nodes, id, json, typeof(NodeBase)) is NodeBase n) nodes.Add((n, parent));
         var folders = nodes.Select(x => x.Node).OfType<Folder>().ToDictionary(f => f.Id.ToString());
         var parents = nodes.ToDictionary(x => x.Node.Id.ToString(), x => x.Parent);
         foreach (var (n, parent) in nodes)
@@ -381,7 +411,7 @@ internal static class AppDataRecords
         var sa2 = old.Secrets.ToDictionary(s => s.Path, s => s.Value);
         var sb2 = now.Secrets.ToDictionary(s => s.Path, s => s.Value);
         foreach (var path in sa2.Keys.Union(sb2.Keys))
-            if (sa2.GetValueOrDefault(path) != sb2.GetValueOrDefault(path)) fields.Add(path.Replace('/', '.'));
+            if (!Secret.AreEqual(sa2.GetValueOrDefault(path), sb2.GetValueOrDefault(path))) fields.Add(path.Replace('/', '.'));
         return fields;
     }
 }

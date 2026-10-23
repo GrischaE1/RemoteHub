@@ -52,7 +52,8 @@ wins, and §14 lists what changes in them. It builds on main as of 0.21.0 (conne
   `-Confirm` prompts fail instead of hanging (the catalog's §4 *UI and prompts*).
 - **Signing scripts.** Runs use `-ExecutionPolicy Bypass` (§6.2). Neither the library nor the user's own scripts are
   signed. Where a GPO enforces an execution policy, the run fails with a clear message and isn't worked around.
-- **Sharing scripts with other users, and sync.** These wait for the server and device sync, as for notes.
+- **Sharing scripts with other users, and sync.** Sharing waits for a server, as for notes; device sync is not
+  planned (local-db-design.md §8).
 - **Running from a note's script block.** Notes stay documentation only (notes-view-design.md §2). A script block can
   be saved as a new script (§4.7).
 

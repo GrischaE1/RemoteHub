@@ -36,7 +36,7 @@ public class NetworkShareTests : IDisposable
     {
         var data = new AppData();
         var nuc = new Connection { Name = "NUC10", Host = "hv02" };
-        nuc.Shares.Add(new NetworkShare { Name = "share", Path = "share", InheritCredentials = false, Credentials = { Username = "lab", Password = TestSecret("Share") } });
+        nuc.Shares.Add(new NetworkShare { Name = "share", Path = "share", InheritCredentials = false, Credentials = { Username = "lab", Password = Secret.From(TestSecret("Share")) } });
         nuc.Shares.Add(new NetworkShare { Name = "nas", Protocol = ShareProtocol.Sftp, Host = "nas.lab", Port = 2222, TrustedFingerprint = "SHA256:abc" });
         data.Items.Add(nuc);
         SettingsStore.RelinkParents(data.Items, null);
@@ -48,7 +48,7 @@ public class NetworkShareTests : IDisposable
         var back = Assert.IsType<Connection>(SettingsStore.Load().Items.Single());
         Assert.Equal(["share", "nas"], back.Shares.Select(s => s.Name));
         Assert.All(back.Shares, s => Assert.Same(back, s.Server));
-        Assert.Equal(TestSecret("Share"), back.Shares[0].Credentials.Password);
+        Assert.Equal(TestSecret("Share"), back.Shares[0].Credentials.Password?.Reveal());
         Assert.Equal(@"\\hv02\share", back.Shares[0].Address);
         Assert.Equal("sftp://nas.lab:2222", back.Shares[1].Address);
         Assert.Equal("SHA256:abc", back.Shares[1].TrustedFingerprint);
@@ -94,7 +94,7 @@ public class NetworkShareTests : IDisposable
     {
         var data = new AppData();
         var folder = new Folder { Name = "NAS" };
-        folder.Children.Add(new NetworkShare { Name = "media", Host = "nas", Path = "media", InheritCredentials = false, Credentials = { Username = "lab", Password = TestSecret("Alone") } });
+        folder.Children.Add(new NetworkShare { Name = "media", Host = "nas", Path = "media", InheritCredentials = false, Credentials = { Username = "lab", Password = Secret.From(TestSecret("Alone")) } });
         folder.Children.Add(new Connection { Name = "HV02", Host = "hv02" });
         data.Items.Add(folder);
         data.Items.Add(new NetworkShare { Name = "files", Protocol = ShareProtocol.Sftp, Host = "files.lab", Path = "/data" });
@@ -112,7 +112,7 @@ public class NetworkShareTests : IDisposable
         var media = Assert.IsType<NetworkShare>(Assert.IsType<Folder>(back.Items[0]).Children[0]);
         Assert.True(media.IsStandalone);
         Assert.Same(back.Items[0], media.Parent);
-        Assert.Equal(TestSecret("Alone"), media.Credentials.Password);
+        Assert.Equal(TestSecret("Alone"), media.Credentials.Password?.Reveal());
         Assert.Equal(@"\\nas\media", media.Address);
         var files = Assert.IsType<NetworkShare>(back.Items[1]);
         Assert.Null(files.Parent);

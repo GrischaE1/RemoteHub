@@ -44,7 +44,7 @@ public static class PsRemoting
     }
 
     /// <summary>True when a username is set but no password: the caller has to ask for it.</summary>
-    public static bool NeedsPassword(CredentialSet c) => !c.IsEmpty && string.IsNullOrEmpty(c.Password);
+    public static bool NeedsPassword(CredentialSet c) => !c.IsEmpty && c.Password is null;
 
     /// <summary>Where a runspace connects to; <paramref name="forward"/>: WinRM through a jump host's local port.</summary>
     public static RunspaceConnectionInfo ConnectionInfo(PsTarget t, LocalForward? forward = null) =>
@@ -65,8 +65,7 @@ public static class PsRemoting
     private static PSCredential? Credential(string? user, CredentialSet c)
     {
         if (user is null) return null;
-        var pw = new SecureString();
-        foreach (var ch in c.Password ?? "") pw.AppendChar(ch);
+        var pw = c.Password?.ToSecureString() ?? new SecureString(); // decrypted straight into the SecureString
         pw.MakeReadOnly();
         return new PSCredential(user, pw);
     }

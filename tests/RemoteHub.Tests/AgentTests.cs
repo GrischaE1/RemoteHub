@@ -15,6 +15,7 @@ using RemoteHub.Models;
 using RemoteHub.Agent;
 using RemoteHub.Remoting;
 using A = agent::RemoteHub.Agent;
+using RemoteHub.Services;
 
 namespace RemoteHub.Tests;
 
@@ -103,7 +104,7 @@ public class AgentTests
     }
 
     private static PsTarget Target(Agent a, string user = "tester", string password = "secret", string? fingerprint = null) =>
-        new("127.0.0.1", false, new CredentialSet { Username = user, Password = password, Domain = "." },
+        new("127.0.0.1", false, new CredentialSet { Username = user, Password = Secret.From(password), Domain = "." },
             new AgentEndpoint(a.Port, fingerprint ?? a.Fingerprint));
 
     [Fact]

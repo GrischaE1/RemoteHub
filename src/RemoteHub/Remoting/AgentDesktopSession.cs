@@ -190,7 +190,7 @@ public sealed partial class AgentDesktopSession : SessionBase
     private static Task<AgentDesktopClient> Open(PsTarget target) => Task.Run(async () =>
     {
         var user = PsRemoting.AgentUserName(target.Credentials) ?? throw new InvalidOperationException("The RemoteHub Agent needs credentials (a Windows account of the device).");
-        var cred = new PSCredential(user, Secure(target.Credentials.Password ?? ""));
+        var cred = new PSCredential(user, target.Credentials.Password?.ToSecureString() ?? Empty());
         return await AgentDesktopClient.ConnectAsync(target.Host, target.Agent!, cred, CancellationToken.None);
     });
 
@@ -273,10 +273,9 @@ public sealed partial class AgentDesktopSession : SessionBase
         return s.Length == 0 ? "" : char.ToUpperInvariant(s[0]) + s[1..] + ".";
     }
 
-    private static SecureString Secure(string s)
+    private static SecureString Empty()
     {
         var ss = new SecureString();
-        foreach (var ch in s) ss.AppendChar(ch);
         ss.MakeReadOnly();
         return ss;
     }
@@ -1135,7 +1134,8 @@ public sealed partial class AgentDesktopSession : SessionBase
             return;
         }
         Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Requested");
-        _client.Send(DesktopWire.SignInRequest(password)); // the frame is wiped once sent (AgentDesktopClient.SendLoop)
+        var client = _client;
+        password.Use(v => client.Send(DesktopWire.SignInRequest(v))); // the frame is wiped once sent (AgentDesktopClient.SendLoop)
     }
 
     private DispatcherTimer? _noticeTimer;

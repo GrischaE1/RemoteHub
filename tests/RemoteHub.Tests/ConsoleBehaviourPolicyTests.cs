@@ -32,9 +32,9 @@ public class ConsoleBehaviourPolicyTests
     public void Stored_passwords_are_not_used_while_saving_them_is_blocked_and_stay_stored()
     {
         var data = new AppData();
-        var saved = new SavedCredential { Name = "admin", Username = "admin", Password = "s3cret" };
+        var saved = new SavedCredential { Name = "admin", Username = "admin", Password = Secret.From("s3cret") };
         data.SavedCredentials.Add(saved);
-        var own = new Connection { Name = "a", Host = "a", InheritCredentials = false, Credentials = new CredentialSet { Username = "u", Password = "pw" } };
+        var own = new Connection { Name = "a", Host = "a", InheritCredentials = false, Credentials = new CredentialSet { Username = "u", Password = Secret.From("pw") } };
         var bySaved = new Connection { Name = "b", Host = "b", InheritCredentials = false, CredentialId = saved.Id };
         WithPolicy(Set(("AllowSavedPasswords", 0)), () =>
         {
@@ -42,20 +42,20 @@ public class ConsoleBehaviourPolicyTests
             Assert.Equal("u", c.Username);
             Assert.Null(c.Password);
             Assert.Null(Inheritance.ResolveCredentials(bySaved, data).Credentials.Password);
-            Assert.Equal("pw", own.Credentials.Password); // removed only by SavedPasswords.Remove, after the notice
+            Assert.Equal("pw", own.Credentials.Password?.Reveal()); // removed only by SavedPasswords.Remove, after the notice
         });
-        Assert.Equal("pw", Inheritance.ResolveCredentials(own, data).Credentials.Password);
+        Assert.Equal("pw", Inheritance.ResolveCredentials(own, data).Credentials.Password?.Reveal());
     }
 
     [Fact]
     public void Removing_saved_passwords_clears_every_kind_and_counts_them()
     {
-        var data = new AppData { DefaultCredentials = new CredentialSet { Username = "d", Password = "1" } };
-        data.SavedCredentials.Add(new SavedCredential { Name = "s", Username = "s", Password = "2" });
+        var data = new AppData { DefaultCredentials = new CredentialSet { Username = "d", Password = Secret.From("1") } };
+        data.SavedCredentials.Add(new SavedCredential { Name = "s", Username = "s", Password = Secret.From("2") });
         data.SavedCredentials.Add(new SavedCredential { Name = "t", Username = "t" });
-        var server = new Connection { Name = "srv", Host = "srv", Credentials = new CredentialSet { Username = "u", Password = "3" } };
-        server.Shares.Add(new NetworkShare { Name = "data", Server = server, Credentials = new CredentialSet { Username = "x", Password = "4" } });
-        var folder = new Folder { Name = "f", Credentials = new CredentialSet { Username = "f", Password = "5" } };
+        var server = new Connection { Name = "srv", Host = "srv", Credentials = new CredentialSet { Username = "u", Password = Secret.From("3") } };
+        server.Shares.Add(new NetworkShare { Name = "data", Server = server, Credentials = new CredentialSet { Username = "x", Password = Secret.From("4") } });
+        var folder = new Folder { Name = "f", Credentials = new CredentialSet { Username = "f", Password = Secret.From("5") } };
 
         Assert.Equal(5, SavedPasswords.Remove(data, [server, folder]));
         Assert.Null(data.DefaultCredentials.Password);
@@ -126,7 +126,7 @@ public class ConsoleBehaviourPolicyTests
     public void A_duplicate_takes_no_password_while_saving_them_is_blocked()
     {
         var data = new AppData();
-        var c = new Connection { Name = "srv", Host = "srv", InheritCredentials = false, Credentials = new CredentialSet { Username = "u", Password = "pw" } };
+        var c = new Connection { Name = "srv", Host = "srv", InheritCredentials = false, Credentials = new CredentialSet { Username = "u", Password = Secret.From("pw") } };
         data.Items.Add(c);
         var vm = new MainViewModel(data);
         WithPolicy(Set(("AllowSavedPasswords", 0)), () =>
@@ -134,7 +134,7 @@ public class ConsoleBehaviourPolicyTests
             var copy = vm.Duplicate(c);
             Assert.Null(copy.Credentials.Password);
             Assert.Equal("u", copy.Credentials.Username);
-            Assert.Equal("pw", c.Credentials.Password);
+            Assert.Equal("pw", c.Credentials.Password?.Reveal());
         });
     }
 

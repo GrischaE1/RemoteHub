@@ -181,7 +181,7 @@ internal static class LabTools
         var cred = new CredentialSet
         {
             Username = o["user"],
-            Password = o["password"],
+            Password = RemoteHub.Services.Secret.From(o["password"]),
             Domain = o.GetValueOrDefault("local") == "0" ? null : CredentialSet.LocalComputerDomain,
         };
         return o["via"] switch
