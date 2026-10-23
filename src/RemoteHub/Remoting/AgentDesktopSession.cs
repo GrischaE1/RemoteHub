@@ -13,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using RemoteHub.Agent;
 using RemoteHub.Models;
 using RemoteHub.Rdp;
+using RemoteHub.Remoting.Decoder;
 using RemoteHub.Services;
 using SessionState = RemoteHub.Rdp.SessionState;
 
@@ -813,7 +814,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         var items = r.Transfer.Kind == DesktopTransferKind.Files ? r.Targets : null;
         r.Dispose();
         // Decoded here, on the receiving thread, and only as PNG, BMP or JPEG within the size limit (DeviceImage).
-        var pixels = image is not null ? DeviceImage.Decode(image) : null;
+        var pixels = image is not null ? DecodeImage(image) : null;
         var refused = $"The image copied on the device can't be taken – only PNG, BMP and JPEG up to {DeviceImage.MaxSide} × {DeviceImage.MaxSide} pixels are.";
         // Asked for by a paste on this PC: the waiting paste gets it (it's on the clipboard through that paste).
         if (_pastingFromDevice is { } p && p.Id == r.Transfer.Id)
@@ -1259,6 +1260,11 @@ public sealed partial class AgentDesktopSession : SessionBase
         return null;
     }
 
+    /// <summary>
+    /// The session's video, decoded in its own sandboxed process (<see cref="SessionDecoder"/>,
+    /// docs/decoder-isolation-design.md): this thread hands each checked message to it and shows the pixels it answers
+    /// with. Clipboard images from the device go to the same process (<see cref="DecodeImage"/>).
+    /// </summary>
     private sealed class FrameDecoder : IDisposable
     {
         private readonly AgentDesktopSession _session;
@@ -1272,64 +1278,70 @@ public sealed partial class AgentDesktopSession : SessionBase
         public FrameDecoder(AgentDesktopSession session)
         {
             _session = session;
+            Process = new SessionDecoder(() => DecoderHost.Start(), session.DecoderStopped);
             _thread = new Thread(Run) { IsBackground = true, Name = "Desktop decoder" };
             _thread.Start();
         }
+
+        /// <summary>The session's decoder process (video and clipboard images).</summary>
+        public SessionDecoder Process { get; }
 
         public void Enqueue(byte[] m)
         {
             try { _queue.Add(m); } catch (InvalidOperationException) { /* closing */ }
         }
 
-        private unsafe void Run()
+        private void Run()
         {
-            H264Decoder? decoder = null;
-            try
+            void KeyFrameNext()
             {
-                decoder = new H264Decoder();
-                foreach (var m in _queue.GetConsumingEnumerable())
+                _waitForKeyFrame = true;
+                _session._client?.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+            }
+            foreach (var m in _queue.GetConsumingEnumerable())
+            {
+                // The device chooses every byte: a message it got wrong is a bad frame, not the end of the session.
+                if (CheckVideo(m, out var h) is { } bad)
                 {
-                    // The device chooses every byte: a message it got wrong is a bad frame, not the end of the session.
-                    if (CheckVideo(m, out var h) is { } bad)
-                    {
-                        Services.DiagLog.Write("Agent desktop: video message refused – " + bad);
-                        try { decoder.Flush(); } catch { /* new decoder below */ }
-                        _waitForKeyFrame = true;
-                        _session._client?.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
-                        if (m.Length >= DesktopWire.VideoHeaderSize) _session._client?.Send(DesktopWire.Ack(h.FrameId)); // its id is readable
-                        continue;
-                    }
-                    try
-                    {
-                        if (_waitForKeyFrame && !h.KeyFrame) continue;
-                        _waitForKeyFrame = false;
-                        decoder.Decode(m.AsSpan(DesktopWire.VideoHeaderSize), h.Width, h.Height, (bgra, w, hh) => Publish(bgra, w, hh));
-                    }
-                    catch (Exception ex)
-                    {
-                        Services.DiagLog.Write("Agent desktop: frame could not be decoded – " + ex.Message);
-                        try { decoder.Flush(); } catch { /* new decoder below */ }
-                        _waitForKeyFrame = true;
-                        _session._client?.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
-                    }
-                    finally { _session._client?.Send(DesktopWire.Ack(h.FrameId)); }
+                    Services.DiagLog.Write("Agent desktop: video message refused – " + bad);
+                    KeyFrameNext();
+                    if (m.Length >= DesktopWire.VideoHeaderSize) _session._client?.Send(DesktopWire.Ack(h.FrameId)); // its id is readable
+                    continue;
                 }
+                try
+                {
+                    if (_waitForKeyFrame && !h.KeyFrame) continue;
+                    _waitForKeyFrame = false;
+                    if (!Process.Use(d => d.Video(h.FrameId, h.Width, h.Height, h.KeyFrame, m.AsSpan(DesktopWire.VideoHeaderSize), Publish)))
+                    {
+                        Services.DiagLog.Write("Agent desktop: a frame couldn't be decoded");
+                        KeyFrameNext();
+                    }
+                }
+                catch (DecoderFailedException)
+                {
+                    // Ended and reported (DecoderStopped); the next frame starts a new decoder – from a key frame.
+                    if (Process.Stopped) return;
+                    KeyFrameNext();
+                }
+                catch (DecoderUnavailableException ex)
+                {
+                    var why = ex.Message;
+                    _session._ui.BeginInvoke(() => _session.Fail("The picture can't be shown on this PC: " + why));
+                    return;
+                }
+                finally { _session._client?.Send(DesktopWire.Ack(h.FrameId)); }
             }
-            catch (Exception ex)
-            {
-                var why = ex.Message;
-                _session._ui.BeginInvoke(() => _session.Fail("The picture can't be shown on this PC: " + why));
-            }
-            finally { decoder?.Dispose(); }
         }
 
-        private unsafe void Publish(byte* bgra, int w, int h)
+        /// <summary>The pixels the decoder answered with (read during the call only): copied for the UI thread.</summary>
+        private void Publish(ReadOnlySpan<byte> bgra, int w, int h)
         {
-            if (w is < 1 or > DesktopProtocol.MaxVideoWidth || h is < 1 or > DesktopProtocol.MaxVideoHeight) return; // (CheckVideo bounds it already)
+            if (w is < 1 or > DesktopProtocol.MaxVideoWidth || h is < 1 or > DesktopProtocol.MaxVideoHeight || bgra.Length != w * h * 4) return; // (DecoderHost checks it already)
             lock (_lock)
             {
                 if (_back.Length < w * h * 4) _back = new byte[w * h * 4];
-                new ReadOnlySpan<byte>(bgra, w * h * 4).CopyTo(_back);
+                bgra.CopyTo(_back);
                 (_w, _h) = (w, h);
                 Interlocked.Increment(ref _session._framesShown);
                 if (_pending) return;
@@ -1354,8 +1366,32 @@ public sealed partial class AgentDesktopSession : SessionBase
         public void Dispose()
         {
             _queue.CompleteAdding();
+            Process.Dispose(); // first: a frame waiting for the decoder returns at once, so the join doesn't wait for it
             _thread.Join(TimeSpan.FromSeconds(2));
         }
+    }
+
+    /// <summary>
+    /// A decoder of this session misbehaved and was ended (docs/decoder-isolation-design.md §3.4): logged without the
+    /// device's name, audited – an attack leaves a trace – and after too many the session ends.
+    /// </summary>
+    internal void DecoderStopped(string reason, bool gaveUp)
+    {
+        Services.DiagLog.Write($"Agent desktop: decoder stopped – {reason}{(gaveUp ? "; giving up" : "")}");
+        Data.AuditLog.Write(Data.AuditEvents.DesktopDecoderStopped, Connection, gaveUp ? reason + " – the session was ended" : reason);
+        if (gaveUp)
+            _ui.BeginInvoke(() => Fail("The picture can't be shown – the device keeps sending data RemoteHub can't decode. Disconnect and check the device."));
+    }
+
+    /// <summary>
+    /// A clipboard image from the device as pixels, decoded in the session's decoder process (§3.5), or null when it
+    /// can't be taken (not PNG, BMP or JPEG within the limits, no decoder, or the decoder failed).
+    /// </summary>
+    private DeviceImagePixels? DecodeImage(byte[] image)
+    {
+        if (_decoder?.Process is not { } process) return null;
+        try { return process.Use(d => d.Image(image)); }
+        catch (Exception ex) when (ex is DecoderFailedException or DecoderUnavailableException) { return null; }
     }
 }
 

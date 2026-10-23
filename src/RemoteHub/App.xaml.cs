@@ -13,6 +13,12 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // RemoteHub.exe --decoder-check <file>: the decoder sandbox checked, the results written, nothing else started
+        if (e.Args is ["--decoder-check", var checkFile])
+        {
+            Shutdown(Remoting.Decoder.DecoderCheck.Run(checkFile));
+            return;
+        }
         StartupTiming.Mark("app");
         Views.WindowPlacement.Install(); // popups open centred on the window they belong to, also when it is maximised
 

@@ -7,12 +7,12 @@
 #              are numbers only (major.minor.build, each part at most 255.255.65535).
 # -OutputPath  Where the MSIs end up (default: artifacts). Publish folders: <OutputPath>\publish, <OutputPath>\publish-agent.
 #
-# Signing (Authenticode, SHA-256; Sign-Files.ps1): RemoteHubAgent.exe, RemoteHub.exe and both MSIs, each before it is
-# packed into the next step.
+# Signing (Authenticode, SHA-256; Sign-Files.ps1): RemoteHubAgent.exe, RemoteHub.exe, RemoteHubDecoder.exe and both
+# MSIs, each before it is packed into the next step.
 # -SigningCertificate  Thumbprint of the code-signing certificate: in the certificate store, or with -ESigner the one
 #                      every signature is checked against.
 # -ESigner             Signs through SSL.com eSigner (release.yml; Sign-Files.ps1 has the environment it needs). Each
-#                      signed file counts against the yearly signings: 4 per release, 5 with -CredentialProvider.
+#                      signed file counts against the yearly signings: 5 per release, 6 with -CredentialProvider.
 # -LabSigning          The lab certificate instead (lab\New-LabSigningCertificate.ps1); only the lab VMs trust it.
 # -TimestampServer     Defaults to DigiCert's for -SigningCertificate; the lab signs without a timestamp, eSigner with its own.
 # Without -SigningCertificate or -LabSigning, nothing is signed.
@@ -116,7 +116,13 @@ Sign $agentMsi
 dotnet publish "$root\src\RemoteHub\RemoteHub.csproj" -c $Configuration -r win-x64 --self-contained true `
     -p:Version=$Version -p:DebugType=none -o $publish
 if ($LASTEXITCODE) { throw "publish failed" }
-Sign "$publish\RemoteHub.exe"
+# The decoder process (docs/decoder-isolation-design.md) next to RemoteHub.exe, on the same runtime: RemoteHub starts it
+# from there, and only Program Files is readable from its AppContainer.
+dotnet publish "$root\src\RemoteHub.Decoder\RemoteHub.Decoder.csproj" -c $Configuration -r win-x64 --self-contained true `
+    -p:Version=$Version -p:DebugType=none -o $publish
+if ($LASTEXITCODE) { throw "decoder publish failed" }
+if (-not (Test-Path "$publish\RemoteHubDecoder.exe")) { throw "RemoteHubDecoder.exe was not published." }
+Sign "$publish\RemoteHub.exe", "$publish\RemoteHubDecoder.exe"
 New-Item -ItemType Directory -Force -Path "$publish\Agent" | Out-Null
 Copy-Item $agentMsi "$publish\Agent\RemoteHub-Agent-x64.msi"
 

@@ -69,7 +69,7 @@ jobs:
 
       # Code signing through SSL.com eSigner (CodeSignTool), in the environment release-signing: its secrets ES_USERNAME,
       # ES_PASSWORD, ES_CREDENTIAL_ID and ES_TOTP_SECRET, and the variable SIGNING_CERTIFICATE_THUMBPRINT that every
-      # signature is checked against. The account has 240 signings a year and a release takes 4 (5 with the credential
+      # signature is checked against. The account has 240 signings a year and a release takes 5 (6 with the credential
       # provider), so only releases sign: CI and the lab never do, and test releases (a suffix: v0.19.1-test.1) are built
       # unsigned. Without the secrets the release is built unsigned, with a warning. The credential provider is never
       # built unsigned (credential-provider-design.md §8.4) - build-installer.ps1 refuses that on its own.

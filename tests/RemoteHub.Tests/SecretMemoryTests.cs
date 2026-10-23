@@ -14,8 +14,12 @@ namespace RemoteHub.Tests;
 /// string (the control) is found. The test never holds the password itself in one piece – only two random halves that
 /// are combined byte by byte while the dump is searched – so the search can't find its own copy.
 /// </summary>
+[Collection(Name)]
 public class SecretMemoryTests
 {
+    public const string Name = "Memory dump";
+
+
     private const int MiniDumpWithFullMemory = 0x2, MiniDumpIgnoreInaccessibleMemory = 0x20000;
 
     [DllImport("dbghelp.dll", SetLastError = true)]
@@ -128,3 +132,10 @@ public class SecretMemoryTests
         finally { File.Delete(path); }
     }
 }
+
+/// <summary>
+/// The dump test runs alone, after every other test: MiniDumpWriteDump on its own process suspends the other threads,
+/// and one that holds a lock the dump needs deadlocks it – it hung the whole run beside the decoder tests.
+/// </summary>
+[CollectionDefinition(SecretMemoryTests.Name, DisableParallelization = true)]
+public sealed class MemoryDumpCollection;

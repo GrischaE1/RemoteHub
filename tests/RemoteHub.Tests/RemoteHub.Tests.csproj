@@ -28,7 +28,19 @@
     <ProjectReference Include="..\..\src\RemoteHub\RemoteHub.csproj" />
     <!-- alias: AgentProtocol.cs is compiled into both assemblies -->
     <ProjectReference Include="..\..\src\RemoteHub.Agent\RemoteHub.Agent.csproj" Aliases="agent" />
+    <!-- The decoder process, next to the tests as it is next to RemoteHub.exe (DecoderHost.DefaultPath) -->
+    <ProjectReference Include="..\..\src\RemoteHub.Decoder\RemoteHub.Decoder.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+  </PropertyGroup>
+  <Target Name="CopyDecoder" AfterTargets="Build">
+    <ItemGroup>
+      <DecoderFiles Include="..\..\src\RemoteHub.Decoder\bin\$(Configuration)\$(TargetFramework)\win-x64\RemoteHubDecoder.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DecoderFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 
   <ItemGroup>
     <Using Include="Xunit" />

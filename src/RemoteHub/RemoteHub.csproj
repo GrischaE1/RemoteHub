@@ -67,6 +67,21 @@
     <Compile Include="..\RemoteHub.Agent\PolicyCatalog.cs" Link="Services\PolicyCatalog.cs" />
   </ItemGroup>
 
+  <!-- RemoteHubDecoder.exe decodes a device's video and clipboard images in a sandbox (docs/decoder-isolation-design.md).
+       Built with RemoteHub and copied next to RemoteHub.exe; build-installer.ps1 publishes it into the same folder. -->
+  <PropertyGroup>
+    <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RemoteHub.Decoder\RemoteHub.Decoder.csproj" ReferenceOutputAssembly="false" Private="false" />
+  </ItemGroup>
+  <Target Name="CopyDecoder" AfterTargets="Build">
+    <ItemGroup>
+      <DecoderFiles Include="..\RemoteHub.Decoder\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\RemoteHubDecoder.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DecoderFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <Using Include="System" />
     <Using Include="System.Collections.Generic" />
