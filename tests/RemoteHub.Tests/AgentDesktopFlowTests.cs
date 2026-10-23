@@ -2302,7 +2302,9 @@ public partial class AgentDesktopFlowTests
             auto.Dropped(3, helper, log);
             WaitFor(() => s.Disconnects.Contains(3), "locked when the sign-out is refused");
             WaitFor(() => helper.Disposed, "the cover ends once the session is locked");
-            Assert.Null(auto.Owned(3));
+            // the record goes right after the cover (AutoSignInSessions disposes, then forgets): waited for, not checked at
+            // once - CI (PR #69) looked in between
+            WaitFor(() => auto.Owned(3) is null, "the session's record forgotten");
         }
         finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); A.AutoSignInSessions.SignOutWait = TimeSpan.FromSeconds(60); }
     }
