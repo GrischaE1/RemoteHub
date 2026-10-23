@@ -34,10 +34,12 @@ public class HelperClipboardFilesTests
         try
         {
             using var script = Process.Start(new ProcessStartInfo("powershell.exe",
-                $"-NoProfile -NonInteractive -Command \"Set-Clipboard -Path '{file}'; Start-Sleep -Seconds 4; 'done'\"")
+                $"-NoProfile -NonInteractive -Command \"Set-Clipboard -Path '{file}'; Start-Sleep -Seconds 10; 'done'\"")
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
-            var ok = SpinWait.SpinUntil(() => !got.IsEmpty, 6000);
-            script.WaitForExit(10000);
+            // A cold Windows PowerShell can take several seconds to start on a busy CI runner (the 6 s wait failed there):
+            // the script keeps running long enough for that, and the wait ends as soon as the files arrive.
+            var ok = SpinWait.SpinUntil(() => !got.IsEmpty, 20_000);
+            script.WaitForExit(20_000);
             Assert.True(ok, "no file list from a running script; notes: " + string.Join(" | ", notes));
             Assert.Contains(got, c => c.Files is { } f && f.SequenceEqual([file]));
         }
