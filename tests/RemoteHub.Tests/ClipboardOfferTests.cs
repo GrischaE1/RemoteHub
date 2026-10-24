@@ -49,7 +49,7 @@ public class ClipboardOfferTests
         {
             if (ClipboardOffer.BackgroundReader(paster)) return null;
             fetches.Enqueue(paster);
-            return new OfferedContent(Image: png, Png: true);
+            return new OfferedContent(Image: png, Png: true, Pixels: DeviceImage.Decode(png)); // as the session's decoder answers
         });
         Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
         Thread.Sleep(500);
@@ -126,7 +126,7 @@ public class ClipboardOfferTests
         var bmp = DeviceImageTests.Encode(new System.Windows.Media.Imaging.BmpBitmapEncoder(), 3, 2);
         byte[] crafted = [.. bmp, .. "trailing bytes of the device"u8];
         var offer = new RemoteHub.Agent.DesktopTransfer(7, RemoteHub.Agent.DesktopTransferKind.Image, [new RemoteHub.Agent.DesktopTransferItem("image.bmp", crafted.Length)], crafted.Length);
-        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: crafted));
+        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: crafted, Pixels: DeviceImage.Decode(crafted)));
         Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
 
         var (width, png) = PasteImage();
@@ -141,7 +141,7 @@ public class ClipboardOfferTests
     {
         var gif = DeviceImageTests.Encode(new System.Windows.Media.Imaging.GifBitmapEncoder(), 2, 2);
         var offer = new RemoteHub.Agent.DesktopTransfer(8, RemoteHub.Agent.DesktopTransferKind.Image, [new RemoteHub.Agent.DesktopTransferItem("image.png", gif.Length)], gif.Length);
-        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: gif, Png: true));
+        ClipboardOffer.Instance.Offer(offer, paster => ClipboardOffer.BackgroundReader(paster) ? null : new OfferedContent(Image: gif, Png: true, Pixels: DeviceImage.Decode(gif)));
         Skip.IfNot(SpinWait.SpinUntil(() => ClipboardOffer.Instance.OwnsClipboard, 3000), "no clipboard in this session");
 
         var (width, png) = PasteImage();

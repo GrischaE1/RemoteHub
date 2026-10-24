@@ -35,7 +35,7 @@ public sealed class ClipboardOffer
     private HwndSource _window = null!;
     private Func<string, OfferedContent?>? _fetch;
     private OfferedContent? _rendered;
-    private DeviceImagePixels? _pixels; // the rendered image, decoded once for both formats
+
 
     private ClipboardOffer()
     {
@@ -83,7 +83,7 @@ public sealed class ClipboardOffer
         try
         {
             EmptyClipboard(); // the previous offer ends here (WM_DESTROYCLIPBOARD)
-            (_fetch, _rendered, _pixels) = (fetch, null, null);
+            (_fetch, _rendered) = (fetch, null);
             SetClipboardData(PngFormat, IntPtr.Zero);
             SetClipboardData(CF_DIB, IntPtr.Zero);
         }
@@ -102,7 +102,7 @@ public sealed class ClipboardOffer
                 handled = true;
                 break;
             case WM_DESTROYCLIPBOARD:
-                (_fetch, _rendered, _pixels) = (null, null, null);
+                (_fetch, _rendered) = (null, null);
                 handled = true;
                 break;
         }
@@ -115,12 +115,10 @@ public sealed class ClipboardOffer
         _rendered ??= fetch(Paster());
         if (_rendered is not { } r) return;
         if (format == CF_HDROP && r.Files is { } files) SetData(CF_HDROP, DropFiles(files));
-        else if ((format == PngFormat || format == CF_DIB) && r.Image is { } image)
-        {
-            // Both formats are made from the decoded pixels: the device's own bytes never reach the clipboard.
-            _pixels ??= r.Pixels ?? DeviceImage.Decode(image);
-            if (_pixels is { } pixels) SetData(format, format == CF_DIB ? DeviceImage.ToDib(pixels) : DeviceImage.ToPng(pixels));
-        }
+        // Both image formats are made from the pixels the session's decoder process answered with
+        // (AgentDesktopSession.DecodeImage): the device's own bytes never reach the clipboard, and nothing is decoded here.
+        else if ((format == PngFormat || format == CF_DIB) && r.Pixels is { } pixels)
+            SetData(format, format == CF_DIB ? DeviceImage.ToDib(pixels) : DeviceImage.ToPng(pixels));
     }
 
     /// <summary>

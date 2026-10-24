@@ -1,7 +1,8 @@
 # RemoteHub – Decoding a device's data outside the console
 
-Status: phase 0 built, phase 1 (spike) done – 2026-10-23. Phases 2–4 (the decoder process) are next; see §10 for the
-phases and §11 for what the spike found. The decisions in §9 are made.
+Status: built – 2026-10-23. The device's video and clipboard images are decoded in `RemoteHubDecoder.exe`, in an
+AppContainer (§12 has what was built and how it differs from the plan). Open: the lab cases with a rogue agent
+(SEC-DEC-01 … 05, §10). The decisions in §9 are made; §11 has what the spike found.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -23,9 +24,9 @@ the wire framing, file names). That code is memory-safe and stays where it is.
 
 | Data | Where | Decoder | Risk |
 |---|---|---|---|
-| Video | `AgentDesktopSession.cs` `FrameDecoder` (thread "Desktop decoder") → `VideoCodec.cs` `H264Decoder` | Microsoft's software H.264 MFT (`CLSID_MSH264DecoderMFT`), driven through COM vtables; NV12 → BGRA in managed code | **High** – native parser of a stream the device writes, every frame |
-| Clipboard image, pushed | `AgentDesktopSession.FinishReceiving` | Was: WPF `BitmapDecoder.Create` (WIC; any format WIC recognises) on the UI thread. Since phase 0: `DeviceImage` on the receiving thread (§3.6) | **High** – native parser; phase 0 narrows it to three decoders after a size check |
-| Clipboard image, offered | `ClipboardOffer.Render` | Was: `BitmapDecoder` + `FormatConvertedBitmap` on the offer's STA thread (`PngToDib`). Since phase 0: `DeviceImage` | **High** – same |
+| Video | `AgentDesktopSession.cs` `FrameDecoder` (thread "Desktop decoder") → `VideoCodec.cs` `H264Decoder` | Microsoft's software H.264 MFT (`CLSID_MSH264DecoderMFT`), driven through COM vtables; NV12 → BGRA in managed code. Since phase 2: in `RemoteHubDecoder.exe` (§12) | **High** – native parser of a stream the device writes, every frame |
+| Clipboard image, pushed | `AgentDesktopSession.FinishReceiving` | Was: WPF `BitmapDecoder.Create` (WIC; any format WIC recognises) on the UI thread. Since phase 0: `DeviceImage`, since phase 3 in `RemoteHubDecoder.exe` | **High** – native parser; phase 0 narrows it to three decoders after a size check |
+| Clipboard image, offered | `ClipboardOffer.Render` | Was: `BitmapDecoder` + `FormatConvertedBitmap` on the offer's STA thread (`PngToDib`). Since phase 0: `DeviceImage`, since phase 3 decoded when it arrives, in `RemoteHubDecoder.exe` | **High** – same |
 | Clipboard BMP | `ClipboardOffer` | Was: not parsed – the bytes went on the clipboard as CF_DIB. Since phase 0: decoded and rebuilt from pixels | Was medium – parsed later by whatever program the user pastes into |
 | Cursor shape | `OnMessage` → `CursorFiles.Create` | BGRA pixels (checked, ≤ 1024²); RemoteHub builds the `.cur` itself | Low – RemoteHub's own header around checked pixels |
 | JSON messages, framing, transfer metadata | `DesktopProtocol`, `ClipboardTransfer` | System.Text.Json, managed readers with length checks | Low – managed |
@@ -65,13 +66,15 @@ and other processes.
 
 ### 3.3 Talking to it
 
-- **Control pipe** (an anonymous pipe pair, inherited): length-prefixed messages, using the existing
-  `WriteFramedAsync` / `ReadFramedAsync` (4-byte length, at most 16 MB). Requests are `Video(frameId, flags, bitstream)`,
-  `Flush`, `Image(id, bytes)` and `Exit`. Answers are `Frame(frameId, buffer, width, height)`, `Image(id, buffer,
-  width, height)`, `Skipped(frameId, reason)` and `Error(reason)`.
-- **Pixels** through a shared-memory section (`CreateFileMapping`, made by RemoteHub, inherited by the decoder). It holds
-  two buffers of 4096 × 2304 × 4 bytes (≈ 75 MB in total, committed only as used), so the decoder fills one while the
-  console shows the other. Images larger than a buffer are refused in the decoder (§3.5).
+- **Control pipe** (an anonymous pipe pair, inherited): length-prefixed messages (4-byte length; requests at most
+  100 MB, the clipboard's limit; answers at most 64 KB), `DecoderProtocol.cs`. Requests are `Video(frameId, width,
+  height, key frame, access unit)`, `Image(id, section, width, height, file)`, `Probe` and `Exit`. Answers are
+  `Ready`, `Frame(frameId, buffer, width, height)`, `NoFrame(frameId)`, `ImageDone(id, width, height)`,
+  `Failed(id, reason)` (the input couldn't be decoded; the decoder is fine) and `ProbeResult(json)`.
+- **Pixels** through shared memory, never the pipe. Video: one section (`CreateFileMapping`, made by RemoteHub,
+  inherited by the decoder) with two buffers of 4096 × 2304 × 4 bytes, the decoder filling them in turn. Images: a
+  section per image of exactly the size RemoteHub read from the header (up to 8192 × 8192 × 4 bytes), handed to the
+  decoder with `DuplicateHandle` and closed by it once written – an image larger than a video buffer still fits.
 - **The console doesn't trust the answers.** A taken-over decoder can say anything. Before reading, the console checks
   that the buffer index is 0 or 1, that `width × height × 4` fits the buffer, that the size is within
   `MaxVideoWidth/Height`, and that `frameId` is one it sent. Anything else ends the decoder (§3.4). The worst a decoder
@@ -79,9 +82,8 @@ and other processes.
 - Nothing is named (no named pipes, no named sections), so no other process can sit in the middle or pretend to be the
   decoder.
 
-**Cost per frame:** the console already copies every frame into its back buffer before `WritePixels`. With the section,
-`WritePixels` reads from the mapped view instead, so there's no extra copy. A pipe round trip adds ~0.1 ms. The decoding
-itself is unchanged.
+**Cost per frame:** the console copies the picture from the section into its back buffer, as it copied the decoder's
+output before, so there's no extra copy. A pipe round trip adds ~0.1 ms. The decoding itself is unchanged (§11).
 
 ### 3.4 When it crashes or misbehaves
 
@@ -133,18 +135,28 @@ None. Isolation is always on, like the other protections. An administrator gains
 
 ## 6. Tests
 
-- **Unit:** the answer checks in §3.3 (bad index, oversized, unknown frame), the restart limit, and the DIB built from
-  pixels. A fake decoder program crashes, hangs and answers garbage to test the console's side.
-- **Integration (CI, no VM):** the real decoder process decodes a recorded H.264 clip and a PNG, BMP and JPEG, with the
-  same pixels as decoding in-process. A probe mode of the decoder, run in its sandbox, tries to connect a socket,
-  open a file in the user's profile, read the clipboard and start a process – each must fail.
-- **Fuzz (SEC-DEC-01/02):** truncated, oversized and bit-flipped H.264 and images fed to the decoder process. Pass when
-  every input ends in a frame, a "skipped", or a contained crash and a restart, never a hang of the console.
+Built (`tests/RemoteHub.Tests/DecoderProcessTests.cs`, `DeviceImageTests.cs`, `ClipboardOfferTests.cs`;
+`lab/tests/SEC-DEC.Tests.ps1`):
+
+- **Unit:** the answer checks in §3.3 (wrong kind, length, frame or image id, buffer, a picture larger than asked for,
+  an image of another size), the restart limit with a clock (the fourth failure in a minute gives up; failures spread
+  over more than a minute don't), the DIB built from pixels, the header parsing and the video message checks of §3.6.
+- **Integration (CI, no VM):** the real `RemoteHubDecoder.exe` started in its AppContainer decodes an H.264 stream
+  RemoteHub encodes and a PNG, BMP and JPEG (pixels as expected); its probes – network, loopback, the profile, the
+  database folder, writing, HKCU, the clipboard, a new process, RemoteHub's process, another window – are all blocked.
+  The same at low integrity (forced): no writing, clipboard, process, RemoteHub's process or windows. A decoder killed
+  from outside is reported within the frame timeout and the session starts a new one.
+- **Fuzz (SEC-DEC-01/02 in CI):** 120 truncated, bit-flipped, noisy and doubled H.264 access units (some declaring
+  4096 × 2304) and 120 broken PNG, BMP and JPEG files fed to the decoder process. Every input ends in a picture, a bad
+  frame or a contained failure and a new decoder within the time limit, and a good stream decodes afterwards; no image
+  comes back larger than its header states.
 - **Lab:**
-  - SEC-DEC-01/02 through the harness's raw desktop client, with a device that sends a malformed stream and malformed
-    clipboard images. RemoteHub stays responsive, restarts the decoder, ends the session after the limit, and audits it.
+  - SEC-DEC-06: the installed build's decoder on Windows 11 and Server, run by normaluser (`RemoteHub.exe
+    --decoder-check`, §12): AppContainer, decoding works, every probe blocked.
+  - SEC-DEC-01 … 05 need the rogue agent (security-test-lab-design.md §5.1) – not built yet.
   - The D-VID cases for frame rate and latency stay within today's results.
-- **View test (STA):** the session tab after a decoder restart and after the limit (message, buttons).
+- **View test (STA):** the session tab after a decoder restart (still connected) and after the limit (the message,
+  *Connect* to start again).
 
 ## 7. Effort
 
@@ -183,9 +195,9 @@ The spike decides whether the AppContainer works as planned. If .NET can't start
 |---|---|---|
 | 0 | §3.6, and §3.5's clipboard rules in RemoteHub's process | **Built** |
 | 1 | Spike: .NET, Media Foundation and WIC in an AppContainer with no capabilities, job, handle list, section | **Done** – §11 |
-| 2 | `RemoteHubDecoder.exe` for video: protocol, section, the console's checks, restarts and limit, audit, view tests | Next |
-| 3 | Clipboard images through the session's decoder (phase 0's `DeviceImage` moves into it) | – |
-| 4 | Integration, sandbox probe, fuzz (SEC-DEC-01/02 with the rogue agent), lab cases, MSI, docs; D-VID within today's results | – |
+| 2 | `RemoteHubDecoder.exe` for video: protocol, section, the console's checks, restarts and limit, audit, view tests | **Built** – §12 |
+| 3 | Clipboard images through the session's decoder (phase 0's `DeviceImage` moves into it) | **Built** |
+| 4 | Integration, sandbox probe, fuzz, lab case SEC-DEC-06, MSI, docs | **Built**; the rogue agent and SEC-DEC-01 … 05 are open; D-VID to be run |
 
 ## 11. Spike results (phase 1)
 
@@ -225,5 +237,35 @@ What the decoder can't do (each tried from inside):
 | Read `C:\Windows\System32\drivers\etc\hosts`, read HKCU `…\Explorer` | Allowed – world-readable system data, nothing of the user's |
 
 Left for phase 2: the section's pages are committed with `PAGE_READWRITE` here; `SEC_RESERVE` and committing as used
-(§3.3) is to be checked there. The low-integrity fallback (§9, decision 2) wasn't needed on this PC and gets its own
-test in phase 4.
+(§3.3) is to be checked there (kept as it is – §12). The low-integrity fallback (§9, decision 2) wasn't needed on this
+PC and gets its own test in phase 4 (done – §12).
+
+## 12. As built (phases 2–4)
+
+- **Programs and code:** `src/RemoteHub.Decoder` (`RemoteHubDecoder.exe`: the H.264 decoder of `VideoCodec.cs`,
+  `DeviceImage.Decode` and `DecoderProtocol.cs`, nothing else of RemoteHub's). In RemoteHub, `Remoting/Decoder`:
+  `DecoderSandbox` (AppContainer, low-integrity fallback, job, handle list), `DecoderHost` (one process: requests,
+  time limits, the answer checks), `SessionDecoder` (one per agent desktop session: start on first use, restarts, the
+  limit) and `DecoderCheck`.
+- **Installed:** `build-installer.ps1` publishes the decoder self-contained into RemoteHub's folder, on the same runtime,
+  and signs it – a release now signs 5 files (6 with the credential provider). In a development build it is copied
+  next to `RemoteHub.exe`; there its folder gets read access for all application packages (as Program Files has), or
+  the decoder starts at low integrity.
+- **Time limits:** 10 s to start (≈ 0.3 s usually; the first picture of a session waits for it), 2 s per frame, 10 s
+  per image. A decoder past its limit is ended by closing its job.
+- **Job:** as §3.2, plus `DIE_ON_UNHANDLED_EXCEPTION`, so a crash never waits on an error dialog.
+- **Video section:** committed at creation (`PAGE_READWRITE`): 75 MB of commit charge per open desktop session, but
+  physical memory only for the pages the decoder writes. `SEC_RESERVE` would save the charge at the cost of committing
+  from the decoder; not worth it for a few sessions.
+- **Clipboard images:** RemoteHub reads the size from the header (§3.6), the decoder decodes into the image's own
+  section, and RemoteHub builds the clipboard data from those pixels. An image is decoded once, when it arrives, in
+  the session's decoder; `ClipboardOffer` only re-encodes the pixels.
+- **The audit event** `desktop.decoder_stopped` ("Desktop decoder stopped") names the connection and the reason (e.g.
+  "no answer within 2 s while decoding a frame"), and says when the session was ended.
+- **AppContainer profile:** `RemoteHub.Decoder`, made once per Windows user on the first desktop session
+  (`%LOCALAPPDATA%\Packages\remotehub.decoder`, which also holds the decoder's own temporary folder). Uninstalling
+  RemoteHub (per machine) doesn't remove it.
+- **Low integrity, measured:** the forced fallback blocks writing, HKCU, the clipboard, new processes, RemoteHub's
+  process and other windows, but – unlike the AppContainer – lets the decoder read most files and use the network.
+- **`RemoteHub.exe --decoder-check <file>`** starts the decoder as a session does, decodes a test stream and images,
+  runs the probes and writes the result as JSON – SEC-DEC-06 runs it on the installed build; support can too.
