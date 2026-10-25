@@ -209,7 +209,7 @@ account is `PSAdmin`.
 | S-TLS-01 | TLS versions | TLS 1.2 and 1.3 accepted; TLS 1.0/1.1 refused (host `SslStream` with forced protocols) | H | 1 | ✅ |
 | S-TLS-02 | No plain HTTP | `http://vm:58732/v1/health` fails | H | 1 | ✅ |
 | S-TLS-03 | Pin mismatch | client with a wrong pin stops before sending credentials: no 4625, no sign-in line in the agent log | H PS E | 1 | ✅ |
-| S-TLS-04 | Health reveals nothing | health JSON has only product, version, protocol, deviceId, features and managed (only the names `autoSignIn`, `virtualDisplay`, `port` – never values); no `Server` header | H | 1 | ✅ |
+| S-TLS-04 | Health reveals nothing | health JSON has only product, version, protocol, deviceId, features, managed (only the names `autoSignIn`, `virtualDisplay`, `port` – never values) and instance (a random 32-hex id per agent start); no `Server` header | H | 1 | ✅ |
 | S-AUTH-01 | Wrong password | 401, event 2000, Security 4625 | H E | 1 | ✅ |
 | S-AUTH-02 | Missing / malformed Basic header | 401 with `WWW-Authenticate: Basic realm="RemoteHub Agent"`, not counted as a failure | H | 2 | ✅ |
 | S-AUTH-03 | Not a WebSocket request | 400 | H | 3 | ✅ |

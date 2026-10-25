@@ -2100,23 +2100,32 @@ function Start-LabMarker {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'User')
     Copy-LabPerson -Name $Name
-    $file = "C:\ProgramData\RemoteHubLab\session\marker-$([guid]::NewGuid().ToString('N').Substring(0, 8)).jsonl"
-    $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do marker -Out '$file'"))
-    $until = (Get-Date).AddSeconds(60)
-    $state = $null
-    while ((Get-Date) -lt $until) {
-        # shown and active (it has the keyboard), or shown and given up on the keyboard ('nofocus', after 30 s)
-        $state = Invoke-LabGuest -Name $Name -ArgumentList $file -ScriptBlock {
-            param($f)
-            $ev = @(Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
-            if (-not @($ev | Where-Object e -eq 'shown')) { return $null }
-            $no = @($ev | Where-Object e -eq 'nofocus') | Select-Object -First 1
-            if ($no) { return "nofocus:$($no.fg)" }
-            if (@($ev | Where-Object e -eq 'active')) { return 'active' }
-            $null
+    # In a session signed in moments before, the task sometimes stays Ready (last result 0x00041303) or its PowerShell
+    # never starts (C-END-12 / C-END-13, runs 20261018-133341, 20261022-172139, 20261025-132336): then it is stopped
+    # and started once more.
+    $earlier = $null
+    foreach ($try in 1..2) {
+        $file = "C:\ProgramData\RemoteHubLab\session\marker-$([guid]::NewGuid().ToString('N').Substring(0, 8)).jsonl"
+        $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do marker -Out '$file'"))
+        $until = (Get-Date).AddSeconds(60)
+        $state = $null
+        while ((Get-Date) -lt $until) {
+            # shown and active (it has the keyboard), or shown and given up on the keyboard ('nofocus', after 30 s)
+            $state = Invoke-LabGuest -Name $Name -ArgumentList $file -ScriptBlock {
+                param($f)
+                $ev = @(Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+                if (-not @($ev | Where-Object e -eq 'shown')) { return $null }
+                $no = @($ev | Where-Object e -eq 'nofocus') | Select-Object -First 1
+                if ($no) { return "nofocus:$($no.fg)" }
+                if (@($ev | Where-Object e -eq 'active')) { return 'active' }
+                $null
+            }
+            if ($state) { break }
+            Start-Sleep -Seconds 1
         }
-        if ($state) { break }
-        Start-Sleep -Seconds 1
+        if ($state -or $try -eq 2) { break }
+        $earlier = "try 1: task $task not shown within 60 s"
+        Stop-LabInSession -Name $Name -Task $task
     }
     $shown = $state -eq 'active'
     # Not shown, or shown without the keyboard: no key can reach it, so "nothing arrived" would prove nothing. Callers
@@ -2140,6 +2149,7 @@ function Start-LabMarker {
         }
         Write-Warning "${Name}: the marker window didn't show within 60 s ($why)"
     }
+    if ($earlier) { $why = if ($why) { "$earlier | try 2: $why" } else { "$earlier | try 2 shown" } }
     [pscustomobject]@{ Task = $task; File = $file; Shown = $shown; Why = $why }
 }
 
@@ -3343,18 +3353,34 @@ function Restart-LabRdpService {
         [Parameter(Mandatory)][string]$Name,
         [int]$TimeoutSec = 60
     )
+    # Stopping TermService sometimes fails ("Service ... stop failed", runs 20261025-052539 R-RDP-10/11), or failed
+    # quietly and the old instance's listener counted as up (run 20261025-132336: the device kept asking for the password
+    # in every later session). So: its process id first; stopped, or its own svchost ended when it won't stop; started
+    # again; up only with a new process id listening.
     $up = Invoke-LabGuest -Name $Name -ArgumentList $TimeoutSec -ScriptBlock {
         param($t)
+        function TermPid { [int](Get-CimInstance Win32_Service -Filter "Name='TermService'").ProcessId }
+        $before = TermPid
         # -Force: UmRdpService depends on TermService
-        Restart-Service TermService -Force
+        try { Stop-Service TermService -Force -ErrorAction Stop } catch { }
+        $until = (Get-Date).AddSeconds($t)
+        while ((Get-Service TermService).Status -ne 'Stopped' -and (Get-Date) -lt $until) {
+            # only a process that hosts TermService alone is ended
+            $shared = @(Get-CimInstance Win32_Service -Filter "ProcessId=$before" | Where-Object Name -ne 'TermService')
+            if ($before -gt 0 -and $shared.Count -eq 0) { Stop-Process -Id $before -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+        }
+        Start-Service TermService -ErrorAction SilentlyContinue
+        Start-Service UmRdpService -ErrorAction SilentlyContinue
         $until = (Get-Date).AddSeconds($t)
         do {
-            if (@(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue).Count) { return $true }
+            $now = TermPid
+            if ($now -gt 0 -and $now -ne $before -and @(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue).Count) { return "up $before -> $now" }
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
-        $false
+        "not restarted: TermService $((Get-Service TermService).Status), process $before -> $(TermPid)"
     }
-    if (-not (@($up) -contains $true)) { throw "${Name}: Remote Desktop Services didn't listen on port 3389 within $TimeoutSec s of the restart." }
+    if (-not (@($up) -like 'up *')) { throw "${Name}: Remote Desktop Services weren't restarted within $TimeoutSec s ($(@($up) -join '; '))." }
 }
 
 # A local account made by a test (the checkpoint removes it again): the lab password unless -NoPassword, member of

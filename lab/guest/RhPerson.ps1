@@ -321,9 +321,13 @@ switch ($Do) {
         }
         $idleUntil = (Get-Date).AddMinutes(30)
         while ((Get-Date) -lt $idleUntil) {
-            Set-Content -Path (Join-Path $q 'alive.txt') -Value "$PID $((Get-Date).ToUniversalTime().ToString('o'))"
+            # The host reads alive.txt and writes requests while this loop runs: a write that meets its read ("Stream was
+            # not readable", "being used by another process") or a request file gone while the folder is listed ended
+            # the server through the trap above (run 20261025-052539: C-FAV, UI-RDP, C-DB-11). They wait for the next pass.
+            try { [IO.File]::WriteAllText((Join-Path $q 'alive.txt'), "$PID $((Get-Date).ToUniversalTime().ToString('o'))") } catch { }
             if ((Get-Item $self).LastWriteTimeUtc -ne $stamp -or (Test-Path (Join-Path $q 'stop.txt'))) { break }
-            $next = Get-ChildItem $q -Filter '*.req.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -First 1
+            $next = $null
+            try { $next = Get-ChildItem $q -Filter '*.req.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | Select-Object -First 1 } catch { }
             if (-not $next) { Start-Sleep -Milliseconds 200; continue }
             $req = $null
             try { $req = [IO.File]::ReadAllText($next.FullName) | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 100; continue }   # still being written

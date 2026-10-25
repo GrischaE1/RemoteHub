@@ -388,6 +388,9 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             }
             # agent desktop
             Step desktop {
+            # The tab's optional Connect (up to 15 s) and the person's start ran past the 30 s countdown on Server 2025
+            # (runs 20261025-052539 and -132336: refused at 30 s, no agent window seen): a longer countdown, as in D-CLIP
+            Set-LabAgentPolicy -Name $device.Name -Values @{ ConsentTimeoutSeconds = 90 }
             # with the agent in use, Connect opens the agent desktop ("Remote desktop via RDP" is the other way)
             Menu 'Connect'
             # the tab signs in first and then asks what to show ("Signed in as ... Choose what to show."): its Connect

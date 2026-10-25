@@ -1648,7 +1648,7 @@ P1 · How: H · Needs: – · Status: ✅ Automated – `S-AUTH.Tests.ps1`
 
 **Expected:**
 - Status 200.
-- JSON fields are exactly `product`, `version`, `protocol`, `deviceId`, `features`.
+- JSON fields are exactly `product`, `version`, `protocol`, `deviceId`, `features`, `managed`, `instance`; `managed` only names `autoSignIn`, `virtualDisplay` or `port`; `instance` is a random 32-hex id per agent start.
 - `product` = "RemoteHub Agent", `protocol` = 1, `deviceId` = the enrolled device ID.
 - No `Server` header in the response (`AddServerHeader = false`).
 

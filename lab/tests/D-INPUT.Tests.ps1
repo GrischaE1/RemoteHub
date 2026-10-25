@@ -140,7 +140,8 @@ Describe 'D-IN <VmName>' -Tag Desktop, 'D-IN' {
         }
 
         It 'D-IN-04 Win+R sent through the protocol opens Run on the device' -Tag 'D-IN-04' {
-            $runShown.text | Should -Match 'Type the name of a program|Open:'
+            # OCR may miss the label (runs 20261022-172139, 20261025-052539 read 'en:'); the buttons OK, Cancel, Browse... are Run's own
+            $runShown.text | Should -Match 'Type the name of a program|Open:|Cancel\s+Browse'
         }
     }
 

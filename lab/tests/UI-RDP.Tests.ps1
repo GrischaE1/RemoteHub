@@ -766,6 +766,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
             Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
             Restart-LabRdpService -Name $device.Name
+            # a session left at the device's password prompt would take the next connection (run 20261025-132336)
+            Clear-DeviceSessions
             Step $p reconnect {
                 Menu 'Connect'
                 $p.reconnected = Wait-RdpTab 60

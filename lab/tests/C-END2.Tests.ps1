@@ -407,6 +407,8 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             $f.Signed = Mine
             $f.ConsoleText = Shot 'failed-cover-console'
             $f.LocalKeys = LocalKeys
+            $f.MarkerShown = $markerState.Shown
+            $f.MarkerWhy = $markerState.Why
             Release $o 'byhand'
             Reached $o 'pictured' 120
             Release $o 'close'
@@ -420,6 +422,7 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             @($f.Signed | Where-Object State -eq 'Active').Count | Should -Be 1
             @(Covers $f.R | Where-Object { $_.Screen -and $_.Screen -ne 'Off' }) | Should -BeNullOrEmpty -Because 'no helper got the service''s cover'
             $f.ConsoleText | Should -Not -Match 'signed in remotely'
+            $f.MarkerShown | Should -BeTrue -Because "lab: the marker window must be up to count keys (c-end2-failed-cover.json MarkerWhy: $($f.MarkerWhy))"
             @($f.LocalKeys).Count | Should -BeGreaterThan 0 -Because 'the device''s keyboard isn''t blocked'
         }
     }
