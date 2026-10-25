@@ -206,6 +206,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowAgentRegistry = Feature("AllowAgentRegistry", "RemoteHub Agent", "Allow the registry through the agent");
     public static readonly PolicyEntry AllowAgentServices = Feature("AllowAgentServices", "RemoteHub Agent", "Allow services through the agent");
     public static readonly PolicyEntry AllowAgentProcesses = Feature("AllowAgentProcesses", "RemoteHub Agent", "Allow processes through the agent");
+    public static readonly PolicyEntry AllowAgentDeviceActions = Feature("AllowAgentDeviceActions", "RemoteHub Agent", "Allow device actions through the agent", DeviceActionsSince);
     public static readonly PolicyEntry AllowAgentInstall = Feature("AllowAgentInstall", "RemoteHub Agent", "Allow installing and updating the agent");
     public static readonly PolicyEntry AllowCredentialProviderInstall = Feature("AllowCredentialProviderInstall", "RemoteHub Agent", "Allow installing and removing the credential provider");
     public static readonly PolicyEntry AllowPowerShellRemoting = Feature("AllowPowerShellRemoting", "PowerShell remoting", "Allow PowerShell remoting (WinRM)");
@@ -214,6 +215,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingRegistry = Feature("AllowRemotingRegistry", "PowerShell remoting", "Allow the registry over WinRM");
     public static readonly PolicyEntry AllowRemotingServices = Feature("AllowRemotingServices", "PowerShell remoting", "Allow services over WinRM");
     public static readonly PolicyEntry AllowRemotingProcesses = Feature("AllowRemotingProcesses", "PowerShell remoting", "Allow processes over WinRM");
+    public static readonly PolicyEntry AllowRemotingDeviceActions = Feature("AllowRemotingDeviceActions", "PowerShell remoting", "Allow device actions over WinRM", DeviceActionsSince);
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
     public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
@@ -356,9 +358,9 @@ public static class PolicyCatalog
     [
         AllowRdp,
         AllowAgent, AllowAgentDesktop, AllowAgentPowerShell, AllowAgentFileTransfer, AllowAgentRegistry, AllowAgentServices, AllowAgentProcesses,
-        AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
+        AllowAgentDeviceActions, AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
-        AllowRemotingSetup,
+        AllowRemotingDeviceActions, AllowRemotingSetup,
         AllowQuickConnect, AllowConnectionEditing,
         AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
         AllowSavedPasswords, AllowPasswordCopy,
@@ -447,8 +449,11 @@ public static class PolicyCatalog
         Console(name, kind, group, title, min, max, words, labels, since: Phase4);
 
     /// <summary>A console feature: DWORD 0 = blocked, 1 = allowed.</summary>
-    private static PolicyEntry Feature(string name, string group, string title) =>
-        Console(name, PolicyKind.Number, group, title, 0, 1, labels: Allowed, since: Phase3);
+    private static PolicyEntry Feature(string name, string group, string title, string since = Phase3) =>
+        Console(name, PolicyKind.Number, group, title, 0, 1, labels: Allowed, since: since);
+
+    /// <summary>Lock, restart, shut down and the other device actions in the connection's menu.</summary>
+    private const string DeviceActionsSince = "0.21.0";
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
         IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11") =>

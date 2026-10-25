@@ -161,6 +161,7 @@ The features are grouped by **how RemoteHub reaches the device**, because RDP, t
 | `AllowAgentRegistry` | The registry tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentServices` | The services tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentProcesses` | The processes tab through the agent | Agent `PowerShellEnabled` |
+| `AllowAgentDeviceActions` *(0.21.0)* | A connection's *Device actions* (lock, message, sign out, restart, shut down, Group Policy, Intune) through the agent | Agent `PowerShellEnabled`, right `PowerShell` |
 | `AllowAgentInstall` | *Install / update / remove RemoteHub Agent*, every method. For organisations that deploy the agent with Intune or SCCM. | – |
 | `AllowCredentialProviderInstall` | *Install / remove credential provider* and the install dialog's *Allow automatic sign-in* | Agent `NoUserBehavior` |
 | `DisableAgentAutoSignIn` *(existing, inverted)* | Automatic sign-in through the agent | Agent `NoUserBehavior`, right `AutoSignIn` |
@@ -175,6 +176,7 @@ The features are grouped by **how RemoteHub reaches the device**, because RDP, t
 | `AllowRemotingRegistry` | The registry tab over WinRM | – |
 | `AllowRemotingServices` | The services tab over WinRM | – |
 | `AllowRemotingProcesses` | The processes tab over WinRM | – |
+| `AllowRemotingDeviceActions` *(0.21.0)* | A connection's *Device actions* over WinRM | – |
 | `AllowRemotingSetup` | *Set up PowerShell remoting on the target…* | – |
 
 A tool tab is offered for a connection only if the transport the connection uses allows it. A connection that uses the

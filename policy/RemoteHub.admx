@@ -200,6 +200,13 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="Console_AllowAgentDeviceActions" class="Both" displayName="$(string.Console_AllowAgentDeviceActions)" explainText="$(string.Console_AllowAgentDeviceActions_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentDeviceActions">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="Console_AllowAgentInstall" class="Both" displayName="$(string.Console_AllowAgentInstall)" explainText="$(string.Console_AllowAgentInstall_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowAgentInstall">
       <parentCategory ref="Console_Agent" />
@@ -254,6 +261,13 @@
             key="Software\Policies\RemoteHub" valueName="AllowRemotingProcesses">
       <parentCategory ref="Console_Remoting" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_19_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingDeviceActions" class="Both" displayName="$(string.Console_AllowRemotingDeviceActions)" explainText="$(string.Console_AllowRemotingDeviceActions_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingDeviceActions">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

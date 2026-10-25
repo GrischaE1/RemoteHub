@@ -7,9 +7,10 @@ namespace RemoteHub.Services;
 public enum Feature
 {
     Rdp,
-    Agent, AgentDesktop, AgentPowerShell, AgentFileTransfer, AgentRegistry, AgentServices, AgentProcesses, AgentInstall,
+    Agent, AgentDesktop, AgentPowerShell, AgentFileTransfer, AgentRegistry, AgentServices, AgentProcesses, AgentDeviceActions, AgentInstall,
     CredentialProviderInstall, AgentAutoSignIn,
-    PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingSetup,
+    PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingDeviceActions,
+    RemotingSetup,
     QuickConnect, ConnectionEditing,
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
     Recording, SavedPasswords, PasswordCopy,
@@ -18,8 +19,11 @@ public enum Feature
     Scripts, ScriptRun, ScriptRunSystem, ScriptRunUser, ScriptRunAsMe, ScriptDraftRun, ScriptLibrary, ScriptImport, ScriptExport,
 }
 
-/// <summary>The tabs that work through the agent or WinRM; which switch applies depends on the connection's transport.</summary>
-public enum RemoteTool { PowerShell, FileTransfer, Registry, Services, Processes }
+/// <summary>
+/// The tabs and the device actions (lock, restart …) that work through the agent or WinRM; which switch applies depends on
+/// the connection's transport.
+/// </summary>
+public enum RemoteTool { PowerShell, FileTransfer, Registry, Services, Processes, DeviceActions }
 
 /// <summary>
 /// Whether a feature is allowed on this PC. A feature's own value at 0 blocks it, and so does its main switch
@@ -45,6 +49,7 @@ public static class Features
         [Feature.AgentRegistry] = new(PolicyCatalog.AllowAgentRegistry, "The registry through the RemoteHub Agent", Feature.Agent),
         [Feature.AgentServices] = new(PolicyCatalog.AllowAgentServices, "Services through the RemoteHub Agent", Feature.Agent),
         [Feature.AgentProcesses] = new(PolicyCatalog.AllowAgentProcesses, "Processes through the RemoteHub Agent", Feature.Agent),
+        [Feature.AgentDeviceActions] = new(PolicyCatalog.AllowAgentDeviceActions, "Device actions through the RemoteHub Agent", Feature.Agent, Plural: true),
         [Feature.AgentInstall] = new(PolicyCatalog.AllowAgentInstall, "Installing and updating the RemoteHub Agent", Feature.Agent),
         [Feature.CredentialProviderInstall] = new(PolicyCatalog.AllowCredentialProviderInstall, "Installing and removing the credential provider", Feature.Agent),
         [Feature.AgentAutoSignIn] = new(PolicyCatalog.DisableAgentAutoSignIn, "Automatic sign-in through the RemoteHub Agent", Feature.Agent, Inverted: true),
@@ -54,6 +59,7 @@ public static class Features
         [Feature.RemotingRegistry] = new(PolicyCatalog.AllowRemotingRegistry, "The registry over WinRM", Feature.PowerShellRemoting),
         [Feature.RemotingServices] = new(PolicyCatalog.AllowRemotingServices, "Services over WinRM", Feature.PowerShellRemoting),
         [Feature.RemotingProcesses] = new(PolicyCatalog.AllowRemotingProcesses, "Processes over WinRM", Feature.PowerShellRemoting),
+        [Feature.RemotingDeviceActions] = new(PolicyCatalog.AllowRemotingDeviceActions, "Device actions over WinRM", Feature.PowerShellRemoting, Plural: true),
         [Feature.RemotingSetup] = new(PolicyCatalog.AllowRemotingSetup, "Setting up PowerShell remoting on a target", Feature.PowerShellRemoting),
         [Feature.QuickConnect] = new(PolicyCatalog.AllowQuickConnect, "Quick connect"),
         [Feature.ConnectionEditing] = new(PolicyCatalog.AllowConnectionEditing, "Changing folders, connections and shares"),
@@ -118,10 +124,12 @@ public static class Features
         (RemoteTool.Registry, true) => Feature.AgentRegistry,
         (RemoteTool.Services, true) => Feature.AgentServices,
         (RemoteTool.Processes, true) => Feature.AgentProcesses,
+        (RemoteTool.DeviceActions, true) => Feature.AgentDeviceActions,
         (RemoteTool.PowerShell, false) => Feature.RemotingPowerShell,
         (RemoteTool.FileTransfer, false) => Feature.RemotingFileTransfer,
         (RemoteTool.Registry, false) => Feature.RemotingRegistry,
         (RemoteTool.Services, false) => Feature.RemotingServices,
+        (RemoteTool.DeviceActions, false) => Feature.RemotingDeviceActions,
         _ => Feature.RemotingProcesses,
     };
 

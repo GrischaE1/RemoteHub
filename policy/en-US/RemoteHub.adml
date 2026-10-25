@@ -204,6 +204,15 @@ This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Feature
 
 Registry: AllowAgentProcesses (REG_DWORD) = 1 or 0.</string>
 
+      <string id="Console_AllowAgentDeviceActions">Allow device actions through the agent</string>
+      <string id="Console_AllowAgentDeviceActions_Help">Enabled or Not configured: allowed.
+
+Disabled: The Device actions in a connection's menu – lock, send a message, sign out, restart, shut down, update Group Policy and sync with Intune – aren't offered for connections that use the RemoteHub Agent, and starting one is refused. Over PowerShell remoting it depends on "Allow device actions over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled) – the actions run as PowerShell commands of the account that signs in. The agent can't block them one by one.
+
+Registry: AllowAgentDeviceActions (REG_DWORD) = 1 or 0.</string>
+
       <string id="Console_AllowAgentInstall">Allow installing and updating the agent</string>
       <string id="Console_AllowAgentInstall_Help">Enabled or Not configured: allowed.
 
@@ -275,6 +284,15 @@ Disabled: The processes tab isn't offered for connections that use PowerShell re
 This binds RemoteHub on this PC only.
 
 Registry: AllowRemotingProcesses (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingDeviceActions">Allow device actions over WinRM</string>
+      <string id="Console_AllowRemotingDeviceActions_Help">Enabled or Not configured: allowed.
+
+Disabled: The Device actions in a connection's menu – lock, send a message, sign out, restart, shut down, update Group Policy and sync with Intune – aren't offered for connections that use PowerShell remoting, and starting one is refused. Through the agent it depends on "Allow device actions through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingDeviceActions (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_AllowRemotingSetup">Allow setting up PowerShell remoting on a target</string>
       <string id="Console_AllowRemotingSetup_Help">Enabled or Not configured: allowed.

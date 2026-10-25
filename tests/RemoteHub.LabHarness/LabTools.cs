@@ -35,6 +35,9 @@ using RemoteHub.Services;
 ///   reg-delete-key --key .. | reg-export --key .. --out <local file>
 ///   svc-list | svc-control --name .. --action Start|Stop|Restart | svc-startup --name .. --startup Automatic|AutomaticDelayed|Manual|Disabled
 ///   proc-list | proc-stop --ids 1|2 --names a|b [--tree 1]
+///   dev-users                                who is signed in, as Device actions sees it (DeviceActions.SignedIn)
+///   dev-action --action Lock|SendMessage|SignOut|Restart|ShutDown|GroupPolicyUpdate|IntuneSync [--message ..] [--device ..]
+///                                            one device action: { ok, text } as RemoteHub shows it
 ///   script --host .. --allow a|b --out <file> [--https 0|1] [--local-admins 0|1]   RemotingSetup.BuildScript
 ///   fetch --host .. [--port 5986]            FetchCertificateAsync: the certificate the device presents
 ///   trust --host .. [--port 5986]            FetchCertificateAsync + TrustOnThisPc (CurrentUser\Root - asks the user, so not in the lab account)
@@ -113,6 +116,7 @@ internal static class LabTools
                 "complete" => Complete(target, o),
                 "fs-upload" => await Upload(target, o),
                 "fs-download" => await Download(target, o),
+                "dev-action" => DeviceActionOp(target, o),
                 _ => WithRunspace(target, rs => Simple(rs, op, o)),
             };
             return new { op, transport = target.Transport, seconds = Math.Round(sw.Elapsed.TotalSeconds, 2), result };
@@ -230,6 +234,21 @@ internal static class LabTools
         try { rs.Open(); }
         catch { rs.Dispose(); forward?.Dispose(); throw; }
         return rs;
+    }
+
+    /// <summary>
+    /// A device action as the connection's menu runs it (MainWindow.RunDeviceAction): the runspace is closed in the
+    /// background without waiting, since a restarting device may not answer the close.
+    /// </summary>
+    private static object DeviceActionOp(PsTarget t, Dictionary<string, string> o)
+    {
+        var rs = Open(t);
+        try
+        {
+            var r = DeviceActions.Run(rs, Enum.Parse<DeviceAction>(o["action"]), o.GetValueOrDefault("device") ?? "the device", o.GetValueOrDefault("message"));
+            return new { ok = r.Ok, text = r.Text };
+        }
+        finally { _ = Task.Run(() => { try { rs.Dispose(); } catch { /* the device may be gone */ } }); }
     }
 
     private static T WithRunspace<T>(PsTarget t, Func<Runspace, T> f)
@@ -351,6 +370,8 @@ internal static class LabTools
                 File.WriteAllBytes(o["out"], bytes);
                 return new { file = o["out"], bytes = bytes.Length };
             }
+
+            case "dev-users": return new { users = DeviceActions.SignedIn(rs) };
 
             case "svc-list":
                 return new { services = RemoteServices.List(rs).Select(s => new { s.Name, s.DisplayName, s.State, startup = s.Startup.ToString(), s.Account, s.ProcessId }) };
