@@ -2100,23 +2100,32 @@ function Start-LabMarker {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'User')
     Copy-LabPerson -Name $Name
-    $file = "C:\ProgramData\RemoteHubLab\session\marker-$([guid]::NewGuid().ToString('N').Substring(0, 8)).jsonl"
-    $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do marker -Out '$file'"))
-    $until = (Get-Date).AddSeconds(60)
-    $state = $null
-    while ((Get-Date) -lt $until) {
-        # shown and active (it has the keyboard), or shown and given up on the keyboard ('nofocus', after 30 s)
-        $state = Invoke-LabGuest -Name $Name -ArgumentList $file -ScriptBlock {
-            param($f)
-            $ev = @(Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
-            if (-not @($ev | Where-Object e -eq 'shown')) { return $null }
-            $no = @($ev | Where-Object e -eq 'nofocus') | Select-Object -First 1
-            if ($no) { return "nofocus:$($no.fg)" }
-            if (@($ev | Where-Object e -eq 'active')) { return 'active' }
-            $null
+    # In a session signed in moments before, the task sometimes stays Ready (last result 0x00041303) or its PowerShell
+    # never starts (C-END-12 / C-END-13, runs 20261018-133341, 20261022-172139, 20261025-132336): then it is stopped
+    # and started once more.
+    $earlier = $null
+    foreach ($try in 1..2) {
+        $file = "C:\ProgramData\RemoteHubLab\session\marker-$([guid]::NewGuid().ToString('N').Substring(0, 8)).jsonl"
+        $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\ProgramData\RemoteHubLab\RhPerson.ps1' -Do marker -Out '$file'"))
+        $until = (Get-Date).AddSeconds(60)
+        $state = $null
+        while ((Get-Date) -lt $until) {
+            # shown and active (it has the keyboard), or shown and given up on the keyboard ('nofocus', after 30 s)
+            $state = Invoke-LabGuest -Name $Name -ArgumentList $file -ScriptBlock {
+                param($f)
+                $ev = @(Get-Content $f -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+                if (-not @($ev | Where-Object e -eq 'shown')) { return $null }
+                $no = @($ev | Where-Object e -eq 'nofocus') | Select-Object -First 1
+                if ($no) { return "nofocus:$($no.fg)" }
+                if (@($ev | Where-Object e -eq 'active')) { return 'active' }
+                $null
+            }
+            if ($state) { break }
+            Start-Sleep -Seconds 1
         }
-        if ($state) { break }
-        Start-Sleep -Seconds 1
+        if ($state -or $try -eq 2) { break }
+        $earlier = "try 1: task $task not shown within 60 s"
+        Stop-LabInSession -Name $Name -Task $task
     }
     $shown = $state -eq 'active'
     # Not shown, or shown without the keyboard: no key can reach it, so "nothing arrived" would prove nothing. Callers
@@ -2140,6 +2149,7 @@ function Start-LabMarker {
         }
         Write-Warning "${Name}: the marker window didn't show within 60 s ($why)"
     }
+    if ($earlier) { $why = if ($why) { "$earlier | try 2: $why" } else { "$earlier | try 2 shown" } }
     [pscustomobject]@{ Task = $task; File = $file; Shown = $shown; Why = $why }
 }
 
