@@ -3353,18 +3353,34 @@ function Restart-LabRdpService {
         [Parameter(Mandatory)][string]$Name,
         [int]$TimeoutSec = 60
     )
+    # Stopping TermService sometimes fails ("Service ... stop failed", runs 20261025-052539 R-RDP-10/11), or failed
+    # quietly and the old instance's listener counted as up (run 20261025-132336: the device kept asking for the password
+    # in every later session). So: its process id first; stopped, or its own svchost ended when it won't stop; started
+    # again; up only with a new process id listening.
     $up = Invoke-LabGuest -Name $Name -ArgumentList $TimeoutSec -ScriptBlock {
         param($t)
+        function TermPid { [int](Get-CimInstance Win32_Service -Filter "Name='TermService'").ProcessId }
+        $before = TermPid
         # -Force: UmRdpService depends on TermService
-        Restart-Service TermService -Force
+        try { Stop-Service TermService -Force -ErrorAction Stop } catch { }
+        $until = (Get-Date).AddSeconds($t)
+        while ((Get-Service TermService).Status -ne 'Stopped' -and (Get-Date) -lt $until) {
+            # only a process that hosts TermService alone is ended
+            $shared = @(Get-CimInstance Win32_Service -Filter "ProcessId=$before" | Where-Object Name -ne 'TermService')
+            if ($before -gt 0 -and $shared.Count -eq 0) { Stop-Process -Id $before -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+        }
+        Start-Service TermService -ErrorAction SilentlyContinue
+        Start-Service UmRdpService -ErrorAction SilentlyContinue
         $until = (Get-Date).AddSeconds($t)
         do {
-            if (@(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue).Count) { return $true }
+            $now = TermPid
+            if ($now -gt 0 -and $now -ne $before -and @(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue).Count) { return "up $before -> $now" }
             Start-Sleep -Seconds 1
         } while ((Get-Date) -lt $until)
-        $false
+        "not restarted: TermService $((Get-Service TermService).Status), process $before -> $(TermPid)"
     }
-    if (-not (@($up) -contains $true)) { throw "${Name}: Remote Desktop Services didn't listen on port 3389 within $TimeoutSec s of the restart." }
+    if (-not (@($up) -like 'up *')) { throw "${Name}: Remote Desktop Services weren't restarted within $TimeoutSec s ($(@($up) -join '; '))." }
 }
 
 # A local account made by a test (the checkpoint removes it again): the lab password unless -NoPassword, member of
