@@ -63,7 +63,14 @@ Describe 'T-DEV <VmName>' -Tag Tools, 'T-DEV' {
                 $P.device = $VmName
                 T 'dev-action' $P
             }
+            # After a restart W11 shows the desktop before it takes WinRM connections (run 20261025-052539: timeouts for
+            # about two minutes); the agent has Wait-LabAgent for the same.
+            function Wait-Transport {
+                if ($Via -eq 'Agent') { $null = Wait-LabAgent -Name $VmName -Pin $pin; return }
+                $null = Wait-Until { (T 'test').state -eq 'Available' } 'WinRM HTTPS to answer after the restart' 300
+            }
             $tag = $Via.ToLowerInvariant()
+            if ($Via -eq 'WinRM') { Wait-Transport }
         }
 
         It 'T-DEV-01 [<Via>] lists the console user with their session, nothing of Windows own' -Tag 'T-DEV-01' {
@@ -165,8 +172,8 @@ Describe 'T-DEV <VmName>' -Tag Tools, 'T-DEV' {
             }
             Save "$tag-restart-events" $e
             ($e -join "`n") | Should -Match 'Requested from RemoteHub'
-            if ($Via -eq 'Agent') { $null = Wait-LabAgent -Name $VmName -Pin $pin }
             Wait-LabDesktop -Name $VmName -Account User
+            Wait-Transport
         }
 
         It 'T-DEV-09 [<Via>] shuts the device down: the VM is off' -Tag 'T-DEV-09' {
