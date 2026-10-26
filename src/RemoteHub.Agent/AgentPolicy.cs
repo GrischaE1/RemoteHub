@@ -74,6 +74,18 @@ public sealed record AgentPolicy
     public TunnelRules Tunnel { get; init; } = TunnelRules.Any;
     /// <summary>MaxTunnelStreams: connections open at once through one jump connection.</summary>
     public int MaxTunnelStreams { get; init; } = 64;
+    /// <summary>TunnelOwnPorts: ports on this device itself the tunnel opens ("RDP" = its RDP port); empty = none (broker-design.md §9.1).</summary>
+    public IReadOnlyList<string> TunnelOwnPorts { get; init; } = ["RDP"];
+    /// <summary>BrokerEnabled: the agent connects to the RemoteHub Broker in agent.json (broker-design.md §13.1).</summary>
+    public bool BrokerEnabled { get; init; } = true;
+    /// <summary>BrokerUrl: another address for the broker (same organisation); null = agent.json's.</summary>
+    public string? BrokerUrl { get; init; }
+    /// <summary>BrokerConsoles: console ids allowed through the broker; empty = every registered console.</summary>
+    public IReadOnlyList<string> BrokerConsoles { get; init; } = [];
+    /// <summary>BrokerProxy: http://proxy:port for the broker's connections; null = the system's.</summary>
+    public string? BrokerProxy { get; init; }
+    /// <summary>BrokerKeepAliveSeconds: keep-alive on the broker connection (30–90).</summary>
+    public int BrokerKeepAliveSeconds { get; init; } = BrokerProtocol.KeepAliveDefault;
     /// <summary>NoUserBehavior: what the agent may do when nobody is signed in on the console (<see cref="NoUserBehaviors"/>).</summary>
     public string NoUserBehavior { get; init; } = NoUserBehaviors.SignInScreen;
     /// <summary>AutoSignInRequirePrivacyScreen: automatic sign-in only where the privacy screen can be shown.</summary>
@@ -180,6 +192,8 @@ public sealed record AgentPolicy
         ConsentModes = [],
         PrivacyScreen = PrivacyScreenLevel.Off,
         TunnelEnabled = false,
+        TunnelOwnPorts = [],
+        BrokerEnabled = false,
         LoadError = reason,
         Rights = Enum.GetValues<AgentRight>().ToDictionary(r => r, _ => (IReadOnlyList<string>)[]),
     };
@@ -211,6 +225,13 @@ public sealed record AgentPolicy
             TunnelEnabled = Raw(PolicyCatalog.TunnelEnabled) is not 0,
             Tunnel = TunnelRules.Parse(Strings(PolicyCatalog.TunnelTargets), Strings(PolicyCatalog.TunnelPorts)),
             MaxTunnelStreams = Number(PolicyCatalog.MaxTunnelStreams) ?? d.MaxTunnelStreams,
+            // Set but with nothing usable in it: no own ports – a value that restricts must not turn into the default.
+            TunnelOwnPorts = Strings(PolicyCatalog.TunnelOwnPorts) is { } own ? [.. own.Select(p => p.Trim()).Where(p => p.Length > 0)] : d.TunnelOwnPorts,
+            BrokerEnabled = Raw(PolicyCatalog.BrokerEnabled) is not 0,
+            BrokerUrl = Checked(PolicyCatalog.BrokerUrl),
+            BrokerConsoles = Strings(PolicyCatalog.BrokerConsoles)?.Select(c => c.Trim().ToLowerInvariant()).Where(c => c.Length > 0).ToList() ?? d.BrokerConsoles,
+            BrokerProxy = Checked(PolicyCatalog.BrokerProxy),
+            BrokerKeepAliveSeconds = Number(PolicyCatalog.BrokerKeepAliveSeconds) ?? d.BrokerKeepAliveSeconds,
             // Set by the policy: that value; not set (or not one of the two words): what the install chose (agent.json).
             // (an invalid policy value still means the sign-in screen – a policy that restricts must not turn into a permission)
             NoUserBehavior = Strings(PolicyCatalog.NoUserBehavior)?.FirstOrDefault() is { } behavior ? NoUserBehaviors.Valid(behavior) : d.NoUserBehavior,
@@ -231,6 +252,7 @@ public sealed record AgentPolicy
         int? Number(PolicyEntry e) => Raw(e) is { } n && n >= e.Min && n <= e.Max ? n : null;
         IReadOnlyList<string>? Strings(PolicyEntry e) => values.Strings(null, e.Name);
         string? Word(PolicyEntry e) => Strings(e)?.FirstOrDefault() is { } w && e.Check(w) is { Problem: null, Value: string word } ? word : null;
+        string? Checked(PolicyEntry e) => values.Text(null, e.Name) is { } t && e.Check(t) is { Problem: null, Value: string ok } ? ok.Trim() : null;
     }
 
     /// <summary>A list of groups as set: trimmed, empty entries dropped; null when not set.</summary>

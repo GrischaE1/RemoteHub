@@ -340,6 +340,19 @@ public static class PolicyCatalog
 
     private const string Phase2 = "0.19.0";
 
+    // The RemoteHub Broker on the device (broker-design.md §13.1).
+    public static readonly PolicyEntry BrokerEnabled = Agent("BrokerEnabled", PolicyKind.Number, "RemoteHub Broker", "Allow the RemoteHub Broker", 0, 1, labels: OnOff, since: BrokerSince);
+    public static readonly PolicyEntry BrokerUrl = Agent("BrokerUrl", PolicyKind.Text, "RemoteHub Broker", "Broker address", max: 200, since: BrokerSince,
+        rule: s => BrokerProtocol.ParseBrokerUrl(s) is null ? "isn't a broker address (https://name)" : null);
+    public static readonly PolicyEntry BrokerConsoles = Agent("BrokerConsoles", PolicyKind.List, "RemoteHub Broker", "Consoles allowed through the broker", since: BrokerSince);
+    public static readonly PolicyEntry BrokerProxy = Agent("BrokerProxy", PolicyKind.Text, "RemoteHub Broker", "Proxy for the broker", max: 200, since: BrokerSince,
+        rule: s => Uri.TryCreate(s.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? null : "isn't a proxy address (http://proxy:8080)");
+    public static readonly PolicyEntry BrokerKeepAliveSeconds = Agent("BrokerKeepAliveSeconds", PolicyKind.Number, "RemoteHub Broker", "Keep-alive interval (seconds)", 30, 90, since: BrokerSince);
+    /// <summary>Ports on the device itself that its tunnel opens (RDP through the agent, port forwarding) – "RDP" = its RDP port.</summary>
+    public static readonly PolicyEntry TunnelOwnPorts = Agent("TunnelOwnPorts", PolicyKind.List, "Jump host", "Ports on this device itself", since: BrokerSince);
+
+    private const string BrokerSince = "0.22.0";
+
     /// <summary>Subkey Rights: one list of groups per AgentRight, in the enum's order.</summary>
     public static readonly IReadOnlyList<PolicyEntry> Rights =
     [
@@ -394,7 +407,8 @@ public static class PolicyCatalog
         AllowedConsentModes, ConsentTimeoutSeconds,
         PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
-        TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams,
+        TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams, TunnelOwnPorts,
+        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerProxy, BrokerKeepAliveSeconds,
         AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
     ];
 
@@ -456,8 +470,9 @@ public static class PolicyCatalog
     private const string DeviceActionsSince = "0.21.0";
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
-        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11") =>
-        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels, Since: since);
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11",
+        Func<string, string?>? rule = null) =>
+        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels, Since: since, Rule: rule);
 
     private static PolicyEntry Right(string name, string title) => new(PolicyProduct.Agent, RightsKey, name, PolicyKind.List, "Access rights", title);
 }

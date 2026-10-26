@@ -80,6 +80,18 @@ public static class BrokerProtocol
 
     public static string NewId() => Guid.NewGuid().ToString("D");
 
+    /// <summary>
+    /// A broker's address: <c>https://rh.contoso.com</c>, or just the name as the MSI and the policy take it. http is
+    /// accepted for a test lab's local broker – its signalling is then readable, while pins and seals still hold.
+    /// </summary>
+    public static Uri? ParseBrokerUrl(string? text)
+    {
+        var t = (text ?? "").Trim();
+        if (t.Length > 0 && !t.Contains("://", StringComparison.Ordinal)) t = "https://" + t;
+        return Uri.TryCreate(t, UriKind.Absolute, out var u) && u.Scheme is "https" or "http" && u.AbsolutePath == "/" && u.Query.Length == 0 && u.UserInfo.Length == 0
+            ? u : null;
+    }
+
     // ---- Secrets (§3.1) -------------------------------------------------------------------------------------------
 
     public enum SecretKind { Device, Console }

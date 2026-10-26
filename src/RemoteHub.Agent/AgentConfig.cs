@@ -248,12 +248,7 @@ public sealed class BrokerSettings
     /// <summary>Seals the device record and checks the consoles' sealed offers (§6.1, §8.1).</summary>
     public string RecordKey { get; set; } = "";
 
-    public static Uri? ParseUrl(string? text)
-    {
-        var t = (text ?? "").Trim();
-        if (t.Length > 0 && !t.Contains("://", StringComparison.Ordinal)) t = "https://" + t; // "rh.contoso.com" as the MSI takes it
-        return Uri.TryCreate(t, UriKind.Absolute, out var u) && u.Scheme is "https" or "http" && u.AbsolutePath == "/" && u.Query.Length == 0 ? u : null;
-    }
+    public static Uri? ParseUrl(string? text) => BrokerProtocol.ParseBrokerUrl(text);
 
     public string? Problem()
     {

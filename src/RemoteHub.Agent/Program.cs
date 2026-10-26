@@ -53,8 +53,14 @@ try
     var desktop = DesktopServices.Windows(autoSignIn);
     // Sessions automatic sign-in created that the last run left open: no connection has them any more (design §9.3).
     desktop.AutoSigned.Recover(log);
+    // Streams through the RemoteHub Broker reach the same HTTPS endpoint as the network does (broker-design.md §10.2).
+    var peers = new PeerTransport();
     var app = AgentHost.Build(new AgentHostOptions(config, certificate,
-        new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop), []);
+        new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop) { Peers = peers }, []);
+    // The broker in agent.json is read again on every connect, so `broker join` and `broker leave` need no restart.
+    var broker = new BrokerLink(() => config.SourcePath is { } source ? AgentConfig.Load(source) : config, certificate,
+        () => AgentPolicy.Load(config), log, peers);
+    _ = Task.Run(() => broker.RunAsync(app.Lifetime.ApplicationStopping));
     log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
