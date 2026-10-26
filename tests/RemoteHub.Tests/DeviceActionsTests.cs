@@ -70,9 +70,11 @@ public class DeviceActionsTests
     [Fact]
     public async Task The_signed_in_users_script_lists_real_accounts_or_says_it_lacks_an_administrators_rights()
     {
-        var script = DeviceActions.Scripts.Single(s => s.Name == "SignedInScript").Script;
+        // With its output redirected, powershell.exe writes progress (on a fresh machine "Preparing modules for first
+        // use") to standard error as CLIXML – noise, not an error of the script. Remoting keeps progress apart anyway.
+        var script = "$ProgressPreference = 'SilentlyContinue'\n" + DeviceActions.Scripts.Single(s => s.Name == "SignedInScript").Script;
         var psi = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
-            "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)))
+            "-NoProfile -NonInteractive -OutputFormat Text -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         using var ps = System.Diagnostics.Process.Start(psi)!;
         var outputRead = ps.StandardOutput.ReadToEndAsync();
