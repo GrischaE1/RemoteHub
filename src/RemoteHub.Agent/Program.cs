@@ -58,8 +58,9 @@ try
     var app = AgentHost.Build(new AgentHostOptions(config, certificate,
         new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop) { Peers = peers }, []);
     // The broker in agent.json is read again on every connect, so `broker join` and `broker leave` need no restart.
+    Enrollment.DirectFirewall.CloseAll(); // direct paths a stopped agent had open
     var broker = new BrokerLink(() => config.SourcePath is { } source ? AgentConfig.Load(source) : config, certificate,
-        () => AgentPolicy.Load(config), log, peers);
+        () => AgentPolicy.Load(config), log, peers, firewall: new Enrollment.DirectFirewall());
     _ = Task.Run(() => broker.RunAsync(app.Lifetime.ApplicationStopping));
     log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");

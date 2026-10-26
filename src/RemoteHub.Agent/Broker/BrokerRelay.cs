@@ -22,6 +22,9 @@ internal sealed class BrokerRelay(PeerTransport peers, IPEndPoint source, int ma
     public int StreamsOpened => _opened;
     public long BytesIn, BytesOut;
 
+    /// <summary>RemoteHub's candidates for another try at the direct path (<see cref="TunnelMessage.Path"/>) → this device's.</summary>
+    public Func<string[], Task<string[]>>? PathRequested { get; init; }
+
     /// <summary>Runs until the relay closes; the reason, for the audit.</summary>
     public async Task<string> RunAsync(WebSocket ws, CancellationToken aborted)
     {
@@ -83,10 +86,33 @@ internal sealed class BrokerRelay(PeerTransport peers, IPEndPoint source, int ma
                 case TunnelMessage.Reset:
                     if (_streams.TryGetValue(id, out var reset)) reset.Abort();
                     break;
+                case TunnelMessage.Path:
+                    if (id != 0) throw new InvalidDataException("a path request is on stream 0");
+                    var asked = ReadPath(payload);
+                    _ = Task.Run(async () =>
+                    {
+                        // Answered in the background: the try's STUN request mustn't hold up the session's streams.
+                        var own = PathRequested is { } answer ? await answer(asked) : [];
+                        try { await Send(TunnelProtocol.Json(TunnelMessage.Path, 0, new TunnelPath(own), TunnelJson.Default.TunnelPath)); }
+                        catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or ObjectDisposedException) { }
+                    }, CancellationToken.None);
+                    break;
                 default:
                     throw new InvalidDataException($"unexpected frame {type}");
             }
         }
+    }
+
+    private static string[] ReadPath(ReadOnlySpan<byte> payload)
+    {
+        try
+        {
+            var path = System.Text.Json.JsonSerializer.Deserialize(payload, TunnelJson.Default.TunnelPath);
+            if (path?.Cands is not { Length: <= BrokerProtocol.MaxCandidates } cands || cands.Any(c => c is null || c.Length > PeerCandidate.MaxLength))
+                throw new InvalidDataException("path request out of range");
+            return cands;
+        }
+        catch (System.Text.Json.JsonException) { throw new InvalidDataException("path request isn't JSON"); }
     }
 
     private async Task Open(uint id)

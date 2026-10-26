@@ -107,11 +107,15 @@ internal static class LabBroker
             var isSealed = client.RecordIsSealed(record, item["seal"]?.GetValue<string>());
             var pin = record["fingerprint"]?.GetValue<string>() ?? "";
             if (!isSealed) return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>() };
-            var route = new BrokerRoute(client, deviceId, item["secretId"]?.GetValue<string>(), "lab device");
+            var route = new BrokerRoute(client, deviceId, item["secretId"]?.GetValue<string>(), "lab device", pin);
             using var handler = AgentClientTransport.ThroughBroker(route, (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.GetRawCertData()) == pin);
             using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(seconds) };
+            var started = DateTime.UtcNow;
             var health = JsonNode.Parse(await http.GetStringAsync($"https://lab-device:{AgentProtocol.DefaultPort}{AgentProtocol.HealthPath}"));
-            return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health };
+            // How the session went: direct (local / internet) or relayed, and how long the first answer took.
+            var path = PeerSessions.PathOf(route)?.ToString();
+            return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health, path,
+                         seconds = Math.Round((DateTime.UtcNow - started).TotalSeconds, 1) };
         }
         finally
         {

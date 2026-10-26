@@ -213,6 +213,14 @@ Registry: AllowAgentProcesses (REG_DWORD) = 1 or 0.</string>
 Disabled: RemoteHub on this PC doesn't connect to a RemoteHub Broker – Settings → RemoteHub Broker is locked, the synced folders of brokers aren't kept up to date, and devices in them are reached only directly (Reach: Direct).
 
 This binds RemoteHub on this PC only. On the device: RemoteHub Agent → RemoteHub Broker → "Allow the RemoteHub Broker" (BrokerEnabled).</string>
+      <string id="Console_BrokerDirect">Direct connections through the RemoteHub Broker</string>
+      <string id="Console_BrokerDirect_Help">Enabled or Not configured: a session through the RemoteHub Broker also tries a direct connection to the device (UDP, hole punching, QUIC), and uses it when it comes up – faster than the relay. The device's certificate pin and the Windows sign-in apply as on the relay.
+
+Disabled: RemoteHub on this PC never tries the direct path; every session through the broker is relayed (TCP 443 to the broker only).
+
+On the device: RemoteHub Agent → RemoteHub Broker → "Direct connections through the broker" (BrokerDirect).
+
+Registry: BrokerDirect (REG_DWORD) = 1 or 0.</string>
       <string id="Console_AllowAgentDeviceActions">Allow device actions through the agent</string>
       <string id="Console_AllowAgentDeviceActions_Help">Enabled or Not configured: allowed.
 
@@ -1386,6 +1394,24 @@ Registry: BrokerProxy (REG_SZ).</string>
 Not configured: 60.
 
 Registry: BrokerKeepAliveSeconds (REG_DWORD).</string>
+      <string id="Agent_BrokerDirect">Direct connections through the broker</string>
+      <string id="Agent_BrokerDirect_Help">Whether a session through the RemoteHub Broker may also run directly between RemoteHub and this device – UDP with hole punching, then QUIC, both ends pinned – instead of through the broker's relay:
+- Over public and local addresses: also over the device's own adapter addresses, so a console in the same network or VPN connects directly.
+- Over public addresses only: only over the public address a STUN service sees; the device's own addresses aren't sent to the broker.
+- Off – relayed only: no UDP and no candidates; every session runs through the relay (TCP 443).
+
+Not configured: over public and local addresses. Devices before Windows 11 / Server 2022 are always relayed.
+
+Registry: BrokerDirect (REG_DWORD) = 2, 1 or 0.</string>
+      <string id="Agent_BrokerDirect_2">Over public and local addresses</string>
+      <string id="Agent_BrokerDirect_1">Over public addresses only</string>
+      <string id="Agent_BrokerDirect_0">Off – relayed only</string>
+      <string id="Agent_BrokerStun">STUN service for direct connections</string>
+      <string id="Agent_BrokerStun_Help">The STUN service the agent asks for its public address on the direct path, as name:port, for example stun.contoso.com:3478. It needs outbound UDP to it.
+
+Not configured: the one the RemoteHub Broker names (by default stun.cloudflare.com:3478).
+
+Registry: BrokerStun (REG_SZ).</string>
 
       <!-- Agent: service -->
       <string id="Agent_AuditToEventLog">Audit to the Windows Application log</string>
@@ -1486,6 +1512,12 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Agent_BrokerKeepAliveSeconds">
         <decimalTextBox refId="BrokerKeepAliveSeconds" defaultValue="60" spinStep="10">Seconds:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_BrokerDirect">
+        <dropdownList refId="BrokerDirect" noSort="true" defaultItem="0">Direct connections:</dropdownList>
+      </presentation>
+      <presentation id="Agent_BrokerStun">
+        <textBox refId="BrokerStun"><label>STUN service (name:port):</label></textBox>
       </presentation>
       <presentation id="Agent_AllowedGroups">
         <multiTextBox refId="AllowedGroups">Groups (one per line, SID or name):</multiTextBox>

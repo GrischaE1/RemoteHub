@@ -145,7 +145,7 @@ internal sealed class TestBrokerAgent : IAsyncDisposable
 
     private TestBrokerAgent(WebApplication app, string deviceId, string fingerprint) => (_app, DeviceId, Fingerprint) = (app, deviceId, fingerprint);
 
-    public static async Task<TestBrokerAgent> StartAsync(TestBroker broker, TestBroker.Org org, Func<A.AgentPolicy>? policy = null)
+    public static async Task<TestBrokerAgent> StartAsync(TestBroker broker, TestBroker.Org org, Func<A.AgentPolicy>? policy = null, A.IDirectFirewall? firewall = null)
     {
         var deviceId = NewId();
         using var key = RSA.Create(3072);
@@ -172,7 +172,7 @@ internal sealed class TestBrokerAgent : IAsyncDisposable
         var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new NoSignIn(), new NoShell(), log, IPAddress.Loopback, Policy: currentPolicy) { Peers = peers });
         await app.StartAsync();
         var agent = new TestBrokerAgent(app, deviceId, A.AgentProtocol.Fingerprint(cert.RawData));
-        var link = new A.BrokerLink(() => config, cert, currentPolicy, log, peers);
+        var link = new A.BrokerLink(() => config, cert, currentPolicy, log, peers, firewall: firewall);
         _ = Task.Run(() => link.RunAsync(agent._stop.Token));
         return agent;
     }
@@ -385,4 +385,13 @@ internal static class Json
         } while (!r.EndOfMessage);
         return JsonNode.Parse(buffer.AsSpan(0, length))!.AsObject();
     }
+}
+
+/// <summary>The device's firewall as the direct path sees it: which ports were opened for which console address, and closed again.</summary>
+internal sealed class TestFirewall : A.IDirectFirewall
+{
+    public readonly System.Collections.Concurrent.ConcurrentQueue<(int Port, IPEndPoint From)> Opened = new();
+    public readonly System.Collections.Concurrent.ConcurrentQueue<int> Closed = new();
+    public bool Open(int localPort, IPEndPoint remote) { Opened.Enqueue((localPort, remote)); return true; }
+    public void Close(int localPort) => Closed.Enqueue(localPort);
 }

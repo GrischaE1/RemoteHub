@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -20,6 +21,8 @@ namespace RemoteHub.Agent;
 public static class Enrollment
 {
     public const string FirewallRuleName = "RemoteHub Agent";
+    /// <summary>The inbound UDP rules of direct broker sessions – one per try, removed with it (and all at start and on uninstall).</summary>
+    public const string DirectRuleName = "RemoteHub Agent direct path";
 
     public static int Run(string[] args, AgentLog log)
     {
@@ -325,6 +328,23 @@ public static class Enrollment
 
     private static void Netsh(string arguments, bool allowFailure = false) => Run("netsh.exe", arguments, allowFailure);
 
+    /// <summary>
+    /// The Windows Firewall side of a direct broker session: QUIC's listener on the punched port hasn't sent anything, so
+    /// the firewall would drop the console's first packets. This opens exactly that port, from exactly the console's
+    /// punched address and port, for the agent's own program – until the try or its connection ends.
+    /// </summary>
+    internal sealed class DirectFirewall : IDirectFirewall
+    {
+        public bool Open(int localPort, IPEndPoint remote) => Run("netsh.exe",
+            $"advfirewall firewall add rule name=\"{DirectRuleName}\" dir=in action=allow protocol=UDP localport={localPort} " +
+            $"remoteip={remote.Address} remoteport={remote.Port} program=\"{Environment.ProcessPath}\" enable=yes", allowFailure: true).Code == 0;
+
+        public void Close(int localPort) => Netsh($"advfirewall firewall delete rule name=\"{DirectRuleName}\" protocol=UDP localport={localPort}", allowFailure: true);
+
+        /// <summary>At service start: rules a stopped or crashed agent left behind.</summary>
+        public static void CloseAll() => Netsh($"advfirewall firewall delete rule name=\"{DirectRuleName}\"", allowFailure: true);
+    }
+
     private static (int Code, string Output) Run(string exe, string arguments, bool allowFailure = false)
     {
         using var p = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, exe), arguments)
@@ -339,7 +359,9 @@ public static class Enrollment
 
     private static int Cleanup(AgentLog log)
     {
-        Netsh($"advfirewall firewall delete rule name=\"{FirewallRuleName}\"", allowFailure: true);        using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
+        Netsh($"advfirewall firewall delete rule name=\"{FirewallRuleName}\"", allowFailure: true);
+        DirectFirewall.CloseAll();
+        using (var store = new X509Store(StoreName.My, StoreLocation.LocalMachine))
         {
             store.Open(OpenFlags.ReadWrite);
             foreach (var c in Ours(store).ToList()) Remove(store, c);

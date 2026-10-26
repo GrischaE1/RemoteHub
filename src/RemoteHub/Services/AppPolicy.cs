@@ -26,6 +26,9 @@ public static class AppPolicy
 
     public static bool UpdateCheckDisabled => UpdateCheck == false;
 
+    /// <summary>DWORD BrokerDirect: 0 = sessions through a RemoteHub Broker are always relayed; not set = the direct path is tried.</summary>
+    public static bool BrokerDirect => PolicyCatalog.Number(PolicyCatalog.ConsoleBrokerDirect, Source) is not 0;
+
     // Phase 4 (docs/admx-design.md §6): settings IT fixes. Null: the user's choice applies.
     public static string? Theme => PolicyCatalog.Text(PolicyCatalog.Theme, Source);
     public static string? SwitchKeys => PolicyCatalog.Text(PolicyCatalog.SwitchKeys, Source);

@@ -86,6 +86,10 @@ public sealed record AgentPolicy
     public string? BrokerProxy { get; init; }
     /// <summary>BrokerKeepAliveSeconds: keep-alive on the broker connection (30–90).</summary>
     public int BrokerKeepAliveSeconds { get; init; } = BrokerProtocol.KeepAliveDefault;
+    /// <summary>BrokerDirect: 0 relay only, 1 direct over public addresses, 2 also over local ones.</summary>
+    public int BrokerDirect { get; init; } = 2;
+    /// <summary>BrokerStun: the STUN service (host:port) for the direct path; null = the broker's, else the default.</summary>
+    public string? BrokerStun { get; init; }
     /// <summary>NoUserBehavior: what the agent may do when nobody is signed in on the console (<see cref="NoUserBehaviors"/>).</summary>
     public string NoUserBehavior { get; init; } = NoUserBehaviors.SignInScreen;
     /// <summary>AutoSignInRequirePrivacyScreen: automatic sign-in only where the privacy screen can be shown.</summary>
@@ -232,6 +236,9 @@ public sealed record AgentPolicy
             BrokerConsoles = Strings(PolicyCatalog.BrokerConsoles)?.Select(c => c.Trim().ToLowerInvariant()).Where(c => c.Length > 0).ToList() ?? d.BrokerConsoles,
             BrokerProxy = Checked(PolicyCatalog.BrokerProxy),
             BrokerKeepAliveSeconds = Number(PolicyCatalog.BrokerKeepAliveSeconds) ?? d.BrokerKeepAliveSeconds,
+            // Set but out of range: relay only – a value that restricts must not turn into the default.
+            BrokerDirect = Raw(PolicyCatalog.BrokerDirect) is null ? d.BrokerDirect : Number(PolicyCatalog.BrokerDirect) ?? 0,
+            BrokerStun = Checked(PolicyCatalog.BrokerStun),
             // Set by the policy: that value; not set (or not one of the two words): what the install chose (agent.json).
             // (an invalid policy value still means the sign-in screen – a policy that restricts must not turn into a permission)
             NoUserBehavior = Strings(PolicyCatalog.NoUserBehavior)?.FirstOrDefault() is { } behavior ? NoUserBehaviors.Valid(behavior) : d.NoUserBehavior,

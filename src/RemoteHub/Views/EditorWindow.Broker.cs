@@ -73,6 +73,7 @@ public partial class EditorWindow
 
         var install = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
         var consoles = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
+        var test = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
         row.Children.Add(ActionButton("Install on devices", SymbolRegular.Shield24, "The agent's MSI command line for Intune, Group Policy or software distribution", () =>
         {
@@ -84,12 +85,18 @@ public partial class EditorWindow
             consoles.Visibility = consoles.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
             if (consoles.Visibility == Visibility.Visible) await FillConsoles(consoles, client);
         }));
+        row.Children.Add(ActionButton("Test", SymbolRegular.Beaker24, "Checks the connection to the broker and whether direct connections can get out of this network", async () =>
+        {
+            test.Visibility = Visibility.Visible;
+            await FillTest(test, ct => BrokerTest.RunAsync(client, ct));
+        }));
         var disconnect = ActionButton("Disconnect…", SymbolRegular.PlugDisconnected24, "Removes this PC from the organisation and its synced folder from the navigation", async () => await DisconnectBroker(client));
         disconnect.Margin = new Thickness(0);
         row.Children.Add(disconnect);
         section.Children.Add(row);
         section.Children.Add(install);
         section.Children.Add(consoles);
+        section.Children.Add(test);
         return section;
     }
 
@@ -144,6 +151,27 @@ public partial class EditorWindow
 
     internal static string InstallCommand(string url, string secret) =>
         $"msiexec /i {AgentInstaller.PackageName} BROKER_URL={url} BROKER_SECRET={secret} /qn";
+
+    /// <summary>The control channel, the STUN answer and what follows from it: direct connections, or relayed only.</summary>
+    internal async Task FillTest(StackPanel panel, Func<System.Threading.CancellationToken, Task<BrokerTestResult>> run)
+    {
+        panel.Children.Clear();
+        panel.Children.Add(Caption("Testing…"));
+        BrokerTestResult result;
+        try { result = await run(System.Threading.CancellationToken.None); }
+        catch (Exception ex)
+        {
+            panel.Children.Clear();
+            panel.Children.Add(Caption("The test couldn't run: " + ex.Message));
+            return;
+        }
+        panel.Children.Clear();
+        panel.Children.Add(Caption(result.Control));
+        panel.Children.Add(Caption(result.Stun));
+        var verdict = Caption(result.Verdict);
+        verdict.SetResourceReference(TextBlock.ForegroundProperty, result.Direct ? "TextFillColorSecondaryBrush" : "SystemFillColorCautionBrush");
+        panel.Children.Add(verdict);
+    }
 
     private async Task FillConsoles(StackPanel panel, BrokerClient client)
     {

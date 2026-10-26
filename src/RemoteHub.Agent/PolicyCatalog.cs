@@ -299,6 +299,9 @@ public static class PolicyCatalog
             Words: ["Automatic", "Direct", "Broker"], Since: BrokerSince),
     ];
 
+    /// <summary>0: this PC never tries the direct path through a RemoteHub Broker – every session relayed.</summary>
+    public static readonly PolicyEntry ConsoleBrokerDirect = Console("BrokerDirect", PolicyKind.Number, "RemoteHub Broker", "Direct connections through the broker", 0, 1, labels: OnOff, since: BrokerSince);
+
     public const string ConnectionsKey = "Connections";
     private const string Phase4 = "0.19.0";
 
@@ -352,6 +355,10 @@ public static class PolicyCatalog
     public static readonly PolicyEntry BrokerProxy = Agent("BrokerProxy", PolicyKind.Text, "RemoteHub Broker", "Proxy for the broker", max: 200, since: BrokerSince,
         rule: s => Uri.TryCreate(s.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? null : "isn't a proxy address (http://proxy:8080)");
     public static readonly PolicyEntry BrokerKeepAliveSeconds = Agent("BrokerKeepAliveSeconds", PolicyKind.Number, "RemoteHub Broker", "Keep-alive interval (seconds)", 30, 90, since: BrokerSince);
+    public static readonly PolicyEntry BrokerDirect = Agent("BrokerDirect", PolicyKind.Number, "RemoteHub Broker", "Direct connections through the broker", 0, 2,
+        labels: new Dictionary<string, string> { ["0"] = "Off – relayed only", ["1"] = "Over public addresses", ["2"] = "Over public and local addresses" }, since: BrokerSince);
+    public static readonly PolicyEntry BrokerStun = Agent("BrokerStun", PolicyKind.Text, "RemoteHub Broker", "STUN service for direct connections", max: 200, since: BrokerSince,
+        rule: s => Stun.ParseServer(s) is null ? "isn't a STUN service (name:port)" : null);
     /// <summary>Ports on the device itself that its tunnel opens (RDP through the agent, port forwarding) – "RDP" = its RDP port.</summary>
     public static readonly PolicyEntry TunnelOwnPorts = Agent("TunnelOwnPorts", PolicyKind.List, "Jump host", "Ports on this device itself", since: BrokerSince);
 
@@ -397,6 +404,7 @@ public static class PolicyCatalog
         AuditRetentionDays, DiagnosticLog, DiagnosticLogRetentionDays,
         DisableRecording, RecordingFolder, RecordingFps, RecordingResolution, RecordingUseGpu, RecordingIncludeDetails,
         ProcessRefreshSeconds, ServiceRefreshSeconds,
+        ConsoleBrokerDirect,
         AgentDesktopQuality, AgentDesktopConsent, AgentDesktopViewOnly, AgentDesktopFitToWindow, AgentDesktopShowInfo, AgentDesktopKeyCombinations,
         AgentDesktopClipboard,
         .. AgentInstallEntries,
@@ -412,7 +420,7 @@ public static class PolicyCatalog
         PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
         TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams, TunnelOwnPorts,
-        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerProxy, BrokerKeepAliveSeconds,
+        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerProxy, BrokerKeepAliveSeconds, BrokerDirect, BrokerStun,
         AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
     ];
 

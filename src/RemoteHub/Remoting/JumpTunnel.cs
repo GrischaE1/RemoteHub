@@ -107,6 +107,7 @@ public sealed class JumpTunnel
     private readonly CancellationTokenSource _cts = new();
     private int _nextId;
     private int _closed;
+    private TaskCompletionSource<string[]>? _path;
     private System.Threading.Timer? _idle;
 
     private JumpTunnel(ClientWebSocket ws, string what, bool targetless = false)
@@ -171,12 +172,31 @@ public sealed class JumpTunnel
         }
     }
 
+    /// <summary>
+    /// A broker session only: RemoteHub's candidates for another try at the direct path, the agent's in return (none:
+    /// it won't try). One question at a time; 10 s for the answer.
+    /// </summary>
+    internal async Task<string[]> AskPathAsync(string[] cands, CancellationToken ct)
+    {
+        if (!_targetless) throw new InvalidOperationException("Only a RemoteHub Broker session has a direct path.");
+        ObjectDisposedException.ThrowIf(IsClosed, this);
+        var answer = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref _path, answer, null) is not null) throw new InvalidOperationException("A path question is already open.");
+        try
+        {
+            await Send(TunnelProtocol.Json(TunnelMessage.Path, 0, new TunnelPath(cands), TunnelJson.Default.TunnelPath)).ConfigureAwait(false);
+            return await answer.Task.WaitAsync(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        }
+        finally { Interlocked.CompareExchange(ref _path, null, answer); }
+    }
+
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) == 1) return;
         _idle?.Dispose();
         foreach (var s in _streams.Values) s.Reset("The connection to the jump host was closed.");
         foreach (var o in _opening.Values) o.TrySetException(new ObjectDisposedException(nameof(JumpTunnel)));
+        _path?.TrySetException(new ObjectDisposedException(nameof(JumpTunnel)));
         // Still open (idle, or RemoteHub closing): a proper close, so the jump host's audit says so – not "connection lost".
         try
         {
@@ -241,6 +261,13 @@ public sealed class JumpTunnel
                     case TunnelMessage.Reset:
                         if (_streams.TryGetValue(id, out var reset)) reset.Reset($"{Cap(_what)} ended the connection.");
                         break;
+                    case TunnelMessage.Path when _targetless && id == 0:
+                    {
+                        var path = JsonSerializer.Deserialize(payload, TunnelJson.Default.TunnelPath);
+                        if (path?.Cands is not { Length: <= BrokerProtocol.MaxCandidates } cands) throw new InvalidDataException("path answer out of range");
+                        _path?.TrySetResult(cands); // an answer nobody asked for is dropped
+                        break;
+                    }
                     default:
                         throw new InvalidDataException($"unexpected frame {type}");
                 }

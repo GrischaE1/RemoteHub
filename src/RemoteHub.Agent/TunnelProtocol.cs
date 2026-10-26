@@ -79,6 +79,11 @@ public enum TunnelMessage : byte
     Close = 6,
     /// <summary>Both ways: the stream ends now in both directions (an error, or the other side gave up).</summary>
     Reset = 7,
+    /// <summary>
+    /// Only on a RemoteHub Broker session, stream 0: <see cref="TunnelPath"/> – RemoteHub asks for another try at the direct
+    /// path while the session is relayed, the agent answers with its own candidates (none: it won't try).
+    /// </summary>
+    Path = 8,
 }
 
 /// <summary>
@@ -101,6 +106,9 @@ public sealed record TunnelOpened(string Address, string? Local = null);
 /// </summary>
 public sealed record TunnelRefused(string Reason, string Message, string? Local = null);
 
+/// <summary>A side's candidates for a new try at the direct path (<see cref="TunnelMessage.Path"/>), at most <see cref="BrokerProtocol.MaxCandidates"/>.</summary>
+public sealed record TunnelPath(string[] Cands);
+
 public static class TunnelRefusal
 {
     /// <summary>The jump host's policy doesn't allow this target or port.</summary>
@@ -119,5 +127,6 @@ public static class TunnelRefusal
 [JsonSerializable(typeof(TunnelOpen))]
 [JsonSerializable(typeof(TunnelOpened))]
 [JsonSerializable(typeof(TunnelRefused))]
+[JsonSerializable(typeof(TunnelPath))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public partial class TunnelJson : JsonSerializerContext;

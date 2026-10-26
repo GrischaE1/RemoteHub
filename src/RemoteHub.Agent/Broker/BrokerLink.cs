@@ -24,7 +24,8 @@ internal sealed class BrokerLink(
     Func<AgentPolicy> policy,
     AgentLog log,
     PeerTransport peers,
-    Func<DateTimeOffset>? clock = null)
+    Func<DateTimeOffset>? clock = null,
+    IDirectFirewall? firewall = null)
 {
     /// <summary>The message types the broker may send an agent – a closed list.</summary>
     private static readonly string[] Allowed = ["welcome", "incoming", "wake", "checks", "orgDeleted", "error"];
@@ -199,16 +200,34 @@ internal sealed class BrokerLink(
         if (why is { } refused)
         {
             log.Audit(AuditEvent.BrokerSessionRefused, $"Session through the RemoteHub Broker refused: console {consoleId} ({consoleName}) from {source} – {refused.Message}");
+            CryptographicOperations.ZeroMemory(sessionKey);
             await Send(ws, new JsonObject { ["t"] = "refuse", ["session"] = session, ["reason"] = refused.Reason, ["message"] = refused.Message }, stop);
             return;
         }
 
-        await Send(ws, new JsonObject { ["t"] = "accept", ["session"] = session, ["cands"] = new JsonArray() }, stop);
+        // The direct path's socket and candidates come first: they go in the answer.
+        var stun = p.BrokerStun ?? (Stun.ParseServer(Text(m, "stun", 200, required: false)) is not null ? Text(m, "stun", 200) : PeerDirect.DefaultStun);
+        var first = await BrokerSession.PrepareAsync(p.BrokerDirect, stun, stop);
+        var remote = PeerDirect.Usable((m["cands"] as JsonArray)?.Select(c => c is JsonValue v && v.TryGetValue<string>(out var t) ? t : null), p.BrokerDirect);
+        try { await Send(ws, new JsonObject { ["t"] = "accept", ["session"] = session, ["cands"] = new JsonArray([.. (first?.Cands ?? []).Select(c => JsonValue.Create(c))]) }, stop); }
+        catch
+        {
+            first?.Dispose();
+            throw;
+        }
         var relayUri = new Uri(WsBase(baseUri), relay + "&side=agent");
         var auth = BrokerProtocol.Mac(sessionKey, broker.Org, "relay", session, "agent");
-        CryptographicOperations.ZeroMemory(sessionKey);
         var who = $"console {consoleId} ({consoleName}) from {source}";
-        _sessions[session] = Task.Run(() => RunRelay(session, relayUri, auth, new IPEndPoint(source, 0), who, p, stop), CancellationToken.None);
+        var consoleKey = offer["consoleKey"]?.GetValue<string>() ?? "";
+        var s = new BrokerSession(session, sessionKey, consoleKey, who, source, p, policy, stun, peers, certificate, log, firewall);
+        _sessions[session] = Task.Run(async () =>
+        {
+            string reason;
+            try { reason = await s.RunAsync(relayUri, auth, first, remote, stop); }
+            catch (Exception ex) { reason = "failed: " + Describe(ex); }
+            finally { _sessions.TryRemove(session, out _); }
+            SessionEnded?.Invoke(reason);
+        }, CancellationToken.None);
     }
 
     /// <summary>Null when the offer checks out, else why not (reason, message).</summary>
@@ -235,30 +254,6 @@ internal sealed class BrokerLink(
         foreach (var old in _nonces.Where(n => n.Value < now - BrokerProtocol.ClockSkewSeconds).Select(n => n.Key).ToList()) _nonces.TryRemove(old, out _);
         if (_nonces.Count > 10_000 || !_nonces.TryAdd(nonce, expires)) return ("offer", "The offer was used before.");
         return null;
-    }
-
-    private async Task RunRelay(string session, Uri relayUri, string auth, IPEndPoint source, string who, AgentPolicy p, CancellationToken stop)
-    {
-        var started = DateTime.UtcNow;
-        var relay = new BrokerRelay(peers, source, p.MaxTunnelStreams);
-        string reason;
-        log.Audit(AuditEvent.BrokerSessionStarted, $"Session through the RemoteHub Broker started: {who}, relayed");
-        try
-        {
-            using var ws = NewSocket(p);
-            ws.Options.SetRequestHeader("Authorization", "RemoteHub-Relay " + auth);
-            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(stop))
-            {
-                timeout.CancelAfter(ConnectTimeout);
-                await ws.ConnectAsync(relayUri, timeout.Token);
-            }
-            reason = await relay.RunAsync(ws, stop);
-        }
-        catch (Exception ex) { reason = "relay failed: " + Describe(ex); }
-        finally { _sessions.TryRemove(session, out _); }
-        log.Audit(AuditEvent.BrokerSessionEnded, $"Session through the RemoteHub Broker ended: {who} after {DateTime.UtcNow - started:hh\\:mm\\:ss}, " +
-                                                  $"{relay.StreamsOpened} stream(s), {relay.BytesIn:N0} bytes in, {relay.BytesOut:N0} bytes out ({reason})");
-        SessionEnded?.Invoke(reason);
     }
 
     // ---- Messages to the broker --------------------------------------------------------------------------------
@@ -339,7 +334,7 @@ internal sealed class BrokerLink(
 
     // ---- WebSocket plumbing ------------------------------------------------------------------------------------
 
-    private static ClientWebSocket NewSocket(AgentPolicy p)
+    internal static ClientWebSocket NewSocket(AgentPolicy p)
     {
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.Zero; // the application keep-alive above

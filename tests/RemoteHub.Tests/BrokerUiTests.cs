@@ -241,6 +241,36 @@ public class BrokerUiTests
     }));
 
     [Fact]
+    public void Test_shows_its_lines_and_marks_relayed_only_as_a_caution() => Sta.Run(owner => WithAppResources(() =>
+    {
+        var w = Settings(owner, Host());
+        var panel = new StackPanel();
+        ((StackPanel)w.FindName("PageBroker")).Children.Add(panel); // in the window, so the theme's brushes resolve
+        var done = w.FillTest(panel, async _ =>
+        {
+            await Task.Delay(50);
+            return new BrokerTestResult("Control channel: connected.", "STUN (stun.cloudflare.com:3478): no answer.", false, "Only relayed connections: UDP is blocked from this network.");
+        });
+        Sta.Pump();
+        Assert.Equal("Testing…", Assert.IsType<TextBlock>(Assert.Single(panel.Children)).Text);
+        Assert.True(SpinWait.SpinUntil(() => { Sta.Pump(); return done.IsCompleted; }, TimeSpan.FromSeconds(5)));
+        Sta.Pump();
+        var lines = panel.Children.OfType<TextBlock>().ToList();
+        Assert.Equal(["Control channel: connected.", "STUN (stun.cloudflare.com:3478): no answer.", "Only relayed connections: UDP is blocked from this network."], lines.Select(l => l.Text));
+        Assert.All(lines, l => Assert.Same(w.FindResource("Caption"), l.Style));
+        Assert.Equal(w.FindResource("SystemFillColorCautionBrush"), lines[2].Foreground);
+
+        done = w.FillTest(panel, _ => Task.FromResult(new BrokerTestResult("Control channel: connected.", "STUN (…): answered.", true, "Direct connections possible.")));
+        Assert.True(SpinWait.SpinUntil(() => { Sta.Pump(); return done.IsCompleted; }, TimeSpan.FromSeconds(5)));
+        Assert.Equal(w.FindResource("TextFillColorSecondaryBrush"), ((TextBlock)panel.Children[2]).Foreground);
+
+        done = w.FillTest(panel, _ => throw new InvalidOperationException("No socket."));
+        Assert.True(SpinWait.SpinUntil(() => { Sta.Pump(); return done.IsCompleted; }, TimeSpan.FromSeconds(5)));
+        Assert.Equal("The test couldn't run: No socket.", Assert.IsType<TextBlock>(Assert.Single(panel.Children)).Text);
+        w.Close();
+    }));
+
+    [Fact]
     public void The_broker_page_says_why_when_this_PCs_policy_turns_the_broker_off() => Sta.Run(owner => WithAppResources(() =>
     {
         AppPolicy.Source = new FeatureSource("AllowBroker", 0);

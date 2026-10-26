@@ -2,7 +2,8 @@
 # without an enrollment file (it enrolls itself and registers), RemoteHub's way to it through the broker (Connect with
 # the console secret, the sealed record, the agent's health through a relayed session pinned to that record), the
 # device's policy BrokerEnabled, broker leave and broker join with the secret on standard input (what Assign to
-# RemoteHub Broker runs), and that the device secret is kept nowhere on the device (SEC-BRK).
+# RemoteHub Broker runs), the direct path (QUIC on a punched port through the device firewall, relayed with the policy
+# BrokerDirect = 0 or with UDP blocked), and that the device secret is kept nowhere on the device (SEC-BRK).
 # Needs the lab's broker: lab.json "Broker" and lab.local.json "BrokerToken" (docs/test-lab-spec.md); without them
 # every case is skipped with that reason. Each run makes its own organisation and deletes it again.
 # See docs/test-lab-cases.md section 9.14.
@@ -54,6 +55,13 @@ BeforeAll {
                     EventsHaveKey  = [bool]($events | Where-Object { $_.Message -and $_.Message.Contains($key) })
                     EventIds       = @($events | ForEach-Object Id | Sort-Object -Unique)
                 }
+            }
+        }
+        # the newest BrokerSessionStarted (1301) in the Application log: its message names the path
+        function Get-StartedSession {
+            Invoke-LabGuest -Name $VmName -ScriptBlock {
+                Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'RemoteHub Agent'; Id = 1301 } -MaxEvents 1 -ErrorAction SilentlyContinue |
+                    Select-Object TimeCreated, Message
             }
         }
         # the agent's own command on the device (as PSAdmin): output and exit code; -Secret goes to standard input
@@ -111,6 +119,62 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         $r.pin | Should -Be $script:device.record.fingerprint
         $r.health.deviceId | Should -Be $script:device.id
         (Get-Kept).EventIds | Should -Contain 1301 -Because 'BrokerSessionStarted'
+    }
+
+    It 'B-BRK-05 a session on the lab network goes direct (QUIC on a punched port) with the firewall on' -Tag 'B-BRK-05' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        $fw = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-NetFirewallProfile | Where-Object Enabled).Count }
+        $fw | Should -BeGreaterThan 0 -Because 'the case is about the device firewall letting the direct path in'
+        $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
+        Save 'direct' ($r | Select-Object path, seconds, pin, health)
+        $r.health.deviceId | Should -Be $script:device.id
+        $r.path | Should -Be 'DirectLocal' -Because 'host candidates on the lab network answer and the agent opens the punched port for the console'
+        (Get-StartedSession).Message | Should -Match 'direct local'
+        # the rule for the try is gone again once the session has ended (the harness closes it when it is done)
+        $left = Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $until = (Get-Date).AddSeconds(30)
+            do {
+                $n = @(Get-NetFirewallRule -DisplayName 'RemoteHub Agent direct path' -ErrorAction SilentlyContinue).Count
+                if ($n -eq 0) { break }
+                Start-Sleep -Milliseconds 500
+            } while ((Get-Date) -lt $until)
+            $n
+        }
+        $left | Should -Be 0 -Because 'the direct path rule is removed within 30 s of the session ending'
+    }
+
+    It 'B-BRK-06 the device policy BrokerDirect = 0 keeps sessions relayed' -Tag 'B-BRK-06' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        Set-LabAgentPolicy -Name $VmName -Values @{ BrokerDirect = 0 }
+        try {
+            $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
+            Save 'relay-only' ($r | Select-Object path, seconds)
+            $r.health.deviceId | Should -Be $script:device.id
+            $r.path | Should -Be 'Relayed'
+            (Get-StartedSession).Message | Should -Match 'relayed'
+        }
+        finally { Set-LabAgentPolicy -Name $VmName -Clear }
+    }
+
+    It 'B-BRK-07 UDP blocked on the device: the session is relayed, without an error and without waiting long' -Tag 'B-BRK-07' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $exe = Join-Path $env:ProgramFiles 'RemoteHub Agent\RemoteHubAgent.exe'
+            foreach ($d in 'Inbound', 'Outbound') {
+                $null = New-NetFirewallRule -DisplayName "LabBlockAgentUdp$d" -Direction $d -Protocol UDP -Action Block -Program $exe
+            }
+        }
+        try {
+            $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
+            Save 'udp-blocked' ($r | Select-Object path, seconds)
+            $r.health.deviceId | Should -Be $script:device.id
+            $r.path | Should -Be 'Relayed'
+            $r.seconds | Should -BeLessThan 10 -Because 'the relay starts at the same time as the punching'
+        }
+        finally {
+            Invoke-LabGuest -Name $VmName -ScriptBlock { Get-NetFirewallRule -DisplayName 'LabBlockAgentUdp*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
+        }
     }
 
     It 'B-BRK-03 the device policy BrokerEnabled = 0 takes it off the broker, and back when cleared' -Tag 'B-BRK-03' {

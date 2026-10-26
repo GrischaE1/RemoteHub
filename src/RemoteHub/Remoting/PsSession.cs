@@ -98,7 +98,7 @@ public sealed partial class PsSession : SessionBase, IConsoleSink
     {
         if (_closed) return;
         Target = target;
-        Transport = target.Transport;
+        ShowTransport(target);
         AccentBrush = accent;
         Title = Connection.Name;
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";
@@ -384,6 +384,7 @@ public sealed partial class PsSession : SessionBase, IConsoleSink
     {
         if (_closed) return;
         _closed = true;
+        StopFollowingPath();
         _connectGeneration++;
         Stop();
         _flush.Stop();

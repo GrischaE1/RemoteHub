@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -47,6 +48,13 @@ public sealed class BrokerClient : IAsyncDisposable
     public string State { get; private set; } = "Connecting…";
     public bool IsConnected { get; private set; }
     public string KeyHash { get; private set; } = "";
+
+    /// <summary>The STUN service the broker names for the direct path (its welcome); Cloudflare's until then.</summary>
+    public string StunServer { get; private set; } = PeerDirect.DefaultStun;
+
+    private readonly object _certificateLock = new();
+    private ECDsa? _peerKey;
+    private X509Certificate2? _peerCertificate;
 
     /// <summary>
     /// The organisation's newest device secret, from the keyring (null until it is read, or when it holds none): what new
@@ -171,6 +179,7 @@ public sealed class BrokerClient : IAsyncDisposable
             throw Refused(ws);
         }
         var orgName = Text(welcome, "orgName", 200);
+        if (welcome["stun"] is JsonValue stun && stun.TryGetValue<string>(out var server) && Stun.ParseServer(server) is not null) StunServer = server.Trim();
         if (orgName != _info.OrgName && orgName.Length > 0) BrokerStore.SetOrgName(_info.Id, orgName);
 
         _ws = ws;
@@ -347,7 +356,7 @@ public sealed class BrokerClient : IAsyncDisposable
     /// Asks for a session with a device: an offer sealed with the record key of the device secret the device
     /// registered with, so a broker alone can't make one. Returns the broker's <c>accepted</c> answer.
     /// </summary>
-    public async Task<JsonObject> OfferAsync(string deviceId, string? secretId, CancellationToken ct)
+    public async Task<JsonObject> OfferAsync(string deviceId, string? secretId, IReadOnlyList<string> cands, CancellationToken ct)
     {
         var recordKey = (secretId is not null && _recordKeys.TryGetValue(secretId, out var k) ? k : _recordKeys.Values.FirstOrDefault())
             ?? throw new BrokerException("This console has no device secret of the organisation – ask the administrator for a current console secret.");
@@ -362,11 +371,30 @@ public sealed class BrokerClient : IAsyncDisposable
         };
         var answer = await RequestAsync(new JsonObject
         {
-            ["t"] = "connect", ["deviceId"] = deviceId, ["offer"] = offer.DeepClone(), ["offerSeal"] = Seal(recordKey, _info.Org, "offer", offer), ["cands"] = new JsonArray(),
+            ["t"] = "connect", ["deviceId"] = deviceId, ["offer"] = offer.DeepClone(), ["offerSeal"] = Seal(recordKey, _info.Org, "offer", offer),
+            ["cands"] = new JsonArray([.. cands.Take(MaxCandidates).Select(c => JsonValue.Create(c))]),
         }, ct).ConfigureAwait(false);
         if (answer["t"]?.GetValue<string>() == "refused")
             throw new BrokerException(answer["message"]?.GetValue<string>() ?? "The device refused the connection.", answer["reason"]?.GetValue<string>());
         return answer;
+    }
+
+    /// <summary>
+    /// This PC's certificate for the direct path: on its console key (CNG, never exportable), made once per run. The
+    /// agent takes a QUIC connection only with the key the sealed offer names.
+    /// </summary>
+    internal X509Certificate2 PeerCertificate()
+    {
+        lock (_certificateLock)
+        {
+            if (_peerCertificate is { } made && made.NotAfter > DateTime.Now.AddHours(1)) return made;
+            _peerKey ??= BrokerKey.Open(_info.ConsoleId)
+                ?? throw new BrokerException("This PC's key for the RemoteHub Broker is missing (another Windows user, or a new PC). Connect to the broker again.", "nokey");
+            var request = new CertificateRequest($"CN={_info.ConsoleId}, O=RemoteHub", _peerKey, HashAlgorithmName.SHA256);
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension([new Oid("1.3.6.1.5.5.7.3.2")], false));
+            _peerCertificate?.Dispose();
+            return _peerCertificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(7));
+        }
     }
 
     /// <summary>The relay WebSocket of an accepted session, console side.</summary>
@@ -472,5 +500,10 @@ public sealed class BrokerClient : IAsyncDisposable
         CryptographicOperations.ZeroMemory(_keyring);
         foreach (var k in _recordKeys.Values) CryptographicOperations.ZeroMemory(k);
         DeviceSecret = null;
+        lock (_certificateLock)
+        {
+            _peerCertificate?.Dispose();
+            _peerKey?.Dispose();
+        }
     }
 }

@@ -269,7 +269,7 @@ public partial class MainWindow
             if (!quiet) _ = Dialogs.Info(this, "RemoteHub Broker", $"This PC isn't connected to the RemoteHub Broker of {c.BrokerRoot?.Name}. Connect in Settings → RemoteHub Broker.");
             return null;
         }
-        return new BrokerRoute(client, r.Item, r.SecretId, c.Name);
+        return new BrokerRoute(client, r.Item, r.SecretId, c.Name, c.Agent.Fingerprint);
     }
 
     private BrokerReach ReachOf(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).Reach ?? BrokerReach.Automatic;

@@ -217,6 +217,13 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="Console_BrokerDirect" class="Both" displayName="$(string.Console_BrokerDirect)" explainText="$(string.Console_BrokerDirect_Help)"
+            key="Software\Policies\RemoteHub" valueName="BrokerDirect">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="Console_AllowAgentInstall" class="Both" displayName="$(string.Console_AllowAgentInstall)" explainText="$(string.Console_AllowAgentInstall_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowAgentInstall">
       <parentCategory ref="Console_Agent" />
@@ -1236,6 +1243,26 @@
       <elements>
         <decimal id="BrokerKeepAliveSeconds" valueName="BrokerKeepAliveSeconds" minValue="30" maxValue="90" required="true" />
       </elements>
+    </policy>
+
+    <policy name="Agent_BrokerDirect" class="Machine" displayName="$(string.Agent_BrokerDirect)" explainText="$(string.Agent_BrokerDirect_Help)"
+            presentation="$(presentation.Agent_BrokerDirect)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements>
+        <enum id="BrokerDirect" valueName="BrokerDirect" required="true">
+          <item displayName="$(string.Agent_BrokerDirect_2)"><value><decimal value="2" /></value></item>
+          <item displayName="$(string.Agent_BrokerDirect_1)"><value><decimal value="1" /></value></item>
+          <item displayName="$(string.Agent_BrokerDirect_0)"><value><decimal value="0" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_BrokerStun" class="Machine" displayName="$(string.Agent_BrokerStun)" explainText="$(string.Agent_BrokerStun_Help)"
+            presentation="$(presentation.Agent_BrokerStun)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerStun" valueName="BrokerStun" maxLength="200" required="true" /></elements>
     </policy>
 
     <!-- ================================================================ RemoteHub Agent: service -->
