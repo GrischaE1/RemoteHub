@@ -1,6 +1,7 @@
 # RemoteHub Broker
 
-Status: Draft v3 (2026-10-26) – decisions in §18 (v3: shared devices, organisation secrets, install and assign).
+Status: Draft v4 (2026-10-26) – decisions in §18 (v3: shared devices, organisation secrets, install and assign;
+v4: multi-organisation from day one, §5.2).
 Nothing built yet. Phases and tests in §17.
 Owner: Grischa Ernst
 
@@ -54,9 +55,10 @@ parts are additions.
    the device and to devices behind it (§9).
 6. **The device decides.** Whether a device uses the broker, may be reached directly and reveals its local addresses
    is the device's policy (§13.1).
-7. **Cloudflare-native, self-hosted first.** v1 is deployed by each organisation into its own Cloudflare account.
-   A broker hosted for customers comes later (§16); the data carries a tenant id from the start so that needs no
-   migration of the model.
+7. **Cloudflare-native, self-hosted first.** v1 is deployed into the operator's own Cloudflare account.
+8. **Multi-organisation from day one.** Every broker serves any number of **organisations**, each identified by its
+   organisation id (§5.2) – one company running its own broker, an MSP running one for its customers, and later the
+   broker hosted for customers (§16) all use the same model.
 
 ## 2. Non-goals (v1)
 
@@ -64,7 +66,8 @@ parts are additions.
   by a key it registered with the organisation's console secret (§6.3), and every console sees every device (§18 D9).
 - **Sharing credentials.** The broker never holds a password; each console keeps its own (§11.4).
 - **RDP, WinRM or shares to a device without an agent** except through an agent acting as jump host (§9).
-- **The hosted, multi-tenant broker** and **AWS** (§16).
+- **The hosted service around it** – sign-up, billing, per-organisation administrators – and **AWS** (§16). The
+  broker itself is multi-organisation from v1 (§5.2).
 - **Migrating a running stream** from relay to direct (§8.6).
 
 ## 3. Network requirements – what IT has to allow
@@ -122,9 +125,9 @@ RemoteHub (console)               RemoteHub Broker (Cloudflare)              Dev
 ┌─────────────────────┐  wss 443  ┌──────────────────────────────┐ wss 443  ┌───────────────────────────────┐
 │ BrokerClient        │─control──▶│ Worker: routing, auth        │◀─control─│ BrokerLink (agent service)    │
 │  ├ registration     │           │ DeviceHub DO (one per device)│          │  ├ registration, keep-alive   │
-│  ├ device list      │           │ TenantHub DO (list, presence)│          │  ├ self-registration          │
+│  ├ device list      │           │ OrgHub DO (list, presence)   │          │  ├ self-registration          │
 │  └ PeerSessions ────┼─relay────▶│ RelaySession DO (per session)│◀─relay───┤  ├ accept / refuse sessions   │
-│     ├ RelayChannel  │           │ D1: tenants, devices,        │          │  └ PeerListener ──┐           │
+│     ├ RelayChannel  │           │ D1: orgs, devices,           │          │  └ PeerListener ──┐           │
 │     └ QuicChannel ◀═╪═══════════╪═ consoles, keys, audit ══════╪═════════▶│                   ▼           │
 │        │ streams    │  direct (UDP, QUIC) – not via Cloudflare │          │  Kestrel (unchanged endpoints)│
 │        ▼            │           └──────────────────────────────┘          │  /v1/powershell /v1/desktop   │
@@ -147,11 +150,78 @@ agent's Kestrel, before any sign-in. Everything else – RDP to the device, othe
 (`/v1/tunnel`): signed in, right `Tunnel`, `TunnelRules`. So the broker adds no way past the agent's sign-in, rights
 or tunnel policy.
 
+### 5.2 Organisations
+
+Every broker serves any number of organisations. Each device and each console belongs to one of them, and nothing
+crosses between them.
+
+**The organisation identifier**
+
+| | Form | Example | Changes? |
+|---|---|---|---|
+| **Organisation id** | `o_` + 16 characters base32 (80 random bits); not secret | `o_k7q29xmd4tpa3fhw` | never |
+| Short name | `a–z`, `0–9`, `-`, 3–32 characters, unique per broker | `contoso` | can be renamed |
+| Display name | free text, ≤ 80 characters | "Contoso Ltd" | can be renamed |
+
+The id is what every key, record and object refers to; the names are for people (the synced folder's title, the CLI,
+later a sign-in page).
+
+**Where it is carried**
+
+- **In both secrets:** `rhd1.<org>.<secret id>.<key>` and `rhc1.<org>.<secret id>.<key>` (§6.1), so the MSI and
+  `broker join` need no extra property – the secret says which organisation a device joins. Also in the `.rhbroker`
+  file and in `agent.json` (`broker: { url, org }`).
+- **In every URL:** `wss://<broker>/v1/o/<org>/agent`, `…/console`, `…/relay`. The paths in this document leave the
+  prefix out.
+- **In every proof and seal:** the signed or sealed text starts with the organisation id, so a proof or seal made for
+  one organisation is worthless in another.
+- **In every name inside the broker:** Durable Objects `<org>:<device>`, `<org>:<session>`, `<org>` (`OrgHub`), and an
+  `org` column on every table (§12.3).
+
+**Isolation**
+
+- **The organisation comes from the authenticated connection** – the path, checked against that organisation's keys
+  by the proof – never from a field in a message. A device id or console id from another organisation in a message
+  is simply "not registered".
+- The storage layer takes the organisation as a required parameter on every query; there is no query without it.
+- Device and console ids are random GUIDs, unique within their organisation.
+- **Limits per organisation** (devices, open sessions, relay bandwidth) on top of those per console (§12.4), so one
+  organisation can't starve the others.
+- v1 keeps all organisations in one D1 database. Because every query already carries the organisation, a database per
+  organisation (or per group of them) is possible later without changing the model – relevant for the hosted service,
+  where one database's size limit matters.
+
+**One device, one organisation – one console, several**
+
+- A device belongs to exactly one organisation. Moving it: `broker leave`, then `broker join` with the other
+  organisation's device secret – a new registration.
+- **A console can connect to several organisations** – an MSP's technician working for several customers. Each
+  connection (broker, organisation, console secret) is its own synced folder, titled with the display name ("Contoso
+  Ltd – RemoteHub Broker", §11.4), with its own credentials and settings. Several brokers work the same way.
+
+**Names on the network**
+
+- One name serves every organisation (`broker.remotehub.dev` or the operator's own); the organisation comes from the
+  path.
+- Later, for the hosted service, a name per organisation (`contoso.broker.remotehub.dev`, or the customer's own domain
+  through Cloudflare for SaaS) can point at the same broker; the path still carries the organisation and must match
+  the name.
+
+**Lifecycle**
+
+- `rhbroker org create contoso --name "Contoso Ltd"` creates the organisation and its first secrets (§6.1);
+  `org list`, `org rename`, `org delete`.
+- Deleting removes its devices, consoles, layout and secrets; connected agents are told `OrgDeleted`, stop using the
+  broker and log 3300; its audit stays for its retention time.
+- The administrator token of §12.5 is the **broker operator's** and reaches every organisation. Inside an organisation,
+  day-to-day administration happens in RemoteHub with the console secret. Per-organisation administrators who don't
+  see other organisations come with the hosted service (§16).
+
 ## 6. Identities and the organisation's secrets
 
 The broker runs behind Cloudflare's edge, which terminates TLS, so identities are proven **inside** the WebSocket, not
 by TLS client certificates: after the upgrade the broker sends `Challenge {nonce}`, the client answers
-`Proof {id, signature}` over `"remotehub-broker/1" | role | id | nonce | broker host`. The broker checks it against the
+`Proof {id, signature}` over `"remotehub-broker/1" | org | role | id | nonce | broker host`. The broker checks it against the
 registered public key (WebCrypto: ECDSA P-256, RSA-PSS). Nothing is accepted before a valid proof; a wrong one closes
 the connection.
 
@@ -161,10 +231,10 @@ device** – otherwise a compromised broker could hand consoles a fake device an
 
 ### 6.1 Two secrets, three keys
 
-`rhbroker tenant init` creates both secrets **on the administrator's PC** (256 bits each, with an id):
+`rhbroker org create` creates both secrets **on the administrator's PC** (256 bits each, with an id):
 
-- **Device secret** `rhd1-<id>-<base32>` – goes into the agent MSI or `broker join` (§6.4); ends up on every device.
-- **Console secret** `rhc1-<id>-<base32>` – for admin PCs only. It contains the device secret too, because consoles
+- **Device secret** `rhd1.<org>.<secret id>.<key>` – goes into the agent MSI or `broker join` (§6.4); ends up on every device.
+- **Console secret** `rhc1.<org>.<secret id>.<key>` – for admin PCs only. It contains the device secret too, because consoles
   need its record key.
 
 Every side derives the keys it needs (HKDF-SHA256, one label each):
@@ -178,7 +248,7 @@ Every side derives the keys it needs (HKDF-SHA256, one label each):
 
 The CLI uploads only the enroll and join keys; the secrets themselves never reach the broker.
 
-**Seals** are `HMAC-SHA256(key, canonical JSON)` over what decides where credentials go:
+**Seals** are `HMAC-SHA256(key, org | canonical JSON)` over what decides where credentials go:
 
 - **The device record** (record key) – device id, certificate fingerprint, computer name, domain, registration time.
   Made by the agent when it registers, or by the console that created its enrollment.
@@ -223,7 +293,7 @@ in a file only SYSTEM can read; the secret itself isn't kept.
 
 | Situation | How |
 |---|---|
-| **New install by software distribution** (Intune, GPO, SCCM) | The generic MSI, no enrollment file: `msiexec /i RemoteHubAgent.msi BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1-… /qn`. `BROKER_ONLY=1` also turns the TCP listener off (§10.3). |
+| **New install by software distribution** (Intune, GPO, SCCM) | The generic MSI, no enrollment file: `msiexec /i RemoteHubAgent.msi BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.o_k7q2….… /qn` (the organisation is in the secret, §5.2). `BROKER_ONLY=1` also turns the TCP listener off (§10.3). |
 | New install from RemoteHub | *Install RemoteHub Agent…* as today. The console registers and seals the device itself, places it in the synced folder where the connection is (§11.4), and puts the broker into the enrollment. |
 | **Installed agent, from RemoteHub** | Connection menu → **Assign to RemoteHub Broker**: through the running agent session RemoteHub runs `RemoteHubAgent.exe broker join <url>` with the device secret on standard input (needs the PowerShell right; `agent.json` is writable by administrators only). The agent registers within seconds and the connection is linked to it. |
 | **Installed agent, on the device or by script** | `RemoteHubAgent.exe broker join rh.contoso.com` as an administrator, the secret from standard input or a prompt – or the MSI again with the two properties (Intune: repair, or a remediation script). |
@@ -261,8 +331,8 @@ in a file only SYSTEM can read; the secret itself isn't kept.
 
 ### 7.2 Console ↔ broker (`/v1/console`)
 
-- Open while RemoteHub runs with a broker connected, so the synced folder stays live (§11.4). The tenant's
-  `TenantHub` object hibernates between changes, so idle consoles cost nothing.
+- Open while RemoteHub runs with a broker connected, so the synced folder stays live (§11.4). The organisation's
+  `OrgHub` object hibernates between changes, so idle consoles cost nothing.
 - **List:** `Sync {sinceVersion}` → the device records, folders and placements changed since then, in pages of
   ≤ 64 KB; the first sync sends everything. After that the broker **pushes** `Changed` (records, folders, placements)
   as they happen.
@@ -438,7 +508,7 @@ connection does** – the agent and RDP alike:
 
 ### 11.2 Settings → RemoteHub Broker
 
-- **Connect to broker:** address and console secret (or *Import .rhbroker file…*) → **Connect**; then the state
+- **Connect to broker:** address and console secret (or *Import .rhbroker file…*) → **Connect** – RemoteHub shows the organisation's display name to confirm; then the state
   (connected as "Alice – laptop", broker version, devices, last contact).
 - **Test:** control channel, STUN answer, whether UDP gets out – "Direct connections possible" / "Only relayed
   connections: UDP is blocked from this network".
@@ -447,6 +517,8 @@ connection does** – the agent and RDP alike:
 - **Consoles:** the list of registered consoles with last contact, and *Remove*.
 - **Disconnect:** removes this console from the broker and the synced folder from the navigation (local overlays are
   kept for a later reconnect).
+- **Several organisations:** the page lists every connection (organisation display name, broker, state) with *Add*;
+  each has the parts above and its own synced folder (§5.2).
 - Built like the neighbouring settings pages; the layout is settled when it is built.
 
 ### 11.3 What the user sees
@@ -462,7 +534,7 @@ connection does** – the agent and RDP alike:
 Every console connected to the broker shows **one top-level folder for it**, with every registered device:
 
 ```
-RemoteHub Broker – rh.contoso.com          (synced)
+Contoso Ltd – RemoteHub Broker            (synced; one folder per organisation)
   ├─ New devices          3 new             devices that registered themselves and aren't placed yet
   ├─ Servers
   │    ├─ SRV-SQL01       ● online           Windows Server 2025 · agent 0.22.0
@@ -526,10 +598,10 @@ Each says which step failed:
 | Piece | Holds |
 |---|---|
 | Worker (entry) | routing by path, `Challenge`/`Proof`, rate limits, join, registration |
-| `DeviceHub` Durable Object, one per device (`tenant:device`) | the agent's control WebSocket (hibernation API – evicted from memory while idle, `ping` answered by auto-response), presence, pending `Incoming` |
+| `DeviceHub` Durable Object, one per device (`<org>:<device>`) | the agent's control WebSocket (hibernation API – evicted from memory while idle, `ping` answered by auto-response), presence, pending `Incoming` |
 | `RelaySession` Durable Object, one per session | the two relay WebSockets; copies messages; byte counters for the audit |
-| `TenantHub` Durable Object, one per tenant | the consoles' control WebSockets (hibernating); pushes list changes and presence (`DeviceHub` objects tell it when an agent comes or goes) |
-| D1 (SQLite) | tenants, secrets' derived keys, devices, layout, consoles, audit (§12.3) |
+| `OrgHub` Durable Object, one per organisation (`<org>`) | the consoles' control WebSockets (hibernating); pushes list changes and presence (`DeviceHub` objects tell it when an agent comes or goes) |
+| D1 (SQLite) | organisations, secrets' derived keys, devices, layout, consoles, audit (§12.3) |
 
 ### 12.3 Storage
 
@@ -538,12 +610,12 @@ secrets.
 
 | Table | Columns |
 |---|---|
-| `tenants` | tenant id, name (one row when self-hosted) |
-| `secrets` | tenant, secret id, kind (device / console), enroll or join key, created, retired |
-| `devices` | tenant, device id, public key, computer name, domain, OS, agent version, secret id, seal, registered, last seen, last public address |
-| `layout` | tenant, folders (id, parent, name), placements and labels – each with version and seal |
-| `consoles` | tenant, console id, name, public key, registered, last seen, removed |
-| `audit` | tenant, time, event, console, device, addresses, path, bytes, reason – kept 90 days (setting) |
+| `organisations` | org id, short name, display name, created, deleted, limits (§5.2) |
+| `secrets` | org, secret id, kind (device / console), enroll or join key, created, retired |
+| `devices` | org, device id, public key, computer name, domain, OS, agent version, secret id, seal, registered, last seen, last public address |
+| `layout` | org, folders (id, parent, name), placements and labels – each with version and seal |
+| `consoles` | org, console id, name, public key, registered, last seen, removed |
+| `audit` | org, time, event, console, device, addresses, path, bytes, reason – kept 90 days (setting) |
 
 Migrations forward only (pre-GA).
 
@@ -560,10 +632,10 @@ Migrations forward only (pre-GA).
 ### 12.5 Deployment and administration
 
 - A deployment guide: Cloudflare account (MFA, few administrators), a custom domain, `wrangler deploy`, D1 migrations,
-  an administrator token, then `rhbroker tenant init` (§6.1) – it prints the device secret and writes the console
+  an administrator token, then `rhbroker org create` (§6.1) – it prints the device secret and writes the console
   secret into a `.rhbroker` file for the admin PCs.
 - Administration through a small CLI `rhbroker` (Node, talks to an admin API with that token, creates secrets locally):
-  `tenant init`, `secret add|list|retire`, `console list|remove`, `device list|remove`, `audit --since`. Day-to-day work
+  `org create|list|rename|delete`, `secret add|list|retire`, `console list|remove`, `device list|remove`, `audit --since`. Day-to-day work
   – folders, placing devices, removing consoles – happens in RemoteHub (§11.2, §11.4). No web UI in v1.
 - Cost: idle agents hibernate; the spikes measure relay cost per GB and per open session (B4, B5) for the guide.
 
@@ -613,7 +685,7 @@ is never a policy value (§6.4); `BrokerUrl` alone moves registered devices to a
 | `BrokerSessionStarted` | 1301 | Session accepted: console id and name, source, path (direct local / direct internet / relayed). |
 | `BrokerSessionEnded` | 1302 | Duration, streams, bytes each way, path changes, why. |
 | `BrokerSessionRefused` | 2300 | Refused by policy (`BrokerEnabled`, `BrokerConsoles`) or limit. |
-| `BrokerRegistered` | 1303 | The device registered itself or was assigned: broker, device id, secret id. Also `broker leave`. |
+| `BrokerRegistered` | 1303 | The device registered itself or was assigned: broker, organisation id, device id, secret id. Also `broker leave`. |
 | `BrokerError` | 3300 | Registration refused (secret retired or unknown, key unknown), broker unreachable for more than an hour (once). |
 
 Sign-ins and streams inside a session are audited as today (1000, 1100, 1200, 2000 …) with the `via RemoteHub Broker`
@@ -645,7 +717,7 @@ Kept stable now so these are additions:
 
 - **The organisation's PKI replaces the secrets:** devices get their certificate from the company's CA (Intune
   SCEP/PKCS), consoles a client certificate (Intune, smart cards). Consoles then trust a device because its
-  certificate chains to the tenant's CA, not because of a seal; the layout is signed by the console's certificate.
+  certificate chains to the organisation's CA, not because of a seal; the layout is signed by the console's certificate.
   The secrets stay possible for organisations without a PKI.
 - **Users and sign-in:** consoles bound to users, with the PKI above or Entra ID / OIDC where that fits.
 - **Who sees what:** device visibility per user or group (RBAC) instead of every console seeing every device
@@ -653,8 +725,8 @@ Kept stable now so these are additions:
 - **Rights from the broker:** the agent already works with a list of rights (agent-desktop-draft §4.1). The broker can
   later issue a **signed rights token** per user and device; an agent policy chooses where rights come from (Windows
   groups, the broker, or both must allow).
-- **Hosted, multi-tenant:** the tenant id is in every table and every Durable Object name from v1; the hosted service
-  adds tenant sign-up, per-tenant limits and billing.
+- **Hosted:** the broker is multi-organisation from v1 (§5.2); the hosted service adds sign-up, per-organisation
+  administrators who see only their organisation, a name per organisation, billing and a database per organisation where needed.
 - **AWS:** the portable core (§12.1) in a container on ECS/Fargate – `Registry` on PostgreSQL or DynamoDB, `DeviceHub`
   and `RelaySession` in process with routing by device id. Not API Gateway WebSockets (frame limits, cost per message).
 - **More roles:** device inventory, central audit from agents, policy and update distribution, automatic placement
@@ -665,7 +737,7 @@ Kept stable now so these are additions:
 | Phase | Content |
 |---|---|
 | **0 – Spikes** | B1–B6 (§15). |
-| **1 – Broker, sharing and relay** | Broker on Cloudflare (§12); secrets, seals, console registration (§6.1–§6.3); self-registration, MSI properties, *Assign to RemoteHub Broker* and `broker join` (§6.4); control channels (§7); the synced folder with live presence (§11.4); relay sessions (§8.1, §8.5); Kestrel transport (§10.2); *Reach* and settings (§11); RDP to the device itself (§9.1); jump hosts through the broker (§10.4); policy, audit, errors. Every console sees every device and reaches it from anywhere – relayed. |
+| **1 – Broker, sharing and relay** | Broker on Cloudflare (§12), multi-organisation with the organisation id everywhere (§5.2); secrets, seals, console registration (§6.1–§6.3); self-registration, MSI properties, *Assign to RemoteHub Broker* and `broker join` (§6.4); control channels (§7); the synced folder with live presence (§11.4); relay sessions (§8.1, §8.5); Kestrel transport (§10.2); *Reach* and settings (§11); RDP to the device itself (§9.1); jump hosts through the broker (§10.4); policy, audit, errors. Every console sees every device and reaches it from anywhere – relayed. |
 | **2 – Direct** | STUN, candidates, punching, QUIC (§8.2–§8.4), path choice and the desktop move (§8.6), *Test* in settings. |
 | **3 – Broker only** | `ListenEnabled = 0` and `BROKER_ONLY` (§10.3), secret rotation in practice (§6.5), ADMX entries. |
 | Later | §16, stream migration, inner TLS dropped on QUIC. |
@@ -675,9 +747,11 @@ Kept stable now so these are additions:
 - **Broker** (`broker/`, Vitest with Cloudflare's Workers test pool – Miniflare, real Durable Objects and D1 locally):
   enroll and join proofs (retired secret, wrong key, replayed nonce, wrong host), an id bound to its first key,
   `Sync` paging and pushed changes, presence debounce, layout versions only going up, rendezvous, relay pairing (wrong
-  token, one side missing, a third connection), limits, tenant separation, audit without secrets.
+  token, one side missing, a third connection), limits, organisation separation (§5.2), audit without secrets.
 - **Unit** (`tests/RemoteHub.Tests`): the C# side against a broker started locally (`wrangler dev`, skippable when Node
-  is missing): key derivation and seals (record and layout; a device can't make a layout seal), agent self-registration
+  is missing): key derivation and seals (record and layout; a device can't make a layout seal; a seal of another
+  organisation fails), parsing the organisation from the secrets and the `.rhbroker` file, a console with two
+  organisations, agent self-registration
   and its certificate, `broker join` reading the secret from standard input only, the record key kept SYSTEM-only,
   agent and console proofs, framing and flow control through the relay, punch packet format and HMAC,
   candidate filtering (special addresses, `BrokerDirect` levels), path choice with a channel that comes up late,
@@ -715,6 +789,7 @@ VM on the lab network.
 | B-15 | An agent installed without a broker: *Assign to RemoteHub Broker* from RemoteHub, and `broker join` on the device with the secret on standard input – both register; `broker leave` removes it. |
 | B-16 | Two consoles: a folder created and a device moved on one appear on the other within 10 s; the device going offline (service stopped) and online again shows on both. |
 | B-17 | Retired device secret: a new install with it is refused (3300); devices registered with it keep working. |
+| B-18 | Two organisations on one broker: a console of one sees none of the other's devices; a console connected to both shows two synced folders with separate credentials; a device secret of one registers only into that one. |
 
 ### 17.3 Security (`SEC-BRK`, in `security-test-lab-design.md`, tag `Security`)
 
@@ -730,7 +805,7 @@ VM on the lab network.
 | SEC-BRK-08 | The `self` target with another port, or a `self` that the policy forbids | always the device's RDP port / refused |
 | SEC-BRK-09 | Session request flood from one console | limited (§12.4); the agent isn't flooded with `Incoming` |
 | SEC-BRK-10 | Broker audit and logs after sessions | no secrets, keys or tokens |
-| SEC-BRK-11 | Tenant separation: a console of tenant A asks for a device of tenant B | "not registered", nothing reaches the device |
+| SEC-BRK-11 | Organisation separation: a console of organisation A asks for, lists or seals a device of organisation B; a proof or seal made for A is replayed against B; a message names B's device ids on A's connection | "not registered" / refused; nothing reaches the device |
 | SEC-BRK-12 | A tampered broker (test build) swaps a device's fingerprint, renames it or moves it into another folder without a valid seal | the console refuses the record or ignores the move; no credentials sent |
 | SEC-BRK-13 | With only the device secret: register a device named like an existing one and seal a placement into *Servers* | lands in *New devices*, duplicate name flagged, the placement seal is invalid (no layout key) |
 | SEC-BRK-14 | A registered device id registered again with another key | refused; the original device keeps working |
@@ -740,7 +815,7 @@ VM on the lab network.
 
 | # | Question | Decision |
 |---|---|---|
-| D1 | Who runs the broker? | Self-hosted first (each organisation's own Cloudflare account). Long term also hosted for customers – tenant id from v1 (§16). |
+| D1 | Who runs the broker? | Self-hosted first (the operator's own Cloudflare account – a company or an MSP for its customers). Long term also hosted for customers (§16). |
 | D2 | Platform | **Cloudflare-native** (Workers, Durable Objects, D1), no Windows server. AWS later through the portable core (§12.1, §16). |
 | D3 | Console identity | ~~Join codes~~ (changed in v3): the organisation's **console secret** now, each console registering its own key (§6.3); long term client certificates from the **organisation's PKI** (§16). |
 | D4 | Windows 10 / Server 2019 | Relay only (no QUIC there) – acceptable. |
@@ -750,6 +825,7 @@ VM on the lab network.
 | D8 | Devices in the navigation | **A synced broker folder** per broker: shared structure, own credentials and settings per console; self-registered devices in *New devices* (§11.4). |
 | D9 | Who sees which devices | **Every console sees every device** of the organisation; the Windows sign-in and policy on each device still decide who gets in. Per-user visibility with RBAC (§16). |
 | D10 | Installing and assigning | Self-registration with `BROKER_URL` / `BROKER_SECRET` (MSI), *Assign to RemoteHub Broker* from RemoteHub, `broker join` on the device; the secret never by policy or on a command line (§6.4). |
+| D11 | Organisations | **Multi-organisation from day one:** an immutable organisation id (`o_…`) plus short and display names; carried in the secrets, URLs, proofs, seals and every stored name; taken only from the authenticated connection; limits per organisation; a console may connect to several (§5.2). |
 
 ## 19. Spike results
 
