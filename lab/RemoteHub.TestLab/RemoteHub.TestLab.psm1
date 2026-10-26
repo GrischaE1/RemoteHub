@@ -3523,8 +3523,14 @@ function Install-LabClient {
 function Start-LabClient {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [string[]]$Arguments = @(), [int]$TimeoutSec = 120, [switch]$KeepFirstStart)
-    $argText = ($Arguments | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ' '
-    $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create("& 'C:\Program Files\RemoteHub\RemoteHub.exe' $argText"))
+    # each argument in double quotes: Start-Process joins them with spaces as they are
+    $argText = ($Arguments | ForEach-Object { "'" + (('"' + $_ + '"') -replace "'", "''") + "'" }) -join ', '
+    # Standard error to a file of its own: a stack overflow prints its repeating frames only there (UI-AG-04, runs of
+    # 16.10.2026, 20261025-192331 and 20261026-032740: exception 0xc00000fd, nothing in the event log). UI-DESKTOP's
+    # EnsureClient reads the newest file.
+    $stderr = "C:\ProgramData\RemoteHubLab\session\remotehub-stderr-$((Get-Date).ToString('HHmmss'))-$([guid]::NewGuid().ToString('N').Substring(0, 6)).txt"
+    $start = "Start-Process -FilePath 'C:\Program Files\RemoteHub\RemoteHub.exe' -RedirectStandardError '$stderr'" + $(if ($argText) { " -ArgumentList @($argText)" })
+    $task = Start-LabInSession -Name $Name -Account $Account -ScriptBlock ([scriptblock]::Create($start))
     # The main window is up: its New button, or - when RemoteHub opens in the view used last, Notes or Scripts, which
     # have none (UI-NOTE-07, run 20261021-222745) - the rail's Remote Control, which every view has
     # A person server stuck in one search (run 20261022-092309, C-POLUPD2: right after an update it took the request and

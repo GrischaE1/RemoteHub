@@ -81,6 +81,9 @@ BeforeAll {
                         Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', '.NET Runtime', 'Windows Error Reporting' -and $_.Message -match 'RemoteHub' } |
                         Select-Object -First 10 | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.ProviderName) $($_.Id): $(($_.Message -split "`n" | Select-Object -First 15) -join ' ')" })
                 diagLog = @(Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 40 -ErrorAction SilentlyContinue)
+                # what the runtime printed as it ended (a stack overflow's frames: Start-LabClient keeps standard error)
+                stderr = @(Get-ChildItem 'C:\ProgramData\RemoteHubLab\session' -Filter 'remotehub-stderr-*.txt' -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 80 -ErrorAction SilentlyContinue)
             }
         }
         if (-not $state) { return }
