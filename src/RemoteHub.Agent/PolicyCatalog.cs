@@ -295,6 +295,8 @@ public static class PolicyCatalog
         ConnWords("RemoteDesktopVia", "Remoting and agent", "Remote desktop through", "Automatic", "Rdp", "Agent"),
         ConnFlag("AgentAutoSignIn", "Remoting and agent", "Sign in automatically when nobody is signed in"),
         ConnWords("AgentAutoSignInEndAction", "Remoting and agent", "When an automatic sign-in's connection ends", "Lock", "SignOut"),
+        new(PolicyProduct.Console, ConnectionsKey, "Reach", PolicyKind.Text, "Connection settings – Remoting and agent", "Reach – directly or through the RemoteHub Broker",
+            Words: ["Automatic", "Direct", "Broker"], Since: BrokerSince),
     ];
 
     public const string ConnectionsKey = "Connections";

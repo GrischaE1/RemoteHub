@@ -180,8 +180,10 @@ public partial class MainWindow
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (WhyNotMove(node, into) is { } why) { await Dialogs.Info(this, "Move", why); return; }
+        if (WhyNotBrokerChange(node) is { } broker) { await Dialogs.Info(this, "Move", broker); return; }
         if (!await ConfirmMove(node, into)) return;
         _vm.Move(node, into);
         node.IsSelected = true;
+        await PublishLayout(node);
     }
 }

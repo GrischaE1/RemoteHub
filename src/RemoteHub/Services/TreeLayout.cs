@@ -66,6 +66,7 @@ public static class TreeLayout
     /// </summary>
     public static string? WhyNot(NodeBase node, NodeBase? container)
     {
+        if (WhyNotBroker(node, container) is { } broker) return broker;
         if (container is null) return null;
         if (node == container || Containers(container).Contains(node)) return "An item can't be moved into itself.";
         if (container is NetworkShare) return "Only connections and folders can be placed here.";
@@ -83,6 +84,26 @@ public static class TreeLayout
             if (node is Folder && node.Descendants().OfType<Connection>().FirstOrDefault(c => c.Children.Count > 0) is { } inner)
                 return $"{inner.Name} in this folder is a jump host itself. Only one jump host is supported for now.";
         }
+        return null;
+    }
+
+    /// <summary>
+    /// The synced folder of a RemoteHub Broker (broker-design.md §11.4) holds the organisation's shared layout: its devices
+    /// and folders move only within it, into its folders, and nothing of the user's own goes in.
+    /// </summary>
+    private static string? WhyNotBroker(NodeBase node, NodeBase? container)
+    {
+        var from = node.BrokerRoot;
+        var to = container?.BrokerRoot;
+        if (from is null && to is null) return null;
+        if (node.Broker is { Kind: BrokerItemKind.Root })
+            return container is null ? null : "The folder of a RemoteHub Broker stays at the top of the navigation.";
+        if (node.Broker is { Kind: BrokerItemKind.NewDevices }) return $"{node.Name} stays where it is.";
+        if (from != to)
+            return from is not null ? "Devices and folders of a RemoteHub Broker stay in its synced folder."
+                : "The synced folder of a RemoteHub Broker holds only its own devices and folders – your own items can't go there.";
+        if (container is Connection) return "Devices of a RemoteHub Broker can't be reached through another device yet.";
+        if (container!.Broker is { Kind: BrokerItemKind.NewDevices }) return $"{container.Name} holds only devices that registered and aren't placed yet.";
         return null;
     }
 

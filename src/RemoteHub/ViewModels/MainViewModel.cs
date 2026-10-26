@@ -360,15 +360,24 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>The items in a folder or under a jump host (null = the top level).</summary>
     public ObservableCollection<NodeBase> ChildrenOf(NodeBase? container) => TreeLayout.ListOf(container, Items);
 
-    /// <summary>Folder (or jump host) that new items should go into, based on the current selection.</summary>
-    public NodeBase? TargetFolderForNew() => SelectedNode switch
+    /// <summary>
+    /// Folder (or jump host) that new items should go into, based on the current selection. The synced folder of a
+    /// RemoteHub Broker takes only folders (<paramref name="folder"/>), not into New devices; other new items go to the top level.
+    /// </summary>
+    public NodeBase? TargetFolderForNew(bool folder = false)
     {
-        Folder f => f,
-        Connection { Children.Count: > 0 } jumpHost => jumpHost,
-        Connection c => c.Parent,
-        NetworkShare { Server: null } s => s.Parent,
-        _ => null,
-    };
+        var target = SelectedNode switch
+        {
+            Folder f => f,
+            Connection { Children.Count: > 0 } jumpHost => jumpHost,
+            Connection c => c.Parent,
+            NetworkShare { Server: null } s => s.Parent,
+            _ => null,
+        };
+        if (target?.BrokerRoot is null) return target;
+        if (!folder) return null;
+        return target.Broker?.Kind == BrokerItemKind.NewDevices ? target.Parent : target;
+    }
 
     public void Add(NodeBase node, NodeBase? parent, int index = -1)
     {

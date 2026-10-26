@@ -30,7 +30,11 @@ public sealed record AppSettingsHost(
     Action Welcome,
     Func<Task> SaveEnrollmentFile,
     Func<Task> ReplaceEnrollmentSecret,
-    Func<Task> RevokeEnrollmentSecrets);
+    Func<Task> RevokeEnrollmentSecrets,
+    Func<IReadOnlyCollection<Broker.BrokerClient>>? Brokers = null,
+    Func<string, string, string, Task<Broker.BrokerClient>>? ConnectBroker = null,
+    Func<Broker.BrokerClient, Task>? DisconnectBroker = null,
+    Func<Action<Broker.BrokerClient>, IDisposable>? WatchBrokers = null);
 
 /// <summary>
 /// Edits a connection or folder – or, without a node, the global settings: RemoteHub's own settings on this PC
@@ -101,6 +105,7 @@ public partial class EditorWindow : FluentWindow
             Page(PageAppSettings, "General", SymbolRegular.Settings24, "Appearance and keys of RemoteHub on this PC.");
             Page(PageUpdateSettings, "Updates & privacy", SymbolRegular.ArrowSync24, "Stored on this PC.");
             Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials, where the settings are kept, backup.");
+            Page(PageBrokerSettings, "RemoteHub Broker", SymbolRegular.CloudLink24, "Reach your organisation's devices from anywhere – the organisations this PC is connected to, installing on devices, consoles.");
             Page(PageRecordingSettings, "Recordings", SymbolRegular.Record24, "Frame rate, video size, graphics card and folder of tab recordings.");
             Page(PageLogSettings, "Logs", SymbolRegular.DocumentBulletList24, "Audit log, how long it keeps entries, diagnostic log.");
             Page(PagePolicySettings, "Policies", SymbolRegular.LockClosed24, "What your organisation set for RemoteHub on this PC – through Group Policy, Intune or the registry.");
@@ -299,6 +304,7 @@ public partial class EditorWindow : FluentWindow
         EnrollmentSaveButton.Click += async (_, _) => { if (_host is not null) await _host.SaveEnrollmentFile(); RefreshDataPage(); };
         EnrollmentReplaceButton.Click += async (_, _) => { if (_host is not null) await _host.ReplaceEnrollmentSecret(); RefreshDataPage(); };
         EnrollmentRevokeButton.Click += async (_, _) => { if (_host is not null) await _host.RevokeEnrollmentSecrets(); RefreshDataPage(); };
+        InitBrokerPage();
         AuditButton.Click += (_, _) => _host?.AuditLog();
         // The diagnostic log has no user setting: say what is in effect (policy DiagnosticLog, DiagnosticLogRetentionDays, §6.5).
         DiagnosticLogText.Text = !AppPolicy.DiagnosticLog ? "Turned off by your organisation (Settings → Policies)."

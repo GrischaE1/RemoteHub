@@ -522,6 +522,43 @@ public static class AgentInstaller
         catch { return null; }
     }
 
+    // ------------------------------------------------------------------ RemoteHub Broker
+
+    /// <summary>
+    /// Assign to RemoteHub Broker (broker-design.md §6.4): <c>RemoteHubAgent.exe broker join &lt;url&gt;</c> on the device,
+    /// with the device secret on its standard input – a parameter of this fixed script, never in a command line or the
+    /// script's text. Answers "joined:&lt;what the agent said&gt;|failed:&lt;its error&gt;|notInstalled".
+    /// </summary>
+    private const string BrokerJoinScript = """
+        param([string]$Url, [string]$Secret)
+        $agent = Join-Path ${env:ProgramFiles} 'RemoteHub Agent\RemoteHubAgent.exe'
+        if (-not (Test-Path $agent)) { 'notInstalled'; return }
+        $psi = [Diagnostics.ProcessStartInfo]::new($agent, "broker join `"$Url`"")
+        $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+        $p = [Diagnostics.Process]::Start($psi)
+        $p.StandardInput.WriteLine($Secret); $p.StandardInput.Close()
+        $out = $p.StandardOutput.ReadToEnd(); $err = $p.StandardError.ReadToEnd(); $p.WaitForExit()
+        if ($p.ExitCode -ne 0) { "failed:$(($err + $out).Trim())" } else { "joined:$($out.Trim())" }
+        """;
+
+    /// <summary>
+    /// Joins the device's agent to a broker over a runspace with admin rights (the agent's own PowerShell or WinRM). Returns
+    /// what the agent said; throws <see cref="RemoteCommandException"/> with a readable reason.
+    /// </summary>
+    public static string JoinBroker(Runspace rs, string url, string deviceSecret)
+    {
+        if (BrokerProtocol.ParseBrokerUrl(url) is not { } broker) throw new RemoteCommandException("That isn't a broker address.");
+        var answer = RemoteFs.Invoke(rs, BrokerJoinScript, ("Url", broker.GetLeftPart(UriPartial.Authority)), ("Secret", deviceSecret)).LastOrDefault()?.ToString() ?? "";
+        if (answer == "notInstalled") throw new RemoteCommandException("The RemoteHub Agent isn't installed on the device.");
+        if (answer.StartsWith("joined:", StringComparison.Ordinal)) return answer["joined:".Length..];
+        var error = answer.StartsWith("failed:", StringComparison.Ordinal) ? answer["failed:".Length..] : answer;
+        // An agent older than the broker (0.22) doesn't know the command: its answer doesn't mention the broker or the secret.
+        var known = error.Contains("broker", StringComparison.OrdinalIgnoreCase) || error.Contains("secret", StringComparison.OrdinalIgnoreCase);
+        throw new RemoteCommandException(known ? $"The agent didn't join: {error}"
+            : $"The agent didn't join – agents older than version 0.22 don't know the RemoteHub Broker; update it first.{(error.Length > 0 ? $" ({error})" : "")}");
+    }
+
     // ------------------------------------------------------------------ credential provider
 
     /// <summary>

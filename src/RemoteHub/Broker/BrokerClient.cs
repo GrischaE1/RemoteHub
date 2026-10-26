@@ -48,6 +48,12 @@ public sealed class BrokerClient : IAsyncDisposable
     public bool IsConnected { get; private set; }
     public string KeyHash { get; private set; } = "";
 
+    /// <summary>
+    /// The organisation's newest device secret, from the keyring (null until it is read, or when it holds none): what new
+    /// devices join with – the MSI command line and Assign to RemoteHub Broker. Memory only, never logged.
+    /// </summary>
+    public string? DeviceSecret { get; private set; }
+
     /// <summary>Raised on a thread-pool thread – the receiver marshals to the dispatcher.</summary>
     public event Action<BrokerClient, IReadOnlyList<JsonObject>>? Changed;
     public event Action<BrokerClient, string, bool, long>? Presence;
@@ -211,13 +217,16 @@ public sealed class BrokerClient : IAsyncDisposable
         var answer = await RequestAsync(new JsonObject { ["t"] = "keyring" }).ConfigureAwait(false);
         var secrets = OpenKeyring(_keyring, _info.Org, _consoleSecretId, answer["blob"]?.GetValue<string>()) ?? [];
         var keys = new Dictionary<string, byte[]>();
+        string? newest = null;
         foreach (var text in secrets)
         {
             if (ParseSecret(text) is not { Kind: SecretKind.Device } d || d.Org != _info.Org) continue;
             keys[d.Id] = DeriveKey(d.Key, d.Org, KeyLabel.Record);
             CryptographicOperations.ZeroMemory(d.Key);
+            newest = text; // the keyring lists them oldest first
         }
         _recordKeys = keys;
+        DeviceSecret = newest;
         if (keys.Count == 0) DiagLog.Write("Broker: no device secret in this console's keyring – devices can't be checked or reached");
     }
 
@@ -462,5 +471,6 @@ public sealed class BrokerClient : IAsyncDisposable
         CryptographicOperations.ZeroMemory(_layout);
         CryptographicOperations.ZeroMemory(_keyring);
         foreach (var k in _recordKeys.Values) CryptographicOperations.ZeroMemory(k);
+        DeviceSecret = null;
     }
 }

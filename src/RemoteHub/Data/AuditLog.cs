@@ -17,6 +17,8 @@ public static class AuditEvents
     public const string BackupExported = "backup.exported", BackupImported = "backup.imported";
     public const string AgentInstalled = "agent.installed", AgentUninstalled = "agent.uninstalled", AgentCredentialProvider = "agent.credential_provider",
         AgentAutoSignIn = "agent.auto_sign_in", AgentEnrollment = "agent.enrollment";
+    // Settings → RemoteHub Broker: the organisation id and broker, never a secret.
+    public const string BrokerConnected = "broker.connected", BrokerDisconnected = "broker.disconnected";
     public const string DesktopDecoderStopped = "desktop.decoder_stopped";
     public const string FilesTransferred = "files.transferred";
     // Lock, restart … from a connection's Device actions: the action and its result, never a message's text.
@@ -54,6 +56,8 @@ public static class AuditEvents
         AgentCredentialProvider => "Credential provider installed or removed",
         AgentAutoSignIn => "Automatic sign-in",
         AgentEnrollment => "Agent enrollment secret",
+        BrokerConnected => "Connected to a RemoteHub Broker",
+        BrokerDisconnected => "Disconnected from a RemoteHub Broker",
         DesktopDecoderStopped => "Desktop decoder stopped",
         FilesTransferred => "Files transferred",
         DeviceAction => "Device action",
@@ -87,7 +91,7 @@ public static class AuditEvents
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
         ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted, NodeRestored, NodePurged]),
         ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
-        ("Files, recordings and agents", [FilesTransferred, DeviceAction, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn, AgentEnrollment]),
+        ("Files, recordings and agents", [FilesTransferred, DeviceAction, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn, AgentEnrollment, BrokerConnected, BrokerDisconnected]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
         ("Notes", [NoteAdded, NoteChanged, NoteDeleted, NoteRestored, NotesExported, NotesImported]),
         ("Scripts", [ScriptAdded, ScriptDeleted, ScriptRestored, ScriptDeployed, ScriptRun, ScriptsExported, ScriptsImported]),

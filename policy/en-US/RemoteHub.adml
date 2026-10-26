@@ -981,6 +981,22 @@ Registry: RemoteDesktopVia (REG_SZ: Automatic, Rdp, Agent).</string>
       <string id="Console_ConnRemoteDesktopVia_Rdp">RDP</string>
       <string id="Console_ConnRemoteDesktopVia_Agent">RemoteHub Agent</string>
 
+      <string id="Console_ConnReach">Reach – directly or through the RemoteHub Broker</string>
+      <string id="Console_ConnReach_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Applies to devices in the synced folder of a RemoteHub Broker – the agent and RDP alike.
+
+Enabled: the value chosen here. Automatic tries the device's own address for 1.5 seconds, then goes through the broker; Directly only never uses the broker; Through the RemoteHub Broker only never tries the device's own address.
+
+Disabled or Not configured: the user decides (default: Automatic).
+
+With "Allow the RemoteHub Broker" disabled, devices are reached only directly.
+
+Registry: Reach (REG_SZ: Automatic, Direct, Broker).</string>
+      <string id="Console_ConnReach_Automatic">Automatic – directly, otherwise through the RemoteHub Broker</string>
+      <string id="Console_ConnReach_Direct">Directly only</string>
+      <string id="Console_ConnReach_Broker">Through the RemoteHub Broker only</string>
+
       <string id="Console_ConnAgentAutoSignIn">Sign in automatically when nobody is signed in</string>
       <string id="Console_ConnAgentAutoSignIn_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
 
@@ -1551,6 +1567,9 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Console_ConnRemoteDesktopVia">
         <dropdownList refId="RemoteDesktopVia" noSort="true">Remote desktop through:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnReach">
+        <dropdownList refId="Reach" noSort="true">Reach:</dropdownList>
       </presentation>
       <presentation id="Console_ConnAgentAutoSignInEndAction">
         <dropdownList refId="AgentAutoSignInEndAction" noSort="true">When an automatic sign-in's connection ends:</dropdownList>

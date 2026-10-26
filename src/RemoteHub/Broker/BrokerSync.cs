@@ -22,13 +22,13 @@ public sealed class BrokerSync(ObservableCollection<NodeBase> top, Action change
         var root = top.OfType<Folder>().FirstOrDefault(f => f.Broker is { Kind: BrokerItemKind.Root } r && r.Connection == b.Id);
         if (root is null)
         {
-            root = new Folder { Name = RootName(b), Broker = new BrokerRef { Connection = b.Id, Kind = BrokerItemKind.Root }, IsExpanded = true };
+            root = new Folder { Name = RootName(b), Icon = "CloudLink24", Broker = new BrokerRef { Connection = b.Id, Kind = BrokerItemKind.Root }, IsExpanded = true };
             top.Add(root);
             changed();
         }
         if (root.Children.OfType<Folder>().All(f => f.Broker?.Kind != BrokerItemKind.NewDevices))
         {
-            var fresh = new Folder { Name = NewDevicesName, Broker = new BrokerRef { Connection = b.Id, Kind = BrokerItemKind.NewDevices }, Parent = root };
+            var fresh = new Folder { Name = NewDevicesName, Icon = "FolderAdd24", Broker = new BrokerRef { Connection = b.Id, Kind = BrokerItemKind.NewDevices }, Parent = root };
             root.Children.Insert(0, fresh);
             changed();
         }
@@ -47,13 +47,20 @@ public sealed class BrokerSync(ObservableCollection<NodeBase> top, Action change
 
     public void SetConnected(BrokerConnection b, bool connected)
     {
-        foreach (var n in Root(b).Descendants().Prepend(Root(b)))
-            if (n.Broker is { } r) r.Connected = connected;
+        var root = Root(b);
+        foreach (var n in root.Descendants().Prepend(root))
+        {
+            if (n.Broker is not { } r || r.Connected == connected) continue;
+            r.Connected = connected;
+            n.RefreshRoute();
+        }
     }
 
     public void Presence(BrokerConnection b, string deviceId, bool online)
     {
-        if (Device(Root(b), deviceId) is { Broker: { } r }) r.Online = online;
+        if (Device(Root(b), deviceId) is not { Broker: { } r } node) return;
+        r.Online = online;
+        node.RefreshRoute();
     }
 
     /// <summary>Applies changed items: folders first (so places exist), then devices, then placements.</summary>
@@ -153,6 +160,8 @@ public sealed class BrokerSync(ObservableCollection<NodeBase> top, Action change
         node.Agent.Label = computer;
         node.Agent.Version = item["agentVersion"] is JsonValue av && av.TryGetValue<string>(out var ver) ? ver : node.Agent.Version;
         if (isSealed) node.Host = domain.Length > 0 ? $"{computer}.{domain}" : computer;
+        r.Connected = client.IsConnected || r.Connected;
+        node.RefreshRoute();
         return true;
     }
 

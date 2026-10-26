@@ -337,6 +337,12 @@ public sealed partial class EditorViewModel : ObservableObject
             "For a session RemoteHub signed in automatically: when you disconnect, it is locked (you can come back to open work) or signed " +
             "out. A connection that drops is always signed out after 2 minutes if it isn't continued. The device's policy " +
             "(\"AutoSignInEndAction\") may decide instead.", autoSignInOff));
+        PsRows.Add(Row("Reach", own.Reach, parent.Reach,
+            [(BrokerReach.Automatic, "Automatic – directly, otherwise through the RemoteHub Broker"), (BrokerReach.Direct, "Directly only"), (BrokerReach.Broker, "Through the RemoteHub Broker only")],
+            (o, v) => o.Reach = (BrokerReach?)v,
+            "For devices in a RemoteHub Broker's synced folder – the agent and RDP alike. Automatic tries the device's own address for 1.5 seconds " +
+            "(in the same network), then goes through the broker. Without a connected broker it is reached directly.",
+            Features.IsAllowed(Feature.Broker) ? null : Features.TurnedOff));
         PsRows.Add(Row("Use HTTPS", own.PsUseSsl, parent.PsUseSsl,
             [(false, "Off (HTTP, port 5985 – encrypted by Kerberos/NTLM)"), (true, "On (HTTPS, port 5986)")],
             (o, v) => o.PsUseSsl = (bool?)v,

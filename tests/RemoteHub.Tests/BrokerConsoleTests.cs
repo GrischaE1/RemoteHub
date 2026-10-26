@@ -60,6 +60,8 @@ public class BrokerConsoleTests : IDisposable
         var renamed = (JsonObject)record.DeepClone();
         renamed["computerName"] = "DC01";
         Assert.False(client.RecordIsSealed(renamed, item["seal"]!.GetValue<string>()));
+        // The device secret for the install command and Assign to RemoteHub Broker comes from the same keyring.
+        Assert.Equal(new BrokerProtocol.Secret(BrokerProtocol.SecretKind.Device, org.Id, org.DeviceSecretId, org.DeviceSecret).ToString(), client.DeviceSecret);
 
         // The agent's HTTPS endpoint through a relayed session, TLS to the pin from the sealed record.
         var route = new BrokerRoute(client, agentHost.DeviceId, item["secretId"]?.GetValue<string>(), "PC-0815");
