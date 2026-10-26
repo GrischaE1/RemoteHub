@@ -72,8 +72,8 @@ public class DecoderProcessTests
     public void A_session_gives_up_after_more_than_three_decoder_failures_in_a_minute()
     {
         var now = new DateTime(2026, 10, 23, 12, 0, 0, DateTimeKind.Utc);
-        var stops = new List<(string Reason, bool GaveUp)>();
-        using var session = new SessionDecoder(() => throw new DecoderFailedException("didn't start"), (r, g) => stops.Add((r, g)), () => now);
+        var stops = new List<(string Reason, bool GaveUp, bool Starting)>();
+        using var session = new SessionDecoder(() => throw new DecoderFailedException("didn't start"), (r, g, s) => stops.Add((r, g, s)), () => now);
         for (var i = 0; i < 3; i++)
         {
             Assert.Throws<DecoderFailedException>(() => session.Use(d => 0));
@@ -84,6 +84,7 @@ public class DecoderProcessTests
         Assert.True(session.GaveUp);
         Assert.Equal([false, false, false, true], stops.Select(s => s.GaveUp));
         Assert.All(stops, s => Assert.Equal("didn't start", s.Reason));
+        Assert.All(stops, s => Assert.True(s.Starting)); // reported as this PC's, not the device's
         Assert.Throws<DecoderFailedException>(() => session.Use(d => 0)); // nothing more: no fifth start
         Assert.Equal(4, stops.Count);
     }
@@ -92,7 +93,7 @@ public class DecoderProcessTests
     public void Failures_spread_over_more_than_a_minute_are_not_counted_together()
     {
         var now = new DateTime(2026, 10, 23, 12, 0, 0, DateTimeKind.Utc);
-        using var session = new SessionDecoder(() => throw new DecoderFailedException("x"), (_, _) => { }, () => now);
+        using var session = new SessionDecoder(() => throw new DecoderFailedException("x"), (_, _, _) => { }, () => now);
         for (var i = 0; i < 10; i++)
         {
             Assert.Throws<DecoderFailedException>(() => session.Use(d => 0));
@@ -160,7 +161,7 @@ public class DecoderProcessTests
     public void A_decoder_that_dies_is_reported_and_the_session_starts_a_new_one()
     {
         var stops = new List<string>();
-        using var session = new SessionDecoder(() => DecoderHost.Start(), (r, _) => stops.Add(r));
+        using var session = new SessionDecoder(() => DecoderHost.Start(), (r, _, _) => stops.Add(r));
         int first;
         try { first = session.Use(d => d.ProcessId); }
         catch (DecoderUnavailableException ex) { Skip.If(true, ex.Message); throw; }
@@ -178,7 +179,7 @@ public class DecoderProcessTests
     public void Closing_the_session_ends_a_waiting_decoder_at_once_and_isnt_reported_as_a_failure()
     {
         var stops = new List<string>();
-        var session = new SessionDecoder(() => DecoderHost.Start(), (r, _) => stops.Add(r));
+        var session = new SessionDecoder(() => DecoderHost.Start(), (r, _, _) => stops.Add(r));
         try { session.Use(d => d.ProcessId); }
         catch (DecoderUnavailableException ex) { Skip.If(true, ex.Message); throw; }
         // The probes wait a few seconds for the network: a call that is still waiting when the tab closes.
@@ -303,5 +304,19 @@ public class DecoderProcessTests
         Assert.Equal("The picture can't be shown – the device keeps sending data RemoteHub can't decode. Disconnect and check the device.", session.StatusText);
         Assert.Contains(Sta.All<TextBlock>(view), t => t.IsVisible && t.Text == session.StatusText);
         Assert.Contains(Sta.All<Button>(view), b => Equals(b.Content, "Connect") && b.IsVisible); // (the choose page has one too, hidden)
+    });
+
+    [Fact]
+    public void Giving_up_on_decoders_that_never_started_doesnt_blame_the_device() => Sta.Run(owner =>
+    {
+        var session = new AgentDesktopSession(new Connection { Name = "pc", Host = "pc.contoso.local" });
+        owner.Content = new AgentDesktopView(session, () => { }, () => { }, () => { }, () => DesktopQualityPreset.Find(null), (_, _) => { },
+            () => new DesktopResolution(DesktopResolutionKind.Fit), _ => { });
+        Sta.Pump();
+        session.DecoderStopped("no answer within 10 s while starting", gaveUp: true, starting: true);
+        Sta.Pump();
+        Assert.Equal(DesktopPhase.Ended, session.Phase);
+        Assert.Equal("The picture can't be shown – RemoteHub's picture decoder doesn't start on this PC. Connect again; if it keeps happening, restart RemoteHub.", session.StatusText);
+        Assert.DoesNotContain("device keeps sending", session.StatusText);
     });
 }

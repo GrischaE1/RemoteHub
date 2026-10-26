@@ -1373,14 +1373,18 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     /// <summary>
     /// A decoder of this session misbehaved and was ended (docs/decoder-isolation-design.md §3.4): logged without the
-    /// device's name, audited – an attack leaves a trace – and after too many the session ends.
+    /// device's name, audited – an attack leaves a trace – and after too many the session ends. One that didn't start
+    /// hadn't seen anything from the device: the end says so instead of blaming the device (lab, runs of 25–26 October:
+    /// "the device keeps sending data" after three decoders didn't start in 10 s).
     /// </summary>
-    internal void DecoderStopped(string reason, bool gaveUp)
+    internal void DecoderStopped(string reason, bool gaveUp, bool starting = false)
     {
         Services.DiagLog.Write($"Agent desktop: decoder stopped – {reason}{(gaveUp ? "; giving up" : "")}");
         Data.AuditLog.Write(Data.AuditEvents.DesktopDecoderStopped, Connection, gaveUp ? reason + " – the session was ended" : reason);
         if (gaveUp)
-            _ui.BeginInvoke(() => Fail("The picture can't be shown – the device keeps sending data RemoteHub can't decode. Disconnect and check the device."));
+            _ui.BeginInvoke(() => Fail(starting
+                ? "The picture can't be shown – RemoteHub's picture decoder doesn't start on this PC. Connect again; if it keeps happening, restart RemoteHub."
+                : "The picture can't be shown – the device keeps sending data RemoteHub can't decode. Disconnect and check the device."));
     }
 
     /// <summary>
