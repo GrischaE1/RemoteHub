@@ -186,7 +186,9 @@ public class DecoderProcessTests
         Thread.Sleep(500);
         var watch = Stopwatch.StartNew();
         session.Dispose();
-        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"closing took {watch.Elapsed}");
+        // Waiting for the probes would take about 5 s more (two connects of up to 3 s each); 1 s was too tight for a
+        // busy CI runner (1.54 s in PR #75's run).
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2.5), $"closing took {watch.Elapsed}");
         var ex2 = Assert.Throws<AggregateException>(() => waiting.Wait(TimeSpan.FromSeconds(5)));
         Assert.IsType<DecoderFailedException>(ex2.InnerException);
         Assert.Empty(stops);
