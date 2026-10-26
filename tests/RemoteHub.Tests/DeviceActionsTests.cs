@@ -68,20 +68,22 @@ public class DeviceActionsTests
     /// dropped that): elevated it lists only real accounts, one per session; otherwise it says why rather than "nobody".
     /// </summary>
     [Fact]
-    public void The_signed_in_users_script_lists_real_accounts_or_says_it_lacks_an_administrators_rights()
+    public async Task The_signed_in_users_script_lists_real_accounts_or_says_it_lacks_an_administrators_rights()
     {
         var script = DeviceActions.Scripts.Single(s => s.Name == "SignedInScript").Script;
         var psi = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"),
             "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script)))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         using var ps = System.Diagnostics.Process.Start(psi)!;
-        var output = ps.StandardOutput.ReadToEndAsync();
-        var errors = ps.StandardError.ReadToEndAsync();
+        var outputRead = ps.StandardOutput.ReadToEndAsync();
+        var errorsRead = ps.StandardError.ReadToEndAsync();
         Assert.True(ps.WaitForExit(60_000), "Windows PowerShell didn't finish");
+        var output = await outputRead;
+        var errors = await errorsRead;
         if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
         {
-            Assert.Equal("", errors.Result.Trim());
-            var users = DeviceActions.ParseUsers(output.Result.Split('\n', StringSplitOptions.TrimEntries));
+            Assert.Equal("", errors.Trim());
+            var users = DeviceActions.ParseUsers(output.Split('\n', StringSplitOptions.TrimEntries));
             Assert.All(users, u =>
             {
                 Assert.True(u.SessionId > 0);
@@ -90,7 +92,7 @@ public class DeviceActionsTests
             });
             Assert.Equal(users.Count, users.Select(u => u.SessionId).Distinct().Count());
         }
-        else Assert.Contains("isn't an administrator on the device", errors.Result + output.Result);
+        else Assert.Contains("isn't an administrator on the device", errors + output);
     }
 
     [Fact]
