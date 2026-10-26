@@ -188,11 +188,11 @@ public sealed partial class AgentDesktopSession : SessionBase
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    private static Task<AgentDesktopClient> Open(PsTarget target) => Task.Run(async () =>
+    private static Task<AgentDesktopClient> Open(PsTarget target, CancellationToken ct = default) => Task.Run(async () =>
     {
         var user = PsRemoting.AgentUserName(target.Credentials) ?? throw new InvalidOperationException("The RemoteHub Agent needs credentials (a Windows account of the device).");
         var cred = new PSCredential(user, target.Credentials.Password?.ToSecureString() ?? Empty());
-        return await AgentDesktopClient.ConnectAsync(target.Host, target.Agent!, cred, CancellationToken.None);
+        return await AgentDesktopClient.ConnectAsync(target.Host, target.Agent!, cred, ct);
     });
 
     private void Attach(AgentDesktopClient client, int gen)
@@ -229,15 +229,20 @@ public sealed partial class AgentDesktopSession : SessionBase
         Phase = DesktopPhase.Reconnecting;
         State = SessionState.Connecting;
         StatusText = $"The connection dropped ({why}). Reconnecting…";
-        ReconnectDetail = Sentence(why);
+        // The attempt is named from the start: with the network cut, one attempt can wait for its connect for most of the
+        // window, and the tab said nothing more than "reconnecting" (lab UI-NET-03, runs of 26 October).
+        ReconnectDetail = $"{Sentence(why)}\nAttempt 1 – trying for up to {ReconnectWindow.TotalSeconds:0} s.";
         Services.DiagLog.Write("Agent desktop: connection lost – reconnecting");
         var until = DateTime.UtcNow + ReconnectWindow;
         for (var attempt = 1; !cancel.IsCancellationRequested && !_closed; attempt++)
         {
             var gen = ++_generation;
+            // an attempt ends with the window: "within 30 s" holds even when a connect would wait longer (it ended after 39 s)
+            using var attemptEnds = CancellationTokenSource.CreateLinkedTokenSource(cancel.Token);
+            attemptEnds.CancelAfter(Max(until - DateTime.UtcNow, TimeSpan.FromSeconds(1)));
             try
             {
-                var client = await Open(target);
+                var client = await Open(target, attemptEnds.Token);
                 if (cancel.IsCancellationRequested || _closed || gen != _generation) { client.Dispose(); return; }
                 Attach(client, gen);
                 // The same session – for the console, the console's current one (it may have moved).
@@ -265,6 +270,8 @@ public sealed partial class AgentDesktopSession : SessionBase
             }
         }
     }
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
     /// <summary>"Connection lost: the remote party …" → "The remote party …."</summary>
     private static string Sentence(string why)
