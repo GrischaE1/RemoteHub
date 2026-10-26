@@ -241,3 +241,23 @@ public static class CrashReporter
         return s.Length <= max ? s : s[..max] + "…";
     }
 }
+
+/// <summary>
+/// An unexpected error on the UI thread: reported like a crash and shown in one box at a time. The box pumps messages,
+/// so an operation that fails again while it is open came back here and opened another box inside it, until the stack
+/// overflowed and RemoteHub ended (lab UI-AG-04, runs of 16.10.2026 to 26.10.2026: 0xc00000fd). Errors while a box is
+/// open are reported but not shown.
+/// </summary>
+public static class UnexpectedErrors
+{
+    private static bool _showing;
+
+    public static void Handle(Exception ex, Action<string> show)
+    {
+        CrashReporter.RecordHandled(ex);
+        if (_showing) return;
+        _showing = true;
+        try { show(ex.Message); }
+        finally { _showing = false; }
+    }
+}

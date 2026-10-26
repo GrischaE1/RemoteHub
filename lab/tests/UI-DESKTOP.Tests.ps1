@@ -84,6 +84,9 @@ BeforeAll {
                 # what the runtime printed as it ended (a stack overflow's frames: Start-LabClient keeps standard error)
                 stderr = @(Get-ChildItem 'C:\ProgramData\RemoteHubLab\session' -Filter 'remotehub-stderr-*.txt' -ErrorAction SilentlyContinue |
                         Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 80 -ErrorAction SilentlyContinue)
+                # the errors RemoteHub reported itself (CrashReporter, redacted): which operation kept failing
+                crashReports = @(Get-ChildItem "C:\Users\$u\AppData\Local\RemoteHub\crash" -Filter 'crash-*.json' -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime | Select-Object -Last 3 | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -ErrorAction SilentlyContinue })
             }
         }
         if (-not $state) { return }
