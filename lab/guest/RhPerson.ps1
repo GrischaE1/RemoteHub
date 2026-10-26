@@ -65,8 +65,10 @@ public static class RhNative
                     else j.Append(ch);
                 }
                 j.Append("\"}");
-                File.WriteAllText(o + ".part", j.ToString());
-                File.Move(o + ".part", o);
+                // its own temporary name: the action's answer may be on its way at the same moment
+                var part = o + "." + Guid.NewGuid().ToString("N") + ".part";
+                File.WriteAllText(part, j.ToString());
+                File.Move(part, o);
             }
             catch { }
         };
@@ -180,7 +182,9 @@ function Out-Json($o) {
     # -InputObject: an empty list is "[]" (piped, Windows PowerShell writes nothing - an answer that looks missing)
     $j = ConvertTo-Json -InputObject $o -Depth 6 -Compress
     # written under another name, then renamed: the reader never sees half an answer
-    if ($Out -and $Do -ne 'marker') { [IO.File]::WriteAllText("$Out.part", $j); Move-Item -LiteralPath "$Out.part" -Destination $Out -Force } else { $j }
+    # each writer its own temporary name: with one shared "<out>.part" the server's late answer or the crash handler
+    # took it away before the move (run 20261025-192331: "Cannot move item ... .part does not exist")
+    if ($Out -and $Do -ne 'marker') { $part = "$Out.$([guid]::NewGuid().ToString('N')).part"; [IO.File]::WriteAllText($part, $j); Move-Item -LiteralPath $part -Destination $Out -Force } else { $j }
 }
 
 # Windows OCR on a bitmap: words with their boxes (bitmap pixels)
@@ -403,8 +407,9 @@ switch ($Do) {
                 }
                 else { @{ serveError = $why } }
                 Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
-                [IO.File]::WriteAllText("$($req.out).part", (ConvertTo-Json -InputObject $late -Depth 4 -Compress))
-                Move-Item -LiteralPath "$($req.out).part" -Destination $req.out -Force
+                $part = "$($req.out).$([guid]::NewGuid().ToString('N')).part"
+                [IO.File]::WriteAllText($part, (ConvertTo-Json -InputObject $late -Depth 4 -Compress))
+                Move-Item -LiteralPath $part -Destination $req.out -Force
                 [Diagnostics.Process]::GetCurrentProcess().Kill()
             }
             $idleUntil = (Get-Date).AddMinutes(30)

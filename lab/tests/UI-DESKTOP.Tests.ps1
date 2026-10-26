@@ -130,6 +130,8 @@ foreach ($w in @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Childre
     foreach ($i in @($w.FindAll([Windows.Automation.TreeScope]::Descendants, $isImg))) {
         if ($i.Current.IsOffscreen) { continue }
         $b = $i.Current.BoundingRectangle
+        # an image not laid out answers Rect.Empty (infinite X, -infinite width): its "area" beat every real one (run 20261025-192331)
+        if ($b.IsEmpty -or $b.Width -le 0 -or $b.Height -le 0) { continue }
         if ($b.Width * $b.Height -gt $area) { $area = $b.Width * $b.Height; $best = $b }
     }
 }
