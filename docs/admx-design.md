@@ -162,6 +162,7 @@ The features are grouped by **how RemoteHub reaches the device**, because RDP, t
 | `AllowAgentServices` | The services tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentProcesses` | The processes tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentDeviceActions` *(0.21.0)* | A connection's *Device actions* (lock, message, sign out, restart, shut down, Group Policy, Intune) through the agent | Agent `PowerShellEnabled`, right `PowerShell` |
+| `AllowBroker` *(0.22.0)* | The RemoteHub Broker on this PC: *Settings → RemoteHub Broker* says why and offers nothing, synced folders aren't kept up to date, their devices are reached only directly | Agent `BrokerEnabled` |
 | `AllowAgentInstall` | *Install / update / remove RemoteHub Agent*, every method. For organisations that deploy the agent with Intune or SCCM. | – |
 | `AllowCredentialProviderInstall` | *Install / remove credential provider* and the install dialog's *Allow automatic sign-in* | Agent `NoUserBehavior` |
 | `DisableAgentAutoSignIn` *(existing, inverted)* | Automatic sign-in through the agent | Agent `NoUserBehavior`, right `AutoSignIn` |
@@ -359,6 +360,7 @@ desktop.
 | `RemoteDesktopVia` | SZ `Automatic`, `Rdp`, `Agent` | Automatic |
 | `AgentAutoSignIn` | DWORD 0/1 | 0 |
 | `AgentAutoSignInEndAction` | SZ `Lock`, `SignOut` | Lock |
+| `Reach` *(0.22.0)* | SZ `Automatic`, `Direct`, `Broker` | Automatic |
 
 Enums are written as words, not numbers, so a policy doesn't depend on the order of a C# enum.
 
@@ -409,6 +411,8 @@ read, nothing is allowed (unchanged). **New** marks values the agent doesn't rea
 | `PowerShellEnabled` **(new)** | DWORD 0/1 | 1 | Every PowerShell session through the agent, and so PowerShell, files, registry, services, processes and updates through the agent. They all run in that session, which is why the agent can't block them one by one (§14 Q4). |
 | `DesktopEnabled` | DWORD 0/1 | 1 | The remote desktop. |
 | `TunnelEnabled` | DWORD 0/1 | 1 | Use as a jump host. |
+| `BrokerEnabled` *(0.22.0)* | DWORD 0/1 | 1 | The RemoteHub Broker: no connection to it, no session through it. With it: `BrokerUrl` (the only broker), `BrokerConsoles` (the only consoles), `BrokerProxy`, `BrokerKeepAliveSeconds` (30–90, 60); category *RemoteHub Agent → RemoteHub Broker*. |
+| `TunnelOwnPorts` *(0.22.0)* | MULTI_SZ | `RDP` | Ports of the device itself a jump or broker session may open (`RDP` = its RDP port, or numbers). |
 | `AuditToEventLog` | DWORD 0/1 | 1 | Audit entries in the Windows Application log. |
 
 ### 9.2 Access rights (subkey `Rights`)
@@ -909,7 +913,8 @@ What was built, and where it differs from §6, §7 and §11.2:
   locked row shows the policy's value at every level (global defaults, folders, connections) with "Set by your
   organisation", and `Apply` skips it (`OptionRow.FixedByPolicy`), keeping the stored value (§4.3).
 - **Conflicts:** Settings → Policies shows a connection value that asks for a blocked feature in amber
-  (`PolicyRow.Conflict`): `RemoteDesktopVia` = Agent or Rdp, `UseAgent`, `AgentAutoSignIn`, `PsRemoting`, `PsUseSsl`.
+  (`PolicyRow.Conflict`): `RemoteDesktopVia` = Agent or Rdp, `UseAgent`, `AgentAutoSignIn`, `PsRemoting`, `PsUseSsl`,
+  `Reach` = Broker with `AllowBroker` = 0.
   With `RemoteDesktopVia` = Agent by policy and the agent desktop blocked, opening a connection is refused instead of
   falling back to RDP.
 - **Where they're locked:** Settings → General (theme, keys), *Updates & privacy* (on by policy: only the switch),

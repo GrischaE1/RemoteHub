@@ -105,7 +105,7 @@ public partial class EditorWindow : FluentWindow
             Page(PageAppSettings, "General", SymbolRegular.Settings24, "Appearance and keys of RemoteHub on this PC.");
             Page(PageUpdateSettings, "Updates & privacy", SymbolRegular.ArrowSync24, "Stored on this PC.");
             Page(PageDataSettings, "Security & storage", SymbolRegular.Shield24, "Startup protection, saved credentials, where the settings are kept, backup.");
-            Page(PageBrokerSettings, "RemoteHub Broker", SymbolRegular.CloudLink24, "Reach your organisation's devices from anywhere – the organisations this PC is connected to, installing on devices, consoles.");
+            Page(PageBrokerSettings, "RemoteHub Broker", SymbolRegular.CloudLink24, "Organisations this PC is connected to, installing the agent on devices, consoles.");
             Page(PageRecordingSettings, "Recordings", SymbolRegular.Record24, "Frame rate, video size, graphics card and folder of tab recordings.");
             Page(PageLogSettings, "Logs", SymbolRegular.DocumentBulletList24, "Audit log, how long it keeps entries, diagnostic log.");
             Page(PagePolicySettings, "Policies", SymbolRegular.LockClosed24, "What your organisation set for RemoteHub on this PC – through Group Policy, Intune or the registry.");

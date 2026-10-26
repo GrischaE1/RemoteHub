@@ -74,9 +74,12 @@ public abstract partial class NodeBase : ObservableObject
     [JsonIgnore] public string? RouteHint => JumpHost is { } j ? $"via {j.Name}"
         : Broker is { Kind: BrokerItemKind.Device } r ? (!r.Sealed ? "not sealed" : !r.Connected ? null : r.Online switch { true => "online", false => "offline", null => null })
         : null;
-    /// <summary>The jump host can be used: it has a RemoteHub Agent. A broker device: sealed, and not known to be offline.</summary>
+    /// <summary>
+    /// The jump host can be used: it has a RemoteHub Agent. A broker device: its record is sealed (offline it may still
+    /// answer directly, so that isn't a warning).
+    /// </summary>
     [JsonIgnore] public bool RouteUsable => JumpHost is { } j ? j.Agent is { Fingerprint.Length: > 0 }
-        : Broker is not { Kind: BrokerItemKind.Device } r || (r.Sealed && r.Online != false);
+        : Broker is not { Kind: BrokerItemKind.Device } r || r.Sealed;
     [JsonIgnore] public string? RouteToolTip => JumpHost is { } j
         ? RouteUsable ? $"Reached through {j.Name} (its RemoteHub Agent is the jump host). Move it out of {j.Name} to connect directly."
             : $"{j.Name} has no RemoteHub Agent – install it there to reach the items below it."

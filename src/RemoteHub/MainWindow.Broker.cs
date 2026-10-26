@@ -196,6 +196,8 @@ public partial class MainWindow
         var offered = c is { Agent: { Status: AgentStatus.Installed, Fingerprint.Length: > 0 }, BrokerRoot: null } && connected.Count > 0
                       && Features.WhyNot(Feature.Broker) is null;
         CmAgentBroker.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
+        // A group opening on hover (like Move under) has no "…"; a single entry opens the question.
+        CmAgentBroker.Header = connected.Count > 1 ? "Assign to RemoteHub Broker" : "Assign to RemoteHub Broker…";
         if (!offered || connected.Count == 1) return;
         foreach (var b in connected)
             CmAgentBroker.Items.Add(MenuEntry(b.Info.OrgName.Length > 0 ? b.Info.OrgName : b.Info.Org, SymbolRegular.Building24, () => _ = AssignToBroker(c!, b),

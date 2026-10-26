@@ -26,6 +26,9 @@ function Get-LabConfig {
     }
     $local = Get-Content $localPath -Raw | ConvertFrom-Json
     $cfg | Add-Member -NotePropertyName Password -NotePropertyValue $local.Password -Force
+    # the RemoteHub Broker's admin token for B-BRK (optional, like lab.json "Broker")
+    $token = if ($local.PSObject.Properties['BrokerToken']) { $local.BrokerToken } else { '' }
+    $cfg | Add-Member -NotePropertyName BrokerToken -NotePropertyValue $token -Force
     $script:Config = $cfg
     $cfg
 }
@@ -3159,6 +3162,70 @@ function Get-LabAgentPolicy {
         foreach ($prop in $p.PSObject.Properties) { if ($prop.Name -notlike 'PS*') { $o[$prop.Name] = $prop.Value } }
         [pscustomobject]$o
     }
+}
+
+# The RemoteHub Broker the lab uses (docs/test-lab-spec.md, "RemoteHub Broker"): lab.json "Broker": { "Url": ... } -
+# "{host}" in it stands for the host's address towards the VM - and the admin token from lab.local.json "BrokerToken".
+# $null when either is missing: B-BRK then skips with the reason. The token is never logged or written to evidence.
+function Get-LabBroker {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $cfg = Get-LabConfig
+    if (-not $cfg.PSObject.Properties['Broker'] -or -not $cfg.Broker.Url -or -not $cfg.BrokerToken) { return $null }
+    $url = $cfg.Broker.Url
+    if ($url -like '*{host}*') { $url = $url.Replace('{host}', (Get-LabHostAddress -Name $Name)) }
+    [pscustomobject]@{ Url = $url.TrimEnd('/'); Token = $cfg.BrokerToken }
+}
+
+# A throwaway organisation at the lab's broker (harness "broker --kind org"): Org, Name, DeviceSecret, DeviceSecretId,
+# ConsoleSecret - test values made for this run only.
+function New-LabBrokerOrg {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker)
+    Invoke-LabHarness @('broker', '--kind', 'org', '--url', $Broker.Url, '--token', $Broker.Token) -TimeoutSec 60
+}
+
+function Remove-LabBrokerOrg {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)][string]$Org)
+    $null = Invoke-LabHarness @('broker', '--kind', 'remove-org', '--url', $Broker.Url, '--token', $Broker.Token, '--org', $Org) -TimeoutSec 60
+}
+
+# The organisation's devices as the broker's admin API lists them (id, record, secretId, online, removed).
+function Get-LabBrokerDevice {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)][string]$Org)
+    @(Invoke-LabHarness @('broker', '--kind', 'devices', '--url', $Broker.Url, '--token', $Broker.Token, '--org', $Org) -TimeoutSec 60)
+}
+
+# Waits until the organisation lists a device with the VM's computer name in the online state wanted (-Offline: gone
+# offline); returns it. The timeout says what didn't happen.
+function Wait-LabBrokerDevice {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Broker,
+        [Parameter(Mandatory)][string]$Org,
+        [Parameter(Mandatory)][string]$ComputerName,
+        [switch]$Offline,
+        [int]$TimeoutSec = 120
+    )
+    $until = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $d = Get-LabBrokerDevice -Broker $Broker -Org $Org | ForEach-Object { $_ } |
+            Where-Object { $_.record.computerName -eq $ComputerName -and -not $_.removed } | Select-Object -First 1
+        if ($d -and [bool]$d.online -ne $Offline.IsPresent) { return $d }
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $until)
+    $state = if ($Offline) { 'offline' } else { 'online' }
+    throw "Timed out after $TimeoutSec s: $ComputerName didn't show $state at the RemoteHub Broker (organisation $Org)."
+}
+
+# RemoteHub's way to the device through the broker (harness "broker --kind health"): Connect with the console secret,
+# the device's sealed record, then the agent's health through a relayed session pinned to that record.
+function Test-LabBrokerHealth {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)]$OrgInfo, [Parameter(Mandatory)][string]$DeviceId)
+    Invoke-LabHarness @('broker', '--kind', 'health', '--url', $Broker.Url, '--console-secret', $OrgInfo.consoleSecret, '--device', $DeviceId) -TimeoutSec 120
 }
 
 # GET /v1/health over TLS from the host, pinned to the fingerprint (AgentInstaller.HealthAsync).

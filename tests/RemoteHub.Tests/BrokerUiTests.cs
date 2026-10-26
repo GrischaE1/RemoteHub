@@ -103,12 +103,13 @@ public class BrokerUiTests
         Assert.True(d.RouteUsable);
         d.Broker!.Online = false;
         Assert.Equal("offline", d.RouteHint);
-        Assert.False(d.RouteUsable); // in the warning colour
+        Assert.True(d.RouteUsable); // no warning: in the same network it may still answer directly
         d.Broker.Connected = false;
         Assert.Null(d.RouteHint); // a PC that shares the settings but isn't connected doesn't know
         d.Broker.Sealed = false;
         Assert.Equal("not sealed", d.RouteHint);
         Assert.True(d.BrokerUnsealed); // greyed
+        Assert.False(d.RouteUsable); // in the warning colour
         Assert.Contains("Not sealed by your organisation", d.RouteToolTip);
     }
 

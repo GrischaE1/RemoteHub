@@ -738,6 +738,18 @@ From [jump-host-design.md](jump-host-design.md) §11 (J0…J12 there). `lab/test
 | J-29 | Bad tunnel traffic | more than 256 KB unacknowledged on a stream resets it; a text or garbled frame or a duplicate stream id ends the tunnel, 1202 "(protocol error: …)"; a target not closing within 60 s after Close is reset | H E | 3 | ✅ | Jump |
 | J-30 | A name with allowed and disallowed addresses | one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed) | PS H | 3 | ✅ | Jump |
 
+### 9.14 RemoteHub Broker (B)
+
+The agent's side of the RemoteHub Broker and RemoteHub's way to a device through it (the broker's own design and tests live with the broker). `lab/tests/B-BRK.Tests.ps1` needs the lab's broker – lab.json `Broker` and lab.local.json `BrokerToken` ([test-lab-spec.md](test-lab-spec.md) §5.3, §7); without them every case is skipped with that reason. Each run makes its own organisation through the broker's admin API (harness `broker --kind org`) and deletes it afterwards. RemoteHub's side runs through its own client code in the harness (`broker --kind health`: Connect with the console secret, the device's sealed record, `AgentClientTransport.ThroughBroker`); the settings page, the synced folder and the menu are covered by `BrokerUiTests` (STA) and the broker tests in `tests/RemoteHub.Tests`.
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| B-BRK-01 | MSI with the broker's properties | `BROKER_URL`, `BROKER_SECRET`, `BROKER_ONLY=1` on a device without an enrollment file: installed (0 / 3010), no inbound firewall rule, the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json has the organisation; audit 1303 (registered) and 1300 (connected) | PS E | 1 | ◐ | Broker |
+| B-BRK-02 | Through the broker | RemoteHub's way: Connect with the console secret, the device's record sealed, the agent's health through a relayed session pinned to the record's fingerprint answers the device's id; audit 1301 (session started) | H E | 1 | ◐ | Broker |
+| B-BRK-03 | Device policy | `BrokerEnabled=0` → the device goes offline at the broker; the policy cleared → online again | PS | 1 | ◐ | Broker |
+| B-BRK-04 | Leave and join | `broker leave` → "Left the RemoteHub Broker …", offline, `broker status` "No RemoteHub Broker."; `broker join <url>` with the device secret on standard input (what *Assign to RemoteHub Broker* runs) → "Joined …", online; the console secret refused ("… console secret …", exit 1) | PS | 2 | ◐ | Broker |
+| SEC-BRK-01 | The device secret is kept nowhere | not in the installer log (`BROKER_SECRET` hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status` | PS E | 1 | ◐ | Broker |
+
 ## 10. RemoteHub on a Windows client (C, R)
 
 RemoteHub itself installed in a client VM, driven by UI Automation (FlaUI) in `normaluser`'s or `Admin`'s session.

@@ -28,10 +28,12 @@ public partial class EditorWindow
 
     private void InitBrokerPage()
     {
-        if (Features.WhyNot(Feature.Broker) is { } off)
+        if (!Features.IsAllowed(Feature.Broker))
         {
-            // Blocked by this PC's policy: nothing is offered, the page says why (as Recordings does).
-            BrokerPolicyText.Text = off + " RemoteHub doesn't connect to a RemoteHub Broker, and devices in synced folders are reached only directly.";
+            // Blocked by this PC's policy: its actions aren't offered (as Security & storage hides the enrollment section
+            // with the agent off), and the page says why.
+            BrokerPolicyText.Text = "Turned off by your organisation (Settings → Policies). RemoteHub doesn't connect to a RemoteHub Broker, " +
+                                    "and devices in synced folders are reached only directly.";
             BrokerPolicyText.Visibility = Visibility.Visible;
             BrokerList.Visibility = BrokerConnectSection.Visibility = Visibility.Collapsed;
             return;
@@ -201,7 +203,7 @@ public partial class EditorWindow
             return;
         if (_host?.DisconnectBroker is not { } disconnect) return;
         try { await disconnect(client); }
-        catch (Exception ex) { await Dialogs.Info(this, "Disconnect", $"{org} couldn't be disconnected completely: {ex.Message}"); }
+        catch (Exception ex) { await Dialogs.Info(this, "Disconnect from the RemoteHub Broker", $"{org} couldn't be disconnected completely: {ex.Message}"); }
         RefreshBrokerPage();
     }
 

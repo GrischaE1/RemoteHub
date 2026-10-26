@@ -207,6 +207,16 @@ Out of scope for v1. The design keeps it possible:
 
 `enrollmentKeyId`, `enrollmentSecret`: from the `.rhagent` file, for the claim (§5.5); missing on devices enrolled with a format-1 file.
 
+`broker` (since 0.22.0, only on a device that joined a RemoteHub Broker): `{url, org, secretId, enrollKey, recordKey}` –
+the broker, the organisation, which device secret it joined with, and the two keys derived from that secret
+([broker-protocol.md](broker-protocol.md) §3.2): the enroll key proves the device to the broker when it registers, the
+record key seals its record and checks the consoles' session offers. The device secret itself is never kept. Written by
+the MSI (`BROKER_URL`, `BROKER_SECRET`, `BROKER_ONLY`) through `enroll`, or by `RemoteHubAgent.exe broker join <url>`
+with the secret on standard input; `broker leave` removes it. A device without an enrollment file enrolls itself
+there (its own key, default port, Administrators; no firewall rule with `BROKER_ONLY=1`). The service keeps one
+outbound WebSocket to the broker (keep-alive every 60 s) and takes a session only for a sealed offer it accepts;
+the session's bytes go into its own HTTPS endpoint, so sign-in, rights and policy apply as for a direct connection.
+
 `virtualDisplay`: the virtual monitor for devices without one – `auto` (switched on for a desktop connection only when
 the shown display offers less than the window and at most 1280×720, e.g. 640×480 without a monitor), `always`, `off`
 (driver not installed). Chosen at install (install dialog, MSI property `VIRTUALDISPLAY`, or the `.rhagent` file;
@@ -262,6 +272,11 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `TunnelEnabled` | DWORD | 0: never a jump host (on) |
 | `TunnelTargets`, `TunnelPorts` | MULTI_SZ | where jump connections may go: ranges and names / ports (anywhere except the device's own loopback, link-local and multicast; every port) |
 | `MaxTunnelStreams` | DWORD | 1–1024 streams per jump connection (64) |
+| `TunnelOwnPorts` | MULTI_SZ | ports of the device itself a jump or broker session may open (`RDP` = the RDP port in the registry, or numbers) (RDP) – since 0.22.0 |
+| `BrokerEnabled` | DWORD | 0: no RemoteHub Broker (on) – since 0.22.0 |
+| `BrokerUrl` | SZ | the only broker the device may use (any) – since 0.22.0 |
+| `BrokerConsoles` | MULTI_SZ | the console ids that may start a session through the broker (all of the organisation's) – since 0.22.0 |
+| `BrokerProxy`, `BrokerKeepAliveSeconds` | SZ / DWORD | proxy for the broker connection (system); keep-alive 30–90 s (60) – since 0.22.0 |
 | `NoUserBehavior` | SZ | `SignInScreen` or `AutoSignIn` (agent.json, else AutoSignIn – on by default) |
 | `AutoSignInRequirePrivacyScreen` | DWORD | 1: no automatic sign-in where the privacy screen can't be shown (0) |
 | `AutoSignInEndAction` | SZ | `Lock` or `SignOut`; wins over RemoteHub's setting (unset) |
@@ -346,6 +361,7 @@ zero-filled after a hard power-off, and the service didn't start).
 | `RemoteHubAgent.exe selftest` (TLS, endpoints, sign-in refusal) – run by the build | done |
 | Remote desktop (`/v1/desktop`, helper, consent, policy, RemoteHub tab) – §12 | done; lab: D-* cases on real devices |
 | Jump host (`/v1/tunnel`, policy TunnelEnabled / TunnelTargets / TunnelPorts / MaxTunnelStreams) | done; lab: J-JUMP |
+| RemoteHub Broker (agent.json `broker`, `broker join/leave/status`, MSI BROKER_*, policy Broker*, TunnelOwnPorts; audit 1300–1303, 2400, 3400) | done; lab: B-BRK (needs the lab's broker) |
 | Automatic sign-in (credential provider, `AutoSignInBroker`, `autosignin.json`, `auto-sign-in on\|off`) – [credential-provider-design.md](credential-provider-design.md) | done; lab: C-* cases |
 
 ## 12. Remote desktop

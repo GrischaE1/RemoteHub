@@ -311,7 +311,7 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
   - Information: 1000/1001 PowerShell session started/ended, 1100/1101 remote desktop started/ended, 1102 the user who signed in or unlocked allowed it, 1103 continued after a dropped connection.
   - Warning: 2000 sign-in refused, 2100 remote desktop refused, 2101 the user who signed in or unlocked refused it, 2102 ended for no input.
   - Error: 3100 remote desktop error.
-- **Not yet:** signing in automatically with stored credentials (on the backlog), audio, file drag and drop into the picture, a relay for devices outside the network.
+- **Not yet:** signing in automatically with stored credentials (on the backlog), audio, file drag and drop into the picture.
 
 ### Jump hosts (devices RemoteHub can't reach directly)
 
@@ -330,6 +330,18 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
   - `MaxTunnelStreams` (DWORD, 1–1024, default 64): connections open at once through one jump connection.
   - Right `Tunnel` (subkey `Rights`): who may use it as a jump host – by default the agent's allowed groups (Administrators).
 - **Audit on the jump host:** 1200/1202 jump connection started/ended (account, source), 1201 each connection through it (target, address, port, duration, bytes), 2200 refused by policy (which rule).
+
+### RemoteHub Broker (devices anywhere)
+
+A RemoteHub Broker lets RemoteHub reach an organisation's devices from anywhere. Devices and admin PCs only connect **out** to the broker – one address to allow in a corporate network, no inbound port on the device. The broker is a service of its own (self-hosted on Cloudflare); its wire protocol is [docs/broker-protocol.md](docs/broker-protocol.md).
+
+- **Connect RemoteHub:** *Settings → RemoteHub Broker → Connect* with the broker's address and the **console secret** your administrator gives you – or *Import .rhbroker file…*. RemoteHub makes a key for this PC and Windows user (kept by Windows, not exportable); the secret is stored encrypted in this PC's database. Several organisations can be connected. The page shows each one's state, the registered consoles (*Remove*), the agent's install command line and *Disconnect*.
+- **Devices join** with the organisation's **device secret**: the agent MSI with `BROKER_URL=<broker> BROKER_SECRET=<device secret>` (`BROKER_ONLY=1`: no inbound firewall rule) – the command line is on the settings page, the secret shown only after *Show secret* and copied to the clipboard for 2 minutes – or, for a device RemoteHub already manages, right-click → **RemoteHub Agent → Assign to RemoteHub Broker…**, or `RemoteHubAgent.exe broker join <broker>` with the secret on standard input (`broker leave`, `broker status`). A device without an enrollment file enrolls itself. Its agent keeps only keys derived from the secret, never the secret itself.
+- **The synced folder:** each organisation appears as a folder at the top of the navigation with every registered device and its state (*online*, *offline*; *not sealed* and greyed when its record isn't sealed by the organisation – RemoteHub doesn't connect to it). New devices land in *New devices*. Folders, placement and names are shared: moving, renaming, creating or deleting inside it changes it for every console of the organisation. Credentials, RDP options, notes and colours on these items stay your own. Nothing of your own can be dropped into it, and its devices don't leave it.
+- **Reach** (connection setting, inherited like the others; console policy `Connections\Reach`): *Automatic* tries the device's own address for 1.5 seconds and then goes through the broker (a failure is remembered for 10 minutes), *Directly only*, or *Through the RemoteHub Broker only*. RDP through the broker goes through the device's own agent to its RDP port, with the certificate checked as through a jump host.
+- **Security:** the broker relays bytes – TLS to the device's pinned certificate runs end to end, and the pin comes from the device's record sealed with the organisation's key, so a broker alone can't change where RemoteHub connects or open a session (session offers are sealed too). The device's policy decides as everywhere else.
+- **Policy:** console `AllowBroker` (0: no broker on this PC – devices in synced folders only directly); on the device (subkey `Agent`) `BrokerEnabled`, `BrokerUrl` (only that broker), `BrokerConsoles` (only these console ids), `BrokerProxy`, `BrokerKeepAliveSeconds` (30–90, default 60), and `TunnelOwnPorts` (ports of the device itself a session may open, default RDP).
+- **Audit on the device:** 1300 connected to the broker, 1301/1302 session through the broker started/ended, 1303 registered, 2400 session refused, 3400 broker error. RemoteHub's audit log records connecting to and disconnecting from a broker.
 
 ## Storage & security
 

@@ -52,6 +52,8 @@ using RemoteHub.Remoting;
 // through that RemoteHub Agent as a jump host, as RemoteHub does for a connection placed under one (LabJump.cs).
 //   desktop --host .. --port .. --pin .. --user .. --password .. --steps <json> [--out <folder>] [--timeout s]
 //       a scripted remote desktop viewer (see DesktopHarness.cs)
+//   broker --kind org|devices|remove-org|health ...   the RemoteHub Broker: a throwaway organisation, and the agent's
+//       health through the broker as RemoteHub reaches it (see LabBroker.cs)
 // Answers one JSON object on stdout; exit code 0 = ok, 1 = failed (the object then has "error").
 
 var json = new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
@@ -81,6 +83,7 @@ try
         "probe" => await LabProbes.Run(opt),
         "jump" => await LabJump.Run(opt),
         "desktop" => await DesktopHarness.Run(opt),
+        "broker" => await LabBroker.Run(opt),
         _ => throw new ArgumentException("usage: install --vm .. --user .. --password .. --msi .. --label .. [--scope ..] [--port ..] | health --host .. --port .. --pin .. | " +
                                          "cad --host .. --port .. --pin .. --user .. --password .."),
     };

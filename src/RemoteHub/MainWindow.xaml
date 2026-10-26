@@ -362,7 +362,8 @@
                                             <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
                                         </DockPanel>
                                         <DockPanel>
-                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used) -->
+                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used);
+                                                 a device of a synced broker folder: online / offline / not sealed (the last in the warning colour) -->
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
                                                        Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
                                                 <TextBlock.Style>
