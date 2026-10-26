@@ -361,10 +361,10 @@ public static class LocalDb
                                     items INTEGER NOT NULL, deleted_utc INTEGER NOT NULL, data BLOB NOT NULL);
         """;
 
-    // RemoteHub Broker connections of this PC and user (broker-design.md §6.3): never in the shared settings file, since each
+    // RemoteHub Broker connections of this PC and user: never in the shared settings file, since each
     // PC registers its own key. The console secret is sealed with the secret key (SecretBox, place "broker|<id>|secret").
     // broker_items is the last sealed state the broker sent – for showing the synced folder while offline and for
-    // publishing it again after the broker lost its data (§12.6).
+    // publishing it again after the broker lost its data.
     private const string Schema4 = """
         CREATE TABLE broker_connections (id TEXT PRIMARY KEY, url TEXT NOT NULL, org TEXT NOT NULL, org_name TEXT NOT NULL,
                                          console_id TEXT NOT NULL, console_name TEXT NOT NULL, secret BLOB NOT NULL,

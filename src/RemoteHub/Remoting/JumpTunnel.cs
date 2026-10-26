@@ -89,8 +89,8 @@ public static class JumpTunnels
 
 /// <summary>
 /// One signed-in connection to a jump host's agent, carrying any number of <see cref="TunnelStream"/>s – or a relayed
-/// RemoteHub Broker session, where every stream goes to the device's own agent and an Open names no target
-/// (broker-design.md §8.5): the same framing and flow control.
+/// RemoteHub Broker session, where every stream goes to the device's own agent and an Open names no target:
+/// the same framing and flow control.
 /// </summary>
 public sealed class JumpTunnel
 {

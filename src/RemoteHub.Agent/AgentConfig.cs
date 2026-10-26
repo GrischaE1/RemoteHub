@@ -44,7 +44,7 @@ public sealed class AgentConfig
     public string? EnrollmentSecret { get; set; }
 
     /// <summary>
-    /// The RemoteHub Broker this device uses (<c>broker join</c>, MSI BROKER_URL / BROKER_SECRET; broker-design.md §6.4),
+    /// The RemoteHub Broker this device uses (<c>broker join</c>, MSI BROKER_URL / BROKER_SECRET),
     /// with the two keys it keeps from the device secret – like the enrollment secret above, in a folder only SYSTEM and
     /// Administrators can read. Null: no broker. The service reads it again while it runs, so a join needs no restart.
     /// </summary>
@@ -243,9 +243,9 @@ public sealed class BrokerSettings
     public string Url { get; set; } = "";
     public string Org { get; set; } = "";
     public string SecretId { get; set; } = "";
-    /// <summary>Proves at registration that the device belongs to the organisation; kept to register again after the broker lost its data (§12.6).</summary>
+    /// <summary>Proves at registration that the device belongs to the organisation; kept to register again after the broker lost its data.</summary>
     public string EnrollKey { get; set; } = "";
-    /// <summary>Seals the device record and checks the consoles' sealed offers (§6.1, §8.1).</summary>
+    /// <summary>Seals the device record and checks the consoles' sealed offers.</summary>
     public string RecordKey { get; set; } = "";
 
     public static Uri? ParseUrl(string? text) => BrokerProtocol.ParseBrokerUrl(text);

@@ -8,7 +8,7 @@ namespace RemoteHub.Agent;
 /// <summary>
 /// The RemoteHub Broker's wire contract on this side (this file is compiled into both RemoteHub and the agent):
 /// encodings, the keys derived from an organisation's secrets, MACs, seals and proofs. It matches the broker's own
-/// implementation byte for byte – <c>docs/broker-protocol.md</c> §1–§4 – and the test vectors there are checked in
+/// implementation byte for byte, and the broker's test vectors are checked in
 /// <c>BrokerProtocolTests</c>.
 /// <para>
 /// The broker never holds what it would need to forge a device: it gets the enroll and join keys only; record, layout
@@ -20,7 +20,7 @@ public static class BrokerProtocol
 {
     public const string Protocol = "remotehub-broker/1";
 
-    /// <summary>Close codes the broker uses (broker-protocol.md §9).</summary>
+    /// <summary>Close codes the broker uses.</summary>
     public static class Close
     {
         public const int BadMessage = 4400, AuthFailed = 4401, Refused = 4403, Unknown = 4404, Timeout = 4408,
@@ -33,7 +33,7 @@ public static class BrokerProtocol
     public const int ClockSkewSeconds = 2 * 60;
     public const int KeepAliveDefault = 60, KeepAliveMin = 30, KeepAliveMax = 90;
 
-    // ---- Encodings (§1) -------------------------------------------------------------------------------------------
+    // ---- Encodings ------------------------------------------------------------------------------------------------
 
     public static string B64u(ReadOnlySpan<byte> bytes) => Base64Url.EncodeToString(bytes);
 
@@ -69,7 +69,7 @@ public static class BrokerProtocol
         return sb.ToString();
     }
 
-    // ---- Identifiers (§2) -----------------------------------------------------------------------------------------
+    // ---- Identifiers ----------------------------------------------------------------------------------------------
 
     public static bool IsOrgId(string? s) => s is { Length: 18 } && s.StartsWith("o_", StringComparison.Ordinal) && s[2..].All(IsB32Char);
     public static bool IsSecretId(string? s) => s is { Length: 10 } && s.StartsWith("s_", StringComparison.Ordinal) && s[2..].All(IsB32Char);
@@ -92,7 +92,7 @@ public static class BrokerProtocol
             ? u : null;
     }
 
-    // ---- Secrets (§3.1) -------------------------------------------------------------------------------------------
+    // ---- Secrets --------------------------------------------------------------------------------------------------
 
     public enum SecretKind { Device, Console }
 
@@ -112,7 +112,7 @@ public static class BrokerProtocol
         return new Secret(kind.Value, parts[1], parts[2], key);
     }
 
-    // ---- Keys and MACs (§3.2, §3.3) -------------------------------------------------------------------------------
+    // ---- Keys and MACs --------------------------------------------------------------------------------------------
 
     public enum KeyLabel { Enroll, Record, Join, Layout, Keyring }
 
@@ -128,7 +128,7 @@ public static class BrokerProtocol
     public static bool VerifyMac(byte[] key, string? expected, string org, params string[] parts) =>
         expected is not null && CryptographicOperations.FixedTimeEquals(Encoding.ASCII.GetBytes(Mac(key, org, parts)), Encoding.ASCII.GetBytes(expected));
 
-    // ---- Seals and canonical JSON (§4) ----------------------------------------------------------------------------
+    // ---- Seals and canonical JSON ---------------------------------------------------------------------------------
 
     public static string Seal(byte[] key, string org, string kind, JsonNode body) => Mac(key, org, "seal", kind, Canonical(body));
 
@@ -218,7 +218,7 @@ public static class BrokerProtocol
         sb.Append('"');
     }
 
-    // ---- Proofs and signatures (§3.5) ----------------------------------------------------------------------------
+    // ---- Proofs and signatures ------------------------------------------------------------------------------------
 
     public static string ProofText(string org, string role, string id, string nonce, string host) =>
         string.Join('|', Protocol, org, role, id, nonce, host);
@@ -247,7 +247,7 @@ public static class BrokerProtocol
         catch (CryptographicException) { return false; }
     }
 
-    // ---- Keyring (§3.4) -------------------------------------------------------------------------------------------
+    // ---- Keyring --------------------------------------------------------------------------------------------------
 
     /// <summary>Opens a keyring blob with the console secret's keyring key; the device secrets in it, or null if it isn't this one.</summary>
     public static string[]? OpenKeyring(byte[] keyringKey, string org, string consoleSecretId, string? blob)

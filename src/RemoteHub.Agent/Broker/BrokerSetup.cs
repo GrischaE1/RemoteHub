@@ -1,7 +1,7 @@
 namespace RemoteHub.Agent;
 
 /// <summary>
-/// Joining and leaving a RemoteHub Broker (broker-design.md §6.4):
+/// Joining and leaving a RemoteHub Broker:
 /// <list type="bullet">
 /// <item><c>RemoteHubAgent.exe broker join &lt;url&gt;</c> – the device secret comes from standard input, never from the command
 /// line (process lists, scripts' logs). An enrolled agent adds the broker; one installed without an enrollment file

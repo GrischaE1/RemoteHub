@@ -16,9 +16,9 @@ using Wpf.Ui.Controls;
 namespace RemoteHub;
 
 /// <summary>
-/// The RemoteHub Broker in the main window (broker-design.md §11): one client per connected organisation, its synced
+/// The RemoteHub Broker in the main window: one client per connected organisation, its synced
 /// folder in the navigation, and how the devices in it are reached – directly, through the broker, or the first that
-/// works (Reach). RDP to a device reached through the broker goes through its own agent's tunnel ("self", §9.1).
+/// works (Reach). RDP to a device reached through the broker goes through its own agent's tunnel ("self").
 /// </summary>
 public partial class MainWindow
 {
@@ -105,7 +105,7 @@ public partial class MainWindow
         _brokers.Clear();
     }
 
-    // ---- The shared layout (design §11.4): what changes here goes to the broker, sealed --------------------------------
+    // ---- The shared layout: what changes here goes to the broker, sealed -----------------------------------------------
 
     /// <summary>Why an item of a synced folder can't be changed now – only while connected to its broker. Null: it can, or it isn't one.</summary>
     private string? WhyNotBrokerChange(NodeBase node)
@@ -183,7 +183,7 @@ public partial class MainWindow
         _vm.Remove(n);
     }
 
-    // ---- Assign to RemoteHub Broker (design §6.4) -------------------------------------------------------------------
+    // ---- Assign to RemoteHub Broker ------------------------------------------------------------------------------------
 
     /// <summary>
     /// The connection menu's entry: for a connection of the user's own tree whose agent is installed, while this PC is
@@ -247,7 +247,7 @@ public partial class MainWindow
         await Dialogs.Info(this, title, failure is null ? $"{c.Name} joined {org}. {said}" : $"{c.Name} didn't join {org}.\n\n{failure}");
     }
 
-    // ---- How a synced device is reached (Reach, design §11.1) --------------------------------------------------------
+    // ---- How a synced device is reached (Reach) ------------------------------------------------------------------------
 
     /// <summary>The broker route for a device of a synced folder, or null (not a broker device, or not usable – said unless quiet).</summary>
     private BrokerRoute? BrokerRouteFor(Connection c, bool quiet)

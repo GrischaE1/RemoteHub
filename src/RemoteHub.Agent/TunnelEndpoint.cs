@@ -192,7 +192,7 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
     }
 
     /// <summary>
-    /// The device itself (broker-design.md §9.1): only ports its policy lists in TunnelOwnPorts – port 0 asks for "RDP",
+    /// The device itself: only ports its policy lists in TunnelOwnPorts – port 0 asks for "RDP",
     /// the port RDP is configured for here, whatever RemoteHub knows about it. Nothing else on its own addresses opens
     /// this way; services that listen only on this device stay out of reach unless listed.
     /// </summary>
@@ -207,7 +207,7 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
         if (!listed) { await Refused(id, where, "TunnelOwnPorts", $"This device's policy doesn't allow {where} through its agent (TunnelOwnPorts)."); return; }
 
         // Windows lets RDP clients in from 127.0.0.2 (a loopback address other than the one it refuses for itself); the
-        // device's own address is the fallback (broker-design.md spike B6).
+        // device's own address is the fallback.
         Socket? socket = null;
         Exception? last = null;
         using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_ct))

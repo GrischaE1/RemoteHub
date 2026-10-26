@@ -3,7 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace RemoteHub.Models;
 
-/// <summary>What an item of a synced RemoteHub Broker folder stands for (broker-design.md §11.4).</summary>
+/// <summary>What an item of a synced RemoteHub Broker folder stands for.</summary>
 public enum BrokerItemKind
 {
     /// <summary>The folder for one broker organisation, at the top of the navigation.</summary>

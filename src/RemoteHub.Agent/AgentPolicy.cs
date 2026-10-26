@@ -74,9 +74,9 @@ public sealed record AgentPolicy
     public TunnelRules Tunnel { get; init; } = TunnelRules.Any;
     /// <summary>MaxTunnelStreams: connections open at once through one jump connection.</summary>
     public int MaxTunnelStreams { get; init; } = 64;
-    /// <summary>TunnelOwnPorts: ports on this device itself the tunnel opens ("RDP" = its RDP port); empty = none (broker-design.md §9.1).</summary>
+    /// <summary>TunnelOwnPorts: ports on this device itself the tunnel opens ("RDP" = its RDP port); empty = none.</summary>
     public IReadOnlyList<string> TunnelOwnPorts { get; init; } = ["RDP"];
-    /// <summary>BrokerEnabled: the agent connects to the RemoteHub Broker in agent.json (broker-design.md §13.1).</summary>
+    /// <summary>BrokerEnabled: the agent connects to the RemoteHub Broker in agent.json.</summary>
     public bool BrokerEnabled { get; init; } = true;
     /// <summary>BrokerUrl: another address for the broker (same organisation); null = agent.json's.</summary>
     public string? BrokerUrl { get; init; }

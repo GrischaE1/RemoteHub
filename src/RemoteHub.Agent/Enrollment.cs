@@ -83,13 +83,13 @@ public static class Enrollment
         };
     }
 
-    /// <summary>The MSI's BROKER_URL, BROKER_SECRET and BROKER_ONLY (broker-design.md §6.4); null without a broker address.</summary>
+    /// <summary>The MSI's BROKER_URL, BROKER_SECRET and BROKER_ONLY; null without a broker address.</summary>
     private static (string Url, string Secret, bool Listen)? Broker(string[] args) =>
         Option(args, "broker-url") is { Length: > 0 } url ? (url, Option(args, "broker-secret") ?? "", Option(args, "broker-only") != "1") : null;
 
     /// <param name="virtualDisplay">From the MSI (VIRTUALDISPLAY): "1" install the virtual monitor, "0" not, "" not chosen.</param>
     /// <param name="autoSignIn">From the MSI (AUTOSIGNIN): "1" allow automatic sign-in, "0" stop it, "" leave it.</param>
-    /// <param name="broker">From the MSI: with a broker and no enrollment file, the device enrolls itself (§6.4).</param>
+    /// <param name="broker">From the MSI: with a broker and no enrollment file, the device enrolls itself.</param>
     private static int Enroll(string source, string? virtualDisplay, AgentLog log, string? autoSignIn = null,
         (string Url, string Secret, bool Listen)? broker = null)
     {

@@ -10,7 +10,7 @@ public sealed record BrokerRoute(BrokerClient Client, string DeviceId, string? S
 }
 
 /// <summary>
-/// The relayed sessions to devices through their broker (broker-design.md §8.5, §8.7): one per device, shared by every tab
+/// The relayed sessions to devices through their broker: one per device, shared by every tab
 /// and tool, opened with a sealed offer and closed two minutes after its last stream (the tunnel's idle close). Every
 /// stream ends at the device's own agent; TLS to its pinned certificate and the Windows sign-in run inside it.
 /// </summary>

@@ -7,7 +7,7 @@ namespace RemoteHub.Tests;
 
 /// <summary>
 /// The broker's wire contract on this side: encodings, derived keys, MACs, seals, canonical JSON, secrets, proofs and
-/// keyrings. The fixed values are the test vectors of the broker's <c>docs/broker-protocol.md</c> §10 – the broker's
+/// keyrings. The fixed values are the broker's test vectors – the broker's
 /// own tests check the same ones, so a seal made here checks there and back.
 /// </summary>
 public class BrokerProtocolTests

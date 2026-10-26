@@ -6,7 +6,7 @@ namespace RemoteHub.Broker;
 public sealed record BrokerConnection(string Id, string Url, string Org, string OrgName, string ConsoleId, string ConsoleName, DateTime AddedUtc, long Cursor);
 
 /// <summary>
-/// This PC's broker connections in the local database (schema 4; broker-design.md §6.3): the console secret sealed with
+/// This PC's broker connections in the local database (schema 4): the console secret sealed with
 /// the secret key, the sync cursor, and the last sealed state of the shared list. Never in the shared settings file.
 /// </summary>
 internal static class BrokerStore

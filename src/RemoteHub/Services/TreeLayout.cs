@@ -88,7 +88,7 @@ public static class TreeLayout
     }
 
     /// <summary>
-    /// The synced folder of a RemoteHub Broker (broker-design.md §11.4) holds the organisation's shared layout: its devices
+    /// The synced folder of a RemoteHub Broker holds the organisation's shared layout: its devices
     /// and folders move only within it, into its folders, and nothing of the user's own goes in.
     /// </summary>
     private static string? WhyNotBroker(NodeBase node, NodeBase? container)

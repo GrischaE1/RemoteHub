@@ -53,7 +53,7 @@ try
     var desktop = DesktopServices.Windows(autoSignIn);
     // Sessions automatic sign-in created that the last run left open: no connection has them any more (design §9.3).
     desktop.AutoSigned.Recover(log);
-    // Streams through the RemoteHub Broker reach the same HTTPS endpoint as the network does (broker-design.md §10.2).
+    // Streams through the RemoteHub Broker reach the same HTTPS endpoint as the network does.
     var peers = new PeerTransport();
     var app = AgentHost.Build(new AgentHostOptions(config, certificate,
         new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop) { Peers = peers }, []);

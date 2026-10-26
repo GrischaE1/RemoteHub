@@ -4,7 +4,7 @@ using static RemoteHub.Agent.BrokerProtocol;
 
 namespace RemoteHub.Broker;
 
-/// <summary>What a <c>.rhbroker</c> file gives a console: the broker, the organisation and its console secret (broker-protocol.md §3.1).</summary>
+/// <summary>What a <c>.rhbroker</c> file gives a console: the broker, the organisation and its console secret.</summary>
 public sealed record BrokerFile(string Url, string Org, string Name, string ConsoleSecret)
 {
     public const string Extension = ".rhbroker";

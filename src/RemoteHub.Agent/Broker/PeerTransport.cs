@@ -15,7 +15,7 @@ internal sealed class PeerEndPoint : EndPoint
 }
 
 /// <summary>
-/// A second Kestrel transport next to the TCP sockets (broker-design.md §10.2): every stream of a broker session becomes
+/// A second Kestrel transport next to the TCP sockets: every stream of a broker session becomes
 /// an ordinary connection to the agent's HTTPS endpoint – same certificate, same TLS, same sign-in, rights and limits as
 /// a connection over the network. Its remote address is the console's public address as the broker saw it, so the
 /// sign-in gate and the audit see where it came from.

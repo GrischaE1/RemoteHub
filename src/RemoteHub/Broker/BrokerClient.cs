@@ -19,7 +19,7 @@ public sealed class BrokerException(string message, string? code = null, Excepti
 }
 
 /// <summary>
-/// This console's connection to one RemoteHub Broker organisation (broker-design.md §7.2): registration or proof with
+/// This console's connection to one RemoteHub Broker organisation: registration or proof with
 /// this PC's key, the keyring, the shared list from the last cursor on, and what the broker pushes. Requests (writes,
 /// session offers) go over the same connection. Everything that decides where credentials go arrives sealed and is
 /// checked here (<see cref="BrokerSync"/>), never trusted because the broker sent it.
@@ -163,7 +163,7 @@ public sealed class BrokerClient : IAsyncDisposable
         {
             if ((int?)ws.CloseStatus == Close.Unknown)
             {
-                // The broker doesn't know this console (it lost its data, §12.6): register again with the kept key.
+                // The broker doesn't know this console (it lost its data): register again with the kept key.
                 await RegisterAgainAsync(broker, key, spki, ct).ConfigureAwait(false);
                 return;
             }
@@ -317,7 +317,7 @@ public sealed class BrokerClient : IAsyncDisposable
 
     // ---- Sealed data ---------------------------------------------------------------------------------------------
 
-    /// <summary>Whether a device record was sealed with one of the organisation's record keys (design §6.1).</summary>
+    /// <summary>Whether a device record was sealed with one of the organisation's record keys.</summary>
     public bool RecordIsSealed(JsonObject? record, string? seal) =>
         record is not null && _recordKeys.Values.Any(k => VerifySeal(k, seal, _info.Org, "device", record));
 
@@ -344,7 +344,7 @@ public sealed class BrokerClient : IAsyncDisposable
     public Task<JsonObject> RemoveConsoleAsync(string consoleId) => RequestAsync(new JsonObject { ["t"] = "removeConsole", ["id"] = consoleId });
 
     /// <summary>
-    /// Asks for a session with a device (design §8.1): an offer sealed with the record key of the device secret the device
+    /// Asks for a session with a device: an offer sealed with the record key of the device secret the device
     /// registered with, so a broker alone can't make one. Returns the broker's <c>accepted</c> answer.
     /// </summary>
     public async Task<JsonObject> OfferAsync(string deviceId, string? secretId, CancellationToken ct)
@@ -369,7 +369,7 @@ public sealed class BrokerClient : IAsyncDisposable
         return answer;
     }
 
-    /// <summary>The relay WebSocket of an accepted session (design §8.5), console side.</summary>
+    /// <summary>The relay WebSocket of an accepted session, console side.</summary>
     internal async Task<ClientWebSocket> OpenRelayAsync(JsonObject accepted, CancellationToken ct)
     {
         var session = Text(accepted, "session", 22);

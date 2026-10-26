@@ -525,7 +525,7 @@ public static class AgentInstaller
     // ------------------------------------------------------------------ RemoteHub Broker
 
     /// <summary>
-    /// Assign to RemoteHub Broker (broker-design.md §6.4): <c>RemoteHubAgent.exe broker join &lt;url&gt;</c> on the device,
+    /// Assign to RemoteHub Broker: <c>RemoteHubAgent.exe broker join &lt;url&gt;</c> on the device,
     /// with the device secret on its standard input – a parameter of this fixed script, never in a command line or the
     /// script's text. Answers "joined:&lt;what the agent said&gt;|failed:&lt;its error&gt;|notInstalled".
     /// </summary>

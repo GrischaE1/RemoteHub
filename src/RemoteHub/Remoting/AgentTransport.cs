@@ -18,7 +18,7 @@ namespace RemoteHub.Remoting;
 /// <summary>
 /// Where the RemoteHub Agent of a device listens, and the device certificate it must present. <paramref name="Via"/>: the
 /// jump host it is reached through, if any; <paramref name="Broker"/>: the RemoteHub Broker it is reached through instead
-/// of the network (broker-design.md §11.1) – the pin and the sign-in stay the same. <paramref name="DirectFirst"/>: Reach
+/// of the network – the pin and the sign-in stay the same. <paramref name="DirectFirst"/>: Reach
 /// Automatic – the device's own address is tried for 1.5 s before the broker, so in the same network it isn't used.
 /// </summary>
 public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null, Broker.BrokerRoute? Broker = null, bool DirectFirst = false);

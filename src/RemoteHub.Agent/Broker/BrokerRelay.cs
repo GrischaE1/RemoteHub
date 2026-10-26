@@ -5,10 +5,10 @@ using System.Net.WebSockets;
 namespace RemoteHub.Agent;
 
 /// <summary>
-/// The agent's side of a relayed broker session (broker-design.md §8.5): one WebSocket through the broker, carrying the
+/// The agent's side of a relayed broker session: one WebSocket through the broker, carrying the
 /// jump host's stream framing end to end with the console. Unlike a jump connection a stream has <b>no target</b> – an
 /// <see cref="TunnelMessage.Open"/> with any payload is a protocol error – and always ends at this agent's own HTTPS
-/// endpoint through <see cref="PeerTransport"/> (§5.1). Reaching other hosts is <c>/v1/tunnel</c> inside such a stream,
+/// endpoint through <see cref="PeerTransport"/>. Reaching other hosts is <c>/v1/tunnel</c> inside such a stream,
 /// signed in and checked as always.
 /// </summary>
 internal sealed class BrokerRelay(PeerTransport peers, IPEndPoint source, int maxStreams) : IRelayOwner

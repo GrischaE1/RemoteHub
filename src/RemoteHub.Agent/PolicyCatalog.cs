@@ -219,7 +219,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
     public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
-    /// <summary>Reaching devices through a RemoteHub Broker and its synced folders (broker-design.md §13.2).</summary>
+    /// <summary>Reaching devices through a RemoteHub Broker and its synced folders.</summary>
     public static readonly PolicyEntry AllowBroker = Feature("AllowBroker", "RemoteHub Agent", "Allow the RemoteHub Broker", "0.22.0");
     public static readonly PolicyEntry AllowNetworkShares = Feature("AllowNetworkShares", "Jump hosts and network shares", "Allow network shares");
     public static readonly PolicyEntry AllowSmb = Feature("AllowSmb", "Jump hosts and network shares", "Allow SMB shares");
@@ -344,7 +344,7 @@ public static class PolicyCatalog
 
     private const string Phase2 = "0.19.0";
 
-    // The RemoteHub Broker on the device (broker-design.md §13.1).
+    // The RemoteHub Broker on the device.
     public static readonly PolicyEntry BrokerEnabled = Agent("BrokerEnabled", PolicyKind.Number, "RemoteHub Broker", "Allow the RemoteHub Broker", 0, 1, labels: OnOff, since: BrokerSince);
     public static readonly PolicyEntry BrokerUrl = Agent("BrokerUrl", PolicyKind.Text, "RemoteHub Broker", "Broker address", max: 200, since: BrokerSince,
         rule: s => BrokerProtocol.ParseBrokerUrl(s) is null ? "isn't a broker address (https://name)" : null);

@@ -207,15 +207,13 @@ Out of scope for v1. The design keeps it possible:
 
 `enrollmentKeyId`, `enrollmentSecret`: from the `.rhagent` file, for the claim (§5.5); missing on devices enrolled with a format-1 file.
 
-`broker` (since 0.22.0, only on a device that joined a RemoteHub Broker): `{url, org, secretId, enrollKey, recordKey}` –
-the broker, the organisation, which device secret it joined with, and the two keys derived from that secret
-([broker-protocol.md](broker-protocol.md) §3.2): the enroll key proves the device to the broker when it registers, the
-record key seals its record and checks the consoles' session offers. The device secret itself is never kept. Written by
-the MSI (`BROKER_URL`, `BROKER_SECRET`, `BROKER_ONLY`) through `enroll`, or by `RemoteHubAgent.exe broker join <url>`
-with the secret on standard input; `broker leave` removes it. A device without an enrollment file enrolls itself
-there (its own key, default port, Administrators; no firewall rule with `BROKER_ONLY=1`). The service keeps one
-outbound WebSocket to the broker (keep-alive every 60 s) and takes a session only for a sealed offer it accepts;
-the session's bytes go into its own HTTPS endpoint, so sign-in, rights and policy apply as for a direct connection.
+`broker` (since 0.22.0, only on a device that joined a RemoteHub Broker): the broker, the organisation and keys derived
+from the device secret – the secret itself is never kept. Written by the MSI (`BROKER_URL`, `BROKER_SECRET`,
+`BROKER_ONLY`) through `enroll`, or by `RemoteHubAgent.exe broker join <url>` with the secret on standard input;
+`broker leave` removes it. A device without an enrollment file enrolls itself there (its own key, default port,
+Administrators; no firewall rule with `BROKER_ONLY=1`). The service keeps one outbound connection to the broker; a
+session through it goes into the agent's own HTTPS endpoint, so sign-in, rights and policy apply as for a direct
+connection.
 
 `virtualDisplay`: the virtual monitor for devices without one – `auto` (switched on for a desktop connection only when
 the shown display offers less than the window and at most 1280×720, e.g. 640×480 without a monitor), `always`, `off`

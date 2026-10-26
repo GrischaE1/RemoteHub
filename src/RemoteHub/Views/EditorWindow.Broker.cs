@@ -12,7 +12,7 @@ using TextBox = Wpf.Ui.Controls.TextBox;
 namespace RemoteHub.Views;
 
 /// <summary>
-/// Settings → RemoteHub Broker (broker-design.md §11.2): every organisation this PC is connected to – its state, the
+/// Settings → RemoteHub Broker: every organisation this PC is connected to – its state, the
 /// agent's install command line and the registered consoles – then Connect for another one.
 /// </summary>
 public partial class EditorWindow

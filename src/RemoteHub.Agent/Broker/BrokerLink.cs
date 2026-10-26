@@ -12,9 +12,9 @@ using System.Text.Json.Nodes;
 namespace RemoteHub.Agent;
 
 /// <summary>
-/// The agent's permanent connection to its RemoteHub Broker (broker-design.md §7.1, broker-protocol.md §5–§6): outbound
-/// only, kept open with a keep-alive, proven with the device's own key. What may come down it is the closed list of
-/// §7.1a; anything else closes the connection. The only thing it ever leads to is a session the device checked and
+/// The agent's permanent connection to its RemoteHub Broker: outbound
+/// only, kept open with a keep-alive, proven with the device's own key. What may come down it is a closed
+/// list; anything else closes the connection. The only thing it ever leads to is a session the device checked and
 /// accepted – a console's offer sealed with the record key – which then runs through <see cref="BrokerRelay"/> into the
 /// agent's own HTTPS endpoint, where the pin, the Windows sign-in, rights and policy apply as on a direct connection.
 /// </summary>
@@ -26,7 +26,7 @@ internal sealed class BrokerLink(
     PeerTransport peers,
     Func<DateTimeOffset>? clock = null)
 {
-    /// <summary>The message types the broker may send an agent – a closed list (design §7.1a).</summary>
+    /// <summary>The message types the broker may send an agent – a closed list.</summary>
     private static readonly string[] Allowed = ["welcome", "incoming", "wake", "checks", "orgDeleted", "error"];
     private const int MaxMessagesPerSecond = 10;
     private static readonly TimeSpan IdleRetry = TimeSpan.FromSeconds(15);
@@ -171,12 +171,12 @@ internal sealed class BrokerLink(
                 case "error":
                     log.Write($"RemoteHub Broker: {Text(m, "message", 300, required: false)}");
                     break;
-                // wake and checks come with later versions of the broker (design §10.5, §10.7): known, not acted on yet.
+                // wake and checks come with later versions of the broker: known, not acted on yet.
             }
         }
     }
 
-    // ---- Offers (design §8.1) -----------------------------------------------------------------------------------
+    // ---- Offers ------------------------------------------------------------------------------------------------
 
     private async Task Incoming(ClientWebSocket ws, JsonObject m, AgentConfig config, BrokerSettings broker, Uri baseUri, CancellationToken stop)
     {
@@ -223,7 +223,7 @@ internal sealed class BrokerLink(
         var keys = offer.Select(p => p.Key).OrderBy(k => k, StringComparer.Ordinal).ToArray();
         if (!keys.SequenceEqual(["consoleId", "consoleKey", "deviceId", "expires", "kind", "nonce"])) return ("offer", "The offer isn't in its form.");
         var recordKey = BrokerProtocol.FromB64u(broker.RecordKey)!;
-        // The broker can't make this seal (it has no record key): a broker alone can't start a session (design §7.1a).
+        // The broker can't make this seal (it has no record key): a broker alone can't start a session.
         if (!BrokerProtocol.VerifySeal(recordKey, seal, broker.Org, "offer", offer)) return ("offer", "The offer isn't sealed by this organisation.");
         if (offer["deviceId"]?.GetValue<string>() != config.DeviceId) return ("offer", "The offer is for another device.");
         if (offer["kind"]?.GetValue<string>() != "device") return ("unsupported", "Support sessions come in a later version of the agent.");
@@ -263,7 +263,7 @@ internal sealed class BrokerLink(
 
     // ---- Messages to the broker --------------------------------------------------------------------------------
 
-    /// <summary>Self-registration (design §6.4): the enroll MAC shows the organisation, the proof the device's own key.</summary>
+    /// <summary>Self-registration: the enroll MAC shows the organisation, the proof the device's own key.</summary>
     private JsonObject Registration(AgentConfig config, BrokerSettings broker, string nonce, string proof)
     {
         using var rsa = certificate.GetRSAPublicKey()!;
@@ -303,7 +303,7 @@ internal sealed class BrokerLink(
         ["macs"] = new JsonArray([.. Adapters().Take(16)]),
     };
 
-    /// <summary>MAC address, IPv4 address and prefix of each adapter that is up – for Wake-on-LAN later (design §10.7).</summary>
+    /// <summary>MAC address, IPv4 address and prefix of each adapter that is up – for Wake-on-LAN later.</summary>
     private static IEnumerable<JsonNode> Adapters()
     {
         foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
@@ -332,7 +332,7 @@ internal sealed class BrokerLink(
         while (!ct.IsCancellationRequested)
         {
             await Task.Delay(every, ct);
-            // "ping" is answered at the broker's edge without waking anything (design §7.1).
+            // "ping" is answered at the broker's edge without waking anything.
             await ws.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text, true, ct);
         }
     }

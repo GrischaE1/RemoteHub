@@ -36,7 +36,7 @@
          RemoteHub's install again repairs (A-SAME-01), or an admin runs the MSI with REINSTALL=ALL (A-REPAIR-01). -->
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ENROLLMENT" Secure="yes" />
-    <!-- RemoteHub Broker (broker-design.md §6.4): BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… lets a device enroll
+    <!-- RemoteHub Broker: BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… lets a device enroll
          itself without an enrollment file and register with the broker; on an enrolled agent it adds the broker.
          BROKER_SECRET is hidden – never in the installer log. BROKER_ONLY=1: no inbound firewall rule for a new device. -->
     <Property Id="BROKER_URL" Secure="yes" />

@@ -6,7 +6,7 @@ using RemoteHub.Services;
 namespace RemoteHub.Broker;
 
 /// <summary>
-/// Keeps the synced folder of each broker organisation in step with its shared list (broker-design.md §11.4), on the UI
+/// Keeps the synced folder of each broker organisation in step with its shared list, on the UI
 /// thread. Only sealed data moves anything: folders and placements need the layout seal (only consoles can make it),
 /// device records the record seal – and a device's certificate pin is taken from a sealed record only, never from what
 /// the broker says otherwise. The nodes are ordinary folders and connections, so credentials, RDP options and notes on

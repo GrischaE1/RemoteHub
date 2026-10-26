@@ -8,7 +8,7 @@ public enum ServerAuth { ConnectWithoutWarning = 0, DoNotConnect = 1, Warn = 2 }
 public enum VisualQuality { Best, Balanced, Fast }
 /// <summary>How "Remote desktop" opens: through the RemoteHub Agent when one is installed (otherwise RDP), always RDP, or always the agent.</summary>
 public enum DesktopVia { Automatic, Rdp, Agent }
-/// <summary>How a device of a synced RemoteHub Broker folder is reached (broker-design.md §11.1).</summary>
+/// <summary>How a device of a synced RemoteHub Broker folder is reached.</summary>
 public enum BrokerReach
 {
     /// <summary>Its own address first (1.5 s), then through the broker – in the same network the broker isn't used.</summary>

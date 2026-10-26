@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace RemoteHub.Broker;
 
 /// <summary>
-/// This PC's key towards one RemoteHub Broker organisation (broker-design.md §6.3): ECDSA P-256 in CNG for the current
+/// This PC's key towards one RemoteHub Broker organisation: ECDSA P-256 in CNG for the current
 /// Windows user, made here and never exportable, so a copied database or settings file holds nothing to sign in with.
 /// The broker knows only its public part.
 /// </summary>
