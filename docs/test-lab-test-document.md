@@ -7873,6 +7873,7 @@ P2 · How: U · Needs: – · Status: ✅ Automated – `UI-JUMP.Tests.ps1`
 
 **Expected:**
 - the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab
+- closing the tab after *Trust the new one* leaves no RDP tab within 15 s, and RemoteHub still answers UI Automation
 
 #### UI-AD-09 · No usable session
 P2 · How: U PS · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`

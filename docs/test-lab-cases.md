@@ -870,7 +870,7 @@ The admin's side is RemoteHub in the client VM, driven by FlaUI in `Admin`'s ses
 | UI-AG-17 | Uninstall from the UI | right-click → RemoteHub Agent → *Uninstall RemoteHub Agent…* → the question names "its credential provider, certificate and firewall rule" → *Uninstall* → "Uninstalled – <name> no longer runs the RemoteHub Agent.", *Done*; on the device no service, no Apps entry, no firewall rule, no credential provider, `%SystemRoot%\Temp\RemoteHub-Agent-uninstall.log`; the menu offers *Install RemoteHub Agent…* again (no *Update* / *Uninstall*) | U PS | 2 | ✅ |
 | UI-AG-18 | Remove here only | the uninstall can't reach the agent (a certificate RemoteHub didn't make) → "The agent couldn't be uninstalled … Remove it from this connection in RemoteHub only? The agent stays on the device …" → *Remove here*: the connection forgets the agent, the device still runs it | U PS | 3 | ✅ |
 | UI-JUMP-01 | RDP tab through a jump host | **2VM** + jump host: connection under the jump host → RemoteHub asks "Trust this RDP certificate?" ("<name> is reached through <jump> …", issued to the device's computer name, thumbprint) → *Trust and connect* → RDP signs in with NTLM through the forwarder (4624 NTLM), no certificate warning from the RDP client | U | 1 | ✅ |
-| UI-JUMP-02 | RDP certificate pin | the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab | U | 2 | ✅ |
+| UI-JUMP-02 | RDP certificate pin | the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab; closing the tab leaves no tab and RemoteHub answering | U | 2 | ✅ |
 
 **Agent remote desktop**
 

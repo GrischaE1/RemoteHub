@@ -335,7 +335,8 @@ switch ($Do) {
             if (-not $next) { Start-Sleep -Milliseconds 200; continue }
             $req = $null
             try { $req = [IO.File]::ReadAllText($next.FullName) | ConvertFrom-Json } catch { Start-Sleep -Milliseconds 100; continue }   # still being written
-            Remove-Item $next.FullName -ErrorAction SilentlyContinue
+            # gone already (an earlier server took it): the server ended here through its trap (UI-AD-07, run 20261026-032740)
+            try { [IO.File]::Delete($next.FullName) } catch { continue }
             $a = @{ Do = $req.do; Title = $(if ($req.title) { $req.title } else { '*' }); TimeoutSec = [int]$req.timeout; Out = $req.out }
             if ($req.text) { $a.Text = $req.text }
             if ($req.PSObject.Properties['value'] -and $null -ne $req.value) { $a.Value = [string]$req.value }
@@ -616,7 +617,13 @@ switch ($Do) {
             if (-not $found) { Start-Sleep -Milliseconds 500 }
         } while (-not $found -and (Get-Date) -lt $until)
         $action = if ($Value) { $Value } else { 'click' }
-        if (-not $found) { Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }; break }
+        # a hung program's window has no name for UI Automation and drops out of the list: named here as not responding
+        # (UI-JUMP, run 20261026-032740: RemoteHub's UI thread hung, the list showed only "Program Manager")
+        if (-not $found) {
+            $hung = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and -not $_.Responding } | ForEach-Object { "$($_.ProcessName) ($($_.Id))" })
+            Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; notResponding = $hung; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }
+            break
+        }
         $pat = { param($p) $o = $null; if ($found.TryGetCurrentPattern($p, [ref]$o)) { $o } else { $null } }
         $result = @{ found = $true; name = $found.Current.Name; type = $found.Current.ControlType.ProgrammaticName; window = $win.Current.Name; enabled = $found.Current.IsEnabled }
         # The element's centre for a real click. Something of the window's own drawn over that point (RemoteHub's view rail

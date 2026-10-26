@@ -3624,7 +3624,7 @@ function Invoke-LabUi {
         # a password typed into a field never goes into the message (it ends up in the evidence and the console log -
         # lab run 20261019-193627 had the lab password there, UI-RDP's "setnext:..." for 'Password')
         $shown = if ($Value -match '^(setnext|keys):' -and $Text -match 'Password|PIN|Passwort|Kennwort') { "$(($Value -split ':', 2)[0]):<hidden>" } else { $Value }
-        throw "UI step failed: '$Text' in '$Title' ($shown): $(if ($r.PSObject.Properties['error']) { $r.error + $(if ($r.PSObject.Properties['entries']) { ' - entries: ' + (@($r.entries) -join ', ') }) } else { 'not found; windows: ' + ($r.windows -join ', ') })"
+        throw "UI step failed: '$Text' in '$Title' ($shown): $(if ($r.PSObject.Properties['error']) { $r.error + $(if ($r.PSObject.Properties['entries']) { ' - entries: ' + (@($r.entries) -join ', ') }) } else { 'not found; windows: ' + ($r.windows -join ', ') + $(if ($r.PSObject.Properties['notResponding'] -and @($r.notResponding).Count) { '; not responding: ' + (@($r.notResponding) -join ', ') }) })"
     }
     $r
 }
