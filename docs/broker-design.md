@@ -1,7 +1,7 @@
 # RemoteHub Broker
 
-Status: Draft v4 (2026-10-26) – decisions in §18 (v3: shared devices, organisation secrets, install and assign;
-v4: multi-organisation from day one, §5.2).
+Status: Draft v5 (2026-10-26) – decisions in §18 (v3: shared devices, organisation secrets, install and assign;
+v4: multi-organisation from day one, §5.2; v5: devices behind a jump host shared with every console, §10.5).
 Nothing built yet. Phases and tests in §17.
 Owner: Grischa Ernst
 
@@ -116,6 +116,10 @@ error. The direct path is a speed-up:
 | The device's internal addresses leak to consoles | Host candidates reveal local addresses to the console (through the broker). `BrokerDirect = 1` sends only public candidates, `0` none (§13.1). |
 | Brute force against devices through the broker | The agent's sign-in gate keys on the console's public address as the broker saw it (§10.2); the broker limits session requests per console (§12.4). |
 | Denial of service against the broker | It stops reaching devices *from outside*; on the LAN, direct connections keep working (§11.1). Cloudflare absorbs volumetric attacks; per-console and per-agent limits (§12.4). |
+| The broker changes a shared target's address or certificate pin behind a jump host | Target records are sealed with the layout key (§10.5); a changed one fails the seal and isn't opened. |
+| A compromised jump host announces rogue targets | They land in *Discovered* without inherited credentials, marked as announced by that jump host (§10.5). A compromised jump host could already misdirect what goes through it today; the pins of RDP, SSH and the agent still protect. |
+| The broker uses a jump host's reachability checks to scan its network | Only addresses and ports the jump host's `TunnelTargets` / `TunnelPorts` allow, at most 500, a TCP connect with nothing sent, never special addresses (§10.5). |
+| Directory discovery publishes a site's computer names | Off until IT names an OU (`JumpHostDiscovery`); names, DNS names and OS only (§10.5). |
 | RDP to the device itself through the tunnel opens more than RDP | The exception is the device's own RDP port only, read on the device – the caller can't choose another port or address (§9.1). |
 
 ## 5. Architecture
@@ -482,6 +486,75 @@ The jump host rule "the jump host itself must be reachable directly" (jump-host-
 or through the RemoteHub Broker". Nothing else in the tree rules changes. One agent makes a whole site reachable from
 anywhere.
 
+### 10.5 Devices behind a jump host – shared with every console
+
+A device behind a jump host usually has no agent, so it never registers with the broker. Without more, it would exist
+only in the tree of the console that created it. So the synced folder (§11.4) also carries what sits **under a broker
+jump host**, in three ways:
+
+| Kind | Comes from | Lands in |
+|---|---|---|
+| **Shared target** | a console creates a connection under the jump host in the synced folder, or drags one there | where that console puts it |
+| **Announced target** | the jump host itself – from its policy or from the directory (below) | *Discovered on JUMP01* under the jump host, until a console places it |
+| **Agent behind the jump host** | an agent with no internet of its own that reaches the broker **through** its jump host (below) | *New devices*, like any self-registered device (§6.4) |
+
+```
+Contoso Ltd – RemoteHub Broker
+  └─ Site Berlin
+       └─ JUMP01            ● online                 broker device, jump host
+            ├─ SQL01        ● reachable from JUMP01   shared target (RDP, WinRM)
+            ├─ Branch office
+            │    └─ PC-0815 ○ not reachable           shared target
+            └─ Discovered on JUMP01   12              announced, not placed yet
+```
+
+**Shared targets**
+
+- A **target record**, sealed with the layout key (§6.1) like folders and placements: id, the jump host's device id,
+  name, address, the ports and protocols it is used with (RDP, WinRM, agent, SSH/SFTP, SMB, WebDAV shares), its
+  placement, and – once a console has confirmed them – the **RDP certificate pin** (jump-host-design §14) and **SSH
+  host key**. The broker can't change the address or a pin without breaking the seal.
+- **Pins are shared:** the first console that confirms a target's RDP certificate seals the pin into the record; the
+  others connect without being asked again, and a changed certificate prompts everyone.
+- **Not shared:** credentials, RDP options, notes – as for devices, each console keeps its own (§11.4).
+- **Moving an existing connection** from one's own tree under a broker jump host in the synced folder makes it shared
+  (it asks first: "SQL01 becomes visible to every console of Contoso Ltd. Its credentials stay on this PC.").
+- The one-hop rule applies unchanged: nothing below a jump host is a jump host (jump-host-design §4.3).
+
+**Announced targets** – the jump host tells the broker what it can reach:
+
+- **From its policy:** `JumpHostTargets` (MULTI_SZ, one per line: `SQL01=sql01.contoso.local`,
+  `PRINT01=10.20.1.40:3389,5986`) – for IT that deploys jump hosts by Intune or GPO.
+- **From the directory:** `JumpHostDiscovery` (SZ, an LDAP path such as `OU=Servers,DC=contoso,DC=local`) – a
+  domain-joined jump host reads the computer objects there (name, `dNSHostName`, operating system) as its computer
+  account, every 6 hours.
+- The agent keeps only entries its own `TunnelTargets` allows (it couldn't reach the others anyway) and sends
+  `Announce {targets[], seal}` – sealed with the record key over its device id. The broker accepts it only on that jump
+  host's own control channel.
+- Both values are unset by default, so nothing is announced until IT names targets or an OU – it publishes computer
+  names to the broker (the operator's Cloudflare account), so it isn't done without being asked.
+- In RemoteHub they appear in *Discovered on JUMP01* without inherited credentials ("announced by JUMP01"); dragging
+  them out – one, several or *Place all* – turns them into shared targets. A target no longer announced is marked so;
+  unplaced ones disappear after 7 days, placed ones stay with a note.
+
+**Reachability instead of an online dot.** An agentless target can't be "online" at the broker, so the jump host
+checks it:
+
+- The broker sends the jump host the addresses and ports of its shared and announced targets (addresses only – the
+  same information the target records hold). Every 5 minutes, spread over the interval, the jump host tries a TCP
+  connection to each and reports `TargetStatus {id, reachable, port, checked}`; consoles show "● reachable from JUMP01"
+  or "○ not reachable (RDP port closed)".
+- **The broker can't use this to scan:** the agent checks only addresses and ports its `TunnelTargets` and
+  `TunnelPorts` allow, at most 500 targets, a TCP connect with nothing sent, never a special address (jump-host-design
+  §6.2). Policy `JumpHostChecks` (DWORD, default 1) turns it off.
+
+**Agents behind the jump host.** An agent on an isolated network can't reach the broker itself. Its jump host can
+carry that one connection: with `BrokerProxy = JUMP01:58732` the inner agent opens `CONNECT <broker>:443` through
+the jump host's agent, which allows only the broker's own name and port (policy `BrokerProxyEnabled`, default 1). The
+inner agent then registers like any device (§6.4). Consoles reach it through the jump host's tunnel (its *Reach* is
+inherited from where it is placed – under JUMP01 – and the jump host route is used, jump-host-design §5), or relayed
+through the broker over that proxied connection; no direct path, as UDP isn't carried.
+
 ## 11. RemoteHub side
 
 ### 11.1 Reach – direct or through the broker
@@ -615,6 +688,7 @@ secrets.
 | `devices` | org, device id, public key, computer name, domain, OS, agent version, secret id, seal, registered, last seen, last public address |
 | `layout` | org, folders (id, parent, name), placements and labels – each with version and seal |
 | `consoles` | org, console id, name, public key, registered, last seen, removed |
+| `targets` | org, target id, jump host device id, record (name, address, ports, shares, pins), seal, version, announced (and by what), reachability, last checked (§10.5) |
 | `audit` | org, time, event, console, device, addresses, path, bytes, reason – kept 90 days (setting) |
 
 Migrations forward only (pre-GA).
@@ -653,6 +727,10 @@ Migrations forward only (pre-GA).
 | `BrokerProxy` | SZ | WinHTTP setting | `http://proxy:8080`. |
 | `ListenEnabled` | DWORD 0/1 | 1 | 0: no TCP listener; reachable only through the broker (§10.3). |
 | `TunnelOwnRdp` | DWORD 0/1 | 1 | 0: no RDP to this device through its own agent (§9.1). |
+| `JumpHostTargets` | MULTI_SZ | none | Targets this jump host announces: `name=address[:ports]` (§10.5). |
+| `JumpHostDiscovery` | SZ | none | LDAP path of an OU whose computers this jump host announces (§10.5). |
+| `JumpHostChecks` | DWORD 0/1 | 1 | 0: no reachability checks of targets behind this jump host. |
+| `BrokerProxyEnabled` | DWORD 0/1 | 1 | 0: agents behind this jump host can't reach the broker through it (§10.5). |
 
 On by default once the agent has a broker (features on by default; IT turns them off). An unreadable policy key
 refuses everything, as today. The ADMX template (admx-design §9) gets a *RemoteHub Broker* category. The device secret
@@ -686,6 +764,8 @@ is never a policy value (§6.4); `BrokerUrl` alone moves registered devices to a
 | `BrokerSessionEnded` | 1302 | Duration, streams, bytes each way, path changes, why. |
 | `BrokerSessionRefused` | 2300 | Refused by policy (`BrokerEnabled`, `BrokerConsoles`) or limit. |
 | `BrokerRegistered` | 1303 | The device registered itself or was assigned: broker, organisation id, device id, secret id. Also `broker leave`. |
+| `JumpHostAnnounced` | 1304 | This jump host announced targets: how many, from the policy and/or which OU. Only when the list changes. |
+| `BrokerProxied` | 1305 | An agent behind this jump host connected to the broker through it: its source address. Once per source per day. |
 | `BrokerError` | 3300 | Registration refused (secret retired or unknown, key unknown), broker unreachable for more than an hour (once). |
 
 Sign-ins and streams inside a session are audited as today (1000, 1100, 1200, 2000 …) with the `via RemoteHub Broker`
@@ -737,9 +817,9 @@ Kept stable now so these are additions:
 | Phase | Content |
 |---|---|
 | **0 – Spikes** | B1–B6 (§15). |
-| **1 – Broker, sharing and relay** | Broker on Cloudflare (§12), multi-organisation with the organisation id everywhere (§5.2); secrets, seals, console registration (§6.1–§6.3); self-registration, MSI properties, *Assign to RemoteHub Broker* and `broker join` (§6.4); control channels (§7); the synced folder with live presence (§11.4); relay sessions (§8.1, §8.5); Kestrel transport (§10.2); *Reach* and settings (§11); RDP to the device itself (§9.1); jump hosts through the broker (§10.4); policy, audit, errors. Every console sees every device and reaches it from anywhere – relayed. |
+| **1 – Broker, sharing and relay** | Broker on Cloudflare (§12), multi-organisation with the organisation id everywhere (§5.2); secrets, seals, console registration (§6.1–§6.3); self-registration, MSI properties, *Assign to RemoteHub Broker* and `broker join` (§6.4); control channels (§7); the synced folder with live presence (§11.4) and shared targets behind broker jump hosts with shared pins (§10.5); relay sessions (§8.1, §8.5); Kestrel transport (§10.2); *Reach* and settings (§11); RDP to the device itself (§9.1); jump hosts through the broker (§10.4); policy, audit, errors. Every console sees every device and reaches it from anywhere – relayed. |
 | **2 – Direct** | STUN, candidates, punching, QUIC (§8.2–§8.4), path choice and the desktop move (§8.6), *Test* in settings. |
-| **3 – Broker only** | `ListenEnabled = 0` and `BROKER_ONLY` (§10.3), secret rotation in practice (§6.5), ADMX entries. |
+| **3 – Broker only, behind the jump host** | `ListenEnabled = 0` and `BROKER_ONLY` (§10.3), secret rotation in practice (§6.5), announced targets, reachability checks and the broker proxy for agents behind a jump host (§10.5), ADMX entries. |
 | Later | §16, stream migration, inner TLS dropped on QUIC. |
 
 ### 17.1 Tests
@@ -790,6 +870,10 @@ VM on the lab network.
 | B-16 | Two consoles: a folder created and a device moved on one appear on the other within 10 s; the device going offline (service stopped) and online again shows on both. |
 | B-17 | Retired device secret: a new install with it is refused (3300); devices registered with it keep working. |
 | B-18 | Two organisations on one broker: a console of one sees none of the other's devices; a console connected to both shows two synced folders with separate credentials; a device secret of one registers only into that one. |
+| B-19 | Shared target: console A creates SQL01 under the broker-reached jump host and confirms its RDP certificate; console B sees it within 10 s and connects over RDP without a certificate question; credentials entered on A are not on B. |
+| B-20 | Announced targets: `JumpHostTargets` and `JumpHostDiscovery` (an OU of the lab domain where the lab has one; otherwise the policy part only) on the jump host fill *Discovered on JUMP01*; an entry outside `TunnelTargets` isn't announced; placing one makes it shared; removing it from the policy marks it. |
+| B-21 | Reachability: the target VM up → "reachable from JUMP01", its RDP port blocked → "not reachable" within 5 minutes; `JumpHostChecks = 0` stops the checks. |
+| B-22 | Agent behind the jump host: an agent on the private switch with `BrokerProxy = JUMP01:58732` registers and is reached through the jump host; `BrokerProxyEnabled = 0` on the jump host stops it (3300 on the inner agent). |
 
 ### 17.3 Security (`SEC-BRK`, in `security-test-lab-design.md`, tag `Security`)
 
@@ -810,6 +894,10 @@ VM on the lab network.
 | SEC-BRK-13 | With only the device secret: register a device named like an existing one and seal a placement into *Servers* | lands in *New devices*, duplicate name flagged, the placement seal is invalid (no layout key) |
 | SEC-BRK-14 | A registered device id registered again with another key | refused; the original device keeps working |
 | SEC-BRK-15 | The device secret on the device after install: registry, installer log, `agent.json`, process command lines during `broker join` | not found |
+| SEC-BRK-16 | A tampered broker changes a shared target's address or RDP pin | seal fails; the target isn't opened, no credentials sent |
+| SEC-BRK-17 | A tampered broker sends the jump host 1,000 check addresses, special addresses and addresses outside `TunnelTargets` | at most 500 checked, none outside the policy, none special |
+| SEC-BRK-18 | Through the broker proxy of a jump host: `CONNECT` to another host or port | refused; only the broker's name and port 443 |
+| SEC-BRK-19 | Another device announces targets for JUMP01 (its own connection, JUMP01's device id) | refused by the broker – only JUMP01's own authenticated connection may announce for it; a broker that passes one on anyway adds at most entries to *Discovered*, which carry no credentials |
 
 ## 18. Decisions (2026-10-26)
 
@@ -826,6 +914,7 @@ VM on the lab network.
 | D9 | Who sees which devices | **Every console sees every device** of the organisation; the Windows sign-in and policy on each device still decide who gets in. Per-user visibility with RBAC (§16). |
 | D10 | Installing and assigning | Self-registration with `BROKER_URL` / `BROKER_SECRET` (MSI), *Assign to RemoteHub Broker* from RemoteHub, `broker join` on the device; the secret never by policy or on a command line (§6.4). |
 | D11 | Organisations | **Multi-organisation from day one:** an immutable organisation id (`o_…`) plus short and display names; carried in the secrets, URLs, proofs, seals and every stored name; taken only from the authenticated connection; limits per organisation; a console may connect to several (§5.2). |
+| D12 | Devices behind a jump host | Shared with every console like devices: **shared targets** created by consoles (sealed, with shared RDP and SSH pins), **announced targets** from the jump host's policy or an OU (into *Discovered*, off until configured), **reachability checks** by the jump host within its tunnel policy, and agents without internet reaching the broker **through** their jump host (§10.5). |
 
 ## 19. Spike results
 
