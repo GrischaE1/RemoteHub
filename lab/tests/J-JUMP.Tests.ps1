@@ -236,7 +236,9 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $mod = (Get-Module RemoteHub.TestLab).Path
             $since = Get-LabGuestTime -Name 'JumpHost'
             $held = Start-Job -ArgumentList $mod, $jump, $target -ScriptBlock {
-                param($mod, $jump, $target) Import-Module $mod; Use-LabJump -Jump $jump; Invoke-LabJump -Kind open -TargetHost $target -Port 58732 -Params @{ seconds = 60 }
+                # held 60 s: the harness' own limit (timeout, 60 s by default) must be longer, or it cancels the connection
+                # it holds (runs 20261025-192331 to 20261026-144106: TaskCanceledException)
+                param($mod, $jump, $target) Import-Module $mod; Use-LabJump -Jump $jump; Invoke-LabJump -Kind open -TargetHost $target -Port 58732 -Params @{ seconds = 60; timeout = 150 }
             }
             # The job's start and module import took longer than the 8 s waited before (run 20261026-032740: the probe
             # got in, 101): the probe goes once the jump host has logged the held connection
@@ -262,6 +264,22 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
                 Set-Acl $k $acl; Remove-Item $k -Recurse -Force
             }
             Save 'limits' $s
+        }
+
+        # Also when the setup above failed half way: maxSessions 1 left on the jump host refused J-08's desktop with 503
+        # later in this file (runs 20261025-192331 to 20261026-144106). Both steps are harmless when already done.
+        AfterAll {
+            Invoke-LabGuest -Name 'JumpHost' -ScriptBlock {
+                $f = 'C:\ProgramData\RemoteHub\Agent\agent.json'; $c = Get-Content $f -Raw | ConvertFrom-Json
+                if ($c.PSObject.Properties['maxSessions'] -and $c.maxSessions -ne 20) { $c.maxSessions = 20; [IO.File]::WriteAllText($f, ($c | ConvertTo-Json -Depth 5)) }
+                $k = 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent'
+                if (Test-Path $k) {
+                    $acl = Get-Acl $k
+                    foreach ($r in @($acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' })) { $null = $acl.RemoveAccessRule($r) }
+                    Set-Acl $k $acl; Remove-Item $k -Recurse -Force
+                }
+            }
+            $null = Restart-LabAgent -Name 'JumpHost' -Pin $jump.Pin
         }
 
         It 'J-14 a jump connection counts toward maxSessions; an unreadable policy key turns jump connections off' -Tag 'J-14' {
