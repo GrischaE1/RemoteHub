@@ -85,8 +85,12 @@ public enum TunnelMessage : byte
 /// Open a TCP connection from the jump host to <paramref name="Host"/> (name or address) and port. <paramref name="Probe"/>:
 /// only resolve and check it, and answer <see cref="TunnelMessage.Refused"/> with <see cref="TunnelRefusal.Probe"/> and the
 /// jump host's own address towards it – nothing is connected (older agents ignore it and connect).
+/// <para>Host <see cref="Self"/> is the agent's device itself, for the ports its policy TunnelOwnPorts lists; port 0 asks for its RDP port.</para>
 /// </summary>
-public sealed record TunnelOpen(string Host, int Port, bool Probe = false);
+public sealed record TunnelOpen(string Host, int Port, bool Probe = false)
+{
+    public const string Self = "self";
+}
 
 /// <summary>Connected to <paramref name="Address"/>; <paramref name="Local"/> is the jump host's own address towards it.</summary>
 public sealed record TunnelOpened(string Address, string? Local = null);

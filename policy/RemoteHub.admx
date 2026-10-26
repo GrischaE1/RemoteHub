@@ -21,6 +21,7 @@
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
       <definition name="SUPPORTED_Agent_0_19_0" displayName="$(string.SUPPORTED_Agent_0_19_0)" />
+      <definition name="SUPPORTED_Agent_0_22_0" displayName="$(string.SUPPORTED_Agent_0_22_0)" />
     </definitions>
   </supportedOn>
 
@@ -64,6 +65,7 @@
     <category name="Agent_Privacy" displayName="$(string.Cat_Agent_Privacy)"><parentCategory ref="Agent" /></category>
     <category name="Agent_AutoSignIn" displayName="$(string.Cat_Agent_AutoSignIn)"><parentCategory ref="Agent" /></category>
     <category name="Agent_JumpHost" displayName="$(string.Cat_Agent_JumpHost)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Broker" displayName="$(string.Cat_Agent_Broker)"><parentCategory ref="Agent" /></category>
     <category name="Agent_Service" displayName="$(string.Cat_Agent_Service)"><parentCategory ref="Agent" /></category>
   </categories>
 
@@ -1166,6 +1168,53 @@
       <supportedOn ref="SUPPORTED_Agent_0_18_11" />
       <elements>
         <decimal id="MaxTunnelStreams" valueName="MaxTunnelStreams" minValue="1" maxValue="1024" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Agent_TunnelOwnPorts" class="Machine" displayName="$(string.Agent_TunnelOwnPorts)" explainText="$(string.Agent_TunnelOwnPorts_Help)"
+            presentation="$(presentation.Agent_TunnelOwnPorts)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><multiText id="TunnelOwnPorts" valueName="TunnelOwnPorts" required="true" /></elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: RemoteHub Broker -->
+
+    <policy name="Agent_BrokerEnabled" class="Machine" displayName="$(string.Agent_BrokerEnabled)" explainText="$(string.Agent_BrokerEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="BrokerEnabled">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_BrokerUrl" class="Machine" displayName="$(string.Agent_BrokerUrl)" explainText="$(string.Agent_BrokerUrl_Help)"
+            presentation="$(presentation.Agent_BrokerUrl)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerUrl" valueName="BrokerUrl" maxLength="200" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerConsoles" class="Machine" displayName="$(string.Agent_BrokerConsoles)" explainText="$(string.Agent_BrokerConsoles_Help)"
+            presentation="$(presentation.Agent_BrokerConsoles)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><multiText id="BrokerConsoles" valueName="BrokerConsoles" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerProxy" class="Machine" displayName="$(string.Agent_BrokerProxy)" explainText="$(string.Agent_BrokerProxy_Help)"
+            presentation="$(presentation.Agent_BrokerProxy)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerProxy" valueName="BrokerProxy" maxLength="200" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerKeepAliveSeconds" class="Machine" displayName="$(string.Agent_BrokerKeepAliveSeconds)" explainText="$(string.Agent_BrokerKeepAliveSeconds_Help)"
+            presentation="$(presentation.Agent_BrokerKeepAliveSeconds)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements>
+        <decimal id="BrokerKeepAliveSeconds" valueName="BrokerKeepAliveSeconds" minValue="30" maxValue="90" required="true" />
       </elements>
     </policy>
 

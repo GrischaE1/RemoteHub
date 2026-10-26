@@ -110,6 +110,7 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
         StreamRelay? relay = null;
         try
         {
+            if (host == TunnelOpen.Self) { await OpenSelf(id, open.Port, p); return; }
             if (host.Length == 0 || open.Port is < 1 or > 65535) { await Refuse(id, TunnelRefusal.Unreachable, $"{where} is not a valid target.", null); return; }
             if (!p.TunnelEnabled) { await Refused(id, where, "TunnelEnabled = 0", "Jump connections are turned off on this device by policy (TunnelEnabled)."); return; }
             if (!p.Tunnel.PortAllowed(open.Port))
@@ -188,6 +189,60 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
             log.Write($"Jump connection {account} from {source}: opening {where} failed: {ex.Message}");
             try { await Refuse(id, TunnelRefusal.Unreachable, $"Opening {where} failed on the jump host: {ex.Message}", null); } catch { /* tunnel gone */ }
         }
+    }
+
+    /// <summary>
+    /// The device itself (broker-design.md §9.1): only ports its policy lists in TunnelOwnPorts – port 0 asks for "RDP",
+    /// the port RDP is configured for here, whatever RemoteHub knows about it. Nothing else on its own addresses opens
+    /// this way; services that listen only on this device stay out of reach unless listed.
+    /// </summary>
+    private async Task OpenSelf(uint id, int asked, AgentPolicy p)
+    {
+        var rdp = asked == 0;
+        var port = rdp ? RdpPort() : asked;
+        var where = rdp ? $"this device's RDP port ({port})" : $"port {asked} on this device";
+        var listed = rdp ? p.TunnelOwnPorts.Contains("RDP", StringComparer.OrdinalIgnoreCase)
+                         : asked is >= 1 and <= 65535 && p.TunnelOwnPorts.Contains(asked.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!p.TunnelEnabled) { await Refused(id, where, "TunnelEnabled = 0", "Jump connections are turned off on this device by policy (TunnelEnabled)."); return; }
+        if (!listed) { await Refused(id, where, "TunnelOwnPorts", $"This device's policy doesn't allow {where} through its agent (TunnelOwnPorts)."); return; }
+
+        // Windows lets RDP clients in from 127.0.0.2 (a loopback address other than the one it refuses for itself); the
+        // device's own address is the fallback (broker-design.md spike B6).
+        Socket? socket = null;
+        Exception? last = null;
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_ct))
+        {
+            timeout.CancelAfter(ConnectTimeout);
+            foreach (var address in new[] { IPAddress.Parse("127.0.0.2"), IPAddress.Loopback })
+            {
+                try { socket = await _net.Connect(new IPEndPoint(address, port), timeout.Token); break; }
+                catch (Exception ex) when (!_ct.IsCancellationRequested) { last = ex; if (timeout.IsCancellationRequested) break; }
+            }
+        }
+        if (socket is null)
+        {
+            log.Write($"Jump connection {account} from {source}: {where} unreachable ({last?.Message})");
+            await Refuse(id, TunnelRefusal.Unreachable, $"Nothing answers on {where} ({(last as SocketException)?.SocketErrorCode.ToString() ?? last?.Message}).", null);
+            return;
+        }
+        var target = socket;
+        var relay = new StreamRelay(this, id, new NetworkStream(target, ownsSocket: true),
+            () => target.Shutdown(SocketShutdown.Send), () => target.LingerState = new LingerOption(true, 0)) { Name = "self", Remote = (IPEndPoint)target.RemoteEndPoint! };
+        _streams[id] = relay;
+        Interlocked.Increment(ref _opened);
+        await Send(TunnelProtocol.Json(TunnelMessage.Opened, id, new TunnelOpened(relay.Remote!.Address.ToString(), null), TunnelJson.Default.TunnelOpened));
+        relay.Start();
+    }
+
+    /// <summary>The port RDP listens on (HKLM\…\WinStations\RDP-Tcp PortNumber), 3389 when it can't be read.</summary>
+    internal static int RdpPort()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp");
+            return key?.GetValue("PortNumber") is int n && n is >= 1 and <= 65535 ? n : 3389;
+        }
+        catch { return 3389; }
     }
 
     /// <summary>A send nobody waits for: a failure (the tunnel closing) is expected and ignored.</summary>
