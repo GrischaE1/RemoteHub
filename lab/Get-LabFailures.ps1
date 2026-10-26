@@ -31,6 +31,7 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'LabRetry.ps1')
 
 if (-not (Test-Path $Root)) { throw "No lab results in $Root - pass -Root (e.g. D:\RemoteHubLab\results)." }
 $runs = @(Get-ChildItem $Root -Directory | Where-Object Name -match '^\d{8}-\d{6}$' | Sort-Object Name)
@@ -104,7 +105,7 @@ $rows = @($rows)
 if ($PassThru) { return $rows }
 # failed the first time, passed the second: not failures of the run, but each one is a case to make reliable
 $flakyFile = Join-Path $dir 'flaky.json'
-$flaky = @(if (Test-Path $flakyFile) { Get-Content $flakyFile -Raw | ConvertFrom-Json | Where-Object { $_ -and $_.Id } })
+$flaky = @(Read-LabFlaky -Path $flakyFile)
 function Write-Flaky {
     if (-not $flaky.Count) { return }
     foreach ($f in $flaky) { 'FLAKY {0} [{1}, {2}]: passed the second time; first: {3}' -f $f.Id, $f.File, $f.Vm, (Short $f.Message $Width) }

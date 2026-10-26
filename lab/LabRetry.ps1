@@ -87,6 +87,15 @@ function Get-LabFlakyCases {
     }
 }
 
+# A run's flaky.json, one object per case. Windows PowerShell 5.1 hands a JSON array on as one object (piped straight
+# on, every case became one row: "FLAKY System.Object[]" in run 20261026-144106), so it is assigned first.
+function Read-LabFlaky {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $list = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    foreach ($f in @($list)) { if ($f -and $f.PSObject.Properties['Id'] -and $f.Id) { $f } }
+}
+
 # Every finished run under -Root, newest last: per case how often it failed (in its last attempt) and how often it was
 # flaky (failed, then passed on the retry), the runs it ran in, and the last time and message. Runs with tags or -Quick
 # count too - they ran the case - but runs that never finished (no done.json) don't.
@@ -109,14 +118,10 @@ function Get-LabFlakyHistory {
                 if ($c.Result -eq 'Failure') { $e.Failed++; $e.Last = $d.Name; $e.LastResult = 'failed'; $e.Message = $c.Message }
             }
         }
-        $flakyFile = Join-Path $d.FullName 'flaky.json'
-        if (Test-Path -LiteralPath $flakyFile) {
-            foreach ($f in @(Get-Content -LiteralPath $flakyFile -Raw | ConvertFrom-Json)) {
-                if (-not $f -or -not $f.Id) { continue }
-                $e = Entry $f.Id
-                $e.Flaky++
-                if ($e.Last -ne $d.Name) { $e.Last = $d.Name; $e.LastResult = 'flaky'; $e.Message = $f.Message }
-            }
+        foreach ($f in @(Read-LabFlaky -Path (Join-Path $d.FullName 'flaky.json'))) {
+            $e = Entry $f.Id
+            $e.Flaky++
+            if ($e.Last -ne $d.Name) { $e.Last = $d.Name; $e.LastResult = 'flaky'; $e.Message = $f.Message }
         }
     }
     $cases.Values | Where-Object { $_.Failed -or $_.Flaky } | Sort-Object @{ Expression = { $_.Failed + $_.Flaky }; Descending = $true }, Id

@@ -110,12 +110,16 @@ public class LabRetryTests
             if (done) File.WriteAllText(Path.Combine(run, "done.json"), "{}");
         }
         Run("20261101-100000", true, "[]", ("A-01", "Failure"), ("B-01", "Success"));
-        Run("20261102-100000", true, "[{\"Id\":\"B-01\",\"File\":\"F\",\"Kind\":\"W11\",\"Vm\":\"W11\",\"Message\":\"B-01 timed out\"}]", ("A-01", "Failure"), ("B-01", "Success"));
+        // two flaky cases: Windows PowerShell 5.1 hands a JSON array on as one object, and once they were one row
+        Run("20261102-100000", true, "[{\"Id\":\"B-01\",\"File\":\"F\",\"Kind\":\"W11\",\"Vm\":\"W11\",\"Message\":\"B-01 timed out\"}," +
+                                     "{\"Id\":\"C-01\",\"File\":\"F\",\"Kind\":\"W11\",\"Vm\":\"W11\",\"Message\":\"C-01 slow\"}]",
+            ("A-01", "Failure"), ("B-01", "Success"), ("C-01", "Success"));
         Run("20261103-100000", false, "[]", ("A-01", "Failure"));   // not finished: not counted
         var (exit, output) = PowerShell($@"Get-LabFlakyHistory -Root '{root}' | ForEach-Object {{ '{{0}} ran={{1}} failed={{2}} flaky={{3}} last={{4}} {{5}} msg={{6}}' -f $_.Id, $_.Ran, $_.Failed, $_.Flaky, $_.Last, $_.LastResult, $_.Message }}");
         Assert.True(exit == 0, output);
         Assert.Contains("A-01 ran=2 failed=2 flaky=0 last=20261102-100000 failed msg=A-01 broke", output);
         Assert.Contains("B-01 ran=2 failed=0 flaky=1 last=20261102-100000 flaky msg=B-01 timed out", output);
+        Assert.Contains("C-01 ran=1 failed=0 flaky=1 last=20261102-100000 flaky msg=C-01 slow", output);
         return 0;
     });
 }
