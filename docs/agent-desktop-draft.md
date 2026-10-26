@@ -219,7 +219,7 @@ Defaults: the groups in `agent.json` (`AllowedGroups`, Administrators) get `Powe
 - **WebRTC library:**
   - SIPSorcery (licence to check: *assumption*, it may have non-standard additions);
   - or a native libwebrtc wrapper.
-- **Client–server model:** who runs the broker or relay, and how devices register and stay reachable (an outbound connection from the agent).
+- **Client–server model:** who runs the broker or relay, and how devices register and stay reachable (an outbound connection from the agent). Designed in [broker-design.md](broker-design.md).
 - **RBAC server:** how rights are managed, the token format, and how several admins and tenants are separated.
 - Audio; dragging files out of the tab onto this PC (dropping onto the tab is built, §4.7).
 

@@ -23,7 +23,7 @@ WinRM can stay disabled on the device.
 
 ## 2. Non-goals (v1)
 
-- **No NAT traversal, relay or cloud service.** RemoteHub needs a network path to the device, for example through VPN or routing – or through another device's agent used as a jump host (`/v1/tunnel`, §6).
+- **No NAT traversal, relay or cloud service.** RemoteHub needs a network path to the device, for example through VPN or routing – or through another device's agent used as a jump host (`/v1/tunnel`, §6). Planned: the RemoteHub Broker – see [broker-design.md](broker-design.md).
 - ~~No screen or input.~~ Changed: the agent also offers its own remote desktop for devices where RDP is off – see [agent-desktop-draft.md](agent-desktop-draft.md) and §12.
 - **No own command set.** The agent never interprets commands. It authenticates the account, starts PowerShell as that account and forwards the protocol.
 

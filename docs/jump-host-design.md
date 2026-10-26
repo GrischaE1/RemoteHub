@@ -550,7 +550,8 @@ What was built, and where it differs from the sections above:
 ## 16. Not done yet
 
 - **More than one hop** (D5): only the tree rule limits it – "… Only one jump host is supported for now."
-- **Client-side restrictions** (D6), **relay servers**, **SSH jump hosts**, **RD Gateway**.
+- **Client-side restrictions** (D6), **relay servers** (designed in [broker-design.md](broker-design.md); a jump host
+  may then be reached through the RemoteHub Broker, §10.4 there), **SSH jump hosts**, **RD Gateway**.
 - **FTP through a jump host.**
 - **Kerberos for RDP through a jump host** (§9.1 candidates 1 and 2); WinRM over HTTP to `localhost` (§9.2).
 - **The route in RemoteHub's session history** (§7) and on the RDP tab (§4.2).
