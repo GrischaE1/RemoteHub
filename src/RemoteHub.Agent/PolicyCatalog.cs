@@ -219,6 +219,8 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
     public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
+    /// <summary>Reaching devices through a RemoteHub Broker and its synced folders (broker-design.md §13.2).</summary>
+    public static readonly PolicyEntry AllowBroker = Feature("AllowBroker", "RemoteHub Agent", "Allow the RemoteHub Broker", "0.22.0");
     public static readonly PolicyEntry AllowNetworkShares = Feature("AllowNetworkShares", "Jump hosts and network shares", "Allow network shares");
     public static readonly PolicyEntry AllowSmb = Feature("AllowSmb", "Jump hosts and network shares", "Allow SMB shares");
     public static readonly PolicyEntry AllowSftp = Feature("AllowSftp", "Jump hosts and network shares", "Allow SFTP shares");
@@ -375,7 +377,7 @@ public static class PolicyCatalog
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
         AllowRemotingDeviceActions, AllowRemotingSetup,
         AllowQuickConnect, AllowConnectionEditing,
-        AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
+        AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav, AllowBroker,
         AllowSavedPasswords, AllowPasswordCopy,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
         AllowNotes,

@@ -18,6 +18,7 @@
       <definition name="SUPPORTED_RemoteHub_0_19_0" displayName="$(string.SUPPORTED_RemoteHub_0_19_0)" />
       <definition name="SUPPORTED_RemoteHub_0_20_2" displayName="$(string.SUPPORTED_RemoteHub_0_20_2)" />
       <definition name="SUPPORTED_RemoteHub_0_21_0" displayName="$(string.SUPPORTED_RemoteHub_0_21_0)" />
+      <definition name="SUPPORTED_RemoteHub_0_22_0" displayName="$(string.SUPPORTED_RemoteHub_0_22_0)" />
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
       <definition name="SUPPORTED_Agent_0_19_0" displayName="$(string.SUPPORTED_Agent_0_19_0)" />
@@ -206,6 +207,13 @@
             key="Software\Policies\RemoteHub" valueName="AllowAgentDeviceActions">
       <parentCategory ref="Console_Agent" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowBroker" class="Both" displayName="$(string.Console_AllowBroker)" explainText="$(string.Console_AllowBroker_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowBroker">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

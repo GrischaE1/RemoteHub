@@ -74,7 +74,8 @@ public partial class MainWindow
 
     /// <summary>Where <paramref name="device"/>'s agent is reached for <paramref name="c"/> – through its jump host, if any (null: not now).</summary>
     private AgentEndpoint? EndpointOf(Connection c, AgentDevice device, bool quiet = true) =>
-        TryRoute(c, quiet, out var via) ? new AgentEndpoint(device.Port, device.Fingerprint, via) : null;
+        c is { Broker.Kind: BrokerItemKind.Device, JumpHost: null } ? BrokerEndpointOf(c, device, quiet)
+        : TryRoute(c, quiet, out var via) ? new AgentEndpoint(device.Port, device.Fingerprint, via) : null;
 
     /// <summary>
     /// How an RDP session reaches <paramref name="c"/>: directly, or through a local port that leads through its jump host. The
@@ -84,6 +85,7 @@ public partial class MainWindow
     /// </summary>
     private async Task<RdpRoute?> RdpRouteAsync(Connection c)
     {
+        if (c is { Broker.Kind: BrokerItemKind.Device, JumpHost: null }) return await BrokerRdpRouteAsync(c);
         if (c.JumpHost is not { } jump) return RdpRoute.Direct;
         if (!TryRoute(c, quiet: false, out var via) || via is null) return null;
         var host = c.Host.Trim();

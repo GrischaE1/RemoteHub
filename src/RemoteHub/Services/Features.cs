@@ -13,6 +13,7 @@ public enum Feature
     RemotingSetup,
     QuickConnect, ConnectionEditing,
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
+    Broker,
     Recording, SavedPasswords, PasswordCopy,
     RdpFileImport, RdpFileExport, BackupExport, BackupImport, SharedSettings,
     Notes,
@@ -65,6 +66,7 @@ public static class Features
         [Feature.ConnectionEditing] = new(PolicyCatalog.AllowConnectionEditing, "Changing folders, connections and shares"),
         // A jump host is an agent: no agent, no jump hosts.
         [Feature.JumpHosts] = new(PolicyCatalog.AllowJumpHosts, "Jump hosts", Feature.Agent, Plural: true),
+        [Feature.Broker] = new(PolicyCatalog.AllowBroker, "The RemoteHub Broker", Feature.Agent),
         [Feature.NetworkShares] = new(PolicyCatalog.AllowNetworkShares, "Network shares", Plural: true),
         [Feature.Smb] = new(PolicyCatalog.AllowSmb, "SMB shares", Feature.NetworkShares, Plural: true),
         [Feature.Sftp] = new(PolicyCatalog.AllowSftp, "SFTP shares", Feature.NetworkShares, Plural: true),

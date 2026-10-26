@@ -30,6 +30,20 @@ public abstract partial class NodeBase : ObservableObject
     /// <summary>What it is in: a folder, or the connection it is reached through (a jump host); null = top level.</summary>
     [JsonIgnore] public NodeBase? Parent { get; set; }
 
+    /// <summary>Set on the items of a synced RemoteHub Broker folder (broker-design.md §11.4); null for the user's own items.</summary>
+    public BrokerRef? Broker { get; set; }
+
+    /// <summary>The synced broker folder this item is in (or is), or null.</summary>
+    [JsonIgnore] public NodeBase? BrokerRoot
+    {
+        get
+        {
+            for (NodeBase? n = this; n is not null; n = n.Parent)
+                if (n.Broker is { Kind: BrokerItemKind.Root }) return n;
+            return null;
+        }
+    }
+
     /// <summary>The connection this item is reached through (directly or in folders below it), or null.</summary>
     [JsonIgnore] public Connection? JumpHost
     {

@@ -8,6 +8,16 @@ public enum ServerAuth { ConnectWithoutWarning = 0, DoNotConnect = 1, Warn = 2 }
 public enum VisualQuality { Best, Balanced, Fast }
 /// <summary>How "Remote desktop" opens: through the RemoteHub Agent when one is installed (otherwise RDP), always RDP, or always the agent.</summary>
 public enum DesktopVia { Automatic, Rdp, Agent }
+/// <summary>How a device of a synced RemoteHub Broker folder is reached (broker-design.md §11.1).</summary>
+public enum BrokerReach
+{
+    /// <summary>Its own address first (1.5 s), then through the broker – in the same network the broker isn't used.</summary>
+    Automatic,
+    /// <summary>Only its own address: the broker is never used.</summary>
+    Direct,
+    /// <summary>Only through the broker.</summary>
+    Broker,
+}
 /// <summary>What to do when Windows asks for the password during connect (e.g. the server refuses saved credentials).</summary>
 public enum PasswordPromptAction
 {
@@ -58,6 +68,8 @@ public sealed class RdpOptions
     public bool? UseAgent { get; set; }
     /// <summary>Remote desktop through RDP or the RemoteHub Agent's own screen sharing (for devices where RDP is off).</summary>
     public DesktopVia? RemoteDesktopVia { get; set; }
+    /// <summary>Devices of a synced RemoteHub Broker folder: directly, through the broker, or the first that works.</summary>
+    public BrokerReach? Reach { get; set; }
     /// <summary>
     /// Agent remote desktop on a device where nobody is signed in: sign in automatically with the connection's credentials
     /// (the device must allow it – policy NoUserBehavior, right AutoSignIn – and have the credential provider installed).
@@ -89,6 +101,7 @@ public sealed class RdpOptions
         PsUseSsl = false,
         UseAgent = false,
         RemoteDesktopVia = DesktopVia.Automatic,
+        Reach = BrokerReach.Automatic,
         AgentAutoSignIn = false,
         AgentAutoSignInEndAction = "Lock",
     };

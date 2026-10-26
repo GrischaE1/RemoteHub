@@ -76,6 +76,8 @@ public partial class MainWindow : FluentWindow
             NewButton.Visibility = RailNewButton.Visibility = DeleteUnusedButton.Visibility = EditConnectionButton.Visibility = Visibility.Collapsed;
         };
         Loaded += (_, _) => StartAutoLock();
+        Loaded += (_, _) => StartBrokers();
+        Closed += (_, _) => _ = StopBrokersAsync();
         Closing += Window_Closing;
     }
 

@@ -258,10 +258,11 @@ public static class AgentInstaller
         var expected = AgentProtocol.NormalizeFingerprint(endpoint.Fingerprint);
         var port = endpoint.Port;
         RemoteCertificateValidationCallback pinned = (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.GetRawCertData()) == expected;
-        using var handler = endpoint.Via is { } via
-            ? AgentClientTransport.ThroughJumpHost(via, pinned)
+        // Through the broker the health check goes the same way as the sessions (Reach Automatic's direct try is for those).
+        using var handler = endpoint.Broker is { } broker ? AgentClientTransport.ThroughBroker(broker, pinned)
+            : endpoint.Via is { } via ? AgentClientTransport.ThroughJumpHost(via, pinned)
             : new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = pinned } };
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(endpoint.Via is null ? 8 : 30) };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(endpoint.Via is null && endpoint.Broker is null ? 8 : 30) };
         var h = host.Trim();
         if (h.Contains(':') && !h.StartsWith('[')) h = $"[{h}]";
         var json = await http.GetStringAsync($"https://{h}:{port}{AgentProtocol.HealthPath}", ct).ConfigureAwait(false);

@@ -10,6 +10,7 @@
       <string id="SUPPORTED_RemoteHub_0_19_0">RemoteHub 0.19.0 or later</string>
       <string id="SUPPORTED_RemoteHub_0_20_2">RemoteHub 0.20.2 or later</string>
       <string id="SUPPORTED_RemoteHub_0_21_0">RemoteHub 0.21.0 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_22_0">RemoteHub 0.22.0 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
       <string id="SUPPORTED_Agent_0_19_0">RemoteHub Agent 0.19.0 or later</string>
@@ -206,6 +207,12 @@ This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Feature
 
 Registry: AllowAgentProcesses (REG_DWORD) = 1 or 0.</string>
 
+      <string id="Console_AllowBroker">Allow the RemoteHub Broker</string>
+      <string id="Console_AllowBroker_Help">Enabled or Not configured: allowed.
+
+Disabled: RemoteHub on this PC doesn't connect to a RemoteHub Broker – Settings → RemoteHub Broker is locked, the synced folders of brokers aren't kept up to date, and devices in them are reached only directly (Reach: Direct).
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → RemoteHub Broker → "Allow the RemoteHub Broker" (BrokerEnabled).</string>
       <string id="Console_AllowAgentDeviceActions">Allow device actions through the agent</string>
       <string id="Console_AllowAgentDeviceActions_Help">Enabled or Not configured: allowed.
 
