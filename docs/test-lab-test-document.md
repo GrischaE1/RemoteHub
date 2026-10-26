@@ -7873,6 +7873,7 @@ P2 · How: U · Needs: – · Status: ✅ Automated – `UI-JUMP.Tests.ps1`
 
 **Expected:**
 - the second connect asks nothing; a different certificate → "RDP certificate changed" / *Trust the new one*; Cancel → no tab
+- closing the tab after *Trust the new one* leaves no RDP tab within 15 s, and RemoteHub still answers UI Automation
 
 #### UI-AD-09 · No usable session
 P2 · How: U PS · Needs: – · Status: ✅ Automated – `UI-MORE.Tests.ps1`
@@ -8443,6 +8444,6 @@ P1 · How: PS U · Needs: – · Status: ◐ Written – `SEC-DEC.Tests.ps1`
 **Expected:**
 - exit code 0, no `error`
 - `confinement` and the probe `sandbox`: `AppContainer`
-- the video: as many pictures shown as sent, mean difference below 5 (of 255)
+- the video: as many pictures shown as sent, or one fewer (a picture may come out only with the next at the stream's format change), mean difference below 5 (of 255)
 - the PNG, BMP and JPEG images: each `64×48`
 - every other probe `blocked`: network, loopback, the user's profile, RemoteHub's database folder, writing in the profile, writing HKCU, the clipboard, starting a process, opening RemoteHub's process, using another process's window

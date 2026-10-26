@@ -312,7 +312,9 @@ public sealed partial class RdpSession : SessionBase
         Services.DiagLog.Write($"Session {GetHashCode():x8}: disconnected, reason {reason}");
         _loggedIn = false;
         IsFullScreen = false;
-        if (_closeRequested) { FinishClose(); return; }
+        // Not from inside the control's own event: releasing the ActiveX there hung the UI thread for good when a tab
+        // through a jump host was closed (lab UI-JUMP, runs 20261025-052539 and 20261026-032740).
+        if (_closeRequested) { Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, FinishClose); return; }
         if (_connectPending) { ConnectNow(); return; } // reconnect requested while connected
 
         string text;

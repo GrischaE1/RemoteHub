@@ -59,7 +59,7 @@ BeforeAll {
     }
     function Menu([string]$Entry, [string]$Node, [int]$TimeoutSec = 30) {
         $m = MenuTry $Entry -Node $Node -TimeoutSec $TimeoutSec
-        if (-not $m.found) { throw "menu ${Node}: not found; windows: $(@($m.windows) -join ', ')" }
+        if (-not $m.found) { throw "menu ${Node}: not found; windows: $(@($m.windows) -join ', ')$(if ($m.PSObject.Properties['notResponding'] -and @($m.notResponding).Count) { '; not responding: ' + (@($m.notResponding) -join ', ') })" }
         if ($m.PSObject.Properties['error'] -and $m.error) { throw "menu ${Node}: $($m.error) - entries: $(@($m.entries) -join ', ')" }
         $m
     }
@@ -582,6 +582,10 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $p.connected3 = Wait-RdpTab 120
                 Shot 'rdp-changed'
                 Close-Tabs
+                # closing must leave RemoteHub working: its UI thread hung here, releasing the RDP control inside the
+                # control's own disconnect event (runs 20261025-052539, 20261026-032740: every later step found no window)
+                $until = (Get-Date).AddSeconds(15)
+                do { $p.tabsAfterClose = @(Items | Where-Object { $_ -like 'Text|Remote desktop|*' }).Count; if ($p.tabsAfterClose -eq 0) { break }; Start-Sleep -Seconds 1 } while ((Get-Date) -lt $until)
             }
             Save 'rdp' $p
         }
@@ -590,6 +594,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             $p.trust | Should -Match 'Behind is reached through JumpHost, so the RDP client can.t check its certificate by name'
             $p.connected1 | Should -BeTrue
             $p.trustAgain | Should -BeFalse
+            $p.tabsAfterClose | Should -Be 0 -Because 'the tab closes and RemoteHub keeps answering'
             $p.connected2 | Should -BeTrue
             $p.thumb2 | Should -Not -Be $p.thumb1 -Because 'the device has a new RDP certificate'
             $p.changed | Should -Match 'Behind presents a different RDP certificate than the one you trusted before'

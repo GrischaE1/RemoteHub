@@ -81,6 +81,9 @@ BeforeAll {
                         Where-Object { $_.ProviderName -in 'Application Error', 'Application Hang', '.NET Runtime', 'Windows Error Reporting' -and $_.Message -match 'RemoteHub' } |
                         Select-Object -First 10 | ForEach-Object { "$($_.TimeCreated.ToString('HH:mm:ss')) $($_.ProviderName) $($_.Id): $(($_.Message -split "`n" | Select-Object -First 15) -join ' ')" })
                 diagLog = @(Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 40 -ErrorAction SilentlyContinue)
+                # what the runtime printed as it ended (a stack overflow's frames: Start-LabClient keeps standard error)
+                stderr = @(Get-ChildItem 'C:\ProgramData\RemoteHubLab\session' -Filter 'remotehub-stderr-*.txt' -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 80 -ErrorAction SilentlyContinue)
             }
         }
         if (-not $state) { return }
@@ -130,6 +133,8 @@ foreach ($w in @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Childre
     foreach ($i in @($w.FindAll([Windows.Automation.TreeScope]::Descendants, $isImg))) {
         if ($i.Current.IsOffscreen) { continue }
         $b = $i.Current.BoundingRectangle
+        # an image not laid out answers Rect.Empty (infinite X, -infinite width): its "area" beat every real one (run 20261025-192331)
+        if ($b.IsEmpty -or $b.Width -le 0 -or $b.Height -le 0) { continue }
         if ($b.Width * $b.Height -gt $area) { $area = $b.Width * $b.Height; $best = $b }
     }
 }

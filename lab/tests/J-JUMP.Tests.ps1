@@ -234,10 +234,14 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             }
             $null = Restart-LabAgent -Name 'JumpHost' -Pin $jump.Pin
             $mod = (Get-Module RemoteHub.TestLab).Path
+            $since = Get-LabGuestTime -Name 'JumpHost'
             $held = Start-Job -ArgumentList $mod, $jump, $target -ScriptBlock {
-                param($mod, $jump, $target) Import-Module $mod; Use-LabJump -Jump $jump; Invoke-LabJump -Kind open -TargetHost $target -Port 58732 -Params @{ seconds = 20 }
+                param($mod, $jump, $target) Import-Module $mod; Use-LabJump -Jump $jump; Invoke-LabJump -Kind open -TargetHost $target -Port 58732 -Params @{ seconds = 60 }
             }
-            Start-Sleep -Seconds 8
+            # The job's start and module import took longer than the 8 s waited before (run 20261026-032740: the probe
+            # got in, 101): the probe goes once the jump host has logged the held connection
+            $until = (Get-Date).AddSeconds(60)
+            while (-not (@(Get-LabAgentLog -Name 'JumpHost' -Since $since) -match 'Jump connection started') -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
             $s.ps = (Invoke-LabProbe -Name 'JumpHost' -Kind hold -Params @{ pin = $jump.Pin; user = $jump.User; password = (Get-LabConfig).Password; count = 1; seconds = 1 }).results[0]
             $s.held = Receive-Job $held -Wait -AutoRemoveJob
             Invoke-LabGuest -Name 'JumpHost' -ScriptBlock {
