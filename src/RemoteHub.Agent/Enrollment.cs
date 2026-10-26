@@ -27,10 +27,11 @@ public static class Enrollment
         {
             return args[0].ToLowerInvariant() switch
             {
-                "enroll" => Enroll(args.Length > 1 ? args[1] : "", Option(args, "virtual-display"), log, Option(args, "auto-sign-in")),
+                "enroll" => Enroll(args.Length > 1 ? args[1] : "", Option(args, "virtual-display"), log, Option(args, "auto-sign-in"),
+                    Broker(args)),
                 "cleanup" => Cleanup(log),
                 "auto-sign-in" => AutoSignIn(args.Length > 1 ? args[1] : "", log),
-                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> | cleanup | auto-sign-in on|off"),
+                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> [broker-url=… broker-secret=… broker-only=1] | cleanup | auto-sign-in on|off"),
             };
         }
         catch (Exception ex)
@@ -82,11 +83,30 @@ public static class Enrollment
         };
     }
 
+    /// <summary>The MSI's BROKER_URL, BROKER_SECRET and BROKER_ONLY (broker-design.md §6.4); null without a broker address.</summary>
+    private static (string Url, string Secret, bool Listen)? Broker(string[] args) =>
+        Option(args, "broker-url") is { Length: > 0 } url ? (url, Option(args, "broker-secret") ?? "", Option(args, "broker-only") != "1") : null;
+
     /// <param name="virtualDisplay">From the MSI (VIRTUALDISPLAY): "1" install the virtual monitor, "0" not, "" not chosen.</param>
     /// <param name="autoSignIn">From the MSI (AUTOSIGNIN): "1" allow automatic sign-in, "0" stop it, "" leave it.</param>
-    private static int Enroll(string source, string? virtualDisplay, AgentLog log, string? autoSignIn = null)
+    /// <param name="broker">From the MSI: with a broker and no enrollment file, the device enrolls itself (§6.4).</param>
+    private static int Enroll(string source, string? virtualDisplay, AgentLog log, string? autoSignIn = null,
+        (string Url, string Secret, bool Listen)? broker = null)
     {
+        // Self-registration: no enrollment file and no agent.json, but a broker and its device secret.
+        if (broker is { } selfJoin && Locate(source) is null && !File.Exists(AgentConfig.DefaultPath))
+        {
+            Run("sc.exe", "config RemoteHubAgent start= delayed-auto", allowFailure: true);
+            BrokerSetup.Join(selfJoin.Url, selfJoin.Secret, log, selfJoin.Listen);
+            if (TryLoad(AgentConfig.DefaultPath) is { } joined)
+            {
+                ApplyVirtualDisplay(joined, virtualDisplay, null, log);
+                joined.Save(AgentConfig.DefaultPath);
+            }
+            return 0;
+        }
         var done = Enroll(source, virtualDisplay, log);
+        if (done == 0 && broker is { } b) BrokerSetup.Join(b.Url, b.Secret, log, b.Listen);
         if (done == 0 && autoSignIn is "1" or "0")
             try { log.Write(autoSignIn == "1" ? AutoSignInSetup.On(AllowedGroups()) : AutoSignInSetup.Off()); }
             catch (Exception ex) { log.Write("Automatic sign-in policy not set: " + ex.Message); } // never fails the install
@@ -176,7 +196,7 @@ public static class Enrollment
     /// (<see cref="AgentEnrollment.CreateCertificate"/>) in LocalMachine\My. Earlier agent certificates and the keys the
     /// agent made for them are removed. Returns the thumbprint.
     /// </summary>
-    private static string CreateIdentity(string deviceId, string label)
+    internal static string CreateIdentity(string deviceId, string label)
     {
         var parameters = new CngKeyCreationParameters
         {
@@ -271,7 +291,7 @@ public static class Enrollment
         $"advfirewall firewall add rule name=\"{FirewallRuleName}\" dir=in action=allow protocol=TCP localport={port} " +
         $"program=\"{program}\" profile=any remoteip={(string.IsNullOrWhiteSpace(remoteAddresses) ? "any" : remoteAddresses.Replace(" ", ""))}";
 
-    private static void SetFirewallRule(int port, string remoteAddresses)
+    internal static void SetFirewallRule(int port, string remoteAddresses)
     {
         Netsh($"advfirewall firewall delete rule name=\"{FirewallRuleName}\"", allowFailure: true);
         Netsh(FirewallAddArguments(Environment.ProcessPath!, port, remoteAddresses));

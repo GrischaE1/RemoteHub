@@ -14,6 +14,8 @@ var log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), 30);
 
 // Setup commands, run by the MSI: enroll <file|folder>, cleanup.
 if (args.Length > 0 && args[0] is "enroll" or "cleanup" or "auto-sign-in") return Enrollment.Run(args, log);
+// broker join <url> (device secret on standard input) | broker leave | broker status – see BrokerSetup.
+if (args.Length > 0 && args[0] == "broker") return BrokerSetup.Run(args, log, Console.In, Console.Out);
 if (args.Length > 0 && args[0] == "selftest") return await SelfTest.RunAsync();
 // Every policy value in effect and where it comes from (policy, agent.json, default) – for support and the lab.
 if (args.Length > 0 && args[0] == "policy") return PolicyCommand.Run(Console.Out);
