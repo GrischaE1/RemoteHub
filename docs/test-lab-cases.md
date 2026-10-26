@@ -327,6 +327,26 @@ account isn't covered here: the agent admits only administrators by default (the
 | S-SCRIPT-08 | User run with nobody signed in | refused: "No user is signed in on the device." | H | 2 | ✅ |
 | S-SCRIPT-09 | GPO-set execution policy | `AllSigned` set by policy (HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell) → refused: "The device's group policy only allows signed scripts."; no task created | H PS | 1 | ✅ |
 
+### 7.3 Device actions (T-DEV)
+
+A connection's Device actions (README → Remote tools) through RemoteHub's `DeviceActions` in the harness
+(`tool --op dev-users`, `dev-action`): once over the agent, once over WinRM HTTPS, each time with the standard user
+signed in on the console (`-AutoLogon User`). Sessions are read over PowerShell Direct as WTS lists them
+(`Get-LabSessions`), the message on the console screen (OCR), the shut-down VM on the host. Automatic sign-in may sign
+the user in again after a sign-out or restart: the old session's programs are what must end. `T-DEV.Tests.ps1`.
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| T-DEV-01 | Who is signed in | the console user with the console session's id; no `DWM-n` / `UMFD-n`, nothing in session 0 | H PS | 2 | ◐ |
+| T-DEV-02 | Send message | answered "Message shown on <device> to …"; the text appears on the console within 60 s | H C | 2 | ◐ |
+| T-DEV-03 | Lock | the user's session *Disconnected* within 60 s with the same explorer.exe; the console shows the sign-in screen | H PS | 1 | ◐ |
+| T-DEV-04 | Sign out | answered "Signed out on <device>: …"; the session's explorer.exe gone within 90 s | H PS | 1 | ◐ |
+| T-DEV-05 | Update Group Policy | "Group Policy was updated on …"; a manual run (event 4004 / 4005) in Group Policy's log after the request | H PS E | 2 | ◐ |
+| T-DEV-06 | Sync with Intune | on a device without an MDM enrollment: "isn't enrolled in Intune"; with one, the sync task started | H PS | 3 | ◐ |
+| T-DEV-07 | No administrator's rights (agent) | an account with the agent's PowerShell right but not an administrator: "RemoteHub can't see who is signed in: the account isn't an administrator on the device" – not "nobody is signed in" | H PS | 2 | ◐ |
+| T-DEV-08 | Restart | a new boot time within 10 min; event 1074 with "Requested from RemoteHub"; the agent answers again | H PS E | 1 | ◐ |
+| T-DEV-09 | Shut down | the VM is off within 5 min | H | 1 | ◐ |
+
 ## 8. WinRM setup script (W)
 
 The script RemoteHub generates, run in the guest by PS Direct (`Invoke-LabSetupScript`), then RemoteHub's own

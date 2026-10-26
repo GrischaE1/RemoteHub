@@ -855,6 +855,7 @@ public partial class MainWindow : FluentWindow
         CmRegistry.Visibility = V(available && Features.IsAllowed(RemoteTool.Registry, viaAgent));
         CmServices.Visibility = V(available && Features.IsAllowed(RemoteTool.Services, viaAgent));
         CmProcesses.Visibility = V(available && Features.IsAllowed(RemoteTool.Processes, viaAgent));
+        FillDeviceActions(CmDevice, c, DeviceActions.Offered(available, viaAgent));
         CmPsTest.Visibility = V(psOn && st != PsRemotingState.Available);
         CmPsTest.Header = c?.PsChecking == true ? $"Testing {name}…"
                         : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}";
@@ -890,11 +891,12 @@ public partial class MainWindow : FluentWindow
         CmSharesSep.Visibility = V(CmAddShare.Visibility == Visibility.Visible &&
                                    new[] { CmPs, CmRunScript, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
         CmTools.Visibility = V(GroupHasItems(CmTools));
+        CmDevice.Visibility = V(GroupHasItems(CmDevice));
         CmManage.Visibility = V(GroupHasItems(CmManage));
         CmMore.Visibility = V(GroupHasItems(CmMore));
         // Separators only between groups that show: with RDP and the agent desktop blocked the menu may start with Tools or Edit.
         var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
-        var toolsShown = CmTools.Visibility == Visibility.Visible || CmManage.Visibility == Visibility.Visible;
+        var toolsShown = new[] { CmTools, CmDevice, CmManage }.Any(g => g.Visibility == Visibility.Visible);
         CmPsSep.Visibility = V(connectShown && toolsShown);
         // …and only with something after it: Edit and the rest (a read-only tree hides them), or More.
         CmSep1.Visibility = V(n is not null && (connectShown || toolsShown || CmNotes.Visibility == Visibility.Visible)
@@ -998,6 +1000,10 @@ public partial class MainWindow : FluentWindow
             if (canAdd) tools.Items.Add(MenuEntry("Add network share…", SymbolRegular.FolderLink24, () => AddShare(c), tip: jumped ? AddShareTip(c) : null));
         }
         if (tools.Items.Count > 0) cm.Items.Add(tools);
+
+        var device = Submenu("Device actions", SymbolRegular.Flash24);
+        FillDeviceActions(device, c, DeviceActions.Offered(Features.AnyTool(toolsViaAgent) && st == PsRemotingState.Available, toolsViaAgent));
+        if (device.Items.Count > 0) cm.Items.Add(device);
 
         var manage = Submenu("RemoteHub Agent", SymbolRegular.Shield24);
         if (st == PsRemotingState.Unavailable && !toolsViaAgent && Features.AnyTool(viaAgent: false) && Features.IsAllowed(Feature.RemotingSetup))
@@ -1232,7 +1238,7 @@ public partial class MainWindow : FluentWindow
         {
             var main = UsesAgent(c) ? Feature.Agent : Feature.PowerShellRemoting;
             if (interactive && !Refused(main))
-                _ = Dialogs.Info(this, Features.Topic(main), $"PowerShell, file transfer, registry, services and processes through {(UsesAgent(c) ? "the RemoteHub Agent" : "PowerShell remoting")} " +
+                _ = Dialogs.Info(this, Features.Topic(main), $"PowerShell, file transfer, registry, services, processes and device actions through {(UsesAgent(c) ? "the RemoteHub Agent" : "PowerShell remoting")} " +
                                                              "are turned off by your organisation – see Settings → Policies.");
             return;
         }
@@ -1256,7 +1262,7 @@ public partial class MainWindow : FluentWindow
         if (target.Agent is not null)
         {
             if (st.State == PsRemotingState.Available)
-                await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell, File transfer, Registry, Services or Processes.");
+                await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent works ({st.Message}).\n\nRight-click the connection or its tab → Tools (PowerShell, File transfer, Registry, Services, Processes) or Device actions.");
             else if (!Features.IsAllowed(Feature.AgentInstall))
                 await Dialogs.Info(this, "RemoteHub Agent", $"The RemoteHub Agent on {c.Name} could not be used.\n\n{st.Message}");
             else if (await Dialogs.Confirm(this, "RemoteHub Agent", $"The RemoteHub Agent on {c.Name} could not be used.\n\n{st.Message}", "Install / update the agent…"))
@@ -1284,7 +1290,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
         if (st.State == PsRemotingState.Available)
-            await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting works ({st.Message}).\n\nRight-click the connection or its tab → PowerShell or File transfer.");
+            await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting works ({st.Message}).\n\nRight-click the connection or its tab → Tools (PowerShell, File transfer, Registry, Services, Processes) or Device actions.");
         else if (!Features.IsAllowed(Feature.RemotingSetup))
             await Dialogs.Info(this, "PowerShell remoting", $"PowerShell remoting is not available for {c.Name}.\n\n{st.Message}");
         else if (await Dialogs.Confirm(this, "PowerShell remoting",

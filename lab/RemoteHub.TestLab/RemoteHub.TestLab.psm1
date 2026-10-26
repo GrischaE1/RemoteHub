@@ -2347,6 +2347,63 @@ function Unlock-LabSession {
     Wait-LabDesktop -Name $Name -Account $Account -TimeoutSec $TimeoutSec
 }
 
+# The guest's Windows sessions as WTS lists them: Id, State (Active / Disconnected / ...), User (DOMAIN\user or ''),
+# Console (the active console session), Explorer (explorer.exe PIDs in it) and LogonUI (the sign-in or lock screen
+# shows in it). The same view C-END builds for itself.
+$script:LabWtsCode = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class RhLabWtsSessions {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SessionInfo { public int Id; public IntPtr Station; public int State; }
+    [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSEnumerateSessionsW(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+    [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSQuerySessionInformationW(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
+    [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(IntPtr memory);
+    [DllImport("kernel32.dll")] public static extern int WTSGetActiveConsoleSessionId();
+    private static string Query(int session, int infoClass) {
+        IntPtr b; int n;
+        if (!WTSQuerySessionInformationW(IntPtr.Zero, session, infoClass, out b, out n)) return "";
+        try { return Marshal.PtrToStringUni(b) ?? ""; } finally { WTSFreeMemory(b); }
+    }
+    public static string[] List() {
+        var list = new List<string>();
+        IntPtr info; int count;
+        if (!WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out info, out count)) return list.ToArray();
+        try {
+            var size = Marshal.SizeOf(typeof(SessionInfo));
+            for (var i = 0; i < count; i++) {
+                var s = (SessionInfo)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(SessionInfo));
+                var user = Query(s.Id, 5);
+                list.Add(s.Id + "|" + s.State + "|" + (user.Length > 0 ? Query(s.Id, 7) + "\\" + user : ""));
+            }
+        } finally { WTSFreeMemory(info); }
+        return list.ToArray();
+    }
+}
+'@
+
+function Get-LabSessions {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-LabGuest -Name $Name -ArgumentList $script:LabWtsCode -ScriptBlock {
+        param($code)
+        if (-not ('RhLabWtsSessions' -as [type])) { Add-Type -TypeDefinition $code }
+        $names = 'Active', 'Connected', 'ConnectQuery', 'Shadow', 'Disconnected', 'Idle', 'Listen', 'Reset', 'Down', 'Init'
+        $console = [RhLabWtsSessions]::WTSGetActiveConsoleSessionId()
+        $explorer = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'")
+        $logonUi = @(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId)
+        foreach ($line in [RhLabWtsSessions]::List()) {
+            $id, $st, $user = $line -split '\|', 3
+            $id = [int]$id
+            [pscustomobject]@{
+                Id = $id; State = $names[[int]$st]; User = $user; Console = ($id -eq $console)
+                Explorer = @($explorer | Where-Object SessionId -eq $id | ForEach-Object { [int]$_.ProcessId }); LogonUI = ($logonUi -contains $id)
+            }
+        }
+    }
+}
+
 #endregion
 
 #region RemoteHub Agent
