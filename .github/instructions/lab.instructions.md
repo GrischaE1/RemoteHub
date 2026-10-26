@@ -46,6 +46,10 @@ tokens than it is worth. In a Claude Code or similar session:
 - Open evidence only for the failure being diagnosed, and only the fields that matter (`Select-Object`, a JSON
   property, `-Tail`), never whole files of tens of KB. Look at a screenshot only when the text can't answer it.
 - Re-run only what failed (`-Tag <case IDs>`), not the whole suite or whole files.
+- A failed file runs a second time by itself within the run; `FLAKY` lines in `failures.txt` are cases that passed
+  only the second time - not failures of the run, but each one is unreliable. `lab\Get-LabFlaky.ps1` lists them over
+  the last runs with how often they failed or were flaky: fix the most frequent causes (a family of cases at once)
+  rather than the cases of one run.
 - To make runs faster, start from `lab\Get-LabTimings.ps1 [-Run <id>]` (where each file's time went, about 2 KB), not
   from the logs.
 - Diagnose a few failures in the session itself; a subagent per area only when several unrelated failures need deep

@@ -3,7 +3,8 @@
 .SYNOPSIS
     A short summary of a lab run: one line per VM, then one line per failed case (ID, VM, the start of the message)
     and where its evidence is. Meant to be read instead of the pester XMLs and console logs - about 1 KB for a run
-    with a few failures.
+    with a few failures. A file that failed ran a second time (Invoke-LabTests.ps1): its failures are the second
+    attempt's, and the cases that failed only the first time are listed apart as FLAKY (flaky.json, LabRetry.ps1).
 .PARAMETER Run
     The run ID (20261019-130557). Default: the newest run under -Root.
 .PARAMETER Root
@@ -58,6 +59,7 @@ if ((Test-Path $summary) -and -not $PassThru) {
     $list = Get-Content $summary -Raw | ConvertFrom-Json
     foreach ($s in $list) {
         $line = '  {0,-22} {1,-7} passed {2}, failed {3}, skipped {4}' -f $s.Vm, $s.Result, $s.Passed, $s.Failed, $s.Skipped
+        if ($s.PSObject.Properties['Flaky'] -and $s.Flaky) { $line += ", flaky $($s.Flaky)" }
         if ("$($s.TimedOut)") { $line += ", timed out: $($s.TimedOut)" }
         $line
     }
@@ -100,7 +102,18 @@ $rows = foreach ($xml in @(Get-ChildItem $dir -Recurse -Filter 'pester-*.xml')) 
 }
 $rows = @($rows)
 if ($PassThru) { return $rows }
-if (-not $rows.Count) { if ($Skipped) { 'No failed or skipped cases.' } else { 'No failed cases.' }; return }
+# failed the first time, passed the second: not failures of the run, but each one is a case to make reliable
+$flakyFile = Join-Path $dir 'flaky.json'
+$flaky = @(if (Test-Path $flakyFile) { Get-Content $flakyFile -Raw | ConvertFrom-Json | Where-Object { $_ -and $_.Id } })
+function Write-Flaky {
+    if (-not $flaky.Count) { return }
+    foreach ($f in $flaky) { 'FLAKY {0} [{1}, {2}]: passed the second time; first: {3}' -f $f.Id, $f.File, $f.Vm, (Short $f.Message $Width) }
+}
+if (-not $rows.Count) {
+    if ($Skipped) { 'No failed or skipped cases.' } else { 'No failed cases.' }
+    Write-Flaky
+    return
+}
 
 # Cases a failed BeforeAll never ran only say so in the XML; the error itself is in the file's console log (UTF-16,
 # with colour codes): its first exception line.
@@ -131,6 +144,7 @@ foreach ($g in @($rows | Group-Object Result, File, Vm, Message)) {
     }
     '{0} {1} [{2}, {3}]: {4}' -f $r.Result, $ids, $r.File, $r.Vm, $msg
 }
+Write-Flaky
 ''
 'Evidence:'
 $rows | Select-Object -ExpandProperty Evidence -Unique | ForEach-Object { "  $_" }

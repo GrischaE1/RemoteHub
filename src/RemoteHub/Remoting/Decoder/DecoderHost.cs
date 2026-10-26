@@ -194,10 +194,23 @@ public sealed unsafe class DecoderHost : IDisposable
         var read = Task.Run(() => DecoderProtocol.Read(_fromDecoder, DecoderProtocol.MaxAnswerBytes));
         try
         {
-            if (!read.Wait(timeout)) Kill($"no answer within {timeout.TotalSeconds:0} s while {doing}");
+            if (!read.Wait(timeout)) Kill($"no answer within {timeout.TotalSeconds:0} s while {doing} ({State()})");
         }
         catch (AggregateException ex) { Kill($"its answer couldn't be read while {doing}: {ex.InnerException?.Message}"); }
         return read.Result ?? Kill<byte[]>($"it ended while {doing} (exit code {ExitCode()})");
+    }
+
+    /// <summary>
+    /// What the decoder was doing when it didn't answer: still running with the CPU time it had used (little: it was
+    /// starved or blocked; much: busy), or ended with its exit code. The lab saw starts of over 10 s, three in a row,
+    /// where 0.3 s is usual (runs 20261025-052539 to 20261026-062351) – this tells the next one apart.
+    /// </summary>
+    private string State()
+    {
+        if (Native.GetExitCodeProcess(_process.Process, out var code) && code != Native.STILL_ACTIVE) return $"it had ended, exit code 0x{code:X}";
+        return Native.GetProcessTimes(_process.Process, out _, out _, out var kernel, out var user)
+            ? $"still running, {TimeSpan.FromTicks(kernel + user).TotalSeconds:0.00} s of CPU used"
+            : "still running";
     }
 
     private string ExitCode()
@@ -274,7 +287,7 @@ public sealed unsafe class DecoderHost : IDisposable
 
     private static class Native
     {
-        public const uint FILE_MAP_READ = 0x0004, FILE_MAP_WRITE = 0x0002;
+        public const uint FILE_MAP_READ = 0x0004, FILE_MAP_WRITE = 0x0002, STILL_ACTIVE = 259;
 
         [StructLayout(LayoutKind.Sequential)] public struct SECURITY_ATTRIBUTES { public int nLength; public IntPtr lpSecurityDescriptor; public bool bInheritHandle; }
 
@@ -291,5 +304,8 @@ public sealed unsafe class DecoderHost : IDisposable
         [DllImport("kernel32.dll")] public static extern bool TerminateJobObject(Microsoft.Win32.SafeHandles.SafeFileHandle job, uint code);
         [DllImport("kernel32.dll")] public static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeProcessHandle h, uint ms);
         [DllImport("kernel32.dll")] public static extern bool GetExitCodeProcess(Microsoft.Win32.SafeHandles.SafeProcessHandle h, out uint code);
+        // times in 100 ns ticks
+        [DllImport("kernel32.dll")]
+        public static extern bool GetProcessTimes(Microsoft.Win32.SafeHandles.SafeProcessHandle h, out long creation, out long exit, out long kernel, out long user);
     }
 }

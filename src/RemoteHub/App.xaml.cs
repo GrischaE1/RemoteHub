@@ -34,9 +34,8 @@ public partial class App : Application
 
         DispatcherUnhandledException += (_, args) =>
         {
-            CrashReporter.RecordHandled(args.Exception); // RemoteHub keeps running, but the error is reported like a crash
-            System.Windows.MessageBox.Show(args.Exception.Message, "RemoteHub – unexpected error",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            UnexpectedErrors.Handle(args.Exception, message => System.Windows.MessageBox.Show(message, "RemoteHub – unexpected error",
+                MessageBoxButton.OK, MessageBoxImage.Error));
             args.Handled = true;
         };
 

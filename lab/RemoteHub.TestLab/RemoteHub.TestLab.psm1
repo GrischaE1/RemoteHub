@@ -1504,6 +1504,12 @@ function Invoke-LabInSession {
     $user = Resolve-LabAccount (Get-LabVm $Name) $Account
     Invoke-LabGuest -Name $Name -ArgumentList $user, $ScriptBlock.ToString(), $TimeoutSec, $Elevated.IsPresent -ScriptBlock {
         param($u, $code, $timeout, $elevated)
+        # A task for an account that isn't signed in never starts (0x00041303): said at once, not after the timeout
+        # (runs 20261019 - 20261026: "no result ... (is normaluser signed in?)" with only admin in the console)
+        $sessions = @(quser.exe 2>$null | Select-Object -Skip 1 | ForEach-Object { ("$_" -replace '^\s*>', '' -replace '\s+', ' ').Trim() })
+        if (-not @($sessions | Where-Object { $_ -match "^$([regex]::Escape(($u -split '\\')[-1]))\s" }).Count) {
+            throw "$u isn't signed in, so a task in its session can't start - sessions: $(if ($sessions) { $sessions -join '; ' } else { 'none' })"
+        }
         $id = [guid]::NewGuid().ToString('N')
         $dir = 'C:\ProgramData\RemoteHubLab\session'
         $null = New-Item -ItemType Directory -Path $dir -Force
@@ -1568,6 +1574,12 @@ function Start-LabInSession {
     $user = Resolve-LabAccount (Get-LabVm $Name) $Account
     Invoke-LabGuest -Name $Name -ArgumentList $user, $ScriptBlock.ToString(), $Elevated.IsPresent -ScriptBlock {
         param($u, $code, $elevated)
+        # as in Invoke-LabInSession: the account must be signed in, or the task never starts and its caller waits for
+        # nothing (J-08 in four runs: "the changing window didn't come up")
+        $sessions = @(quser.exe 2>$null | Select-Object -Skip 1 | ForEach-Object { ("$_" -replace '^\s*>', '' -replace '\s+', ' ').Trim() })
+        if (-not @($sessions | Where-Object { $_ -match "^$([regex]::Escape(($u -split '\\')[-1]))\s" }).Count) {
+            throw "$u isn't signed in, so a task in its session can't start - sessions: $(if ($sessions) { $sessions -join '; ' } else { 'none' })"
+        }
         $task = "RHLab-bg-$([guid]::NewGuid().ToString('N').Substring(0, 12))"
         # its process id, for Stop-LabInSession (stopping the task ends conhost, not always the powershell under it)
         $dir = 'C:\ProgramData\RemoteHubLab\session'

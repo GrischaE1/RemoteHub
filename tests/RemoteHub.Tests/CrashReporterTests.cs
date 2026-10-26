@@ -22,6 +22,23 @@ public class CrashReporterTests
     }
 
     [Fact]
+    public void An_error_while_the_error_box_is_open_is_reported_but_opens_no_second_box() => InFolder(dir =>
+    {
+        var shown = new List<string>();
+        // the box pumps messages: the failing operation runs again and comes back while the first box is still open
+        UnexpectedErrors.Handle(new InvalidOperationException("first"), m =>
+        {
+            shown.Add(m);
+            UnexpectedErrors.Handle(new InvalidOperationException("again"), shown.Add);
+        });
+        Assert.Equal(["first"], shown);
+        // once it is closed, the next error gets its box again
+        UnexpectedErrors.Handle(new InvalidOperationException("later"), shown.Add);
+        Assert.Equal(["first", "later"], shown);
+        return 0;
+    });
+
+    [Fact]
     public void Messages_are_redacted()
     {
         var text = $@"Could not open \\fileserver01\share$\x.txt and C:\Users\{Environment.UserName}\AppData\a.json on {Environment.MachineName}; " +

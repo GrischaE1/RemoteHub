@@ -24,6 +24,9 @@
     Initialize-LabVm takes a run checkpoint ("RHLAB <run> <state>"); later files that need that state revert to it
     instead of installing again (off: -NoSnapshots). Run checkpoints are removed at the end of the run and, left by a
     cancelled run, at the start of the next.
+    A file that fails or runs past its time limit runs once more, in full, from its VM's checkpoint (LabRetry.ps1): its
+    last attempt counts. Cases that failed the first time and passed then are flaky - listed in results\<run>\flaky.json
+    and by Get-LabFailures.ps1, kept over runs by Get-LabFlaky.ps1 - and don't fail the run (off: -NoRetry, -FailFast).
 .EXAMPLE
     .\Invoke-LabTests.ps1                                              # all kinds, all scenarios
     .\Invoke-LabTests.ps1 -Vm W11-26H2-en-US,Console-26H2-en-US -Tag Smoke
@@ -44,8 +47,10 @@ param(
     # files marked "LabQuick: every kind"; the Console files as usual
     [switch]$Quick,
     # a Describe block skips its other cases after its first failure, and the run stops starting files once 4 in a row
-    # passed nothing (the build looks broken)
-    [switch]$FailFast
+    # passed nothing (the build looks broken); no second attempts
+    [switch]$FailFast,
+    # a failed file isn't run a second time: every failure counts, flaky or not
+    [switch]$NoRetry
 )
 $ErrorActionPreference = 'Stop'
 # powershell -File passes "-Vm a,b" as one string
@@ -53,6 +58,7 @@ $Vm = @($Vm | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Tag = @($Tag | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 
 Import-Module (Join-Path $PSScriptRoot 'RemoteHub.TestLab') -Force
+. (Join-Path $PSScriptRoot 'LabRetry.ps1')
 $cfg = Get-LabConfig
 
 # Run checkpoints a cancelled run left behind (Stop-LabRun ends the processes, so the finally block below didn't run),
@@ -100,6 +106,7 @@ if (Test-Path $optionsFile) {
     $o = Get-Content $optionsFile -Raw | ConvertFrom-Json
     if ($o.PSObject.Properties['Quick'] -and $o.Quick) { $Quick = [switch]$true }
     if ($o.PSObject.Properties['FailFast'] -and $o.FailFast) { $FailFast = [switch]$true }
+    if ($o.PSObject.Properties['NoRetry'] -and $o.NoRetry) { $NoRetry = [switch]$true }
     if ($o.PSObject.Properties['Commit']) { $commit = $o.Commit }
 }
 $testFiles = @(Get-ChildItem (Join-Path $PSScriptRoot 'tests') -Filter '*.Tests.ps1' | ForEach-Object FullName)
@@ -123,6 +130,7 @@ function Get-MsiInfo($file) {
     Tags          = @($Tag)
     Quick         = [bool]$Quick
     FailFast      = [bool]$FailFast
+    Retry         = -not ($NoRetry -or $FailFast)
     Commit        = $commit
     Agent         = Get-MsiInfo $msi
     PreviousAgent = Get-MsiInfo $previous
@@ -164,7 +172,7 @@ foreach ($file in $testFiles) {
     $needs = Get-LabFileNeeds -File $file -DefaultLimitMin $FileTimeoutMin
     $name = [IO.Path]::GetFileNameWithoutExtension([IO.Path]::GetFileNameWithoutExtension($file))
     foreach ($k in $kinds) {
-        if (Test-KindRuns $needs $k) { $queue.Add([pscustomobject]@{ File = $file; Name = $name; Kind = $k; Needs = $needs }) }
+        if (Test-KindRuns $needs $k) { $queue.Add([pscustomobject]@{ File = $file; Name = $name; Kind = $k; Needs = $needs; Attempt = 1; FirstXml = $null; FirstTimedOut = $false }) }
     }
 }
 Write-Host "$($queue.Count) file runs on $($vms.Count) VMs"
@@ -193,6 +201,8 @@ $jumpBusy = $false
 $timeouts = @{}     # kind -> list
 $results = [Collections.Generic.List[object]]::new()
 $nothingPassed = 0  # -FailFast: files in a row that ended with failures and no passed case
+$flaky = [Collections.Generic.List[object]]::new()   # cases that failed, then passed on the file's second attempt
+$retry = -not ($NoRetry -or $FailFast)
 
 function Start-Item($item, $v, $partners) {
     $kindDir = Join-Path $runDir $item.Kind
@@ -203,6 +213,11 @@ function Start-Item($item, $v, $partners) {
     # evidence per VM: two lanes run files of the same kind at once, and their evidence names may meet. Lane 1's Id is
     # the kind, so its evidence stays next to the Pester results; lane 2 gets <run>\<kind>-2.
     $evidenceDir = Join-Path $runDir $v.Id
+    if ($item.Attempt -gt 1) {
+        # the second attempt from the checkpoint, its evidence apart: the first attempt's stays for the diagnosis
+        $evidenceDir = Join-Path $evidenceDir 'retry'
+        foreach ($n in @($v.Name) + @($partners | ForEach-Object Name)) { Clear-LabVmState -Name $n }
+    }
     $null = New-Item -ItemType Directory -Path $evidenceDir -Force
     $runner = Join-Path $PSScriptRoot 'Invoke-LabTestFile.ps1'
     $cmd = "& '$runner' -TestFile '$($item.File)' -VmName '$($v.Name)' -EvidenceDir '$evidenceDir' -OutputPath '$xml' -Tag '$($Tag -join ',')'$(if ($FailFast) { ' -FailFast' }) *> '$log'"
@@ -216,7 +231,7 @@ function Start-Item($item, $v, $partners) {
     $limit = Get-LabFileLimit -Needs $item.Needs -Time $times["$base|$($item.Kind)"]
     $script:running[$v.Name] = [pscustomobject]@{ Item = $item; Vm = $v; Process = $p; Base = $base; Xml = $xml; Held = $held
         Limit = $limit; Deadline = (Get-Date).AddMinutes($limit); Started = Get-Date }
-    Write-Host "$((Get-Date).ToString('HH:mm:ss')) start  $base on $($v.Id)$(if ($held) { " (+ $(($held | ForEach-Object Id) -join ', '))" })"
+    Write-Host "$((Get-Date).ToString('HH:mm:ss')) start  $base on $($v.Id)$(if ($held) { " (+ $(($held | ForEach-Object Id) -join ', '))" })$(if ($item.Attempt -gt 1) { ' (second attempt)' })"
 }
 
 function Complete-Item($r) {
@@ -226,14 +241,30 @@ function Complete-Item($r) {
     $c = if (Test-Path $sum) { Get-Content $sum -Raw | ConvertFrom-Json } else { $null }
     $failed = if ($c) { [int]$c.Failed } else { 0 }
     $min = [int]((Get-Date) - $r.Started).TotalMinutes
+    # failed or ended the first time: once more from the checkpoint. Its line says "retry", not "done" - the lab app
+    # (LabData.RunLog) counts the file run once, when its last attempt is done.
+    $again = $script:retry -and $r.Item.Attempt -eq 1 -and ($timedOut -or $failed -gt 0)
     if ($timedOut) {
-        Write-Host "$((Get-Date).ToString('HH:mm:ss')) $($r.Base) on $($r.Vm.Id): ended after $($r.Limit) min (time limit)" -ForegroundColor Red
-        if (-not $script:timeouts.ContainsKey($r.Item.Kind)) { $script:timeouts[$r.Item.Kind] = [Collections.Generic.List[object]]::new() }
-        $script:timeouts[$r.Item.Kind].Add([pscustomobject]@{ File = $r.Base; Minutes = $r.Limit; Ended = (Get-Date).ToString('s'); Vm = $r.Vm.Id })
+        Write-Host "$((Get-Date).ToString('HH:mm:ss')) $($r.Base) on $($r.Vm.Id): ended after $($r.Limit) min (time limit)$(if ($again) { ' - a second attempt follows' })" -ForegroundColor Red
+        if (-not $again) {
+            if (-not $script:timeouts.ContainsKey($r.Item.Kind)) { $script:timeouts[$r.Item.Kind] = [Collections.Generic.List[object]]::new() }
+            $script:timeouts[$r.Item.Kind].Add([pscustomobject]@{ File = $r.Base; Minutes = $r.Limit; Ended = (Get-Date).ToString('s'); Vm = $r.Vm.Id })
+        }
     }
     else {
-        Write-Host ("{0} done   {1} on {2}: {3} passed, {4} failed, {5} skipped ({6} min)" -f (Get-Date).ToString('HH:mm:ss'), $r.Base, $r.Vm.Id,
-            $(if ($c) { $c.Passed } else { 0 }), $failed, $(if ($c) { $c.Skipped } else { 0 }), $min)
+        Write-Host ("{0} {7} {1} on {2}: {3} passed, {4} failed, {5} skipped ({6} min){8}" -f (Get-Date).ToString('HH:mm:ss'), $r.Base, $r.Vm.Id,
+            $(if ($c) { $c.Passed } else { 0 }), $failed, $(if ($c) { $c.Skipped } else { 0 }), $min,
+            $(if ($again) { 'retry ' } else { 'done  ' }), $(if ($again) { ' - a second attempt follows' } else { '' }))
+    }
+    if ($again) {
+        $first = Move-LabAttempt -KindDir (Split-Path $r.Xml) -File $r.Base
+        $script:queue.Add([pscustomobject]@{ File = $r.Item.File; Name = $r.Item.Name; Kind = $r.Item.Kind; Needs = $r.Item.Needs; Attempt = 2
+                FirstXml = $first; FirstTimedOut = $timedOut })
+    }
+    elseif ($r.Item.Attempt -gt 1) {
+        $f = @(Get-LabFlakyCases -FirstXml $r.Item.FirstXml -SecondXml $r.Xml -File $r.Base -Kind $r.Item.Kind -Vm $r.Vm.Id -TimedOut:$r.Item.FirstTimedOut)
+        foreach ($x in $f) { $script:flaky.Add($x) }
+        if ($f.Count) { Write-Host "$((Get-Date).ToString('HH:mm:ss')) flaky  $($r.Base) on $($r.Vm.Id): $(($f | ForEach-Object Id) -join ', ') failed the first time, passed the second" -ForegroundColor Yellow }
     }
     if ($timedOut -or ($failed -gt 0 -and $c -and [int]$c.Passed -eq 0)) { $script:nothingPassed++ } else { $script:nothingPassed = 0 }
     # a failed or ended file may have left its VMs changed: the next file there starts from the checkpoint
@@ -241,6 +272,13 @@ function Complete-Item($r) {
     foreach ($h in $r.Held) { $script:heldBy.Remove($h.Name) }
     if ($r.Item.Needs.JumpHost) { $script:jumpBusy = $false }
     $script:running.Remove($r.Vm.Name)
+}
+
+# The run winds down (drained, or ended): no more second attempts, and those still waiting give their first results
+# back, so their failures count.
+function Stop-Retries {
+    $script:retry = $false
+    foreach ($i in @($script:queue | Where-Object { $_.Attempt -gt 1 })) { Restore-LabAttempt -KindDir (Join-Path $runDir $i.Kind) -File $i.Name }
 }
 
 try {
@@ -251,6 +289,7 @@ try {
         # LabRoot\drain.txt: no new files - the running ones finish, then the run ends (the rest is reported as not run)
         if ((Test-Path $drainFile) -and $queue.Count) {
             Write-Host "$((Get-Date).ToString('HH:mm:ss')) drain.txt: $($queue.Count) file runs not started" -ForegroundColor Yellow
+            Stop-Retries
             $queue.Clear()
         }
         # -FailFast: 4 files in a row passed nothing - the build looks broken, the rest isn't started
@@ -270,6 +309,7 @@ try {
     }
 }
 finally {
+    Stop-Retries
     foreach ($r in @($running.Values)) { Complete-Item $r }
     foreach ($v in $labVms | Where-Object { $_.Role }) { try { Stop-LabVm -Name $v.Name } catch { } }
     # after the last file (also when drained or ended early): the run checkpoints go. The VMs are off by now, so nothing
@@ -280,6 +320,9 @@ finally {
     }
     catch { Write-Warning "Removing the run checkpoints failed: $($_.Exception.Message) - the next run removes them" }
 }
+
+# the flaky cases of the run (an empty list when there were none): Get-LabFailures.ps1 and Get-LabFlaky.ps1 read it
+ConvertTo-Json -InputObject @($flaky) -Depth 3 | Set-Content (Join-Path $runDir 'flaky.json') -Encoding UTF8
 
 $summary = foreach ($k in $kinds) {
     $kindDir = Join-Path $runDir $k
@@ -294,6 +337,7 @@ $summary = foreach ($k in $kinds) {
         Passed   = [int]($counts | Measure-Object Passed -Sum).Sum
         Failed   = $failed
         Skipped  = [int]($counts | Measure-Object Skipped -Sum).Sum
+        Flaky    = @($flaky | Where-Object Kind -eq $k).Count
         TimedOut = @($to | ForEach-Object File) -join ', '
         Result   = $(if ($failed) { 'Failed' } else { 'Passed' })
     }
