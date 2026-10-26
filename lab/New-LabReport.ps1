@@ -156,6 +156,16 @@ foreach ($area in $areaNames.Keys) {
 }
 Add
 
+# cases that failed the first time and passed on the file's second attempt (flaky.json, LabRetry.ps1): they don't fail
+# the gate, but are named - each one is a case to make reliable (Get-LabFlaky.ps1 has their history)
+$flakyFile = Join-Path $runDir 'flaky.json'
+$flaky = @(if (Test-Path $flakyFile) { Get-Content $flakyFile -Raw | ConvertFrom-Json | Where-Object { $_ -and $_.Id } })
+if ($flaky.Count) {
+    Add "**Flaky** $([char]0x2013) passed on the file's second attempt"
+    Add
+    foreach ($f in $flaky) { Add "- ``$($f.Id)`` on ``$($f.Vm)`` $([char]0x2013) first attempt: $($f.Message)" }
+    Add
+}
 if ($failed.Count) {
     Add '**Failed**'
     Add

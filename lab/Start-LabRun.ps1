@@ -9,15 +9,17 @@
     .\lab\Start-LabRun.ps1 -Vm W11-26H2-en-US -Tag Smoke
     .\lab\Start-LabRun.ps1 -Tag A-INST -NoBuild
     .\lab\Start-LabRun.ps1 -Quick -FailFast              # the build check: device files on one kind, stop early
+    .\lab\Start-LabRun.ps1 -NoRetry                       # a failed file isn't run a second time
 #>
 [CmdletBinding()]
 param(
     [string[]]$Vm,
     [string[]]$Tag,
     [switch]$NoBuild,
-    # Invoke-LabTests.ps1 -Quick / -FailFast (passed in results\<run>\options.json: the queue takes only -Vm and -Tag)
+    # Invoke-LabTests.ps1 -Quick / -FailFast / -NoRetry (passed in results\<run>\options.json: the queue takes only -Vm and -Tag)
     [switch]$Quick,
-    [switch]$FailFast
+    [switch]$FailFast,
+    [switch]$NoRetry
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LabQueue.ps1')
@@ -79,7 +81,7 @@ $runDir = Join-Path $LabRoot "results\$runId"
 $null = New-Item -ItemType Directory -Path $runDir -Force
 # (the checkout's .git may be on a share, which git refuses as owned by someone else unless named as safe)
 $commit = try { $c = git -c "safe.directory=$($repo -replace '\\', '/')" -C $repo rev-parse HEAD; if ($LASTEXITCODE -eq 0) { $c } } catch { $null }
-@{ Quick = [bool]$Quick; FailFast = [bool]$FailFast; Commit = $commit } | ConvertTo-Json | Set-Content (Join-Path $runDir 'options.json') -Encoding UTF8
+@{ Quick = [bool]$Quick; FailFast = [bool]$FailFast; NoRetry = [bool]$NoRetry; Commit = $commit } | ConvertTo-Json | Set-Content (Join-Path $runDir 'options.json') -Encoding UTF8
 Write-Host "Run $runId$(if ($msi) { ", agent $($msi.Name)" }) - queued for '$LabTask'"
 Submit-LabRequest -Request @{ Type = 'tests'; Id = $runId; Vm = @($Vm); Tag = @($Tag) } -DoneFile (Join-Path $runDir 'done.json')
 

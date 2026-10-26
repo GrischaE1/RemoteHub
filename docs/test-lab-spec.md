@@ -291,6 +291,20 @@ The client-side unit tests stay as they are; the lab adds the device-side truth.
   `artifacts\lab\` by default, `-Root D:\RemoteHubLab\results` reads the lab's own copy. `Start-LabRun.ps1` runs it
   at the end of every run and keeps it as `artifacts\lab\<run>\failures.txt` – what an AI session reads instead of
   the XMLs and logs (`.github/instructions/lab.instructions.md`).
+- **Second attempt and flaky cases** (`lab\LabRetry.ps1`): a file that fails, or runs past its time limit, runs once
+  more in the same run, in full, from its VM's checkpoint (its evidence under `<vm>\retry\`). Its last attempt counts;
+  the first one's results move to `<kind>\attempt1\attempt1-<file>.xml` (with its summary and console log), names the
+  readers of `pester-*.xml` don't take. A case that failed the first time and passed the second is **flaky**: listed in
+  the run's `flaky.json` and as `FLAKY` lines in `failures.txt`, counted per VM in `summary.json`, and it doesn't fail
+  the run - a run is green when every case passed, second attempts included. A real bug fails both times. The console
+  log says `retry` instead of `done` for a first attempt that runs again, so the lab app counts the file run once. A
+  second attempt that never runs (the run drained or ended) gives the first results back. Off:
+  `Start-LabRun.ps1 -NoRetry`, and with `-FailFast`. Why: of the 229 cases that failed in the seven full runs of
+  21-26 October, 155 failed in one run only and none in more than four - most failures were the lab's timing, not
+  the product.
+- `Get-LabFlaky.ps1 [-Root ...] [-Runs 30] [-Top 40]` is the work list for that: per case how often it failed (in the
+  last attempt) and how often it was flaky over the last finished runs, in how many runs it ran, and the last time
+  with its message, the most frequent first. A case leaves it once it passes first time in every run.
 - **RemoteHub Lab** (`lab\LabConsole`, WPF like RemoteHub; `LabConsole.cmd` is the older PowerShell version of it):
   `build\build-lab-tool.ps1` builds it into one file, `lab\RemoteHubLab.exe` (git-ignored; again after changes to
   `lab\LabConsole`). Its tests and lab scripts always come from main: it keeps its own checkout of origin/main,
