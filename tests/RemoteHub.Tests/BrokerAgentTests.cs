@@ -92,11 +92,27 @@ internal sealed class TestBroker(Uri url, string token)
             ["secrets"] = new JsonArray(
                 new JsonObject { ["id"] = org.DeviceSecretId, ["kind"] = "device", ["key"] = B64u(DeriveKey(org.DeviceSecret, id, KeyLabel.Enroll)) },
                 new JsonObject { ["id"] = org.ConsoleSecretId, ["kind"] = "console", ["key"] = B64u(DeriveKey(org.ConsoleSecret, id, KeyLabel.Join)) }),
+            ["keyrings"] = new JsonArray(new JsonObject { ["secretId"] = org.ConsoleSecretId, ["blob"] = Keyring(org) }),
         };
         var r = await Admin(HttpMethod.Post, "orgs", body);
         Assert.Equal(HttpStatusCode.Created, r.StatusCode);
         return org;
     }
+
+    /// <summary>The console secret's keyring holding the device secret, as <c>rhbroker</c> makes it (iv ‖ AES-GCM(ciphertext ‖ tag)).</summary>
+    private static string Keyring(Org org)
+    {
+        var device = new Secret(SecretKind.Device, org.Id, org.DeviceSecretId, org.DeviceSecret).ToString();
+        var plain = Encoding.UTF8.GetBytes(new JsonObject { ["v"] = 1, ["deviceSecrets"] = new JsonArray(JsonValue.Create(device)) }.ToJsonString());
+        var iv = RandomNumberGenerator.GetBytes(12);
+        var cipher = new byte[plain.Length];
+        var tag = new byte[16];
+        using var aes = new AesGcm(DeriveKey(org.ConsoleSecret, org.Id, KeyLabel.Keyring), 16);
+        aes.Encrypt(iv, plain, cipher, tag, Encoding.UTF8.GetBytes($"remotehub-broker/1|{org.Id}|keyring|{org.ConsoleSecretId}"));
+        return B64u([.. iv, .. cipher, .. tag]);
+    }
+
+    public string ConsoleSecretText(Org org) => new Secret(SecretKind.Console, org.Id, org.ConsoleSecretId, org.ConsoleSecret).ToString();
 
     public async Task WaitForOnlineAsync(Org org, string deviceId)
     {

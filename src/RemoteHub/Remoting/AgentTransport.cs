@@ -17,9 +17,10 @@ namespace RemoteHub.Remoting;
 
 /// <summary>
 /// Where the RemoteHub Agent of a device listens, and the device certificate it must present. <paramref name="Via"/>: the
-/// jump host it is reached through, if any.
+/// jump host it is reached through, if any; <paramref name="Broker"/>: the RemoteHub Broker it is reached through instead
+/// of the network (broker-design.md §11.1) – the pin and the sign-in stay the same.
 /// </summary>
-public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null);
+public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null, Broker.BrokerRoute? Broker = null);
 
 /// <summary>
 /// A PowerShell session through the RemoteHub Agent instead of WinRM. Everything above the transport – runspaces,
@@ -123,23 +124,26 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
             seen = cert is null ? "" : AgentProtocol.Fingerprint(cert.GetRawCertData());
             return seen == expected;
         };
-        // Through a jump host: the socket is a stream of its tunnel; TLS to the pinned certificate runs inside it, end to end.
+        // Through a jump host or the broker: the socket is a stream of its tunnel; TLS to the pinned certificate runs inside
+        // it, end to end.
         var via = info.Endpoint.Via;
-        if (via is null) ws.Options.RemoteCertificateValidationCallback = pinned;
+        var broker = info.Endpoint.Broker;
+        if (via is null && broker is null) ws.Options.RemoteCertificateValidationCallback = pinned;
         if (info.Credential is { } c)
         {
             ws.Options.SetRequestHeader("Authorization", "Basic " + BasicCredentials(c.UserName, c.Password));
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(info.OpenTimeout > 0 ? info.OpenTimeout : 20_000);
-        if (via is not null) timeout.CancelAfter(Math.Max(info.OpenTimeout, 0) + 30_000); // signing in at the jump host and its connect come first
+        // Signing in at the jump host and its connect, or the broker's offer and relay, come first.
+        if (via is not null || broker is not null) timeout.CancelAfter(Math.Max(info.OpenTimeout, 0) + 30_000);
         try
         {
-            if (via is null) ws.ConnectAsync(info.UriFor(path), timeout.Token).GetAwaiter().GetResult();
+            if (via is null && broker is null) ws.ConnectAsync(info.UriFor(path), timeout.Token).GetAwaiter().GetResult();
             else
             {
                 // Disposed afterwards: an upgraded connection has left its pool; a refused one (401, 404) must not stay open in it.
-                using var invoker = new HttpMessageInvoker(ThroughJumpHost(via, pinned));
+                using var invoker = new HttpMessageInvoker(broker is not null ? ThroughBroker(broker, pinned) : ThroughJumpHost(via!, pinned));
                 ws.ConnectAsync(info.UriFor(path), invoker, timeout.Token).GetAwaiter().GetResult();
             }
             return ws;
@@ -149,6 +153,7 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
             var status = ws.HttpStatusCode;
             ws.Dispose();
             if (JumpError(ex) is { } jump) throw new AgentTransportException(jump.Message, jump);
+            if (BrokerError(ex) is { } refused) throw new AgentTransportException(refused.Message, refused);
             throw new AgentTransportException(AgentErrors.Explain(ex, status, seen, expected, info, path), ex);
         }
     }
@@ -162,11 +167,28 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         PooledConnectionLifetime = TimeSpan.FromMinutes(1),
     };
 
+    /// <summary>An HTTP handler whose connections are relayed streams through the RemoteHub Broker to the device's agent.</summary>
+    internal static SocketsHttpHandler ThroughBroker(Broker.BrokerRoute route, RemoteCertificateValidationCallback validate) => new()
+    {
+        ConnectCallback = async (_, token) => await Broker.PeerSessions.OpenAsync(route, token).ConfigureAwait(false),
+        SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = validate },
+        UseProxy = false,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+    };
+
     /// <summary>The jump host's own error somewhere inside <paramref name="ex"/> (HttpClient and ClientWebSocket wrap it).</summary>
     internal static JumpHostException? JumpError(Exception? ex)
     {
         for (; ex is not null; ex = ex.InnerException)
             if (ex is JumpHostException jump) return jump;
+        return null;
+    }
+
+    /// <summary>The broker's (or the device's) refusal somewhere inside <paramref name="ex"/>.</summary>
+    internal static Broker.BrokerException? BrokerError(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+            if (ex is Broker.BrokerException refused) return refused;
         return null;
     }
 

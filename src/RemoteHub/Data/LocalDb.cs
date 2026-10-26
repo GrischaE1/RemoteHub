@@ -21,7 +21,7 @@ public sealed class DatabaseUnreadableException(string message, Exception? inner
 /// </summary>
 public static class LocalDb
 {
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
     private const int KeptBackups = 7;
 
     private static readonly object Gate = new();
@@ -259,6 +259,13 @@ public static class LocalDb
             Exec(c, "PRAGMA user_version = 3", t);
             t.Commit();
         }
+        if (version < 4)
+        {
+            using var t = c.BeginTransaction();
+            Exec(c, Schema4, t);
+            Exec(c, "PRAGMA user_version = 4", t);
+            t.Commit();
+        }
     }
 
     private static void BackupBeforeMigration(SqliteConnection c, byte[] key)
@@ -352,6 +359,18 @@ public static class LocalDb
         CREATE VIRTUAL TABLE scripts_fts USING fts5(name, description, body, tokenize = 'unicode61 remove_diacritics 2');
         CREATE TABLE deleted_nodes (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL, kind TEXT NOT NULL,
                                     items INTEGER NOT NULL, deleted_utc INTEGER NOT NULL, data BLOB NOT NULL);
+        """;
+
+    // RemoteHub Broker connections of this PC and user (broker-design.md §6.3): never in the shared settings file, since each
+    // PC registers its own key. The console secret is sealed with the secret key (SecretBox, place "broker|<id>|secret").
+    // broker_items is the last sealed state the broker sent – for showing the synced folder while offline and for
+    // publishing it again after the broker lost its data (§12.6).
+    private const string Schema4 = """
+        CREATE TABLE broker_connections (id TEXT PRIMARY KEY, url TEXT NOT NULL, org TEXT NOT NULL, org_name TEXT NOT NULL,
+                                         console_id TEXT NOT NULL, console_name TEXT NOT NULL, secret BLOB NOT NULL,
+                                         added_utc INTEGER NOT NULL, cursor INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE broker_items (connection_id TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, data TEXT NOT NULL,
+                                   PRIMARY KEY (connection_id, kind, id));
         """;
 
     // ------------------------------------------------------------------ access
