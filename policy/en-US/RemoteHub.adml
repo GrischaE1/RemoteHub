@@ -1041,6 +1041,15 @@ This binds RemoteHub on this PC only.
 
 Registry: AllowConnectionEditing (REG_DWORD) = 1 or 0.</string>
 
+      <string id="Console_AllowSsh">Allow SSH connections</string>
+      <string id="Console_AllowSsh_Help">Enabled or Not configured: allowed.
+
+Disabled: SSH connections (a terminal tab) can't be opened or added; they stay in the tree. SFTP shares are set by "Allow SFTP shares".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowSsh (REG_DWORD) = 1 or 0.</string>
+
       <string id="Console_AllowSavedPasswords">Allow saving passwords</string>
       <string id="Console_AllowSavedPasswords_Help">Enabled or Not configured: allowed.
 

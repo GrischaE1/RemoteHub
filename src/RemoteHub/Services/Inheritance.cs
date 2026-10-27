@@ -75,14 +75,16 @@ public static class Inheritance
     }
 
     /// <summary>
-    /// Policy AllowSavedPasswords = 0 (docs/admx-design.md §5.6, §14 Q2): a stored password isn't used – the user is asked when
-    /// connecting, and what they type is kept in memory only. The stored one isn't changed here.
+    /// Policy AllowSavedPasswords = 0 (docs/admx-design.md §5.6, §14 Q2): a stored password – or a private key's passphrase –
+    /// isn't used: the user is asked when connecting, and what they type is kept in memory only. The stored one isn't
+    /// changed here. The key itself is kept: it isn't a password, and without it the account can't sign in at all.
     /// </summary>
     private static CredentialSet WithoutBlockedPassword(CredentialSet c)
     {
-        if (c.Password is null || Features.IsAllowed(Feature.SavedPasswords)) return c;
+        if ((c.Password is null && c.KeyPassphrase is null) || Features.IsAllowed(Feature.SavedPasswords)) return c;
         var copy = c.Clone();
         copy.Password = null;
+        copy.KeyPassphrase = null;
         return copy;
     }
 

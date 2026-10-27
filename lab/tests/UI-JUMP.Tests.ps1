@@ -618,7 +618,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 New-Folder 'JFolder'
                 # a share on its own, first in the folder Plain
                 $null = Ui 'Plain' -Value realclick
-                $null = Ui 'NewButton' -Value 'pick:New network share'
+                $null = Ui 'NewButton' -Value 'pick:New connection>SMB'
                 Set-ShareEditor 'New network share' @{ Name = 'JShare'; Type = 'SMB*'; Host = 'jshare.lab.test'; PathLabel = 'Share name'; Path = 'data' }
                 $null = Ui 'Add' -Title 'New network share'
                 $null = Ui 'JShare' -Value exists

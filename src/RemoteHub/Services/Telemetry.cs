@@ -101,7 +101,7 @@ public static class Telemetry
     };
 
     /// <summary>How many of each kind of item the navigation holds – numbers only, no names, hosts or settings.</summary>
-    public sealed record UsageCounts(int Connections, int Agents, int Shares, int Folders)
+    public sealed record UsageCounts(int Connections, int Agents, int Shares, int Folders, int Ssh = 0)
     {
         public IReadOnlyDictionary<string, object> ToFields() => new Dictionary<string, object>
         {
@@ -109,16 +109,17 @@ public static class Telemetry
             ["agents"] = Agents,
             ["shares"] = Shares,
             ["folders"] = Folders,
+            ["ssh"] = Ssh,
         };
     }
 
     /// <summary>
     /// Counts the tree: every connection, those with an installed RemoteHub Agent, every network share (below a server or
-    /// on its own) and every folder. Call on the UI thread (the collections are the view model's).
+    /// on its own), every SSH connection and every folder. Call on the UI thread (the collections are the view model's).
     /// </summary>
     public static UsageCounts Count(IEnumerable<NodeBase> items)
     {
-        int connections = 0, agents = 0, shares = 0, folders = 0;
+        int connections = 0, agents = 0, shares = 0, folders = 0, ssh = 0;
         void Walk(IEnumerable<NodeBase> nodes)
         {
             foreach (var n in nodes)
@@ -132,12 +133,13 @@ public static class Telemetry
                         shares += c.Shares.Count;
                         Walk(c.Children);
                         break;
+                    case NetworkShare { IsSsh: true }: ssh++; break;
                     case NetworkShare: shares++; break;
                 }
             }
         }
         Walk(items);
-        return new UsageCounts(connections, agents, shares, folders);
+        return new UsageCounts(connections, agents, shares, folders, ssh);
     }
 
     /// <summary>

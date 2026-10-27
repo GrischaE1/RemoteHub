@@ -132,6 +132,13 @@ public sealed class CredentialSet
     public string? Username { get; set; }
     public string? Domain { get; set; }
     public Secret? Password { get; set; }
+    /// <summary>
+    /// SSH and SFTP: a private key – the key file's text as imported (OpenSSH, PEM or PuTTY), stored encrypted like the
+    /// password (docs/network-shares.md §6.2). Tried before the password.
+    /// </summary>
+    public Secret? PrivateKey { get; set; }
+    /// <summary>The private key's passphrase; null = the key has none, or it is asked when connecting (memory only).</summary>
+    public Secret? KeyPassphrase { get; set; }
 
     /// <summary>Domain value meaning "local account on the computer being connected to" (".\user").</summary>
     public const string LocalComputerDomain = ".";

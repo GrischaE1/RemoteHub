@@ -7,71 +7,36 @@ namespace RemoteHub.Remoting.Shares;
 /// <summary>
 /// SFTP (SSH.NET). The server's host key must match the fingerprint accepted for the share; the first time, or when
 /// it changed, the user is asked (<paramref name="trust"/>) – nothing is sent before that. Behind a jump host it connects
-/// to <paramref name="forward"/>'s local port; the key is still checked against the share's own fingerprint.
+/// to <paramref name="forward"/>'s local port; the key is still checked against the share's own fingerprint. Signs in with
+/// the account's private key and/or password (<see cref="SshSignIn"/>).
 /// </summary>
 public sealed class SftpShare : ShareFileSystem
 {
     private readonly SftpClient _client;
     private readonly LocalForward? _forward;
+    private readonly PrivateKeyFile? _key;
 
     public SftpShare(string host, int port, string startFolder, CredentialSet credentials, string? trusted, Func<TrustRequest, bool> trust, Action<string> accepted,
         LocalForward? forward = null)
     {
         if (credentials.IsEmpty) throw new ShareException("SFTP needs an account – set one for the share or its server.");
         _forward = forward;
-        var user = UserName(credentials);
-        var password = credentials.Password?.Reveal() ?? "";
-        var keyboard = new KeyboardInteractiveAuthenticationMethod(user);
-        keyboard.AuthenticationPrompt += (_, e) =>
+        ConnectionInfo info;
+        try { (info, _key) = SshSignIn.Connection(forward?.Host ?? host, forward?.Port ?? port, credentials, TimeSpan.FromSeconds(20)); }
+        catch (SshKeyException ex) { throw new ShareException(ex.Message); }
+        // Without a limit a stalled server would hang the tab (SSH.NET waits forever by default).
+        try { _client = SshSignIn.ConnectTrusted(() => new SftpClient(info) { OperationTimeout = TimeSpan.FromSeconds(60) }, host, trusted, trust, accepted); }
+        catch (Exception ex)
         {
-            foreach (var p in e.Prompts) if (p.Request.Contains("password", StringComparison.OrdinalIgnoreCase)) p.Response = password;
-        };
-        var info = new ConnectionInfo(forward?.Host ?? host, forward?.Port ?? port, user, new PasswordAuthenticationMethod(user, password), keyboard) { Timeout = TimeSpan.FromSeconds(20) };
-        var refused = false;
-        string? acceptedNow = null;
-        SftpClient Connect(string? known)
-        {
-            // Without a limit a stalled server would hang the tab (SSH.NET waits forever by default).
-            var client = new SftpClient(info) { OperationTimeout = TimeSpan.FromSeconds(60) };
-            client.HostKeyReceived += (_, e) =>
-            {
-                var fp = "SHA256:" + e.FingerPrintSHA256;
-                if (fp == known) { e.CanTrust = true; return; }
-                e.CanTrust = trust(new TrustRequest(host, trusted is null ? "SSH host key" : "SSH host key (changed!)", fp,
-                    $"{e.HostKeyName}, {e.KeyLength} bits"));
-                if (e.CanTrust) { acceptedNow = fp; accepted(fp); }
-                else refused = true;
-            };
-            try { client.Connect(); return client; }
-            catch { client.Dispose(); throw; }
-        }
-        try
-        {
-            try { _client = Connect(trusted); }
-            // The question waits for the user while SSH.NET's connection timeout runs, so an answer after it ends this
-            // attempt ("Session operation has timed out"). The key is accepted by then: the second attempt doesn't ask.
-            catch (SshOperationTimeoutException) when (acceptedNow is not null) { _client = Connect(acceptedNow); }
-        }
-        catch (Exception ex) when (refused && ex is SshConnectionException or SshOperationTimeoutException)
-        {
-            throw new ShareException("The server's key wasn't accepted – nothing was sent.");
-        }
-        catch (SshAuthenticationException)
-        {
-            throw new ShareException("The user name or password is incorrect (or the server doesn't allow password sign-in).");
+            _key?.Dispose();
+            if (ex is SshAuthenticationException) throw new ShareException(SshSignIn.Refused(credentials));
+            throw;
         }
 
         var start = startFolder.Trim().Replace('\\', '/');
         Start = start.Length == 0 ? _client.WorkingDirectory : start.StartsWith('/') ? start : Join(_client.WorkingDirectory, start);
         if (Start.Length > 1) Start = Start.TrimEnd('/');
         Description = "SFTP · " + _client.ConnectionInfo.ServerVersion;
-    }
-
-    /// <summary>A Windows-style "DOMAIN\user" for Windows OpenSSH; just the user elsewhere.</summary>
-    internal static string UserName(CredentialSet c)
-    {
-        var user = c.Username!.Trim();
-        return user.Contains('\\') || user.Contains('@') || string.IsNullOrEmpty(c.Domain) || c.IsLocalAccount ? user : $"{c.Domain}\\{user}";
     }
 
     public override string Start { get; }
@@ -119,6 +84,7 @@ public sealed class SftpShare : ShareFileSystem
     {
         try { _client.Disconnect(); } catch { /* connection already gone */ }
         _client.Dispose();
+        _key?.Dispose();
         _forward?.Dispose();
     }
 }

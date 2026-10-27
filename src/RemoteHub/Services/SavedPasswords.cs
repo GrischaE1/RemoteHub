@@ -9,15 +9,17 @@ namespace RemoteHub.Services;
 /// </summary>
 public static class SavedPasswords
 {
-    /// <summary>Clears every stored password – folders, connections, shares, the global defaults and saved credentials – and returns how many.</summary>
+    /// <summary>
+    /// Clears every stored password and private key passphrase – folders, connections, shares, the global defaults and saved
+    /// credentials – and returns how many. Private keys stay: they aren't passwords.
+    /// </summary>
     public static int Remove(AppData data, IEnumerable<NodeBase> nodes)
     {
         var count = 0;
         void Clear(CredentialSet c)
         {
-            if (c.Password is null) return;
-            c.Password = null;
-            count++;
+            if (c.Password is not null) { c.Password = null; count++; }
+            if (c.KeyPassphrase is not null) { c.KeyPassphrase = null; count++; }
         }
         foreach (var n in nodes)
         {
@@ -26,7 +28,10 @@ public static class SavedPasswords
         }
         Clear(data.DefaultCredentials);
         foreach (var s in data.SavedCredentials)
+        {
             if (s.Password is not null) { s.Password = null; count++; }
+            if (s.KeyPassphrase is not null) { s.KeyPassphrase = null; count++; }
+        }
         return count;
     }
 }

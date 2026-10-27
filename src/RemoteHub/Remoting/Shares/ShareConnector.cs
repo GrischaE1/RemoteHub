@@ -37,6 +37,8 @@ public static class ShareConnector
             case ShareProtocol.Sftp:
                 if (via is not null) return Forwarded(via, host, port, f => new SftpShare(host, port, share.Path, credentials, share.TrustedFingerprint, trust, accepted, f));
                 return new SftpShare(host, port, share.Path, credentials, share.TrustedFingerprint, trust, accepted);
+            case ShareProtocol.Ssh:
+                throw new ShareException("An SSH connection opens a terminal, not files – use an SFTP share for its files.");
             case ShareProtocol.Ftp:
                 if (via is not null) throw new ShareException(FtpNotThroughJumpHost);
                 return new FtpShare(host, port, share.FtpSecurity, share.Path, credentials, share.TrustedFingerprint, trust, accepted);
@@ -70,5 +72,8 @@ public static class ShareConnector
     }
 
     /// <summary>Whether the protocol can work without an account (SMB: the Windows account; FTP: anonymous; WebDAV: the Windows account).</summary>
-    public static bool AccountOptional(ShareProtocol p) => p != ShareProtocol.Sftp;
+    public static bool AccountOptional(ShareProtocol p) => p is not (ShareProtocol.Sftp or ShareProtocol.Ssh);
+
+    /// <summary>The account can sign in with a private key (SSH, SFTP).</summary>
+    public static bool TakesKey(ShareProtocol p) => p is ShareProtocol.Sftp or ShareProtocol.Ssh;
 }

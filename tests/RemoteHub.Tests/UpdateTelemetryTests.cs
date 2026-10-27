@@ -440,14 +440,15 @@ public class UpdateTelemetryTests
     [Fact]
     public void Start_payload_adds_only_the_counts_as_numbers()
     {
-        var counts = new Telemetry.UsageCounts(200, 100, 232, 12);
+        var counts = new Telemetry.UsageCounts(200, 100, 232, 12, 7);
         using var doc = JsonDocument.Parse(Telemetry.Payload("app_start", "0.9.0", "beta", Guid.NewGuid().ToString(), counts.ToFields()));
-        Assert.Equal(["agents", "arch", "channel", "connections", "event", "folders", "installId", "os", "shares", "version"],
+        Assert.Equal(["agents", "arch", "channel", "connections", "event", "folders", "installId", "os", "shares", "ssh", "version"],
             doc.RootElement.EnumerateObject().Select(p => p.Name).Order());
         Assert.Equal(200, doc.RootElement.GetProperty("connections").GetInt32());
         Assert.Equal(100, doc.RootElement.GetProperty("agents").GetInt32());
         Assert.Equal(232, doc.RootElement.GetProperty("shares").GetInt32());
         Assert.Equal(12, doc.RootElement.GetProperty("folders").GetInt32());
+        Assert.Equal(7, doc.RootElement.GetProperty("ssh").GetInt32());
     }
 
     [Fact]
@@ -470,11 +471,12 @@ public class UpdateTelemetryTests
         var inner = new Folder { Name = "inner" };
         inner.Children.Add(enrolledOnly);
         inner.Children.Add(new NetworkShare { Name = "standalone" });
+        inner.Children.Add(new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01" });
         var outer = new Folder { Name = "outer" };
         outer.Children.Add(withAgent);
         outer.Children.Add(inner);
 
-        Assert.Equal(new Telemetry.UsageCounts(Connections: 3, Agents: 1, Shares: 3, Folders: 2),
+        Assert.Equal(new Telemetry.UsageCounts(Connections: 3, Agents: 1, Shares: 3, Folders: 2, Ssh: 1),
             Telemetry.Count([outer, new Connection { Name = "top", Host = "srv-c" }]));
         Assert.Equal(new Telemetry.UsageCounts(0, 0, 0, 0), Telemetry.Count([]));
     }

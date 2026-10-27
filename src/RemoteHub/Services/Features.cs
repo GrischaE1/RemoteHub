@@ -11,7 +11,7 @@ public enum Feature
     CredentialProviderInstall, AgentAutoSignIn,
     PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingDeviceActions,
     RemotingSetup,
-    QuickConnect, ConnectionEditing,
+    QuickConnect, ConnectionEditing, Ssh,
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
     Broker,
     Recording, SavedPasswords, PasswordCopy,
@@ -64,6 +64,7 @@ public static class Features
         [Feature.RemotingSetup] = new(PolicyCatalog.AllowRemotingSetup, "Setting up PowerShell remoting on a target", Feature.PowerShellRemoting),
         [Feature.QuickConnect] = new(PolicyCatalog.AllowQuickConnect, "Quick connect"),
         [Feature.ConnectionEditing] = new(PolicyCatalog.AllowConnectionEditing, "Changing folders, connections and shares"),
+        [Feature.Ssh] = new(PolicyCatalog.AllowSsh, "SSH connections", Plural: true),
         // A jump host is an agent: no agent, no jump hosts.
         [Feature.JumpHosts] = new(PolicyCatalog.AllowJumpHosts, "Jump hosts", Feature.Agent, Plural: true),
         [Feature.Broker] = new(PolicyCatalog.AllowBroker, "The RemoteHub Broker", Feature.Agent),
@@ -99,6 +100,7 @@ public static class Features
         Feature.JumpHosts => "Jump host",
         Feature.NetworkShares or Feature.Smb or Feature.Sftp or Feature.Ftp or Feature.WebDav => "Network share",
         Feature.QuickConnect => "Quick connect",
+        Feature.Ssh => "SSH",
         Feature.ConnectionEditing => "Connections",
         Feature.SavedPasswords or Feature.PasswordCopy => "Passwords",
         Feature.RdpFileImport or Feature.RdpFileExport or Feature.BackupExport or Feature.BackupImport => "Import and export",
@@ -116,7 +118,7 @@ public static class Features
     /// <summary>A remote tool, through the transport the connection uses: the agent's switch or WinRM's.</summary>
     public static bool IsAllowed(RemoteTool tool, bool viaAgent, IPolicySource? source = null) => IsAllowed(For(tool, viaAgent), source);
 
-    /// <summary>A network share: AllowNetworkShares and its protocol's switch.</summary>
+    /// <summary>A network share: AllowNetworkShares and its protocol's switch. SSH: AllowSsh alone.</summary>
     public static bool IsAllowed(ShareProtocol protocol, IPolicySource? source = null) => IsAllowed(For(protocol), source);
 
     public static Feature For(RemoteTool tool, bool viaAgent) => (tool, viaAgent) switch
@@ -140,6 +142,7 @@ public static class Features
         ShareProtocol.Smb => Feature.Smb,
         ShareProtocol.Sftp => Feature.Sftp,
         ShareProtocol.Ftp => Feature.Ftp,
+        ShareProtocol.Ssh => Feature.Ssh,
         _ => Feature.WebDav,
     };
 

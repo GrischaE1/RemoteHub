@@ -8,7 +8,7 @@
 #     anonymous), an implicit FTPS site (port 990), two shares only administrators may use, and a small HTTP mock
 #     (port 8085) that answers WebDAV requests with a chosen status code;
 #   - on a client VM: RemoteHub's own window (UI Automation in the console account's session) with the Server VM as
-#     the device (Enable-LabShareServers there): the password prompt, the trust dialog and Forget, New > Network share,
+#     the device (Enable-LabShareServers there): the password prompt, the trust dialog and Forget, New > New connection > SMB,
 #     the editor's messages and a pasted \\host\share\folder.
 # Needs: the Server VM (both parts), a client VM (UI part). No jump host. See docs/network-shares.md.
 # Runs on every kind: the harness part on a Server VM, the UI part on the admin PC (Test-LabConsoleVm) with its lane's
@@ -329,13 +329,14 @@ $out
             if ($S.Password) { $null = Ui 'Password' -Title $Title -Value "setnext:$($S.Password)" }
         }
     }
-    # New > New network share (in the folder of the selected item; -Select picks that item first)
+    # New > New connection > SMB (in the folder of the selected item; -Select picks that item first) - the editor's
+    # type is then set from $S.Type
     # (an editor left open by an earlier step is closed first and written down: the new one would open on top of it
     # and the fields be filled in whichever comes first)
     function New-Share([hashtable]$S, [string]$Select = 'Device') {
         $null = Close-Editors "before New-Share $($S.Name)"
         if ($Select) { $null = Ui $Select -Value realclick }
-        $null = Ui 'NewButton' -Value 'pick:New network share'
+        $null = Ui 'NewButton' -Value 'pick:New connection>SMB'
         Set-ShareEditor 'New network share' $S
     }
     # Add (or Save) that must close the editor -Title: one still open afterwards (a second editor, opened by a repeated
@@ -483,7 +484,7 @@ Describe 'S-SHARE2 harness <VmName>' -Tag Share, 'S-SHARE', 'S-SMB', 'S-SFTP', '
     }
 
     Context 'SFTP' {
-        It 'S-SFTP-04 SFTP needs an account; password and keyboard-interactive only (a key-only server is refused like a wrong password)' -Tag 'S-SFTP-04' {
+        It 'S-SFTP-04 SFTP needs an account; without a key, password and keyboard-interactive only (a key-only server is refused like a wrong password)' -Tag 'S-SFTP-04' {
             if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
             $r = [ordered]@{}
             $r.noAccount = Invoke-LabShare @('--protocol', 'sftp', '--host', $ip, '--port', '2222', '--accept', '1')
@@ -661,7 +662,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
                 $null = Ui 'ShareFolder' -Value exists
             }
             Step $n new {
-                # New > New network share with the folder selected: host left empty first
+                # New > New connection > SMB with the folder selected: host left empty first
                 New-Share @{ Name = 'OwnShare'; Type = 'SMB*'; PathLabel = 'Share name'; Path = 'rhshare' } -Select 'ShareFolder'
                 $n.inherit = (Ui '*from folder*' -Title 'New network share' -Value read -Optional -TimeoutSec 5).name
                 $null = Ui 'Add' -Title 'New network share'

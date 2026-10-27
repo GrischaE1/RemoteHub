@@ -110,12 +110,65 @@ public class ConsoleFeatureTests
     public void Network_shares_off_wins_over_each_protocol_and_a_protocol_blocks_only_itself()
     {
         var off = Set(("AllowNetworkShares", 0), ("AllowSftp", 1));
-        Assert.All(Enum.GetValues<ShareProtocol>(), p => Assert.False(Features.IsAllowed(p, off), p.ToString()));
+        Assert.All(Enum.GetValues<ShareProtocol>().Where(p => p != ShareProtocol.Ssh), p => Assert.False(Features.IsAllowed(p, off), p.ToString()));
 
         var ftpOff = Set(("AllowFtp", 0));
         Assert.False(Features.IsAllowed(ShareProtocol.Ftp, ftpOff));
         Assert.True(Features.IsAllowed(ShareProtocol.Smb, ftpOff));
         Assert.True(Features.IsAllowed(Feature.NetworkShares, ftpOff));
+    }
+
+    [Fact]
+    public void Ssh_has_a_switch_of_its_own_that_network_shares_dont_turn_off()
+    {
+        Assert.True(Features.IsAllowed(ShareProtocol.Ssh, Set(("AllowNetworkShares", 0))));
+        var sshOff = Set(("AllowSsh", 0));
+        Assert.False(Features.IsAllowed(ShareProtocol.Ssh, sshOff));
+        Assert.True(Features.IsAllowed(ShareProtocol.Sftp, sshOff)); // SFTP is a share: AllowSftp
+        Assert.Equal("SSH connections are turned off by your organisation – see Settings → Policies.", Features.WhyNot(Feature.Ssh, sshOff));
+        Assert.Equal("SSH", Features.Topic(Feature.Ssh));
+    }
+
+    [Fact]
+    public void New_connection_offers_every_kind_policy_allows_in_its_order()
+    {
+        Assert.Equal(["Remote Control", "SSH", "SFTP", "FTP / FTPS", "SMB", "WebDAV"], MainWindow.NewConnectionKinds(Set()).Select(k => k.Header));
+        Assert.Equal(["Remote Control", "SFTP", "FTP / FTPS", "SMB", "WebDAV"], MainWindow.NewConnectionKinds(Set(("AllowSsh", 0))).Select(k => k.Header));
+        Assert.Equal(["Remote Control", "SSH"], MainWindow.NewConnectionKinds(Set(("AllowNetworkShares", 0))).Select(k => k.Header));
+        Assert.Equal(["Remote Control", "SSH", "SFTP", "SMB", "WebDAV"], MainWindow.NewConnectionKinds(Set(("AllowFtp", 0))).Select(k => k.Header));
+        Assert.All(MainWindow.NewConnectionKinds(Set()), k => Assert.True(Enum.TryParse<Wpf.Ui.Controls.SymbolRegular>(k.Symbol, out _), k.Symbol));
+    }
+
+    [Fact]
+    public void The_editor_offers_only_the_kinds_policy_allows_and_the_items_own()
+    {
+        static List<ShareProtocol> Kinds(bool standalone, ShareProtocol? current, FakeSource policy) =>
+            Views.ShareEditorWindow.Kinds(standalone, current, policy).Select(k => k.Kind).ToList();
+        Assert.Equal([ShareProtocol.Ssh, ShareProtocol.Smb, ShareProtocol.Sftp, ShareProtocol.Ftp, ShareProtocol.WebDav], Kinds(true, ShareProtocol.Smb, Set()));
+        Assert.Equal([ShareProtocol.Smb, ShareProtocol.Sftp, ShareProtocol.Ftp, ShareProtocol.WebDav], Kinds(true, ShareProtocol.Sftp, Set(("AllowSsh", 0))));
+        Assert.Equal([ShareProtocol.Ssh], Kinds(true, ShareProtocol.Ssh, Set(("AllowNetworkShares", 0))));
+        // A blocked item keeps its own kind (it can still be edited), and nothing else blocked comes with it.
+        Assert.Equal([ShareProtocol.Ssh, ShareProtocol.Smb], Kinds(true, ShareProtocol.Ssh, Set(("AllowSsh", 0), ("AllowSftp", 0), ("AllowFtp", 0), ("AllowWebDav", 0))));
+        Assert.DoesNotContain(ShareProtocol.Ssh, Kinds(false, ShareProtocol.Sftp, Set()));
+        // A new item (no kind of its own yet) gets only allowed kinds: SMB off, the server's new share starts as SFTP.
+        Assert.Equal(ShareProtocol.Sftp, Kinds(false, null, Set(("AllowSmb", 0)))[0]);
+        Assert.Empty(Kinds(false, null, Set(("AllowSmb", 0), ("AllowSftp", 0), ("AllowFtp", 0), ("AllowWebDav", 0))));
+    }
+
+    [Fact]
+    public void Saved_passwords_off_leaves_a_stored_passphrase_unused_but_keeps_the_key()
+    {
+        var key = Secret.From("-----BEGIN OPENSSH PRIVATE KEY-----")!;
+        var data = new AppData();
+        var ssh = new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01", InheritCredentials = false,
+            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From(Guid.NewGuid().ToString("N")) } };
+        WithPolicy(Set(("AllowSavedPasswords", 0)), () =>
+        {
+            var (cred, _) = Inheritance.ResolveCredentials(ssh, data);
+            Assert.Same(key, cred.PrivateKey);
+            Assert.Null(cred.KeyPassphrase);
+        });
+        Assert.NotNull(ssh.Credentials.KeyPassphrase); // the stored one isn't changed
     }
 
     [Fact]

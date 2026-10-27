@@ -4182,6 +4182,41 @@ function Enable-LabShareServers {
     }
 }
 
+# A throwaway SSH key pair for a test, made with Windows' ssh-keygen on the lab host in -Folder (a temporary folder of
+# the test - never the evidence folder): answers Path (the private key), PublicKey (the .pub line) and Fingerprint
+# ("SHA256:..." as ssh-keygen -l writes it, as RemoteHub's editor shows it). No -Passphrase: a key without one.
+function New-LabSshKey {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Folder, [string]$Type = 'ed25519', [string]$Passphrase = '', [string]$Comment = 'rh-lab')
+    $keygen = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh-keygen.exe'
+    if (-not (Test-Path $keygen)) { throw "New-LabSshKey: $keygen not found - the lab host needs Windows' OpenSSH client" }
+    $null = New-Item -ItemType Directory -Path $Folder -Force
+    $path = Join-Path $Folder "id_$Type-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
+    # Windows PowerShell 5.1 drops an empty string argument: no passphrase is passed as two quotes
+    $phrase = if ($Passphrase) { $Passphrase } else { '""' }
+    $null = & $keygen -q -t $Type -N $phrase -C $Comment -f $path
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $path)) { throw "New-LabSshKey: ssh-keygen failed with exit code $LASTEXITCODE" }
+    $line = "$(& $keygen -l -E sha256 -f "$path.pub")"
+    [pscustomobject]@{ Path = $path; PublicKey = (Get-Content "$path.pub" -Raw).Trim(); Fingerprint = ($line -split ' ')[1] }
+}
+
+# Lets these public keys sign in over SSH (Windows OpenSSH) as the guest's administrators: sshd reads the keys of every
+# member of Administrators from administrators_authorized_keys, and only while that file is writable by Administrators
+# and SYSTEM alone. Without -PublicKey the file is removed. Answers how many keys it holds.
+function Set-LabSshAuthorizedKeys {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [string[]]$PublicKey = @())
+    Invoke-LabGuest -Name $Name -ArgumentList (, [string[]]@($PublicKey)) -ScriptBlock {
+        param([string[]]$keys)
+        $ErrorActionPreference = 'Stop'
+        $path = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+        if (-not $keys -or $keys.Count -eq 0) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue; return 0 }
+        Set-Content -LiteralPath $path -Value $keys -Encoding ascii
+        $null = icacls $path /inheritance:r /grant '*S-1-5-32-544:F' '*S-1-5-18:F'
+        $keys.Count
+    }
+}
+
 # Runs the harness' share scenario (ShareConnector + ShareTransfer) with the lab password; answers its JSON.
 function Invoke-LabShare {
     [CmdletBinding()]

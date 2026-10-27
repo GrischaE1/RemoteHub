@@ -29,7 +29,7 @@ public sealed class FtpShare : ShareFileSystem
                     Func<TrustRequest, bool> trust, Action<string> accepted)
     {
         var anonymous = credentials.IsEmpty;
-        var user = anonymous ? "anonymous" : SftpShare.UserName(credentials);
+        var user = anonymous ? "anonymous" : SshSignIn.UserName(credentials);
         var password = anonymous ? "anonymous@" : credentials.Password?.Reveal() ?? "";
         var config = new FtpConfig
         {

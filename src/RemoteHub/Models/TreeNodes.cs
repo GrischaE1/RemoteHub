@@ -347,12 +347,15 @@ public sealed partial class SavedCredential : ObservableObject
     [ObservableProperty] private string? _username;
     [ObservableProperty] private string? _domain;
     public Secret? Password { get; set; }
+    /// <summary>SSH and SFTP: a private key and its passphrase, as on <see cref="CredentialSet"/>.</summary>
+    public Secret? PrivateKey { get; set; }
+    public Secret? KeyPassphrase { get; set; }
 
     [JsonIgnore] public string Display => string.IsNullOrEmpty(Domain) ? (Username ?? "") : $"{Domain}\\{Username}";
     partial void OnUsernameChanged(string? value) => OnPropertyChanged(nameof(Display));
     partial void OnDomainChanged(string? value) => OnPropertyChanged(nameof(Display));
 
-    public CredentialSet ToSet() => new() { Username = Username, Domain = Domain, Password = Password };
+    public CredentialSet ToSet() => new() { Username = Username, Domain = Domain, Password = Password, PrivateKey = PrivateKey, KeyPassphrase = KeyPassphrase };
 }
 
 /// <summary>Root document persisted to disk.</summary>

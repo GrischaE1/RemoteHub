@@ -181,9 +181,9 @@ internal static class AppDataRecords
     }
 
     /// <summary>
-    /// Moves every "Password" and "Secret" out of the JSON, remembering where it was ("Credentials/Password",
-    /// "Keys/0/Secret"): a password's placeholder becomes the captured <see cref="Secret"/>; the enrollment key, a
-    /// plain string in the model, is wrapped in one.
+    /// Moves every "Password", "Secret" and every other <see cref="Secret"/> (a private key and its passphrase) out of the
+    /// JSON, remembering where it was ("Credentials/Password", "Credentials/PrivateKey", "Keys/0/Secret"): a placeholder
+    /// becomes the captured <see cref="Secret"/>; the enrollment key, a plain string in the model, is wrapped in one.
     /// </summary>
     private static void Extract(JsonNode? node, string path, List<Secret> captured, List<(string, Secret)> secrets)
     {
@@ -193,7 +193,7 @@ internal static class AppDataRecords
                 foreach (var (key, value) in o.ToList())
                 {
                     var p = path.Length == 0 ? key : path + "/" + key;
-                    if (key is "Password" or "Secret" && value is JsonValue v && v.TryGetValue<string>(out var s))
+                    if (value is JsonValue v && v.TryGetValue<string>(out var s) && (key is "Password" or "Secret" || SecretJsonConverter.TryParsePlaceholder(s, out _)))
                     {
                         var secret = SecretJsonConverter.TryParsePlaceholder(s, out var i) && i >= 0 && i < captured.Count ? captured[i] : Secret.From(s);
                         if (secret is not null) secrets.Add((p, secret));

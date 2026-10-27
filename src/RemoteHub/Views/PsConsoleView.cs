@@ -23,9 +23,9 @@ public sealed class PsConsoleView : Border, IRecordableView
     public FrameworkElement RecordingArea { get; }
 
     private const int MaxInlines = 12000;
-    private static readonly Brush ConsoleBackground = ColorTags.Frozen(Color.FromRgb(0x0C, 0x0F, 0x15));
-    private static readonly Brush DefaultText = ColorTags.Frozen(Color.FromRgb(0xD6, 0xDB, 0xE4));
-    private static readonly FontFamily Mono = new("Cascadia Mono, Cascadia Code, Consolas, Courier New");
+    internal static readonly Brush ConsoleBackground = ColorTags.Frozen(Color.FromRgb(0x0C, 0x0F, 0x15));
+    internal static readonly Brush DefaultText = ColorTags.Frozen(Color.FromRgb(0xD6, 0xDB, 0xE4));
+    internal static readonly FontFamily Mono = new("Cascadia Mono, Cascadia Code, Consolas, Courier New");
 
     private readonly PsSession _session;
     private readonly RichTextBox _output;

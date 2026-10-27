@@ -529,7 +529,7 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
                 $f.winrmToolsBase = MenuEntries 'PolWinRm' 'Tools'
                 $f.offlineBase = MenuEntries 'PolOffline'
                 $f.offlineToolsBase = MenuEntries 'PolOffline' 'Tools'
-                $f.newBase = MenuEntries 'NewButton' -Pick
+                $f.newBase = MenuEntries 'NewButton' 'New connection' -Pick
                 Settings-Page 'Security & storage'
                 $f.exportBase = (Ui 'Export backup*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5).found
                 $null = Ui 'Cancel' -Title 'Settings'
@@ -588,7 +588,7 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
                 CloseTabs
                 $f.rdpOffMenu = MenuEntries 'PolOffline'
                 $f.sharesOffTools = MenuEntries 'PolOffline' 'Tools'
-                $f.newOff = MenuEntries 'NewButton' -Pick
+                $f.newOff = MenuEntries 'NewButton' 'New connection' -Pick
                 Settings-Page 'Security & storage'
                 $f.exportOff = (Ui 'Export backup*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5).found
                 $f.importOff = (Ui 'Import backup*' -Title 'Settings' -Value exists -Optional -TimeoutSec 5).found
@@ -622,7 +622,8 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
             Has $f.winrmToolsBase 'File transfer' | Should -BeTrue -Because "WinRM's test passed (Tools: $($f.winrmToolsBase -join ', '))"
             Has $f.offlineBase 'Connect' | Should -BeTrue
             Has $f.offlineToolsBase 'Add network share*' | Should -BeTrue
-            Has $f.newBase 'New network share' | Should -BeTrue
+            # New > New connection lists the kinds (the entries of both menu levels are read)
+            foreach ($kind in 'Remote Control', 'SSH', 'SFTP', 'FTP / FTPS', 'SMB', 'WebDAV') { Has $f.newBase $kind | Should -BeTrue -Because "New offers: $($f.newBase -join ', ')" }
             Has $f.newBase 'Import .rdp files*' | Should -BeTrue
             $f.exportBase | Should -BeTrue
             $f.psTab | Should -BeTrue
@@ -659,7 +660,9 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
             Has $f.rdpOffMenu 'Connect' | Should -BeFalse -Because "PolOffline's menu: $($f.rdpOffMenu -join ', ')"
             Has $f.rdpOffMenu 'Open additional session' | Should -BeFalse
             Has $f.sharesOffTools 'Add network share*' | Should -BeFalse
-            Has $f.newOff 'New network share' | Should -BeFalse
+            foreach ($kind in 'SFTP', 'FTP / FTPS', 'SMB', 'WebDAV') { Has $f.newOff $kind | Should -BeFalse -Because "New offers: $($f.newOff -join ', ')" }
+            # SSH has a switch of its own: network shares off leaves it
+            Has $f.newOff 'SSH' | Should -BeTrue -Because "New offers: $($f.newOff -join ', ')"
             Has $f.newOff 'Import .rdp files*' | Should -BeFalse
             $f.exportOff | Should -BeFalse
             $f.importOff | Should -BeTrue -Because 'only the export is blocked'

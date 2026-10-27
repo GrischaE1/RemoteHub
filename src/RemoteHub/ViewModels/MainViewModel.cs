@@ -539,6 +539,13 @@ public sealed partial class MainViewModel : ObservableObject
         return s;
     }
 
+    public SshSession OpenSsh(Connection c, NetworkShare entry)
+    {
+        var s = new SshSession(c, entry);
+        Register(s);
+        return s;
+    }
+
     public RegistrySession OpenRegistry(Connection c, string? startPath)
     {
         var s = new RegistrySession(c, startPath);

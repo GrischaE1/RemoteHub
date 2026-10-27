@@ -528,6 +528,7 @@ public partial class MainWindow : FluentWindow
         else if (s is PsSession p) ConnectPs(p);
         else if (s is FileBrowserSession f) ConnectFileBrowser(f);
         else if (s is ShareSession sh) ConnectShare(sh);
+        else if (s is SshSession ssh) ConnectSsh(ssh);
         else if (s is RemoteToolSession t) ConnectTool(t);
     }
 
@@ -613,6 +614,7 @@ public partial class MainWindow : FluentWindow
             return;
         }
         if (HandleViewKeys(e, ctrl)) return;
+        if (TerminalView.OwnsKey(e)) return;
         if (ctrl && e.Key == Key.N) { if (shift) NewFolder_Click(this, e); else NewConnection_Click(this, e); e.Handled = true; }
         else if (ctrl && e.Key == Key.F && FocusedFilterable() is { } view) { view.FocusFilter(); e.Handled = true; }
         else if (ctrl && e.Key == Key.F)
@@ -831,7 +833,7 @@ public partial class MainWindow : FluentWindow
         CmHistory.Visibility = V(n is Connection);
         CmSaveRdp.Visibility = V(n is not null && Features.IsAllowed(Feature.RdpFileExport));
         CmSaveRdp.Header = n is Folder ? "Export folder as .rdp files…" : "Save as .rdp file…";
-        CmNewShare.Visibility = V(Features.IsAllowed(Feature.NetworkShares));
+        FillNewConnection(CmNewConnection);
         CmFavorite.Visibility = V(n is Connection);
         if (n is Connection fav) CmFavorite.Header = _vm.IsFavorite(fav) ? "Remove from favourites" : "Add to favourites";
         // On a favourite the connection is moved, duplicated or deleted from its folder, not from here.
@@ -2469,11 +2471,11 @@ public partial class MainWindow : FluentWindow
         Close();
     }
 
-    /// <summary>"New" (and + on the collapsed rail): new connection, new folder, import .rdp files.</summary>
+    /// <summary>"New" (and + on the collapsed rail): new connection of each kind, new folder, import .rdp files.</summary>
     private void NewMenu_Click(object sender, RoutedEventArgs e)
     {
         var cm = NewButton.ContextMenu!;
-        NewMenuShare.Visibility = Features.IsAllowed(Feature.NetworkShares) ? Visibility.Visible : Visibility.Collapsed;
+        FillNewConnection(NewMenuConnection);
         NewMenuImport.Visibility = NewMenuImportSep.Visibility = Features.IsAllowed(Feature.RdpFileImport) ? Visibility.Visible : Visibility.Collapsed;
         cm.PlacementTarget = sender as UIElement ?? NewButton;
         cm.Placement = ReferenceEquals(sender, NewButton) ? PlacementMode.Bottom : PlacementMode.Right;

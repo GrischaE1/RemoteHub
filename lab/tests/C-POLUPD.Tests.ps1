@@ -354,7 +354,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
         It 'C-TEL-01 app_start has exactly event, version, channel, os, arch, installId and the counts; app_session after a restart' -Tag 'C-TEL-01' {
             $start = @($t.events | Where-Object event -eq 'app_start')[0]
             $start | Should -Not -BeNullOrEmpty
-            @($start.PSObject.Properties.Name | Sort-Object) | Should -Be @('agents', 'arch', 'channel', 'connections', 'event', 'folders', 'installId', 'os', 'shares', 'version')
+            @($start.PSObject.Properties.Name | Sort-Object) | Should -Be @('agents', 'arch', 'channel', 'connections', 'event', 'folders', 'installId', 'os', 'shares', 'ssh', 'version')
             $start.os | Should -Be $(if ($t.os -match 'Server') { 'Windows Server' } elseif ($t.os -match 'Windows 11') { 'Windows 11' } else { 'Windows 10' })
             @($t.events | Where-Object { $_.event -eq 'app_start' -and $_.connections -ge 1 -and $_.folders -ge 1 }).Count | Should -BeGreaterThan 0
             @($t.events | Where-Object event -eq 'app_session').Count | Should -BeGreaterThan 0

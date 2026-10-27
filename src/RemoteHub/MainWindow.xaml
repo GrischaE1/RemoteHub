@@ -79,7 +79,7 @@
                 <ui:Button Icon="{ui:SymbolIcon PanelLeftExpand24}" Click="ToggleSidebar_Click" Margin="0,0,0,8"
                            AutomationProperties.Name="Show navigation" ToolTip="Show navigation (Ctrl+B)" />
                 <ui:Button x:Name="RailNewButton" Icon="{ui:SymbolIcon Add24}" Appearance="Primary" Click="NewMenu_Click" Margin="0,0,0,8"
-                           AutomationProperties.Name="New" ToolTip="New connection, network share, folder or import .rdp files" />
+                           AutomationProperties.Name="New" ToolTip="New connection (Remote Control, SSH, SFTP, FTP, SMB, WebDAV), folder or import .rdp files" />
                 <ui:Button Icon="{ui:SymbolIcon Search24}" Click="RailSearch_Click"
                            AutomationProperties.Name="Search" ToolTip="Search folders &amp; connections (Ctrl+F)" Margin="0,0,0,8" />
             </StackPanel>
@@ -95,7 +95,7 @@
                 <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
                     <!-- New (menu) and collapse; Settings is on the view rail, app items live in Settings -->
                     <ui:Button x:Name="NewButton" DockPanel.Dock="Left" Appearance="Primary" Click="NewMenu_Click"
-                               AutomationProperties.Name="New" ToolTip="New connection (Ctrl+N), network share, new folder (Ctrl+Shift+N) or import .rdp files">
+                               AutomationProperties.Name="New" ToolTip="New connection (Remote Control with Ctrl+N, SSH, SFTP, FTP, SMB, WebDAV), new folder (Ctrl+Shift+N) or import .rdp files">
                         <StackPanel Orientation="Horizontal">
                             <ui:SymbolIcon Symbol="Add24" FontSize="16" Margin="0,0,6,0" VerticalAlignment="Center" />
                             <TextBlock Text="New" VerticalAlignment="Center" />
@@ -103,8 +103,8 @@
                         </StackPanel>
                         <ui:Button.ContextMenu>
                             <ContextMenu>
-                                <MenuItem Header="New connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Desktop24}" InputGestureText="Ctrl+N" />
-                                <MenuItem x:Name="NewMenuShare" Header="New network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
+                                <!-- Its kinds are filled in when the menu opens (FillNewConnection), as in the tree's New menus -->
+                                <MenuItem x:Name="NewMenuConnection" Header="New connection" Icon="{ui:SymbolIcon Desktop24}" />
                                 <MenuItem Header="New folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" InputGestureText="Ctrl+Shift+N" />
                                 <Separator x:Name="NewMenuImportSep" />
                                 <MenuItem x:Name="NewMenuImport" Header="Import .rdp files…" Click="ImportRdp_Click" Icon="{ui:SymbolIcon DocumentAdd24}" />
@@ -493,8 +493,7 @@
                                 </MenuItem>
                                 <Separator x:Name="CmNewSep" />
                                 <MenuItem x:Name="CmNew" Header="New" Icon="{ui:SymbolIcon Add24}">
-                                    <MenuItem Header="Connection" Click="NewConnection_Click" Icon="{ui:SymbolIcon Add24}" />
-                                    <MenuItem x:Name="CmNewShare" Header="Network share" Click="NewShare_Click" Icon="{ui:SymbolIcon FolderLink24}" />
+                                    <MenuItem x:Name="CmNewConnection" Header="Connection" Icon="{ui:SymbolIcon Add24}" />
                                     <MenuItem Header="Folder" Click="NewFolder_Click" Icon="{ui:SymbolIcon FolderAdd24}" />
                                 </MenuItem>
                             </ContextMenu>
