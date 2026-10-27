@@ -40,12 +40,33 @@ internal sealed class BrokerLink(
     private bool _register;
     private string? _lastProblem;
     private string? _connectedTo;
+    /// <summary>One send at a time on the control socket: an answer to an offer and the keep-alive can come together.</summary>
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+    /// <summary>The current connection's liveness (null between connections).</summary>
+    private volatile BrokerLiveness? _live;
+    /// <summary>Completed by a network change while not connected: the next attempt starts at once.</summary>
+    private volatile TaskCompletionSource _retryNow = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>For tests: the state the link is in, and each session's end.</summary>
     internal string State { get; private set; } = "idle";
     internal event Action<string>? SessionEnded;
 
     public async Task RunAsync(CancellationToken stop)
+    {
+        // A device that sleeps comes back with a new network: a connection is checked at once (it may have died without
+        // a close), and without one the next attempt doesn't wait for the back-off.
+        NetworkChange.NetworkAddressChanged += OnNetworkChanged;
+        try { await RunLoopAsync(stop); }
+        finally { NetworkChange.NetworkAddressChanged -= OnNetworkChanged; }
+    }
+
+    private void OnNetworkChanged(object? sender, EventArgs e)
+    {
+        if (_live is { } live) live.Check();
+        else _retryNow.TrySetResult();
+    }
+
+    private async Task RunLoopAsync(CancellationToken stop)
     {
         var backoff = TimeSpan.FromSeconds(1);
         while (!stop.IsCancellationRequested)
@@ -76,8 +97,14 @@ internal sealed class BrokerLink(
             State = "waiting";
             // A connection that lasted resets the back-off; jitter, so many agents don't return in the same second.
             if (DateTime.UtcNow - started > TimeSpan.FromMinutes(1)) backoff = TimeSpan.FromSeconds(1);
-            await Delay(backoff + TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(0, (int)backoff.TotalMilliseconds + 1)), stop);
-            backoff = TimeSpan.FromTicks(Math.Min(MaxBackoff.Ticks, backoff.Ticks * 2));
+            var retryNow = _retryNow.Task;
+            await Task.WhenAny(Delay(backoff + TimeSpan.FromMilliseconds(RandomNumberGenerator.GetInt32(0, (int)backoff.TotalMilliseconds + 1)), stop), retryNow);
+            if (retryNow.IsCompleted)
+            {
+                _retryNow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                backoff = TimeSpan.FromSeconds(1);
+            }
+            else backoff = TimeSpan.FromTicks(Math.Min(MaxBackoff.Ticks, backoff.Ticks * 2));
         }
     }
 
@@ -132,26 +159,33 @@ internal sealed class BrokerLink(
             log.Audit(AuditEvent.BrokerConnected, $"Connected to the RemoteHub Broker {host} (organisation {broker.Org}, {Text(welcome, "orgName", 200, required: false)})");
             _connectedTo = host;
         }
+        else if (_lastProblem is not null) log.Write($"RemoteHub Broker {host}: connected again");
         _lastProblem = null;
         State = "connected";
 
         await Send(ws, Hello(p), stop);
         using var alive = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        var keepAlive = KeepAlive(ws, TimeSpan.FromSeconds(Math.Clamp(p.BrokerKeepAliveSeconds, BrokerProtocol.KeepAliveMin, BrokerProtocol.KeepAliveMax)), alive.Token);
-        try { return await ReceiveLoop(ws, config, broker, baseUri, stop); }
+        var live = new BrokerLiveness(TimeSpan.FromSeconds(Math.Clamp(p.BrokerKeepAliveSeconds, BrokerProtocol.KeepAliveMin, BrokerProtocol.KeepAliveMax)));
+        _live = live;
+        // "ping" is answered at the broker's edge without waking anything.
+        var keepAlive = live.KeepAliveAsync(ws, c => SendLocked(ws, "ping"u8.ToArray(), c), alive.Token);
+        try { return await ReceiveLoop(ws, live, config, broker, baseUri, stop); }
         finally
         {
             alive.Cancel();
-            try { await keepAlive; } catch { /* ended with the connection */ }
+            _live = null;
+            string? gaveUp = null;
+            try { gaveUp = await keepAlive; } catch { /* ended with the connection */ }
+            if (gaveUp is not null) log.Write($"RemoteHub Broker {host}: the connection was given up – {gaveUp}");
         }
     }
 
-    private async Task<Outcome> ReceiveLoop(ClientWebSocket ws, AgentConfig config, BrokerSettings broker, Uri baseUri, CancellationToken stop)
+    private async Task<Outcome> ReceiveLoop(ClientWebSocket ws, BrokerLiveness live, AgentConfig config, BrokerSettings broker, Uri baseUri, CancellationToken stop)
     {
         var window = new Queue<DateTime>();
         while (true)
         {
-            var m = await Receive(ws, stop);
+            var m = await Receive(ws, stop, live);
             if (m is null) return Outcome.Ended;
             var now = DateTime.UtcNow;
             window.Enqueue(now);
@@ -322,33 +356,32 @@ internal sealed class BrokerLink(
         catch { return ""; }
     }
 
-    private static async Task KeepAlive(ClientWebSocket ws, TimeSpan every, CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(every, ct);
-            // "ping" is answered at the broker's edge without waking anything.
-            await ws.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text, true, ct);
-        }
-    }
-
     // ---- WebSocket plumbing ------------------------------------------------------------------------------------
 
     internal static ClientWebSocket NewSocket(AgentPolicy p)
     {
         var ws = new ClientWebSocket();
-        ws.Options.KeepAliveInterval = TimeSpan.Zero; // the application keep-alive above
+        ws.Options.KeepAliveInterval = TimeSpan.Zero; // the application keep-alive (BrokerLiveness)
         if (p.BrokerProxy is { } proxy) ws.Options.Proxy = new WebProxy(proxy);
         return ws;
     }
 
     private static Uri WsBase(Uri broker) => new UriBuilder(broker) { Scheme = broker.Scheme == "http" ? "ws" : "wss", Path = "/" }.Uri;
 
-    private static async Task Send(ClientWebSocket ws, JsonObject m, CancellationToken ct) =>
-        await ws.SendAsync(Encoding.UTF8.GetBytes(m.ToJsonString()), WebSocketMessageType.Text, true, ct);
+    private Task Send(ClientWebSocket ws, JsonObject m, CancellationToken ct) => SendLocked(ws, Encoding.UTF8.GetBytes(m.ToJsonString()), ct);
 
-    /// <summary>The next message as an object; null when the broker closed. Larger than the limit, not UTF-8 or not an object: refused.</summary>
-    private static async Task<JsonObject?> Receive(ClientWebSocket ws, CancellationToken ct)
+    private async Task SendLocked(ClientWebSocket ws, byte[] text, CancellationToken ct)
+    {
+        await _sendLock.WaitAsync(ct);
+        try { await ws.SendAsync(text, WebSocketMessageType.Text, true, ct); }
+        finally { _sendLock.Release(); }
+    }
+
+    /// <summary>
+    /// The next message as an object; null when the broker closed. Larger than the limit, not UTF-8 or not an object:
+    /// refused. Every frame, a pong included, tells <paramref name="live"/> the connection carries.
+    /// </summary>
+    private static async Task<JsonObject?> Receive(ClientWebSocket ws, CancellationToken ct, BrokerLiveness? live = null)
     {
         var buffer = new byte[BrokerProtocol.MaxMessageBytes];
         while (true)
@@ -363,6 +396,7 @@ internal sealed class BrokerLink(
                 length += r.Count;
             } while (!r.EndOfMessage);
             if (r.MessageType != WebSocketMessageType.Text) throw new InvalidDataException("binary message on the control channel");
+            live?.Heard();
             if (length == 4 && buffer.AsSpan(0, 4).SequenceEqual("pong"u8)) continue; // the answer to our keep-alive
             string text;
             try { text = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(buffer, 0, length); }

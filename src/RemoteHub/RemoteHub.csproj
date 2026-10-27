@@ -48,6 +48,9 @@
     <!-- Scripts view (docs/scripts-view-design.md): the built-in library and the script that runs a script on a device -->
     <EmbeddedResource Include="Assets\ScriptLibrary\**\*.ps1" LogicalName="ScriptLibrary/%(RecursiveDir)%(Filename)%(Extension)" />
     <EmbeddedResource Include="Assets\Scripts\RunScript.ps1" LogicalName="Scripts/RunScript.ps1" />
+    <!-- The elevated update step: embedded for the Windows PowerShell fallback, and next to RemoteHub.exe for RemoteHubUpdate.exe (UpdateService.StartInstall) -->
+    <EmbeddedResource Include="Assets\Update\InstallUpdate.ps1" LogicalName="Update/InstallUpdate.ps1" />
+    <None Include="Assets\Update\InstallUpdate.ps1" Link="InstallUpdate.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- RemoteHub's own license (AGPL-3.0) and those of the libraries shipped with it (installed next to RemoteHub.exe) -->
     <None Include="..\..\LICENSE" Link="LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
@@ -60,6 +63,7 @@
     <Compile Include="..\RemoteHub.Agent\AgentEnrollment.cs" Link="Remoting\AgentEnrollment.cs" />
     <Compile Include="..\RemoteHub.Agent\TunnelProtocol.cs" Link="Remoting\TunnelProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\BrokerProtocol.cs" Link="Remoting\BrokerProtocol.cs" />
+    <Compile Include="..\RemoteHub.Agent\BrokerLiveness.cs" Link="Remoting\BrokerLiveness.cs" />
     <Compile Include="..\RemoteHub.Agent\PeerDirect.cs" Link="Remoting\PeerDirect.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\DesktopProtocol.cs" Link="Remoting\Desktop\DesktopProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\VideoCodec.cs" Link="Remoting\Desktop\VideoCodec.cs" />

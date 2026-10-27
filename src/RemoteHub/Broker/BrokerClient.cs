@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.NetworkInformation;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -6,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
+using Microsoft.Win32;
 using RemoteHub.Agent;
 using RemoteHub.Services;
 using static RemoteHub.Agent.BrokerProtocol;
@@ -37,6 +39,12 @@ public sealed class BrokerClient : IAsyncDisposable
     private ClientWebSocket? _ws;
     private Task? _run;
     private int _nextRef;
+    /// <summary>The current connection's liveness (null between connections).</summary>
+    private volatile BrokerLiveness? _live;
+    /// <summary>Completed by a wake, an unlock or a network change while not connected: the next attempt starts at once.</summary>
+    private volatile TaskCompletionSource _retryNow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>When the last connection was lost, for the log line once it is back.</summary>
+    private DateTime? _lostAt;
 
     /// <summary>Keys from the console secret: join (registering again), layout (sealing folders and placements).</summary>
     private readonly byte[] _join, _layout, _keyring;
@@ -94,9 +102,35 @@ public sealed class BrokerClient : IAsyncDisposable
     public static BrokerClient Start(BrokerConnection info)
     {
         var c = new BrokerClient(info, BrokerStore.Secret(info.Id));
+        SystemEvents.PowerModeChanged += c.OnPowerModeChanged;
+        SystemEvents.SessionSwitch += c.OnSessionSwitch;
+        NetworkChange.NetworkAddressChanged += c.OnNetworkChanged;
         c._run = Task.Run(c.RunAsync);
         return c;
     }
+
+    /// <summary>
+    /// A wake, an unlock or a network change: the connection may have died without a close while the PC slept or the
+    /// network went away. A connection is checked at once (<see cref="BrokerLiveness.Check"/>); without one the next
+    /// attempt starts now instead of after the back-off.
+    /// </summary>
+    internal void Recheck()
+    {
+        if (_live is { } live) live.Check();
+        else _retryNow.TrySetResult();
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume) Recheck();
+    }
+
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.ConsoleConnect or SessionSwitchReason.RemoteConnect) Recheck();
+    }
+
+    private void OnNetworkChanged(object? sender, EventArgs e) => Recheck();
 
     /// <summary>
     /// Settings → RemoteHub Broker → Connect: registers this PC with the console secret (a new key for this PC) and
@@ -158,9 +192,16 @@ public sealed class BrokerClient : IAsyncDisposable
             foreach (var p in _pending.Values) p.TrySetException(new BrokerException($"The connection to the RemoteHub Broker {Host} was lost."));
             _pending.Clear();
             if (DateTime.UtcNow - started > TimeSpan.FromMinutes(1)) backoff = TimeSpan.FromSeconds(1);
-            try { await Task.Delay(backoff + TimeSpan.FromMilliseconds(Random.Shared.Next((int)backoff.TotalMilliseconds)), _stop.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { break; }
-            backoff = TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(60).Ticks, backoff.Ticks * 2));
+            var retryNow = _retryNow.Task;
+            await Task.WhenAny(Task.Delay(backoff + TimeSpan.FromMilliseconds(Random.Shared.Next((int)backoff.TotalMilliseconds)), _stop.Token), retryNow).ConfigureAwait(false);
+            if (_stop.IsCancellationRequested) break;
+            if (retryNow.IsCompleted)
+            {
+                // The PC woke or its network changed: the next attempt now, and the back-off starts again.
+                _retryNow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                backoff = TimeSpan.FromSeconds(1);
+            }
+            else backoff = TimeSpan.FromTicks(Math.Min(TimeSpan.FromSeconds(60).Ticks, backoff.Ticks * 2));
         }
     }
 
@@ -196,16 +237,20 @@ public sealed class BrokerClient : IAsyncDisposable
         _presenceList = HasFeature(welcome, "presenceList");
         if (orgName != _info.OrgName && orgName.Length > 0) BrokerStore.SetOrgName(_info.Id, orgName);
 
+        var live = new BrokerLiveness(KeepAlive);
         _ws = ws;
-        var reader = Task.Run(() => ReadLoop(ws, ct), ct);
+        _live = live;
+        var reader = Task.Run(() => ReadLoop(ws, live, ct), ct);
         using var alive = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var keepAlive = PingLoop(ws, alive.Token);
+        var keepAlive = live.KeepAliveAsync(ws, c => SendPingLocked(ws, c), alive.Token);
         var presence = Task.CompletedTask;
         try
         {
             await LoadKeyringAsync().ConfigureAwait(false);
             await SyncAsync().ConfigureAwait(false);
             SetState(true, $"Connected to {orgName} on {Host}");
+            if (_lostAt is { } lost) DiagLog.Write($"Broker: connected again after {(int)(DateTime.UtcNow - lost).TotalSeconds} s");
+            _lostAt = null;
             if (_presenceList) presence = PresenceLoop(alive.Token);
             await reader.ConfigureAwait(false);
         }
@@ -213,8 +258,12 @@ public sealed class BrokerClient : IAsyncDisposable
         {
             alive.Cancel();
             _ws = null;
+            _live = null;
+            _lostAt ??= DateTime.UtcNow;
             SetState(false, $"The connection to the RemoteHub Broker {Host} was lost.");
-            try { await keepAlive.ConfigureAwait(false); } catch { /* ended with it */ }
+            string? gaveUp = null;
+            try { gaveUp = await keepAlive.ConfigureAwait(false); } catch { /* ended with it */ }
+            if (gaveUp is not null) DiagLog.Write("Broker: the connection was given up – " + gaveUp);
             try { await presence.ConfigureAwait(false); } catch { /* ended with it */ }
         }
     }
@@ -329,11 +378,11 @@ public sealed class BrokerClient : IAsyncDisposable
     private void Cache(IReadOnlyList<JsonObject> items, long cursor) =>
         BrokerStore.PutItems(_info.Id, items.Select(i => (i["kind"]?.GetValue<string>() ?? "", i["id"]?.GetValue<string>() ?? "", i.ToJsonString())), cursor);
 
-    private async Task ReadLoop(ClientWebSocket ws, CancellationToken ct)
+    private async Task ReadLoop(ClientWebSocket ws, BrokerLiveness live, CancellationToken ct)
     {
         while (true)
         {
-            var m = await ReceiveAsync(ws, ct).ConfigureAwait(false);
+            var m = await ReceiveAsync(ws, ct, live).ConfigureAwait(false);
             if (m is null) return;
             if (m["ref"]?.GetValue<string>() is { } r && _pending.TryRemove(r, out var waiting)) { waiting.TrySetResult(m); continue; }
             switch (m["t"]?.GetValue<string>())
@@ -350,13 +399,12 @@ public sealed class BrokerClient : IAsyncDisposable
         }
     }
 
-    private static async Task PingLoop(ClientWebSocket ws, CancellationToken ct)
+    /// <summary>The keep-alive, answered at the broker's edge – under the send lock, as a request's send.</summary>
+    private async Task SendPingLocked(ClientWebSocket ws, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
-        {
-            await Task.Delay(KeepAlive, ct).ConfigureAwait(false);
-            await ws.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text, true, ct).ConfigureAwait(false);
-        }
+        await _sendLock.WaitAsync(ct).ConfigureAwait(false);
+        try { await ws.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text, true, ct).ConfigureAwait(false); }
+        finally { _sendLock.Release(); }
     }
 
     private void SetState(bool connected, string state)
@@ -385,7 +433,12 @@ public sealed class BrokerClient : IAsyncDisposable
                 throw new BrokerException(answer["message"]?.GetValue<string>() ?? "The broker refused the request.", answer["code"]?.GetValue<string>());
             return answer;
         }
-        catch (TimeoutException) { throw new BrokerException($"The RemoteHub Broker {Host} didn't answer in time."); }
+        catch (TimeoutException)
+        {
+            // A request without an answer on a connection that looks open: find out now whether it still carries anything.
+            _live?.Check();
+            throw new BrokerException($"The RemoteHub Broker {Host} didn't answer in time.");
+        }
         finally { _pending.TryRemove(r, out _); }
     }
 
@@ -533,7 +586,8 @@ public sealed class BrokerClient : IAsyncDisposable
     private static Task SendAsync(ClientWebSocket ws, JsonObject m, CancellationToken ct) =>
         ws.SendAsync(Encoding.UTF8.GetBytes(m.ToJsonString()), WebSocketMessageType.Text, true, ct);
 
-    private static async Task<JsonObject?> ReceiveAsync(ClientWebSocket ws, CancellationToken ct)
+    /// <summary>The next message; null when the broker closed. Every frame, a pong included, tells <paramref name="live"/> the connection carries.</summary>
+    private static async Task<JsonObject?> ReceiveAsync(ClientWebSocket ws, CancellationToken ct, BrokerLiveness? live = null)
     {
         var buffer = new byte[MaxMessageBytes];
         while (true)
@@ -547,6 +601,7 @@ public sealed class BrokerClient : IAsyncDisposable
                 if (r.MessageType == WebSocketMessageType.Close) return null;
                 length += r.Count;
             } while (!r.EndOfMessage);
+            live?.Heard();
             if (length == 4 && buffer.AsSpan(0, 4).SequenceEqual("pong"u8)) continue;
             try { return JsonNode.Parse(buffer.AsSpan(0, length)) as JsonObject ?? throw new InvalidDataException("message isn't an object"); }
             catch (JsonException) { throw new InvalidDataException("message from the broker isn't JSON"); }
@@ -564,6 +619,9 @@ public sealed class BrokerClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
+        NetworkChange.NetworkAddressChanged -= OnNetworkChanged;
         _stop.Cancel();
         try { _ws?.Abort(); } catch { /* gone */ }
         if (_run is not null) try { await _run.ConfigureAwait(false); } catch { /* stopping */ }

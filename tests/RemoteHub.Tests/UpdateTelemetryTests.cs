@@ -288,10 +288,14 @@ public class UpdateTelemetryTests
             "CN=O'Brien GmbH, O=O'Brien GmbH, C=DE", 4242, "0123456789abcdef0123456789abcdef");
         System.Management.Automation.Language.Parser.ParseInput(command, out _, out var errors);
         Assert.Empty(errors);
-        Assert.Contains(@"$source = 'C:\Users\O''Brien\AppData", command);
-        Assert.Contains("$sha = 'AB" + new string('0', 62) + "'", command);
-        Assert.Contains("$publisher = 'CN=O''Brien GmbH, O=O''Brien GmbH, C=DE'", command);
-        Assert.Contains("Wait-Process -Id 4242", command);
+        // The step's own script, with its values as parameters
+        Assert.StartsWith("& {\n" + UpdateService.StepScript, command);
+        Assert.Contains(@"-Source 'C:\Users\O''Brien\AppData", command);
+        Assert.Contains("-Sha256 'ab" + new string('0', 62) + "'", command);
+        Assert.Contains("$sha = $Sha256.ToUpperInvariant()", command);
+        Assert.Contains("-Publisher 'CN=O''Brien GmbH, O=O''Brien GmbH, C=DE'", command);
+        Assert.Contains("-WaitPid 4242 -Id '0123456789abcdef0123456789abcdef'", command);
+        Assert.Contains("Wait-Process -Id $WaitPid", command);
         Assert.Contains("Join-Path $env:ProgramFiles 'RemoteHub Updates'", command);
         Assert.Contains("/inheritance:r", command);
         // the copy is checked, never the user's download
@@ -299,7 +303,56 @@ public class UpdateTelemetryTests
         Assert.Contains("Get-AuthenticodeSignature -LiteralPath $target", command);
         // msiexec writes its log next to the outcome, so a failed install says why
         Assert.Contains("'/l*v', ('\"' + $log + '\"')", command);
-        Assert.Contains("$log = Join-Path $results ($id + '.log')", command);
+        Assert.Contains("$log = Join-Path $results ($Id + '.log')", command);
+    }
+
+    [Fact]
+    public void The_step_script_is_ASCII_Windows_PowerShell_installed_next_to_RemoteHub()
+    {
+        // Windows PowerShell 5.1 reads a BOM-less file as ANSI: a non-ASCII character could end a string.
+        var file = Path.Combine(AppContext.BaseDirectory, UpdateService.StepScriptName);
+        Assert.True(File.Exists(file), "InstallUpdate.ps1 isn't copied next to RemoteHub");
+        Assert.All(File.ReadAllBytes(file), b => Assert.True(b < 0x80, $"non-ASCII byte 0x{b:X2}"));
+        Assert.Equal(File.ReadAllText(file), UpdateService.StepScript);
+        System.Management.Automation.Language.Parser.ParseFile(file, out _, out var errors);
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void RemoteHub_Update_asks_only_for_the_installed_RemoteHub_with_its_files_and_publisher()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "rh-updater-" + Guid.NewGuid().ToString("N"));
+        var installed = Path.Combine(dir, "RemoteHub.exe");
+        var updater = Path.Combine(dir, UpdateService.UpdaterName);
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(installed, "");
+            File.WriteAllText(updater, "");
+            // without the step's script next to it: Windows PowerShell, as before
+            Assert.Null(UpdateService.Updater(installed, installed, null));
+            File.WriteAllText(Path.Combine(dir, UpdateService.StepScriptName), "");
+            Assert.Equal(updater, UpdateService.Updater(installed, installed, null));
+            Assert.Equal(updater, UpdateService.Updater(installed.ToUpperInvariant(), installed, null));
+            // a copy run from elsewhere, or no path at all
+            Assert.Null(UpdateService.Updater(Path.Combine(Path.GetTempPath(), "RemoteHub.exe"), installed, null));
+            Assert.Null(UpdateService.Updater(null, installed, null));
+            // a signed RemoteHub asks only through a program signed by its own publisher
+            Assert.Null(UpdateService.Updater(installed, installed, Authenticode.SignerSubject(SignedFile)));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* temp */ }
+        }
+    }
+
+    [Fact]
+    public void RemoteHub_Update_gets_the_values_only()
+    {
+        Assert.Equal(@"--msi ""C:\Users\O'Brien\AppData\Local\Temp\RemoteHub\Updates\RemoteHub-0.9.1-x64.msi"" --sha256 AB" + new string('0', 62) +
+                     " --pid 4242 --id 0123456789abcdef0123456789abcdef",
+            UpdateService.UpdaterArguments(@"C:\Users\O'Brien\AppData\Local\Temp\RemoteHub\Updates\RemoteHub-0.9.1-x64.msi", "ab" + new string('0', 62),
+                4242, "0123456789abcdef0123456789abcdef"));
     }
 
     /// <summary>Runs the elevated step's script without elevation, in a temp folder instead of Program Files.</summary>
@@ -307,8 +360,21 @@ public class UpdateTelemetryTests
     {
         var id = Guid.NewGuid().ToString("N");
         var command = UpdateService.InstallCommand(source, sha, publisher, 0, id, stage);
+        return RunStep("-EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command)), stage, id);
+    }
+
+    /// <summary>Runs the installed script as RemoteHubUpdate.exe starts it (-File, -Signer), without elevation, in a temp folder.</summary>
+    private static string RunStepFile(string source, string sha, string signer, string stage)
+    {
+        var id = Guid.NewGuid().ToString("N");
+        var script = Path.Combine(AppContext.BaseDirectory, UpdateService.StepScriptName);
+        return RunStep($"-File \"{script}\" -Source \"{source}\" -Sha256 {sha} -WaitPid 0 -Id {id} -Signer \"{signer}\" -Stage \"{stage}\"", stage, id);
+    }
+
+    private static string RunStep(string arguments, string stage, string id)
+    {
         var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-            "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command)))
+            "-NoProfile -NonInteractive -ExecutionPolicy Bypass " + arguments)
         { UseShellExecute = false, CreateNoWindow = true };
         using var p = System.Diagnostics.Process.Start(start)!;
         Assert.True(p.WaitForExit(60_000), "the step didn't end within 60 s");
@@ -335,6 +401,13 @@ public class UpdateTelemetryTests
             Assert.Equal("refused changed", RunInstallCommand(download, new string('0', 64), publisher, stage));
             // the right file, but RemoteHub's publisher is someone else
             Assert.Equal("refused signature", RunInstallCommand(download, sha, "CN=RemoteHub Publisher", stage));
+            // As RemoteHubUpdate.exe starts it: the publisher is whoever signed the program, here someone other than
+            // the download's signer (an unsigned copy of it).
+            var unsigned = Path.Combine(dir, "RemoteHub-9.9.8-x64.msi");
+            File.WriteAllBytes(unsigned, [.. File.ReadAllBytes(download).Take(4096)]);
+            var unsignedSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(unsigned)));
+            Assert.Equal("refused signature", RunStepFile(unsigned, unsignedSha, SignedFile, stage));
+            Assert.Equal("refused changed", RunStepFile(download, new string('0', 64), SignedFile, stage));
             Assert.Empty(Directory.GetFiles(stage, "*.msi")); // the copy is always removed
             Assert.Equal("The update wasn't installed: the installer isn't signed by RemoteHub's publisher.",
                 UpdateService.DescribeInstallResult("refused signature"));

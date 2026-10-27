@@ -561,7 +561,7 @@ switch ($Do) {
         # UI Automation of a normal window (RemoteHub, an installer dialog, Settings): -Title the window (wildcards),
         # -Text the element's name (wildcards), -Value what to do: click (Invoke / Toggle / Select / Expand, else a
         # real click), toggle-on, toggle-off, set:<text>, read (the element's value or name), exists, row:<button> (that
-        # button in the element's own row - see there). Waits up to
+        # button in the element's own row - see there), place:<menu path> (where a submenu opens - see there). Waits up to
         # -TimeoutSec for the element.
         Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms
         $A = [Windows.Automation.AutomationElement]
@@ -762,6 +762,53 @@ switch ($Do) {
                     $result.value = $item.Current.Name
                     $result.help = $item.Current.HelpText
                 }
+            }
+            'place:*' {
+                # place:Parent>Entry - right-click, open each submenu of the path (Expand, as the keyboard does), then where
+                # the last one's submenu opened: that entry's rectangle and the one around its submenu's entries (C-NAV-02).
+                # The window is moved first so the element sits 150 px above the working area's bottom: a submenu of some
+                # height then has no room below and opens upwards.
+                $tp = $null
+                if ($win.TryGetCurrentPattern([Windows.Automation.TransformPattern]::Pattern, [ref]$tp) -and $tp.Current.CanMove) {
+                    $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+                    $wr = $win.Current.BoundingRectangle
+                    $er = $found.Current.BoundingRectangle
+                    $tp.Move($wr.Left, $wr.Top + ($wa.Bottom - 150) - ($er.Top + $er.Height / 2))
+                    Start-Sleep -Milliseconds 500
+                }
+                $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
+                [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero)
+                $isItem = New-Object Windows.Automation.PropertyCondition ($A::ControlTypeProperty), ([Windows.Automation.ControlType]::MenuItem)
+                $item = $null
+                foreach ($entry in @($action.Substring(6) -split '>')) {
+                    $menuUntil = (Get-Date).AddSeconds(5)
+                    do {
+                        Start-Sleep -Milliseconds 300
+                        $item = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants, $isItem) | Where-Object { $_.Current.Name -like $entry -and -not $_.Current.IsOffscreen }) | Select-Object -First 1
+                    } while (-not $item -and (Get-Date) -lt $menuUntil)
+                    $o = $null
+                    if (-not $item) { $result.error = "no menu entry '$entry'"; break }
+                    if (-not $item.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$o)) { $result.error = "menu entry '$entry' has no submenu"; break }
+                    $o.Expand()
+                }
+                if (-not $result.error) {
+                    Start-Sleep -Milliseconds 700
+                    $box = { param($r) [ordered]@{ left = [int]$r.Left; top = [int]$r.Top; right = [int]$r.Right; bottom = [int]$r.Bottom } }
+                    $result.item = & $box $item.Current.BoundingRectangle
+                    $kids = @($item.FindAll([Windows.Automation.TreeScope]::Children, $isItem) | Where-Object { -not $_.Current.IsOffscreen })
+                    $result.entries = @($kids | ForEach-Object { $_.Current.Name })
+                    if ($kids) {
+                        $rects = @($kids | ForEach-Object { $_.Current.BoundingRectangle })
+                        $result.submenu = [ordered]@{
+                            left   = [int]($rects | ForEach-Object { $_.Left } | Measure-Object -Minimum).Minimum
+                            top    = [int]($rects | ForEach-Object { $_.Top } | Measure-Object -Minimum).Minimum
+                            right  = [int]($rects | ForEach-Object { $_.Right } | Measure-Object -Maximum).Maximum
+                            bottom = [int]($rects | ForEach-Object { $_.Bottom } | Measure-Object -Maximum).Maximum
+                        }
+                    }
+                    $result.workArea = & $box ([Windows.Forms.Screen]::PrimaryScreen.WorkingArea)
+                }
+                foreach ($i in 1..4) { [RhNative]::keybd_event(0x1B, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x1B, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 100 }
             }
             'row:*' {
                 # row:<button>: the button of that name (wildcards) in the found element's own row - a list whose rows

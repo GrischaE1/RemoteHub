@@ -252,56 +252,54 @@ public static class UpdateService
     /// <summary>The elevated step's outcomes, one file per install attempt; readable by users, written only by the step.</summary>
     public static string ResultsFolder => Path.Combine(StagingFolder, "results");
 
+    /// <summary>The elevated step's script (Assets/Update/InstallUpdate.ps1): installed next to RemoteHub, and embedded for <see cref="InstallCommand"/>.</summary>
+    public const string StepScriptName = "InstallUpdate.ps1";
+
+    /// <summary>The installed program that asks for administrator approval as "RemoteHub Update" and starts the step (src/RemoteHub.Updater).</summary>
+    public const string UpdaterName = "RemoteHubUpdate.exe";
+
+    internal static string StepScript
+    {
+        get
+        {
+            using var s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("Update/" + StepScriptName)
+                          ?? throw new InvalidOperationException(StepScriptName + " is missing from the app.");
+            using var r = new StreamReader(s, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            return r.ReadToEnd();
+        }
+    }
+
     /// <summary>
-    /// The elevated step (Windows PowerShell 5.1, given as the command line, so nothing on disk can change it): waits for
+    /// The elevated step as a Windows PowerShell 5.1 command line, for when <see cref="UpdaterName"/> can't start it: the
+    /// step's script with its values, given as the command line, so nothing on disk can change it. The step waits for
     /// RemoteHub to exit, copies the MSI into <see cref="StagingFolder"/> (administrators and SYSTEM only), checks the
     /// copy's SHA-256 and – when the running build is signed – its signature and publisher again, installs that copy and
-    /// writes the outcome to <see cref="ResultsFolder"/>. Only cmdlets and icacls, so it also runs in Constrained Language Mode.
+    /// writes the outcome to <see cref="ResultsFolder"/>.
     /// </summary>
     internal static string InstallCommand(string msi, string sha256, string? publisher, int pid, string resultId, string? stage = null)
     {
         static string Q(string s) => "'" + s.Replace("'", "''") + "'";
-        return string.Join("\n",
-            "$ErrorActionPreference = 'Stop'",
-            // RemoteHub hosts PowerShell 7, which puts its own module folders into PSModulePath; inherited, Windows
-            // PowerShell would look for Get-FileHash there and not find it. Its own folders only, and nothing a user can write.
-            "$env:PSModulePath = \"$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\"",
-            $"$source = {Q(msi)}; $sha = {Q(sha256.ToUpperInvariant())}; $publisher = {Q(publisher ?? "")}; $id = {Q(resultId)}",
-            stage is null ? "$stage = Join-Path $env:ProgramFiles 'RemoteHub Updates'" : $"$stage = {Q(stage)}", // another folder: tests only
-            "$results = Join-Path $stage 'results'",
-            "$target = Join-Path $stage ($id + '.msi')",
-            "function Result([string]$text) { Set-Content -LiteralPath (Join-Path $results ($id + '.txt')) -Value $text -Encoding UTF8 }",
-            "try {",
-            "  foreach ($dir in $stage, $results) {",
-            "    if (Test-Path -LiteralPath $dir) { if (\"$((Get-Item -LiteralPath $dir -Force).Attributes)\" -match 'ReparsePoint') { throw \"$dir is a link\" } }",
-            "    else { $null = New-Item -ItemType Directory -Path $dir }",
-            "  }",
-            // Administrators and SYSTEM only; users may read the outcomes, nothing else. /reset first: a folder made where
-            // nothing is inherited gets the creator's default permissions as its own entries, which /inheritance:r keeps.
-            "  $icacls = \"$env:SystemRoot\\System32\\icacls.exe\"",
-            "  $null = & $icacls $stage /reset",
-            "  $null = & $icacls $stage /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'",
-            "  if ($LASTEXITCODE -ne 0) { throw 'the staging folder could not be locked down' }",
-            "  $null = & $icacls $results /reset",
-            "  $null = & $icacls $results /grant '*S-1-5-32-545:(OI)(CI)RX'",
-            "  Get-ChildItem -LiteralPath $stage -Filter *.msi -File -Force | Remove-Item -Force",
-            "  Get-ChildItem -LiteralPath $results -File -Force | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Force",
-            $"  Wait-Process -Id {pid} -Timeout 60 -ErrorAction SilentlyContinue",
-            "  Copy-Item -LiteralPath $source -Destination $target -Force",
-            "  if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $sha) { Result 'refused changed'; return }",
-            "  if ($publisher) {",
-            "    $sig = Get-AuthenticodeSignature -LiteralPath $target",
-            "    if ($sig.Status -ne 'Valid' -or -not $sig.SignerCertificate -or $sig.SignerCertificate.Subject -cne $publisher) { Result 'refused signature'; return }",
-            "  }",
-            // msiexec's log next to the outcome (readable by users like it, gone after 7 days): an exit code like 1603
-            // alone doesn't say why the install failed (lab SEC-UPD-02, run 20261021-222745)
-            "  $log = Join-Path $results ($id + '.log')",
-            "  $p = Start-Process -FilePath \"$env:SystemRoot\\System32\\msiexec.exe\" -ArgumentList '/i', ('\"' + $target + '\"'), '/passive', '/norestart', '/l*v', ('\"' + $log + '\"') -Wait -PassThru",
-            "  Result ('installed ' + $p.ExitCode)",
-            "}",
-            "catch { try { Result ('failed ' + $_.Exception.Message) } catch { } }",
-            "finally { if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue } }");
+        return "& {\n" + StepScript + "\n} -Source " + Q(msi) + " -Sha256 " + Q(sha256) + " -Publisher " + Q(publisher ?? "") +
+               $" -WaitPid {pid} -Id " + Q(resultId) + (stage is null ? "" : " -Stage " + Q(stage)); // another folder: tests only
     }
+
+    /// <summary>
+    /// <see cref="UpdaterName"/> next to the installed RemoteHub, when the running RemoteHub is that installed copy and the
+    /// program is there with the step's script – signed by the same publisher when RemoteHub is signed. Otherwise null:
+    /// a local build or a copy run from elsewhere asks through Windows PowerShell, as before.
+    /// </summary>
+    internal static string? Updater(string? running, string installedExe, string? publisher)
+    {
+        if (running is null || !string.Equals(Path.GetFullPath(running), Path.GetFullPath(installedExe), StringComparison.OrdinalIgnoreCase)) return null;
+        var dir = Path.GetDirectoryName(installedExe)!;
+        var exe = Path.Combine(dir, UpdaterName);
+        if (!File.Exists(exe) || !File.Exists(Path.Combine(dir, StepScriptName))) return null;
+        return publisher is null || Authenticode.Refusal(exe, publisher) is null ? exe : null;
+    }
+
+    /// <summary>What <see cref="UpdaterName"/> is given: only the values, which it checks; the publisher it takes from its own signature.</summary>
+    internal static string UpdaterArguments(string msi, string sha256, int pid, string resultId) =>
+        $"--msi \"{msi}\" --sha256 {sha256.ToUpperInvariant()} --pid {pid} --id {resultId}";
 
     /// <summary>
     /// The helper that starts RemoteHub again once the elevated step has ended (it runs as the user, so RemoteHub doesn't
@@ -329,40 +327,53 @@ public static class UpdateService
     public const string UpdateResultArg = "--update-result";
 
     /// <summary>
-    /// Starts the elevated install step – Windows asks for administrator approval now, while RemoteHub still runs – and
+    /// Starts the elevated install step – Windows asks for administrator approval now, while RemoteHub still runs: for
+    /// "RemoteHub Update" and its publisher where <see cref="Updater"/> finds it, otherwise for Windows PowerShell – and
     /// the restart helper. Throws if the approval is declined; then nothing was started. The caller closes RemoteHub right after.
     /// </summary>
     public static void StartInstall(string msi, string sha256)
     {
         var id = Guid.NewGuid().ToString("N");
-        var command = InstallCommand(msi, sha256, Authenticode.RunningPublisher, Environment.ProcessId, id);
-        Process elevated;
+        int step;
         try
         {
-            elevated = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
-                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(command)))
+            if (Updater(Environment.ProcessPath, InstalledExe, Authenticode.RunningPublisher) is { } updater)
             {
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden,
-            }) ?? throw new InvalidOperationException("The installer step didn't start.");
+                using var started = Process.Start(new ProcessStartInfo(updater, UpdaterArguments(msi, sha256, Environment.ProcessId, id))
+                {
+                    UseShellExecute = true,
+                    Verb = "runas",
+                }) ?? throw new InvalidOperationException("The installer step didn't start.");
+                // It starts the step and ends at once (the install replaces it), answering with the step's process id.
+                if (!started.WaitForExit(30_000) || started.ExitCode <= 0) throw new InvalidOperationException("The installer step didn't start.");
+                step = started.ExitCode;
+            }
+            else
+            {
+                var command = InstallCommand(msi, sha256, Authenticode.RunningPublisher, Environment.ProcessId, id);
+                using var elevated = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
+                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(command)))
+                {
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                }) ?? throw new InvalidOperationException("The installer step didn't start.");
+                step = elevated.Id;
+            }
         }
         catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223) // ERROR_CANCELLED
         {
             throw new InvalidOperationException("Administrator approval was declined – nothing was installed.");
         }
-        using (elevated)
+        var current = Environment.ProcessPath ?? InstalledExe;
+        var script = Path.Combine(Path.GetDirectoryName(msi)!, "install-update.cmd");
+        File.WriteAllText(script, RestartScript(step, InstalledExe, current, id), new UTF8Encoding(false));
+        Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/c \"\"{script}\"\"")
         {
-            var current = Environment.ProcessPath ?? InstalledExe;
-            var script = Path.Combine(Path.GetDirectoryName(msi)!, "install-update.cmd");
-            File.WriteAllText(script, RestartScript(elevated.Id, InstalledExe, current, id), new UTF8Encoding(false));
-            Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), $"/c \"\"{script}\"\"")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(msi)!,
-            });
-        }
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(msi)!,
+        });
     }
 
     /// <summary>

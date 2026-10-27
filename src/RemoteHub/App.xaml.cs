@@ -21,6 +21,7 @@ public partial class App : Application
         }
         StartupTiming.Mark("app");
         Views.WindowPlacement.Install(); // popups open centred on the window they belong to, also when it is maximised
+        Views.SubmenuPlacement.Install(); // a submenu that opens upwards ends level with its item
 
         _instance = SingleInstance.ClaimOrForward(e.Args);
         if (_instance is null)
