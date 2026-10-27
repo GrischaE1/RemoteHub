@@ -43,6 +43,13 @@ public sealed class AgentConfig
     public string? EnrollmentKeyId { get; set; }
     public string? EnrollmentSecret { get; set; }
 
+    /// <summary>
+    /// The RemoteHub Broker this device uses (<c>broker join</c>, MSI BROKER_URL / BROKER_SECRET),
+    /// with the two keys it keeps from the device secret – like the enrollment secret above, in a folder only SYSTEM and
+    /// Administrators can read. Null: no broker. The service reads it again while it runs, so a join needs no restart.
+    /// </summary>
+    public BrokerSettings? Broker { get; set; }
+
     public const string AdministratorsSid = "S-1-5-32-544";
 
     [JsonIgnore]
@@ -225,6 +232,31 @@ public sealed class AgentConfig
         if (AllowedGroups.Count == 0) throw new InvalidDataException("allowedGroups is empty – nobody could connect.");
         if (MaxSessions < 1) throw new InvalidDataException("maxSessions must be at least 1.");
         if (!VirtualDisplayModes.IsValid(VirtualDisplay)) throw new InvalidDataException($"virtualDisplay must be \"auto\", \"always\" or \"off\", not \"{VirtualDisplay}\".");
+        if (Broker is { } b && b.Problem() is { } problem) throw new InvalidDataException("broker: " + problem);
+    }
+}
+
+/// <summary>agent.json's <c>broker</c> section: where the broker is, which organisation, and the device secret's two keys.</summary>
+public sealed class BrokerSettings
+{
+    /// <summary>https://rh.contoso.com – http only for a test lab's local broker (the signalling is then readable; pins and seals still hold).</summary>
+    public string Url { get; set; } = "";
+    public string Org { get; set; } = "";
+    public string SecretId { get; set; } = "";
+    /// <summary>Proves at registration that the device belongs to the organisation; kept to register again after the broker lost its data.</summary>
+    public string EnrollKey { get; set; } = "";
+    /// <summary>Seals the device record and checks the consoles' sealed offers.</summary>
+    public string RecordKey { get; set; } = "";
+
+    public static Uri? ParseUrl(string? text) => BrokerProtocol.ParseBrokerUrl(text);
+
+    public string? Problem()
+    {
+        if (ParseUrl(Url) is null) return $"url \"{Url}\" isn't a broker address (https://name).";
+        if (!BrokerProtocol.IsOrgId(Org)) return $"org \"{Org}\" isn't an organisation id.";
+        if (!BrokerProtocol.IsSecretId(SecretId)) return "secretId is missing.";
+        if (BrokerProtocol.FromB64u(EnrollKey) is not { Length: 32 } || BrokerProtocol.FromB64u(RecordKey) is not { Length: 32 }) return "the keys are missing or damaged – join the broker again.";
+        return null;
     }
 }
 

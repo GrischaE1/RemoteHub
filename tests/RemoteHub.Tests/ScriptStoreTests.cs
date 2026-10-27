@@ -275,7 +275,8 @@ public class ScriptStoreTests : IDisposable
         var folder = ScriptStore.CreateFolder(null, "F", null);
         LocalDb.Use((c, _) =>
         {
-            foreach (var table in new[] { "scripts_fts", "script_runs", "script_versions", "scripts", "script_folders", "deleted_nodes" })
+            // The later schema's tables too: a version 2 database had none of them.
+            foreach (var table in new[] { "scripts_fts", "script_runs", "script_versions", "scripts", "script_folders", "deleted_nodes", "broker_connections", "broker_items" })
                 LocalDb.Exec(c, $"DROP TABLE {table}");
             LocalDb.Exec(c, "PRAGMA user_version = 2");
         });
@@ -283,8 +284,27 @@ public class ScriptStoreTests : IDisposable
         var before = LocalDb.Backups().Count;
         LocalDb.Open();
         Assert.Equal(before + 1, LocalDb.Backups().Count);
-        Assert.Equal(3L, LocalDb.Use((c, _) => (long)LocalDb.Scalar(c, "PRAGMA user_version")!));
+        Assert.Equal((long)LocalDb.SchemaVersion, LocalDb.Use((c, _) => (long)LocalDb.Scalar(c, "PRAGMA user_version")!));
         Assert.DoesNotContain(ScriptStore.Folders(), f => f.Id == folder);
         Assert.NotNull(ScriptStore.CreateFolder(null, "After", null));
+    }
+
+    [Fact]
+    public void A_version_3_database_gets_the_broker_tables_and_keeps_its_scripts()
+    {
+        var folder = ScriptStore.CreateFolder(null, "Kept", null);
+        LocalDb.Use((c, _) =>
+        {
+            foreach (var table in new[] { "broker_connections", "broker_items" })
+                LocalDb.Exec(c, $"DROP TABLE {table}");
+            LocalDb.Exec(c, "PRAGMA user_version = 3");
+        });
+        LocalDb.Close();
+        var before = LocalDb.Backups().Count;
+        LocalDb.Open();
+        Assert.Equal(before + 1, LocalDb.Backups().Count);
+        Assert.Equal(4L, LocalDb.Use((c, _) => (long)LocalDb.Scalar(c, "PRAGMA user_version")!));
+        Assert.Contains(ScriptStore.Folders(), f => f.Id == folder);
+        Assert.Empty(RemoteHub.Broker.BrokerStore.All());
     }
 }

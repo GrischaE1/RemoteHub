@@ -1,10 +1,8 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text.Json;
-using System.Threading.Channels;
 
 namespace RemoteHub.Agent;
 
@@ -13,15 +11,13 @@ namespace RemoteHub.Agent;
 /// only checks where they go (policy, every time) and copies bytes – what runs inside (RDP, WinRM, another agent's TLS)
 /// stays encrypted end to end.
 /// </summary>
-internal sealed class TunnelEndpoint(AgentLog log, string account, string source, Func<AgentPolicy> policy, TunnelNetwork? network = null)
+internal sealed class TunnelEndpoint(AgentLog log, string account, string source, Func<AgentPolicy> policy, TunnelNetwork? network = null) : IRelayOwner
 {
     private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(15);
-    /// <summary>After RemoteHub closed its side: how long the target may still send before the stream is cut.</summary>
-    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(60);
 
     private readonly TunnelNetwork _net = network ?? TunnelNetwork.System;
-    private readonly ConcurrentDictionary<uint, Relay?> _streams = new(); // null while opening
+    private readonly ConcurrentDictionary<uint, StreamRelay?> _streams = new(); // null while opening
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private WebSocket _ws = null!;
     private CancellationToken _ct;
@@ -111,9 +107,10 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
         var host = open.Host.Trim().Trim('[', ']');
         var where = $"{host}:{open.Port}";
         Socket? socket = null;
-        Relay? relay = null;
+        StreamRelay? relay = null;
         try
         {
+            if (host == TunnelOpen.Self) { await OpenSelf(id, open.Port, p); return; }
             if (host.Length == 0 || open.Port is < 1 or > 65535) { await Refuse(id, TunnelRefusal.Unreachable, $"{where} is not a valid target.", null); return; }
             if (!p.TunnelEnabled) { await Refused(id, where, "TunnelEnabled = 0", "Jump connections are turned off on this device by policy (TunnelEnabled)."); return; }
             if (!p.Tunnel.PortAllowed(open.Port))
@@ -174,7 +171,9 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
             }
 
             var remote = (IPEndPoint)socket.RemoteEndPoint!;
-            relay = new Relay(this, id, socket, host, remote);
+            var target = socket;
+            relay = new StreamRelay(this, id, new NetworkStream(target, ownsSocket: true),
+                () => target.Shutdown(SocketShutdown.Send), () => target.LingerState = new LingerOption(true, 0)) { Name = host, Remote = remote };
             _streams[id] = relay;
             Interlocked.Increment(ref _opened);
             await Send(TunnelProtocol.Json(TunnelMessage.Opened, id, new TunnelOpened(remote.Address.ToString(), (socket.LocalEndPoint as IPEndPoint)?.Address.ToString()), TunnelJson.Default.TunnelOpened));
@@ -185,11 +184,65 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
             // The target connection, if there is one, must not outlive this failure (e.g. the WebSocket dropped while answering).
             if (relay is not null) relay.Abort();
             else socket?.Dispose();
-            _streams.TryRemove(new KeyValuePair<uint, Relay?>(id, null));
+            _streams.TryRemove(new KeyValuePair<uint, StreamRelay?>(id, null));
             if (ex is OperationCanceledException && _ct.IsCancellationRequested) return;
             log.Write($"Jump connection {account} from {source}: opening {where} failed: {ex.Message}");
             try { await Refuse(id, TunnelRefusal.Unreachable, $"Opening {where} failed on the jump host: {ex.Message}", null); } catch { /* tunnel gone */ }
         }
+    }
+
+    /// <summary>
+    /// The device itself: only ports its policy lists in TunnelOwnPorts – port 0 asks for "RDP",
+    /// the port RDP is configured for here, whatever RemoteHub knows about it. Nothing else on its own addresses opens
+    /// this way; services that listen only on this device stay out of reach unless listed.
+    /// </summary>
+    private async Task OpenSelf(uint id, int asked, AgentPolicy p)
+    {
+        var rdp = asked == 0;
+        var port = rdp ? RdpPort() : asked;
+        var where = rdp ? $"this device's RDP port ({port})" : $"port {asked} on this device";
+        var listed = rdp ? p.TunnelOwnPorts.Contains("RDP", StringComparer.OrdinalIgnoreCase)
+                         : asked is >= 1 and <= 65535 && p.TunnelOwnPorts.Contains(asked.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!p.TunnelEnabled) { await Refused(id, where, "TunnelEnabled = 0", "Jump connections are turned off on this device by policy (TunnelEnabled)."); return; }
+        if (!listed) { await Refused(id, where, "TunnelOwnPorts", $"This device's policy doesn't allow {where} through its agent (TunnelOwnPorts)."); return; }
+
+        // Windows lets RDP clients in from 127.0.0.2 (a loopback address other than the one it refuses for itself); the
+        // device's own address is the fallback.
+        Socket? socket = null;
+        Exception? last = null;
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(_ct))
+        {
+            timeout.CancelAfter(ConnectTimeout);
+            foreach (var address in new[] { IPAddress.Parse("127.0.0.2"), IPAddress.Loopback })
+            {
+                try { socket = await _net.Connect(new IPEndPoint(address, port), timeout.Token); break; }
+                catch (Exception ex) when (!_ct.IsCancellationRequested) { last = ex; if (timeout.IsCancellationRequested) break; }
+            }
+        }
+        if (socket is null)
+        {
+            log.Write($"Jump connection {account} from {source}: {where} unreachable ({last?.Message})");
+            await Refuse(id, TunnelRefusal.Unreachable, $"Nothing answers on {where} ({(last as SocketException)?.SocketErrorCode.ToString() ?? last?.Message}).", null);
+            return;
+        }
+        var target = socket;
+        var relay = new StreamRelay(this, id, new NetworkStream(target, ownsSocket: true),
+            () => target.Shutdown(SocketShutdown.Send), () => target.LingerState = new LingerOption(true, 0)) { Name = "self", Remote = (IPEndPoint)target.RemoteEndPoint! };
+        _streams[id] = relay;
+        Interlocked.Increment(ref _opened);
+        await Send(TunnelProtocol.Json(TunnelMessage.Opened, id, new TunnelOpened(relay.Remote!.Address.ToString(), null), TunnelJson.Default.TunnelOpened));
+        relay.Start();
+    }
+
+    /// <summary>The port RDP listens on (HKLM\…\WinStations\RDP-Tcp PortNumber), 3389 when it can't be read.</summary>
+    internal static int RdpPort()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp");
+            return key?.GetValue("PortNumber") is int n && n is >= 1 and <= 65535 ? n : 3389;
+        }
+        catch { return 3389; }
     }
 
     /// <summary>A send nobody waits for: a failure (the tunnel closing) is expected and ignored.</summary>
@@ -204,139 +257,22 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
 
     private Task Refuse(uint id, string reason, string message, string? local)
     {
-        _streams.TryRemove(new KeyValuePair<uint, Relay?>(id, null)); // only a stream still opening – never a live one
+        _streams.TryRemove(new KeyValuePair<uint, StreamRelay?>(id, null)); // only a stream still opening – never a live one
         return Send(TunnelProtocol.Json(TunnelMessage.Refused, id, new TunnelRefused(reason, message, local), TunnelJson.Default.TunnelRefused));
     }
 
-    private async Task Send(byte[] frame)
+    public async Task Send(byte[] frame)
     {
         await _sendLock.WaitAsync(_ct);
         try { await _ws.SendAsync(frame, WebSocketMessageType.Binary, true, _ct); }
         finally { _sendLock.Release(); }
     }
 
-    private void Ended(Relay r)
+    public void Ended(StreamRelay r)
     {
-        if (!_streams.TryRemove(new KeyValuePair<uint, Relay?>(r.Id, r))) return;
-        log.Audit(AuditEvent.TunnelStream, $"Jump connection: {account} from {source} to {r.Name}:{r.Remote.Port} ({r.Remote.Address}) for " +
+        if (!_streams.TryRemove(new KeyValuePair<uint, StreamRelay?>(r.Id, r))) return;
+        log.Audit(AuditEvent.TunnelStream, $"Jump connection: {account} from {source} to {r.Name}:{r.Remote!.Port} ({r.Remote.Address}) for " +
                                            $"{r.Elapsed:hh\\:mm\\:ss}, {r.BytesIn:N0} bytes sent, {r.BytesOut:N0} bytes received");
-    }
-
-    /// <summary>One TCP connection to a target, both directions with flow control.</summary>
-    private sealed class Relay(TunnelEndpoint owner, uint id, Socket socket, string name, IPEndPoint remote)
-    {
-        private readonly NetworkStream _stream = new(socket, ownsSocket: true);
-        private readonly Channel<byte[]> _toTarget = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions { SingleReader = true });
-        private readonly SemaphoreSlim _creditChanged = new(0);
-        private readonly CancellationTokenSource _abort = new();
-        private readonly Stopwatch _clock = Stopwatch.StartNew();
-        private int _credit = TunnelProtocol.Window;
-        private int _unacknowledged;
-        private int _done; // bit 1: target → RemoteHub finished, bit 2: RemoteHub → target finished
-        private int _ended;
-
-        public uint Id => id;
-        public string Name => name;
-        public IPEndPoint Remote => remote;
-        public TimeSpan Elapsed => _clock.Elapsed;
-        public long BytesIn, BytesOut;
-
-        public void Start()
-        {
-            _ = Task.Run(ToTarget);
-            _ = Task.Run(FromTarget);
-        }
-
-        public void Received(byte[] data)
-        {
-            if (Interlocked.Add(ref _unacknowledged, data.Length) > TunnelProtocol.Window)
-            {
-                Failed(); // more than the window allows
-                return;
-            }
-            _toTarget.Writer.TryWrite(data);
-        }
-
-        public void AddCredit(int bytes)
-        {
-            if (bytes <= 0) return;
-            Interlocked.Add(ref _credit, bytes);
-            _creditChanged.Release();
-        }
-
-        public void RemoteClosed()
-        {
-            _toTarget.Writer.TryComplete();
-            // The target may still answer; if it doesn't close as well, don't keep the connection forever.
-            _ = Task.Delay(DrainTimeout, _abort.Token).ContinueWith(t => { if (!t.IsCanceled) Failed(); }, TaskScheduler.Default);
-        }
-
-        public void Abort()
-        {
-            if (Interlocked.Exchange(ref _ended, 1) == 1) return;
-            _abort.Cancel();
-            _toTarget.Writer.TryComplete();
-            try { socket.LingerState = new LingerOption(true, 0); } catch { /* closed */ }
-            _stream.Dispose();
-            owner.Ended(this);
-        }
-
-        private async Task ToTarget()
-        {
-            try
-            {
-                await foreach (var data in _toTarget.Reader.ReadAllAsync(_abort.Token))
-                {
-                    await _stream.WriteAsync(data, _abort.Token);
-                    BytesIn += data.Length;
-                    Interlocked.Add(ref _unacknowledged, -data.Length);
-                    await owner.Send(TunnelProtocol.Credit(id, data.Length));
-                }
-                socket.Shutdown(SocketShutdown.Send);
-                Finished(2);
-            }
-            catch { Failed(); }
-        }
-
-        private async Task FromTarget()
-        {
-            var buffer = new byte[TunnelProtocol.MaxData];
-            try
-            {
-                while (true)
-                {
-                    while (Volatile.Read(ref _credit) <= 0) await _creditChanged.WaitAsync(_abort.Token);
-                    var n = await _stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, Volatile.Read(ref _credit))), _abort.Token);
-                    if (n == 0)
-                    {
-                        await owner.Send(TunnelProtocol.Frame(TunnelMessage.Close, id));
-                        Finished(1);
-                        return;
-                    }
-                    Interlocked.Add(ref _credit, -n);
-                    BytesOut += n;
-                    await owner.Send(TunnelProtocol.Frame(TunnelMessage.Data, id, buffer.AsSpan(0, n)));
-                }
-            }
-            catch { Failed(); }
-        }
-
-        private void Finished(int bit)
-        {
-            if ((Interlocked.Or(ref _done, bit) | bit) != 3) return;
-            if (Interlocked.Exchange(ref _ended, 1) == 1) return;
-            _abort.Cancel();
-            _stream.Dispose();
-            owner.Ended(this);
-        }
-
-        /// <summary>The target connection failed: tell RemoteHub, end the stream.</summary>
-        private void Failed()
-        {
-            if (Volatile.Read(ref _ended) == 1) return;
-            _ = owner.Send(TunnelProtocol.Frame(TunnelMessage.Reset, id)).ContinueWith(_ => { }, TaskScheduler.Default);
-            Abort();
-        }
     }
 }
 

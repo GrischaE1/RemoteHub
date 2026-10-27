@@ -79,14 +79,23 @@ public enum TunnelMessage : byte
     Close = 6,
     /// <summary>Both ways: the stream ends now in both directions (an error, or the other side gave up).</summary>
     Reset = 7,
+    /// <summary>
+    /// Only on a RemoteHub Broker session, stream 0: <see cref="TunnelPath"/> – RemoteHub asks for another try at the direct
+    /// path while the session is relayed, the agent answers with its own candidates (none: it won't try).
+    /// </summary>
+    Path = 8,
 }
 
 /// <summary>
 /// Open a TCP connection from the jump host to <paramref name="Host"/> (name or address) and port. <paramref name="Probe"/>:
 /// only resolve and check it, and answer <see cref="TunnelMessage.Refused"/> with <see cref="TunnelRefusal.Probe"/> and the
 /// jump host's own address towards it – nothing is connected (older agents ignore it and connect).
+/// <para>Host <see cref="Self"/> is the agent's device itself, for the ports its policy TunnelOwnPorts lists; port 0 asks for its RDP port.</para>
 /// </summary>
-public sealed record TunnelOpen(string Host, int Port, bool Probe = false);
+public sealed record TunnelOpen(string Host, int Port, bool Probe = false)
+{
+    public const string Self = "self";
+}
 
 /// <summary>Connected to <paramref name="Address"/>; <paramref name="Local"/> is the jump host's own address towards it.</summary>
 public sealed record TunnelOpened(string Address, string? Local = null);
@@ -96,6 +105,9 @@ public sealed record TunnelOpened(string Address, string? Local = null);
 /// <paramref name="Local"/>: the jump host's own address towards the target, when its address was resolved and allowed.
 /// </summary>
 public sealed record TunnelRefused(string Reason, string Message, string? Local = null);
+
+/// <summary>A side's candidates for a new try at the direct path (<see cref="TunnelMessage.Path"/>), at most <see cref="BrokerProtocol.MaxCandidates"/>.</summary>
+public sealed record TunnelPath(string[] Cands);
 
 public static class TunnelRefusal
 {
@@ -115,5 +127,6 @@ public static class TunnelRefusal
 [JsonSerializable(typeof(TunnelOpen))]
 [JsonSerializable(typeof(TunnelOpened))]
 [JsonSerializable(typeof(TunnelRefused))]
+[JsonSerializable(typeof(TunnelPath))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public partial class TunnelJson : JsonSerializerContext;

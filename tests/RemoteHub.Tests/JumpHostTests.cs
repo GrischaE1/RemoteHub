@@ -251,6 +251,52 @@ public class JumpHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task The_device_itself_opens_only_on_the_ports_its_policy_lists()
+    {
+        var (listener, port) = Echo();
+        try
+        {
+            // Listed: "self" reaches the port on this device (the echo server stands in for a service such as SQL).
+            await using (var jump = await StartAgent(() => new A.AgentPolicy { Tunnel = Loopback, TunnelOwnPorts = ["RDP", port.ToString()] }))
+            {
+                await using var s = await JumpTunnels.OpenAsync(Route(jump), A.TunnelOpen.Self, port, CancellationToken.None);
+                await s.WriteAsync("own"u8.ToArray());
+                var buffer = new byte[3];
+                Assert.Equal(3, await s.ReadAsync(buffer));
+                Assert.Equal("own"u8.ToArray(), buffer);
+            }
+
+            // Not listed (the default lists only RDP): refused by policy, and audited – even with every target allowed.
+            await using (var jump = await StartAgent(() => new A.AgentPolicy { Tunnel = A.TunnelRules.Parse(["0.0.0.0/0", "127.0.0.0/8"], null) }))
+            {
+                var ex = await Assert.ThrowsAsync<JumpHostException>(() => JumpTunnels.OpenAsync(Route(jump), A.TunnelOpen.Self, port, CancellationToken.None));
+                Assert.Equal(TunnelRefusal.Policy, ex.Reason);
+                Assert.Contains("(TunnelOwnPorts)", ex.Message);
+                Assert.Contains("(TunnelOwnPorts)", jump.Audit());
+            }
+        }
+        finally { listener.Stop(); }
+    }
+
+    [Fact]
+    public async Task An_empty_TunnelOwnPorts_allows_nothing_on_the_device_itself_not_even_RDP()
+    {
+        await using var jump = await StartAgent(() => new A.AgentPolicy { Tunnel = Loopback, TunnelOwnPorts = [] });
+        var ex = await Assert.ThrowsAsync<JumpHostException>(() => JumpTunnels.OpenAsync(Route(jump), A.TunnelOpen.Self, 0, CancellationToken.None));
+        Assert.Equal(TunnelRefusal.Policy, ex.Reason);
+        Assert.Contains("RDP port", ex.Message);
+    }
+
+    [Fact]
+    public void TunnelOwnPorts_from_policy_set_but_empty_allows_nothing_and_not_set_allows_RDP()
+    {
+        var config = new A.AgentConfig();
+        Assert.Equal(["RDP"], A.AgentPolicy.From(config, new Values([])).TunnelOwnPorts);
+        Assert.Empty(A.AgentPolicy.From(config, new Values(new() { ["TunnelOwnPorts"] = new[] { " " } })).TunnelOwnPorts);
+        Assert.Equal(["RDP", "1433"], A.AgentPolicy.From(config, new Values(new() { ["TunnelOwnPorts"] = new[] { "RDP", " 1433 " } })).TunnelOwnPorts);
+    }
+
+    [Fact]
     public async Task By_default_the_jump_host_refuses_its_own_and_special_addresses()
     {
         await using var jump = await StartAgent(() => new A.AgentPolicy());

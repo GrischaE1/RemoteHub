@@ -7595,6 +7595,66 @@ P3 · How: PS H · Needs: Jump · Status: ✅ Automated – `J-JUMP2.Tests.ps1`
 **Expected:**
 - one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed)
 
+### 9.14 RemoteHub Broker (B)
+
+All cases need the lab's broker (lab.json `Broker`, lab.local.json `BrokerToken`); without it they are skipped with that reason. The run makes its own organisation and deletes it afterwards.
+
+#### B-BRK-01 · MSI with the broker's properties
+P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- `msiexec /i … BROKER_URL=<broker> BROKER_SECRET=<device secret> BROKER_ONLY=1 /qn` on a device without an enrollment file ends with 0 or 3010 and leaves no inbound firewall rule
+- the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json names the organisation
+- the Application log has 1303 (registered) and 1300 (connected)
+
+#### B-BRK-02 · Through the broker
+P1 · How: H E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- RemoteHub's client code connects with the console secret and finds the device's record sealed by the organisation
+- the agent's health through a relayed session, pinned to the fingerprint in that record, answers the device's id; the device logs 1301 (session started)
+
+#### B-BRK-03 · Device policy
+P1 · How: PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- `BrokerEnabled=0` in the device's policy: the device goes offline at the broker
+- the policy cleared: it comes back online
+
+#### B-BRK-05 · Direct on the lab network
+P1 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- with the device's Windows Firewall on, the agent's health through the broker answers over the direct path – QUIC on a punched port, over the lab network's own addresses (`DirectLocal`)
+- the Application log's 1301 (session started) says "direct local"
+- the inbound rule the agent opened for the try ("RemoteHub Agent direct path", that port and the console's address only) is gone within 30 s of the session ending
+
+#### B-BRK-06 · Relayed by device policy
+P1 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- `BrokerDirect=0` in the device's policy: the same request answers relayed, and 1301 says "relayed"
+
+#### B-BRK-07 · UDP blocked
+P2 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- inbound and outbound UDP of the agent blocked by firewall rules on the device: the request answers relayed within 10 s, without an error
+
+#### B-BRK-04 · Leave and join
+P2 · How: PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- `RemoteHubAgent.exe broker leave` says "Left the RemoteHub Broker …", the device goes offline, `broker status` says "No RemoteHub Broker."
+- `broker join <url>` with the device secret on standard input – what *Assign to RemoteHub Broker* runs – says "Joined …" and the device comes back online
+- the console secret instead is refused ("… console secret …", exit code 1)
+
+#### SEC-BRK-01 · The device secret is kept nowhere
+P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Expected:**
+- not in the installer log (`BROKER_SECRET` is hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
+
 ### 10.1 Installer
 
 #### C-MSI-09 · Same-version reinstall

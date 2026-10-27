@@ -10,9 +10,11 @@
       <string id="SUPPORTED_RemoteHub_0_19_0">RemoteHub 0.19.0 or later</string>
       <string id="SUPPORTED_RemoteHub_0_20_2">RemoteHub 0.20.2 or later</string>
       <string id="SUPPORTED_RemoteHub_0_21_0">RemoteHub 0.21.0 or later</string>
+      <string id="SUPPORTED_RemoteHub_0_22_0">RemoteHub 0.22.0 or later</string>
       <string id="SUPPORTED_Agent_0_18_11">RemoteHub Agent 0.18.11 or later</string>
       <string id="SUPPORTED_Agent_0_18_12">RemoteHub Agent 0.18.12 or later</string>
       <string id="SUPPORTED_Agent_0_19_0">RemoteHub Agent 0.19.0 or later</string>
+      <string id="SUPPORTED_Agent_0_22_0">RemoteHub Agent 0.22.0 or later</string>
 
       <!-- Categories -->
       <string id="Cat_RemoteHub">RemoteHub</string>
@@ -58,6 +60,7 @@ On a device with RemoteHub installed too, these policies don't affect what Remot
       <string id="Cat_Agent_Privacy">Privacy</string>
       <string id="Cat_Agent_AutoSignIn">Automatic sign-in</string>
       <string id="Cat_Agent_JumpHost">Jump host</string>
+      <string id="Cat_Agent_Broker">RemoteHub Broker</string>
       <string id="Cat_Agent_Service">Service</string>
 
       <!-- Console -->
@@ -204,6 +207,20 @@ This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Feature
 
 Registry: AllowAgentProcesses (REG_DWORD) = 1 or 0.</string>
 
+      <string id="Console_AllowBroker">Allow the RemoteHub Broker</string>
+      <string id="Console_AllowBroker_Help">Enabled or Not configured: allowed.
+
+Disabled: RemoteHub on this PC doesn't connect to a RemoteHub Broker – Settings → RemoteHub Broker is locked, the synced folders of brokers aren't kept up to date, and devices in them are reached only directly (Reach: Direct).
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → RemoteHub Broker → "Allow the RemoteHub Broker" (BrokerEnabled).</string>
+      <string id="Console_BrokerDirect">Direct connections through the RemoteHub Broker</string>
+      <string id="Console_BrokerDirect_Help">Enabled or Not configured: a session through the RemoteHub Broker also tries a direct connection to the device (UDP, hole punching, QUIC), and uses it when it comes up – faster than the relay. The device's certificate pin and the Windows sign-in apply as on the relay.
+
+Disabled: RemoteHub on this PC never tries the direct path; every session through the broker is relayed (TCP 443 to the broker only).
+
+On the device: RemoteHub Agent → RemoteHub Broker → "Direct connections through the broker" (BrokerDirect).
+
+Registry: BrokerDirect (REG_DWORD) = 1 or 0.</string>
       <string id="Console_AllowAgentDeviceActions">Allow device actions through the agent</string>
       <string id="Console_AllowAgentDeviceActions_Help">Enabled or Not configured: allowed.
 
@@ -972,6 +989,22 @@ Registry: RemoteDesktopVia (REG_SZ: Automatic, Rdp, Agent).</string>
       <string id="Console_ConnRemoteDesktopVia_Rdp">RDP</string>
       <string id="Console_ConnRemoteDesktopVia_Agent">RemoteHub Agent</string>
 
+      <string id="Console_ConnReach">Reach – directly or through the RemoteHub Broker</string>
+      <string id="Console_ConnReach_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
+
+Applies to devices in the synced folder of a RemoteHub Broker – the agent and RDP alike.
+
+Enabled: the value chosen here. Automatic tries the device's own address for 1.5 seconds, then goes through the broker; Directly only never uses the broker; Through the RemoteHub Broker only never tries the device's own address.
+
+Disabled or Not configured: the user decides (default: Automatic).
+
+With "Allow the RemoteHub Broker" disabled, devices are reached only directly.
+
+Registry: Reach (REG_SZ: Automatic, Direct, Broker).</string>
+      <string id="Console_ConnReach_Automatic">Automatic – directly, otherwise through the RemoteHub Broker</string>
+      <string id="Console_ConnReach_Direct">Directly only</string>
+      <string id="Console_ConnReach_Broker">Through the RemoteHub Broker only</string>
+
       <string id="Console_ConnAgentAutoSignIn">Sign in automatically when nobody is signed in</string>
       <string id="Console_ConnAgentAutoSignIn_Help">Fixes this setting for every connection on this PC. It wins over the global defaults, the folders and the connection, which keep their own value but don't use it; the connection editor shows it greyed out at every level. A settings file shared with PCs without this policy keeps working there as before.
 
@@ -1321,6 +1354,65 @@ Not configured: 64.
 
 Registry: MaxTunnelStreams (REG_DWORD).</string>
 
+      <string id="Agent_TunnelOwnPorts">Ports on this device itself</string>
+      <string id="Agent_TunnelOwnPorts_Help">The ports on this device itself that connections through its agent may reach – RDP through the agent, for example when the device is reached only through the RemoteHub Broker. One per line: RDP (the port RDP is configured for on this device) or a port number such as 1433. Services that listen only on this device stay unreachable unless they are listed.
+
+Not configured: RDP.
+
+Enabled with an empty list: none.
+
+Registry: TunnelOwnPorts (REG_MULTI_SZ).</string>
+
+      <!-- Agent: RemoteHub Broker -->
+      <string id="Agent_BrokerEnabled">Allow the RemoteHub Broker</string>
+      <string id="Agent_BrokerEnabled_Help">Enabled or Not configured: when the agent was installed or joined with a RemoteHub Broker, it keeps an outbound connection to it, so RemoteHub can reach this device from anywhere. The device's certificate pin and the Windows sign-in still apply to every session.
+
+Disabled: the agent never connects to a RemoteHub Broker; the broker in its configuration is ignored.
+
+Registry: BrokerEnabled (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_BrokerUrl">Broker address</string>
+      <string id="Agent_BrokerUrl_Help">Another address for the same RemoteHub Broker and organisation, for example after the broker moved to a new name: https://rh.contoso.com.
+
+Not configured: the address the agent was installed or joined with.
+
+Registry: BrokerUrl (REG_SZ).</string>
+      <string id="Agent_BrokerConsoles">Consoles allowed through the broker</string>
+      <string id="Agent_BrokerConsoles_Help">The RemoteHub consoles (their console IDs, as the broker lists them) that may start a session with this device through the RemoteHub Broker. One per line.
+
+Not configured: every console registered with the organisation.
+
+Registry: BrokerConsoles (REG_MULTI_SZ).</string>
+      <string id="Agent_BrokerProxy">Proxy for the broker</string>
+      <string id="Agent_BrokerProxy_Help">The HTTP proxy the agent uses for its connections to the RemoteHub Broker, for example http://proxy.contoso.com:8080.
+
+Not configured: the system's proxy setting.
+
+Registry: BrokerProxy (REG_SZ).</string>
+      <string id="Agent_BrokerKeepAliveSeconds">Keep-alive interval (seconds)</string>
+      <string id="Agent_BrokerKeepAliveSeconds_Help">How often the agent sends a keep-alive on its connection to the RemoteHub Broker (30–90 seconds). Shorter keeps the connection through firewalls and proxies that close quiet connections early, and shows a device that lost power as offline sooner (after about 2.5 intervals); longer sends less (about 220 bytes each time).
+
+Not configured: 60.
+
+Registry: BrokerKeepAliveSeconds (REG_DWORD).</string>
+      <string id="Agent_BrokerDirect">Direct connections through the broker</string>
+      <string id="Agent_BrokerDirect_Help">Whether a session through the RemoteHub Broker may also run directly between RemoteHub and this device – UDP with hole punching, then QUIC, both ends pinned – instead of through the broker's relay:
+- Over public and local addresses: also over the device's own adapter addresses, so a console in the same network or VPN connects directly.
+- Over public addresses only: only over the public address a STUN service sees; the device's own addresses aren't sent to the broker.
+- Off – relayed only: no UDP and no candidates; every session runs through the relay (TCP 443).
+
+Not configured: over public and local addresses. Devices before Windows 11 / Server 2022 are always relayed.
+
+Registry: BrokerDirect (REG_DWORD) = 2, 1 or 0.</string>
+      <string id="Agent_BrokerDirect_2">Over public and local addresses</string>
+      <string id="Agent_BrokerDirect_1">Over public addresses only</string>
+      <string id="Agent_BrokerDirect_0">Off – relayed only</string>
+      <string id="Agent_BrokerStun">STUN service for direct connections</string>
+      <string id="Agent_BrokerStun_Help">The STUN service the agent asks for its public address on the direct path, as name:port, for example stun.contoso.com:3478. It needs outbound UDP to it.
+
+Not configured: the one the RemoteHub Broker names (by default stun.cloudflare.com:3478).
+
+Registry: BrokerStun (REG_SZ).</string>
+
       <!-- Agent: service -->
       <string id="Agent_AuditToEventLog">Audit to the Windows Application log</string>
       <string id="Agent_AuditToEventLog_Help">Enabled or Not configured: the agent's audit entries (sign-ins, sessions, remote desktops, jump connections, automatic sign-ins) also go to the Windows Application log, source "RemoteHub Agent", for event forwarding or a SIEM.
@@ -1406,6 +1498,27 @@ Registry: MaxSessions (REG_DWORD).</string>
       <presentation id="Agent_MaxTunnelStreams">
         <decimalTextBox refId="MaxTunnelStreams" defaultValue="64" spinStep="8">Connections:</decimalTextBox>
       </presentation>
+      <presentation id="Agent_TunnelOwnPorts">
+        <multiTextBox refId="TunnelOwnPorts">Ports (one per line: RDP or a number):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_BrokerUrl">
+        <textBox refId="BrokerUrl"><label>Address:</label></textBox>
+      </presentation>
+      <presentation id="Agent_BrokerConsoles">
+        <multiTextBox refId="BrokerConsoles">Console IDs (one per line):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_BrokerProxy">
+        <textBox refId="BrokerProxy"><label>Proxy:</label></textBox>
+      </presentation>
+      <presentation id="Agent_BrokerKeepAliveSeconds">
+        <decimalTextBox refId="BrokerKeepAliveSeconds" defaultValue="60" spinStep="10">Seconds:</decimalTextBox>
+      </presentation>
+      <presentation id="Agent_BrokerDirect">
+        <dropdownList refId="BrokerDirect" noSort="true" defaultItem="0">Direct connections:</dropdownList>
+      </presentation>
+      <presentation id="Agent_BrokerStun">
+        <textBox refId="BrokerStun"><label>STUN service (name:port):</label></textBox>
+      </presentation>
       <presentation id="Agent_AllowedGroups">
         <multiTextBox refId="AllowedGroups">Groups (one per line, SID or name):</multiTextBox>
       </presentation>
@@ -1486,6 +1599,9 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Console_ConnRemoteDesktopVia">
         <dropdownList refId="RemoteDesktopVia" noSort="true">Remote desktop through:</dropdownList>
+      </presentation>
+      <presentation id="Console_ConnReach">
+        <dropdownList refId="Reach" noSort="true">Reach:</dropdownList>
       </presentation>
       <presentation id="Console_ConnAgentAutoSignInEndAction">
         <dropdownList refId="AgentAutoSignInEndAction" noSort="true">When an automatic sign-in's connection ends:</dropdownList>

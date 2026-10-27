@@ -115,7 +115,11 @@ public sealed partial class AgentDesktopSession : SessionBase
     private bool _closed;
     private string _lastClipboardSent = "";
 
-    public AgentDesktopSession(Connection connection) : base(connection) => Title = connection.Name;
+    public AgentDesktopSession(Connection connection) : base(connection)
+    {
+        Title = connection.Name;
+        Broker.PeerSessions.PathChanged += OnPathChanged;
+    }
 
     public override string KindSymbol => "DesktopCursor24";
     public override string KindLabel => "Desktop (agent)";
@@ -163,7 +167,7 @@ public sealed partial class AgentDesktopSession : SessionBase
     {
         if (_closed || target.Agent is null) return;
         Target = target;
-        Transport = "RemoteHub Agent";
+        ShowTransport(target);
         AccentBrush = accent;
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";
         Drop();
@@ -264,6 +268,45 @@ public sealed partial class AgentDesktopSession : SessionBase
                 try { await Task.Delay(TimeSpan.FromSeconds(2), cancel.Token); } catch (OperationCanceledException) { return; }
             }
         }
+    }
+
+    // ---- the path through a RemoteHub Broker got better: new streams go direct, and so does the desktop
+
+    private void OnPathChanged(string route, Broker.PeerPath path)
+    {
+        if (path != Broker.PeerPath.Relayed && Target?.Agent?.Broker?.Key == route) _ui.BeginInvoke(MovePath);
+    }
+
+    /// <summary>
+    /// Continues the session on a new connection, which takes the direct path – the agent's resume token, so no new
+    /// consent question, only a short freeze. The relayed connection is dropped without a close: a close on purpose
+    /// would end the session on the device before the new connection takes it over.
+    /// </summary>
+    private async void MovePath()
+    {
+        if (Phase != DesktopPhase.Live || _resumeToken is not { } token || !Supports(DesktopFeatures.Resume) || _closed || Target is not { } target || _chosen is not { } chosen) return;
+        var before = _generation;
+        AgentDesktopClient client;
+        try { client = await Open(target); }
+        catch (Exception ex)
+        {
+            Services.DiagLog.Write($"Agent desktop: stays on the relayed path ({ex.GetBaseException().Message})");
+            return;
+        }
+        if (_closed || Phase != DesktopPhase.Live || _generation != before || _resumeToken != token)
+        {
+            client.Dispose();
+            return;
+        }
+        DropClient(abort: true);
+        var gen = ++_generation;
+        Phase = DesktopPhase.Reconnecting;
+        StatusText = "Moving to the direct path…";
+        Attach(client, gen);
+        client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(chosen.Id, _chosenConsent, ViewOnly, Quality.FramesPerSecond, Quality.Quality,
+            Layout?.Monitor ?? 0, token, ViewerFeatures), DesktopJson.Default.DesktopStart));
+        _resumeToken = null; // single-use; the next Connected brings a new one
+        Services.DiagLog.Write("Agent desktop: moved to the direct path");
     }
 
     /// <summary>"Connection lost: the remote party …" → "The remote party …."</summary>
@@ -1206,8 +1249,8 @@ public sealed partial class AgentDesktopSession : SessionBase
         return DropClient();
     }
 
-    /// <summary>Only the connection (a reconnect keeps the picture and the decoder).</summary>
-    private bool DropClient()
+    /// <summary>Only the connection (a reconnect keeps the picture and the decoder); <paramref name="abort"/>: without a close.</summary>
+    private bool DropClient(bool abort = false)
     {
         WatchClipboard(false);
         _sending?.Cancel();
@@ -1221,7 +1264,8 @@ public sealed partial class AgentDesktopSession : SessionBase
         if (c is null) return false;
         // On purpose (Disconnect, closing the tab or the app, another target) – or already broken (Lost), where this ends
         // at once: the agent must read the close before the connection goes, or it takes the end for a drop.
-        c.CloseQuietly();
+        if (abort) c.Abort();
+        else c.CloseQuietly();
         return true;
     }
 
@@ -1236,6 +1280,8 @@ public sealed partial class AgentDesktopSession : SessionBase
     {
         if (_closed) return;
         _closed = true;
+        Broker.PeerSessions.PathChanged -= OnPathChanged;
+        StopFollowingPath();
         _generation++;
         _reconnect?.Cancel();
         Drop();
@@ -1548,6 +1594,16 @@ public sealed class AgentDesktopClient : IDisposable
 
     /// <summary>Connections still being closed on purpose (awaited briefly on exit, like <see cref="PsSession.Closing"/>).</summary>
     internal static readonly ConcurrentDictionary<Task, byte> Closing = new();
+
+    /// <summary>Drops the connection without a close: the agent takes it for a drop and keeps the resume token.</summary>
+    public void Abort()
+    {
+        Interlocked.Exchange(ref _closed, 1);
+        _out.Writer.TryComplete();
+        _cts.Cancel();
+        try { _ws.Abort(); } catch { /* gone */ }
+        _ws.Dispose();
+    }
 
     /// <summary>
     /// Ends the connection on purpose in the background (<see cref="CloseAsync"/> within <see cref="CloseLimit"/>), so

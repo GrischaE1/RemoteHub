@@ -59,6 +59,8 @@
     <Compile Include="..\RemoteHub.Agent\AgentProtocol.cs" Link="Remoting\AgentProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\AgentEnrollment.cs" Link="Remoting\AgentEnrollment.cs" />
     <Compile Include="..\RemoteHub.Agent\TunnelProtocol.cs" Link="Remoting\TunnelProtocol.cs" />
+    <Compile Include="..\RemoteHub.Agent\BrokerProtocol.cs" Link="Remoting\BrokerProtocol.cs" />
+    <Compile Include="..\RemoteHub.Agent\PeerDirect.cs" Link="Remoting\PeerDirect.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\DesktopProtocol.cs" Link="Remoting\Desktop\DesktopProtocol.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\VideoCodec.cs" Link="Remoting\Desktop\VideoCodec.cs" />
     <Compile Include="..\RemoteHub.Agent\Desktop\ClipboardTransfer.cs" Link="Remoting\Desktop\ClipboardTransfer.cs" />

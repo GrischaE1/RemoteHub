@@ -76,6 +76,8 @@ public partial class MainWindow : FluentWindow
             NewButton.Visibility = RailNewButton.Visibility = DeleteUnusedButton.Visibility = EditConnectionButton.Visibility = Visibility.Collapsed;
         };
         Loaded += (_, _) => StartAutoLock();
+        Loaded += (_, _) => StartBrokers();
+        Closed += (_, _) => _ = StopBrokersAsync();
         Closing += Window_Closing;
     }
 
@@ -874,6 +876,10 @@ public partial class MainWindow : FluentWindow
             ? "For agents installed with this RemoteHub's enrollment file (Intune, software distribution): asks each connection in the folder and pins the certificates they made"
             : "For an agent installed with this RemoteHub's enrollment file (Intune, software distribution): pins the certificate it made";
         if (c is not null) CmCredentialProvider.Header = CredentialProviderHeader(c);
+        FillAssignToBroker(c);
+        // The synced folder of a broker: its devices register themselves, their pins come from sealed records, and they
+        // aren't reached through jump hosts yet – nothing to duplicate, claim or move under.
+        if (n?.BrokerRoot is not null) CmDuplicate.Visibility = CmAgentClaim.Visibility = CmMoveUnder.Visibility = Visibility.Collapsed;
 
         // The server's own shares in Tools, as in the tab menus (filled fresh each time).
         foreach (var old in CmTools.Items.OfType<MenuItem>().Where(i => Equals(i.Tag, "share")).ToList()) CmTools.Items.Remove(old);
@@ -2101,7 +2107,13 @@ public partial class MainWindow : FluentWindow
         if (AgentDesktopFor(c)) OpenRdp(c); else OpenAgentDesktop(c);
     }
     private void CmEdit_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n) EditNode(n); }
-    private void CmDuplicate_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is { } n && !Refused(Feature.ConnectionEditing)) _vm.Duplicate(n).IsSelected = true; }
+    private void CmDuplicate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.SelectedNode is not { } n || Refused(Feature.ConnectionEditing)) return;
+        // A device registers itself; a copy would be a second node for the same device.
+        if (n.BrokerRoot is not null) { _ = Dialogs.Info(this, "Duplicate", "Devices and folders of a RemoteHub Broker can't be duplicated."); return; }
+        _vm.Duplicate(n).IsSelected = true;
+    }
     private void CmHistory_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenAuditLog(c); }
 
     private void OpenAuditLog(Connection? c)
@@ -2220,22 +2232,28 @@ public partial class MainWindow : FluentWindow
     private void NewFolder_Click(object sender, RoutedEventArgs e)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
-        var parent = _vm.TargetFolderForNew();
+        var parent = _vm.TargetFolderForNew(folder: true);
+        if (parent is not null && WhyNotBrokerChange(parent) is { } why) { _ = Dialogs.Info(this, "New folder", why); return; }
         var f = new Folder { Parent = parent };
+        if (parent?.BrokerRoot is { Broker: { } root })
+            f.Broker = new BrokerRef { Connection = root.Connection, Kind = BrokerItemKind.Folder, Item = Guid.NewGuid().ToString() };
         if (new EditorWindow(f, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
         {
             _vm.AddNow(f, parent);
             RevealInTree(f);
+            _ = PublishLayout(f);
         }
     }
 
     private void EditNode(NodeBase n)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
+        var name = n.Name;
         if (new EditorWindow(n, _vm.Data, isNew: false) { Owner = this }.ShowDialog() == true)
         {
             foreach (var s in _vm.Sessions.Where(s => s.Connection == n)) s.Title = n.Name;
             _vm.RequestSave();
+            if (n.Name != name) _ = PublishLayout(n); // a folder's name or a device's label is shared
         }
     }
 
@@ -2292,6 +2310,7 @@ public partial class MainWindow : FluentWindow
     private async Task DeleteNode(NodeBase n)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
+        if (n.BrokerRoot is not null) { await DeleteBrokerItem(n); return; }
         if (n is Connection { Children.Count: > 0 } jumpHost)
         {
             // What's reached through it: kept by default – it moves next to the jump host and is reached directly.
@@ -2347,7 +2366,11 @@ public partial class MainWindow : FluentWindow
             Welcome: () => new WelcomeWindow { Owner = ActiveOwner() }.ShowDialog(),
             SaveEnrollmentFile: () => SaveEnrollmentFile(ActiveOwner()),
             ReplaceEnrollmentSecret: () => ReplaceEnrollmentSecret(ActiveOwner()),
-            RevokeEnrollmentSecrets: () => RevokeEnrollmentSecrets(ActiveOwner()));
+            RevokeEnrollmentSecrets: () => RevokeEnrollmentSecrets(ActiveOwner()),
+            Brokers: () => Brokers,
+            ConnectBroker: ConnectBrokerAsync,
+            DisconnectBroker: DisconnectBrokerAsync,
+            WatchBrokers: WatchBrokers);
         if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
         UpdateRailVersion();
     }
@@ -2654,9 +2677,12 @@ public partial class MainWindow : FluentWindow
         {
             var (into, idx) = DropPlace(node, target, pos);
             if (WhyNotMove(node, into) is not null) return;
+            if (WhyNotBrokerChange(node) is { } why) { await Dialogs.Info(this, "Move", why); return; }
             if (!await ConfirmMove(node, into)) return;
+            var from = node.Parent;
             _vm.Move(node, into, idx);
             node.IsSelected = true;
+            if (node.Parent != from) await PublishLayout(node);
         }
     }
 
