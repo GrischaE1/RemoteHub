@@ -17,6 +17,7 @@ param(
     [switch]$AllowNotAutomated
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'LabRetry.ps1')
 
 # The script stays ASCII (Windows PowerShell 5.1 reads BOM-less files as ANSI); the report itself is UTF-8.
 $ok = [char]0x2705; $bad = [char]0x274C; $skip = [char]0x23ED; $none = [char]0x2014
@@ -159,7 +160,7 @@ Add
 # cases that failed the first time and passed on the file's second attempt (flaky.json, LabRetry.ps1): they don't fail
 # the gate, but are named - each one is a case to make reliable (Get-LabFlaky.ps1 has their history)
 $flakyFile = Join-Path $runDir 'flaky.json'
-$flaky = @(if (Test-Path $flakyFile) { Get-Content $flakyFile -Raw | ConvertFrom-Json | Where-Object { $_ -and $_.Id } })
+$flaky = @(Read-LabFlaky -Path $flakyFile)
 if ($flaky.Count) {
     Add "**Flaky** $([char]0x2013) passed on the file's second attempt"
     Add

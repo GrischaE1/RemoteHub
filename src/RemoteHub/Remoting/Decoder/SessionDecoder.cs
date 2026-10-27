@@ -11,7 +11,7 @@ public sealed class SessionDecoder : IDisposable
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     private readonly Func<DecoderHost> _start;
-    private readonly Action<string, bool> _stopped;
+    private readonly Action<string, bool, bool> _stopped;
     private readonly Func<DateTime> _now;
     private readonly Queue<DateTime> _failures = new();
     private readonly object _gate = new();
@@ -19,8 +19,11 @@ public sealed class SessionDecoder : IDisposable
     private bool _disposed;
 
     /// <param name="start">Starts a decoder (<see cref="DecoderHost.Start"/>).</param>
-    /// <param name="stopped">A decoder misbehaved and was ended: the reason, and whether the session gives up now.</param>
-    public SessionDecoder(Func<DecoderHost> start, Action<string, bool> stopped, Func<DateTime>? now = null)
+    /// <param name="stopped">
+    /// A decoder misbehaved and was ended: the reason, whether the session gives up now, and whether it was one that
+    /// didn't start - nothing the device sent can cause that, so it is said to be this PC's.
+    /// </param>
+    public SessionDecoder(Func<DecoderHost> start, Action<string, bool, bool> stopped, Func<DateTime>? now = null)
     {
         _start = start;
         _stopped = stopped;
@@ -70,7 +73,7 @@ public sealed class SessionDecoder : IDisposable
         _failures.Enqueue(now);
         while (_failures.Count > 0 && now - _failures.Peek() > Window) _failures.Dequeue();
         if (_failures.Count > MaxRestarts) GaveUp = true;
-        _stopped(reason, GaveUp);
+        _stopped(reason, GaveUp, host is null);
     }
 
     public void Dispose()

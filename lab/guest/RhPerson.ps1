@@ -231,6 +231,21 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
     [pscustomobject]@{ Text = $r.Text; Lines = @($r.Lines | ForEach-Object Text); Words = @($words) }
 }
 
+# The middle of a UI Automation element, as screen pixels for a click. An element that isn't laid out or is scrolled out
+# of view answers an empty rectangle (infinite X, minus infinite width): its middle was NaN and the step ended with
+# 'Cannot convert value "NaN" to type "System.Int32"' (run 20261026-144106, UI-AG-07 / UI-AG-08). It is scrolled into
+# view first; one that still has no place on the screen fails with a message that says so.
+function Get-RhMid($el) {
+    $r = $el.Current.BoundingRectangle
+    if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
+        $sp = $null
+        if ($el.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch { } }
+        $r = $el.Current.BoundingRectangle
+    }
+    if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) { throw "'$($el.Current.Name)' has no place on the screen (not laid out, or scrolled out of view)" }
+    @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+}
+
 function Get-AgentWindows {
     @([RhNative]::Windows('RemoteHubAgentWindow') | ForEach-Object {
             [pscustomobject]@{ Handle = $_[0]; Title = $_[1]; X = $_[2]; Y = $_[3]; Width = $_[4]; Height = $_[5] }
@@ -635,8 +650,7 @@ switch ($Do) {
         # 20261021-062735, C-AUD-08: RemoteHub's window half off the left edge, a right-click on a folder opened no menu),
         # the window is first moved to the top left and kept within the screen, as 'fit' does.
         $center = {
-            $r = $found.Current.BoundingRectangle
-            $pt = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+            $pt = Get-RhMid $found
             $wa = [Windows.Forms.Screen]::PrimaryScreen.WorkingArea
             if ($pt[0] -lt $wa.Left -or $pt[0] -ge $wa.Right -or $pt[1] -lt $wa.Top -or $pt[1] -ge $wa.Bottom) {
                 $tp = $null
@@ -646,8 +660,7 @@ switch ($Do) {
                     if ($tp.Current.CanMove) { $tp.Move($wa.X, $wa.Y) }
                     Start-Sleep -Milliseconds 300
                     $result.movedOnScreen = "$wr0"
-                    $r = $found.Current.BoundingRectangle
-                    $pt = @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+                    $pt = Get-RhMid $found
                 }
             }
             # the window the element is drawn in: its nearest ancestor with a window handle (a popup's own, else $win)
@@ -676,7 +689,7 @@ switch ($Do) {
             try { $sp.Select() }
             catch {
                 $result.selectError = "$($_.Exception.Message)"
-                $r = $el.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2))
+                $m = Get-RhMid $el; [RhNative]::Click($m[0], $m[1])
                 Start-Sleep -Milliseconds 300
             }
             $true
@@ -745,7 +758,7 @@ switch ($Do) {
                     $o = $null
                     if ($item.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$o) -and $entry -ne ($action.Substring(5) -split '>')[-1]) { $o.Expand() }
                     elseif ($item.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$o)) { $o.Invoke() }
-                    else { $r = $item.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+                    else { $m = Get-RhMid $item; [RhNative]::Click($m[0], $m[1]) }
                     $result.value = $item.Current.Name
                     $result.help = $item.Current.HelpText
                 }
@@ -774,7 +787,7 @@ switch ($Do) {
                 $result.value = $btn.Current.Name
                 $ip = $null
                 if ($btn.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$ip)) { $ip.Invoke() }
-                else { $r = $btn.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+                else { $m = Get-RhMid $btn; [RhNative]::Click($m[0], $m[1]) }
             }
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }
             'realclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]) }
@@ -820,7 +833,7 @@ switch ($Do) {
                     if (-not $li) { $li = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::ListItem))) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1 }
                     if (-not $li) { $result.error = "no item '$item'"; if ($ec) { $ec.Collapse() }; break }
                     $sp = $null
-                    if ($li.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sp)) { $null = & $selectOrClick $li $sp } else { $r = $li.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+                    if ($li.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sp)) { $null = & $selectOrClick $li $sp } else { $m = Get-RhMid $li; [RhNative]::Click($m[0], $m[1]) }
                     if ($ec) { try { $ec.Collapse() } catch { } }
                     $result.value = $li.Current.Name
                 }
@@ -888,7 +901,7 @@ switch ($Do) {
                 # a button that opens a modal dialog (Dialogs.Confirm): Invoke may come back with an error while the dialog
                 # is open - the click happened
                 if ($i) { try { $i.Invoke() } catch { $result.invokeError = $_.Exception.InnerException.Message } } elseif ($t) { $t.Toggle() } elseif ($s) { $null = & $selectOrClick $found $s } elseif ($e) { $e.Expand() }
-                else { $r = $found.Current.BoundingRectangle; [RhNative]::Click([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
+                else { $m = Get-RhMid $found; [RhNative]::Click($m[0], $m[1]) }
             }
         }
         Out-Json $result

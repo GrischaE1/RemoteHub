@@ -92,6 +92,9 @@ output before, so there's no extra copy. A pipe round trip adds ~0.1 ms. The dec
   agent for a key frame. The session continues; the picture pauses for a moment.
 - More than 3 restarts in a minute: the session ends with "The picture can't be shown – the device keeps sending data
   RemoteHub can't decode. Disconnect and check the device." Restarting endlessly would hand an attacker unlimited tries.
+  When the last failure was a decoder that didn't start, nothing from the device had reached it: the session ends with
+  "… RemoteHub's picture decoder doesn't start on this PC. Connect again; if it keeps happening, restart RemoteHub."
+  instead (the lab saw three starts of over 10 s in a row on a busy VM).
 - The audit log records it ("Desktop decoder stopped"), so an attack leaves a trace.
 
 ### 3.5 Clipboard images
