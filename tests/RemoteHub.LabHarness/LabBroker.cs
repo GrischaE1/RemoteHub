@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -108,14 +109,35 @@ internal static class LabBroker
             var pin = record["fingerprint"]?.GetValue<string>() ?? "";
             if (!isSealed) return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>() };
             var route = new BrokerRoute(client, deviceId, item["secretId"]?.GetValue<string>(), "lab device", pin);
-            using var handler = AgentClientTransport.ThroughBroker(route, (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.GetRawCertData()) == pin);
+            RemoteCertificateValidationCallback pinned = (_, cert, _, _) => cert is not null && AgentProtocol.Fingerprint(cert.GetRawCertData()) == pin;
+            // --direct-first 1: as RemoteHub with Reach Automatic – the record's name, then every address the agent
+            // reported, before the broker path (DirectReach). The answer says which host answered, and what the broker
+            // has of the device's addresses either way.
+            DeviceAddresses? reported = null;
+            if (o.GetValueOrDefault("direct-first") == "1")
+            {
+                var name = string.Join('.', new[] { record["computerName"]?.GetValue<string>(), record["domain"]?.GetValue<string>() }.Where(s => !string.IsNullOrEmpty(s)));
+                reported = await client.DeviceAddressesAsync(deviceId, timeout.Token);
+                var tried = DateTime.UtcNow;
+                if (await DirectReach.FindAsync(route, name, AgentProtocol.DefaultPort, pin, timeout.Token) is { } found)
+                {
+                    using var direct = new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = pinned } };
+                    using var directHttp = new HttpClient(direct) { Timeout = TimeSpan.FromSeconds(seconds) };
+                    var host = found.Host.Contains(':') ? $"[{found.Host}]" : found.Host;
+                    var answer = JsonNode.Parse(await directHttp.GetStringAsync($"https://{host}:{found.Port}{AgentProtocol.HealthPath}"));
+                    return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health = answer, path = "Network",
+                                 directHost = found.Host, name, addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound,
+                                 seconds = Math.Round((DateTime.UtcNow - tried).TotalSeconds, 1) };
+                }
+            }
+            using var handler = AgentClientTransport.ThroughBroker(route, pinned);
             using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(seconds) };
             var started = DateTime.UtcNow;
             var health = JsonNode.Parse(await http.GetStringAsync($"https://lab-device:{AgentProtocol.DefaultPort}{AgentProtocol.HealthPath}"));
             // How the session went: direct (local / internet) or relayed, and how long the first answer took.
             var path = PeerSessions.PathOf(route)?.ToString();
             return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health, path,
-                         seconds = Math.Round((DateTime.UtcNow - started).TotalSeconds, 1) };
+                         addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound, seconds = Math.Round((DateTime.UtcNow - started).TotalSeconds, 1) };
         }
         finally
         {

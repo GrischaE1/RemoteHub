@@ -14,15 +14,21 @@ namespace RemoteHub.Broker;
 
 /// <summary>
 /// How a device is reached through a RemoteHub Broker: the organisation's connection, the device, and the fingerprint its
-/// sealed record pins (empty: no direct path, which pins it in the QUIC handshake).
+/// sealed record pins (empty: no direct path, which pins it in the QUIC handshake). <paramref name="Host"/> and
+/// <paramref name="Port"/>: its name and agent port, tried without the broker while a session is relayed when
+/// <paramref name="DirectFirst"/> (Reach Automatic, <see cref="DirectReach"/>).
 /// </summary>
-public sealed record BrokerRoute(BrokerClient Client, string DeviceId, string? SecretId, string DeviceName, string Fingerprint = "")
+public sealed record BrokerRoute(BrokerClient Client, string DeviceId, string? SecretId, string DeviceName, string Fingerprint = "",
+    string Host = "", int Port = AgentProtocol.DefaultPort, bool DirectFirst = false)
 {
     internal string Key => $"{Client.Info.Id}|{DeviceId}";
 }
 
-/// <summary>Where a session's new streams go.</summary>
-public enum PeerPath { Relayed, DirectLocal, DirectInternet }
+/// <summary>
+/// Where a session's new streams go: the broker's relay, a punched QUIC connection, or – <see cref="Network"/> – the
+/// device's own address without the broker (its name or an address its agent reported, <see cref="DirectReach"/>).
+/// </summary>
+public enum PeerPath { Relayed, DirectLocal, DirectInternet, Network }
 
 /// <summary>
 /// The sessions to devices through their broker: one per device, shared by every tab and tool, opened with a sealed
@@ -289,8 +295,9 @@ internal sealed class PeerSession
     /// </summary>
     private async Task RetryLoop()
     {
-        if (!_directAllowed) return;
+        if (!_directAllowed && !_route.DirectFirst) return;
         var wait = RetryFirst;
+        var network = false;
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         NetworkAddressChangedEventHandler onChange = (_, _) => changed.TrySetResult();
         NetworkChange.NetworkAddressChanged += onChange;
@@ -315,6 +322,17 @@ internal sealed class PeerSession
                     relay = _relay;
                 }
                 if (relay is null || relay.IsClosed) return;
+                // The device's own address answers now (it came into this PC's network, or this PC into its): the
+                // desktop and new connections move there, without the broker; this session ends with its last stream.
+                if (_route.DirectFirst && !network && _route.Fingerprint.Length > 0
+                    && await DirectReach.FindAsync(_route, _route.Host, _route.Port, _route.Fingerprint, _stop.Token).ConfigureAwait(false) is not null)
+                {
+                    network = true;
+                    DiagLog.Write("Broker session: the device answers at its own address – new connections go there");
+                    PeerSessions.Raise(_route.Key, PeerPath.Network);
+                    continue;
+                }
+                if (!_directAllowed) continue;
                 var round = await Round.PrepareAsync(_route.Client.StunServer, _stop.Token).ConfigureAwait(false);
                 if (round is null) continue;
                 string[] theirs;

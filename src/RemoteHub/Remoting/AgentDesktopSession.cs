@@ -202,6 +202,8 @@ public sealed partial class AgentDesktopSession : SessionBase
     private void Attach(AgentDesktopClient client, int gen)
     {
         _client = client;
+        // Whether this connection runs over the broker's relay – only then does a better path move it (OnPathChanged).
+        _viaRelay = Target?.Agent?.Broker is { } route && !Broker.DirectReach.HasHost(route.Fingerprint) && Broker.PeerSessions.PathOf(route) == Broker.PeerPath.Relayed;
         Hello = client.Hello;
         if (client.Hello.Version is { Length: > 0 } v && Connection.Agent is { } agent && agent.Version != v)
         {
@@ -279,9 +281,12 @@ public sealed partial class AgentDesktopSession : SessionBase
 
     // ---- the path through a RemoteHub Broker got better: new streams go direct, and so does the desktop
 
+    private bool _viaRelay;
+
     private void OnPathChanged(string route, Broker.PeerPath path)
     {
-        if (path != Broker.PeerPath.Relayed && Target?.Agent?.Broker?.Key == route) _ui.BeginInvoke(MovePath);
+        // Another tab connecting directly says so too: a desktop that is direct already stays where it is.
+        if (path != Broker.PeerPath.Relayed && _viaRelay && Target?.Agent?.Broker?.Key == route) _ui.BeginInvoke(MovePath);
     }
 
     /// <summary>

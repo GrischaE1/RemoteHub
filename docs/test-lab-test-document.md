@@ -7685,6 +7685,41 @@ P2 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 **Expected:**
 - inbound and outbound UDP of the agent blocked by firewall rules on the device: the request answers relayed within 10 s, without an error
 
+#### B-BRK-09 · A broker-only device
+P2 · How: H PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Steps:**
+1. The device's own IPv4 addresses (`Get-NetIPAddress`, without loopback and 169.254.x).
+2. `Test-LabBrokerHealth -DirectFirst`: the harness as RemoteHub with Reach Automatic – the record's name, then the addresses the broker has, then the broker path.
+
+**Expected:**
+- the broker's addresses include the device's own; the device takes no direct connections (BROKER_ONLY=1 left the rule out)
+- the health request answers through the broker path (`DirectLocal` or `Relayed`), not at an address
+
+#### B-BRK-10 · Reached at its own address
+P1 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Steps:**
+1. Add the agent's inbound rule (`RemoteHub Agent`, TCP 58732) as an install without BROKER_ONLY makes it; restart the agent, so it tells the broker it takes direct connections; wait until it is online.
+2. Note the newest BrokerSessionStarted (1301) event; `Test-LabBrokerHealth -DirectFirst`.
+3. Remove the rule and restart the agent again.
+
+**Expected:**
+- the answer has path `Network` and names the host that answered – the device's name or one of its reported addresses
+- no new BrokerSessionStarted event: no relay and no punching for the request
+
+#### B-BRK-11 · A new address reported
+P2 · How: H PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Steps:**
+1. Add 10.250.x.y/24 (random, `SkipAsSource`) to the device's adapter.
+2. Read the addresses the broker has for the device (through `Test-LabBrokerHealth -DirectFirst`) every 3 s, at most 60 s.
+3. Remove the address; read again until it is gone, at most 60 s.
+
+**Expected:**
+- the new address is at the broker within 45 s – the agent tells the broker again once its addresses have settled, not only with its next connection
+- it is gone again after it was removed
+
 #### B-BRK-08 · A connection that silently stops carrying
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 

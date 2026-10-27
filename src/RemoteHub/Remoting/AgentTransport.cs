@@ -19,7 +19,8 @@ namespace RemoteHub.Remoting;
 /// Where the RemoteHub Agent of a device listens, and the device certificate it must present. <paramref name="Via"/>: the
 /// jump host it is reached through, if any; <paramref name="Broker"/>: the RemoteHub Broker it is reached through instead
 /// of the network – the pin and the sign-in stay the same. <paramref name="DirectFirst"/>: Reach
-/// Automatic – the device's own address is tried for 1.5 s before the broker, so in the same network it isn't used.
+/// Automatic – the device's name and then every address its agent reported are tried before the broker
+/// (<see cref="Broker.DirectReach"/>), so in the same network it isn't used.
 /// </summary>
 public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null, Broker.BrokerRoute? Broker = null, bool DirectFirst = false);
 
@@ -109,20 +110,21 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
         SendOneItem();
     }
 
-    /// <summary>Devices whose own address didn't answer lately (by pin): Reach Automatic goes through the broker at once for a while.</summary>
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> NotDirect = new();
-    private static readonly TimeSpan NotDirectFor = TimeSpan.FromMinutes(10);
-
     /// <summary>Opens the pinned TLS connection and signs in (blocking). Throws with a readable message.</summary>
     internal static ClientWebSocket Connect(AgentConnectionInfo info, CancellationToken ct, string path = AgentProtocol.PowerShellPath)
     {
-        // Reach Automatic: the device's own address first, briefly; then the broker. Which worked is remembered.
-        if (info.Endpoint is { Broker: not null, DirectFirst: true } e
-            && !(NotDirect.TryGetValue(e.Fingerprint, out var until) && until > DateTime.UtcNow))
+        // Reach Automatic: the device's name, then every address its agent reported; the broker only when none answers.
+        if (info.Endpoint is { Broker: { } route, DirectFirst: true } e
+            && Broker.DirectReach.FindAsync(route, info.ComputerName, e.Port, e.Fingerprint, ct).GetAwaiter().GetResult() is { } found)
         {
-            var direct = new AgentConnectionInfo(info.ComputerName, e with { Broker = null, DirectFirst = false }, info.Credential) { OpenTimeout = 1500 };
-            try { return Connect(direct, ct, path); }
-            catch (AgentTransportException) when (!ct.IsCancellationRequested) { NotDirect[e.Fingerprint] = DateTime.UtcNow + NotDirectFor; }
+            var direct = new AgentConnectionInfo(found.Host, e with { Port = found.Port, Broker = null, DirectFirst = false }, info.Credential) { OpenTimeout = 10_000 };
+            try
+            {
+                var connected = Connect(direct, ct, path);
+                Broker.PeerSessions.Raise(route.Key, Broker.PeerPath.Network);
+                return connected;
+            }
+            catch (AgentTransportException) when (!ct.IsCancellationRequested) { Broker.DirectReach.Failed(e.Fingerprint, found); }
         }
         var expected = AgentProtocol.NormalizeFingerprint(info.Endpoint.Fingerprint);
         if (expected.Length == 0) throw new PSRemotingTransportException("No device certificate fingerprint is stored for this connection's RemoteHub Agent.");

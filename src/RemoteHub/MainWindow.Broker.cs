@@ -270,7 +270,7 @@ public partial class MainWindow
             if (!quiet) _ = Dialogs.Info(this, "RemoteHub Broker", $"This PC isn't connected to the RemoteHub Broker of {c.BrokerRoot?.Name}. Connect in Settings → RemoteHub Broker.");
             return null;
         }
-        return new BrokerRoute(client, r.Item, r.SecretId, c.Name, c.Agent.Fingerprint);
+        return new BrokerRoute(client, r.Item, r.SecretId, c.Name, c.Agent.Fingerprint, c.Host.Trim(), c.Agent.Port, DirectFirst: ReachOf(c) == BrokerReach.Automatic);
     }
 
     private BrokerReach ReachOf(Connection c) => Inheritance.ResolveOptions(c, _vm.Data).Reach ?? BrokerReach.Automatic;
@@ -343,7 +343,9 @@ public partial class MainWindow
                                                        "set a user name and password on it or its folder.");
             return null;
         }
-        return new JumpRoute(c.Name, c.Host.Trim(), new AgentEndpoint(c.Agent!.Port, c.Agent.Fingerprint, Broker: broker), PsRemoting.AgentCredential(cred)!);
+        // Its agent directly where it answers (Reach Automatic), so RDP doesn't go through the relay in its network either.
+        return new JumpRoute(c.Name, c.Host.Trim(), new AgentEndpoint(c.Agent!.Port, c.Agent.Fingerprint, Broker: broker, DirectFirst: broker.DirectFirst),
+            PsRemoting.AgentCredential(cred)!);
     }
 
     private static async Task<bool> AnswersAsync(string host, int port, TimeSpan within)

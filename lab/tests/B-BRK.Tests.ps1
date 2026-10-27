@@ -3,8 +3,9 @@
 # the console secret, the sealed record, the agent's health through a relayed session pinned to that record), the
 # device's policy BrokerEnabled, broker leave and broker join with the secret on standard input (what Assign to
 # RemoteHub Broker runs), the direct path (QUIC on a punched port through the device firewall, relayed with the policy
-# BrokerDirect = 0 or with UDP blocked), a broker connection that silently stops carrying anything given up and made
-# again (B-BRK-08), and that the device secret is kept nowhere on the device (SEC-BRK).
+# BrokerDirect = 0 or with UDP blocked), the addresses the agent reports and RemoteHub trying them before the broker
+# path (B-BRK-09 to 11), a broker connection that silently stops carrying anything given up and made again (B-BRK-08),
+# and that the device secret is kept nowhere on the device (SEC-BRK).
 # Needs the lab's broker: lab.json "Broker" and lab.local.json "BrokerToken" (docs/test-lab-spec.md); without them
 # every case is skipped with that reason. Each run makes its own organisation and deletes it again.
 # See docs/test-lab-cases.md section 9.14.
@@ -176,6 +177,76 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         finally {
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-NetFirewallRule -DisplayName 'LabBlockAgentUdp*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
         }
+    }
+
+    It 'B-BRK-09 a broker-only device (no inbound rule) reports its addresses and goes straight to the broker path' -Tag 'B-BRK-09' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        $own = @(Invoke-LabGuest -Name $VmName -ScriptBlock { Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | ForEach-Object IPAddress })
+        $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst
+        Save 'reach-broker-only' ($r | Select-Object path, seconds, addresses, inbound)
+        $r.health.deviceId | Should -Be $script:device.id
+        $r.inbound | Should -BeFalse -Because 'BROKER_ONLY=1 left the inbound rule out, and the agent says so'
+        @($r.addresses | Where-Object { $_ -in $own }).Count | Should -BeGreaterThan 0 -Because "the agent reports the device's own addresses ($($own -join ', ')) - reported: $(@($r.addresses) -join ', ')"
+        $r.path | Should -BeIn 'DirectLocal', 'Relayed' -Because 'nothing takes a direct connection, so the broker path'
+    }
+
+    It 'B-BRK-10 with the agent inbound rule, RemoteHub reaches the device at its own address and the broker carries nothing' -Tag 'B-BRK-10' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        # the rule an install without BROKER_ONLY makes; the agent tells the broker so when it connects again
+        Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $exe = Join-Path $env:ProgramFiles 'RemoteHub Agent\RemoteHubAgent.exe'
+            $null = New-NetFirewallRule -DisplayName 'RemoteHub Agent' -Direction Inbound -Protocol TCP -LocalPort 58732 -Program $exe -Action Allow
+            Restart-Service RemoteHubAgent
+        }
+        try {
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
+            $before = (Get-StartedSession).TimeCreated
+            $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst
+            Save 'reach-network' ($r | Select-Object path, directHost, name, addresses, inbound, seconds)
+            $r.health.deviceId | Should -Be $script:device.id
+            $r.inbound | Should -BeTrue
+            $r.path | Should -Be 'Network' -Because "the device answers at its name or a reported address (reported: $(@($r.addresses) -join ', '))"
+            $r.directHost | Should -BeIn (@($r.name) + @($r.addresses))
+            (Get-StartedSession).TimeCreated | Should -Be $before -Because 'no session through the broker started (nothing relayed, no punching)'
+        }
+        finally {
+            Invoke-LabGuest -Name $VmName -ScriptBlock {
+                Get-NetFirewallRule -DisplayName 'RemoteHub Agent' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+                Restart-Service RemoteHubAgent
+            }
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
+        }
+    }
+
+    It 'B-BRK-11 an address the device gets is at the broker within seconds, and gone again when it goes' -Tag 'B-BRK-11' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        # a second address on the device's adapter, in a private range the lab doesn't use: a network change as a new
+        # DHCP lease or a VPN would bring (the agent tells the broker once the addresses have settled for 2 s)
+        $extra = "10.250.$(Get-Random -Minimum 1 -Maximum 254).$(Get-Random -Minimum 1 -Maximum 254)"
+        Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock {
+            param($ip)
+            $if = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).InterfaceIndex
+            $null = New-NetIPAddress -InterfaceIndex $if -IPAddress $ip -PrefixLength 24 -SkipAsSource $true
+        }
+        function Reported {
+            (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses
+        }
+        try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            do { $now = @(Reported); if ($now -contains $extra) { break }; Start-Sleep -Seconds 3 } while ($sw.Elapsed.TotalSeconds -lt 60)
+            $added = [int]$sw.Elapsed.TotalSeconds
+            $now | Should -Contain $extra -Because "the agent reports a new address (after $added s: $($now -join ', '))"
+            $added | Should -BeLessThan 45 -Because 'reported once the network settled, not with the next reconnect'
+        }
+        finally {
+            Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock { param($ip) Remove-NetIPAddress -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue }
+        }
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        do { $now = @(Reported); if ($now -notcontains $extra) { break }; Start-Sleep -Seconds 3 } while ($sw.Elapsed.TotalSeconds -lt 60)
+        $now | Should -Not -Contain $extra -Because 'an address the device no longer has is taken off'
     }
 
     It 'B-BRK-03 the device policy BrokerEnabled = 0 takes it off the broker, and back when cleared' -Tag 'B-BRK-03' {

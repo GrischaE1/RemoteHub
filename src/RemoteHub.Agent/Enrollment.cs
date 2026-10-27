@@ -317,6 +317,13 @@ public static class Enrollment
         catch (Exception ex) { return $"Firewall: rule \"{FirewallRuleName}\" not moved to port {port}: {ex.Message}"; }
     }
 
+    /// <summary>Whether the agent's inbound rule is there – MSI BROKER_ONLY=1 leaves it out, so the device takes no direct connections.</summary>
+    public static bool HasFirewallRule()
+    {
+        try { return Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true).Code == 0; }
+        catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+    }
+
     /// <summary>The "LocalPort:" lines of <c>netsh advfirewall firewall show rule</c> (English output; other languages: none found → set anyway).</summary>
     internal static IEnumerable<string> RulePorts(string netshOutput)
     {
