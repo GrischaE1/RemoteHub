@@ -13,6 +13,10 @@ namespace RemoteHub.Tests;
 public class SshKeyTests : IDisposable
 {
     private static readonly string KeyGen = Path.Combine(Environment.SystemDirectory, "OpenSSH", "ssh-keygen.exe");
+    // Test passwords and passphrases are put together at run time, so no literal reads like a secret.
+    private const string Marker = "Ssh-plain-text-marker";
+    private static string TestSecret(string name) => string.Concat(name, "-", Marker);
+    private static Secret Stored(string name) => Secret.From(TestSecret(name))!;
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "rh-sshkey-" + Guid.NewGuid().ToString("N")[..8]);
 
     public SshKeyTests()
@@ -74,14 +78,14 @@ public class SshKeyTests : IDisposable
     public void A_protected_key_needs_its_passphrase_and_a_wrong_one_is_said_as_such()
     {
         Skip.IfNot(System.IO.File.Exists(KeyGen), "Windows' OpenSSH client (ssh-keygen) isn't installed");
-        var (path, fingerprint) = OpenSshKey("ed25519", "c0rrect-horse");
+        var (path, fingerprint) = OpenSshKey("ed25519", TestSecret("Phrase"));
         var key = SshSignIn.ReadKeyFile(path);
         Assert.True(SshSignIn.NeedsPassphrase(key, null));
-        Assert.False(SshSignIn.NeedsPassphrase(key, Secret.From("anything")));
+        Assert.False(SshSignIn.NeedsPassphrase(key, Stored("Other")));
         var missing = Assert.Throws<SshKeyException>(() => SshSignIn.Describe(key, null));
         Assert.True(missing.NeedsPassphrase);
-        Assert.Equal(SshSignIn.WrongPassphrase, Assert.Throws<SshKeyException>(() => SshSignIn.Describe(key, Secret.From("wrong"))).Message);
-        var info = SshSignIn.Describe(key, Secret.From("c0rrect-horse"));
+        Assert.Equal(SshSignIn.WrongPassphrase, Assert.Throws<SshKeyException>(() => SshSignIn.Describe(key, Stored("Wrong"))).Message);
+        var info = SshSignIn.Describe(key, Stored("Phrase"));
         Assert.Equal(fingerprint, info.Fingerprint);
         Assert.True(info.Encrypted);
     }
@@ -117,17 +121,17 @@ public class SshKeyTests : IDisposable
         var key = RsaPem();
         var (keyOnly, k1) = SshSignIn.Connection("web01", 22, new CredentialSet { Username = "deploy", PrivateKey = key }, TimeSpan.FromSeconds(5));
         Assert.Equal(["publickey"], keyOnly.AuthenticationMethods.Select(m => m.Name));
-        var (both, k2) = SshSignIn.Connection("web01", 22, new CredentialSet { Username = "deploy", PrivateKey = key, Password = Secret.From("pw") }, TimeSpan.FromSeconds(5));
+        var (both, k2) = SshSignIn.Connection("web01", 22, new CredentialSet { Username = "deploy", PrivateKey = key, Password = Stored("Password") }, TimeSpan.FromSeconds(5));
         Assert.Equal(["publickey", "password", "keyboard-interactive"], both.AuthenticationMethods.Select(m => m.Name));
-        var (password, k3) = SshSignIn.Connection("web01", 22, new CredentialSet { Username = "deploy", Password = Secret.From("pw") }, TimeSpan.FromSeconds(5));
+        var (password, k3) = SshSignIn.Connection("web01", 22, new CredentialSet { Username = "deploy", Password = Stored("Password") }, TimeSpan.FromSeconds(5));
         Assert.Equal(["password", "keyboard-interactive"], password.AuthenticationMethods.Select(m => m.Name));
         Assert.Null(k3);
         k1?.Dispose();
         k2?.Dispose();
 
         Assert.Contains("authorized_keys", SshSignIn.Refused(new CredentialSet { Username = "u", PrivateKey = key }));
-        Assert.Contains("neither", SshSignIn.Refused(new CredentialSet { Username = "u", PrivateKey = key, Password = Secret.From("pw") }));
-        Assert.Contains("password is incorrect", SshSignIn.Refused(new CredentialSet { Username = "u", Password = Secret.From("pw") }));
+        Assert.Contains("neither", SshSignIn.Refused(new CredentialSet { Username = "u", PrivateKey = key, Password = Stored("Password") }));
+        Assert.Contains("password is incorrect", SshSignIn.Refused(new CredentialSet { Username = "u", Password = Stored("Password") }));
     }
 
     [Fact]
@@ -148,7 +152,7 @@ public class SshKeyTests : IDisposable
         var ssh = new NetworkShare
         {
             Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01.lab", InheritCredentials = false, TrustedFingerprint = "SHA256:abc",
-            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From("pass-phrase-marker") },
+            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Stored("KeyPhrase") },
         };
         data.Items.Add(ssh);
         data.SavedCredentials.Add(new SavedCredential { Name = "deploy key", Username = "deploy", PrivateKey = key });
@@ -158,7 +162,7 @@ public class SshKeyTests : IDisposable
         Data.LocalDb.Use((c, _) =>
         {
             foreach (var table in new[] { "nodes", "credentials", "settings" })
-                Assert.Equal(0L, Data.LocalDb.Scalar(c, $"SELECT count(*) FROM {table} WHERE data LIKE '%PRIVATE KEY%' OR data LIKE '%PrivateKey%' OR data LIKE '%pass-phrase-marker%' OR data LIKE '%secret:%'"));
+                Assert.Equal(0L, Data.LocalDb.Scalar(c, $"SELECT count(*) FROM {table} WHERE data LIKE '%PRIVATE KEY%' OR data LIKE '%PrivateKey%' OR data LIKE '%{Marker}%' OR data LIKE '%secret:%'"));
             Assert.Equal(3L, Data.LocalDb.Scalar(c, "SELECT count(*) FROM secrets WHERE path IN ('Credentials/PrivateKey', 'Credentials/KeyPassphrase', 'PrivateKey')"));
         });
         Data.LocalDb.Close();
@@ -168,7 +172,7 @@ public class SshKeyTests : IDisposable
         Assert.Equal(ShareProtocol.Ssh, entry.Protocol);
         Assert.Equal("ssh://web01.lab", entry.Address);
         Assert.Equal(key.Reveal(), entry.Credentials.PrivateKey?.Reveal());
-        Assert.Equal("pass-phrase-marker", entry.Credentials.KeyPassphrase?.Reveal());
+        Assert.Equal(TestSecret("KeyPhrase"), entry.Credentials.KeyPassphrase?.Reveal());
         Assert.Equal(key.Reveal(), back.SavedCredentials.Single().PrivateKey?.Reveal());
         Assert.Null(back.SavedCredentials.Single().KeyPassphrase);
     }
@@ -179,8 +183,8 @@ public class SshKeyTests : IDisposable
         var key = RsaPem();
         var data = new AppData();
         var ssh = new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01", InheritCredentials = false,
-            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From("p1"), Password = Secret.From("p2") } };
-        data.SavedCredentials.Add(new SavedCredential { Name = "k", Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From("p3") });
+            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Stored("P1"), Password = Stored("P2") } };
+        data.SavedCredentials.Add(new SavedCredential { Name = "k", Username = "deploy", PrivateKey = key, KeyPassphrase = Stored("P3") });
         Assert.Equal(3, SavedPasswords.Remove(data, [ssh]));
         Assert.Null(ssh.Credentials.Password);
         Assert.Null(ssh.Credentials.KeyPassphrase);
@@ -194,12 +198,12 @@ public class SshKeyTests : IDisposable
     {
         var key = RsaPem();
         var data = new AppData();
-        var saved = new SavedCredential { Name = "k", Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From("p") };
+        var saved = new SavedCredential { Name = "k", Username = "deploy", PrivateKey = key, KeyPassphrase = Stored("P") };
         data.SavedCredentials.Add(saved);
         var ssh = new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01", InheritCredentials = false, CredentialId = saved.Id };
         var (cred, source) = Inheritance.ResolveCredentials(ssh, data);
         Assert.Same(key, cred.PrivateKey);
-        Assert.Equal("p", cred.KeyPassphrase?.Reveal());
+        Assert.Equal(TestSecret("P"), cred.KeyPassphrase?.Reveal());
         Assert.Contains("saved credential", source);
     }
 }

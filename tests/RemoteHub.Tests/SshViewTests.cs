@@ -99,7 +99,7 @@ public class SshViewTests
     public void Switching_between_SFTP_and_SSH_keeps_the_accepted_host_key() => Sta.Run(owner =>
     {
         var share = new NetworkShare { Name = "nas", Protocol = ShareProtocol.Sftp, Host = "nas", TrustedFingerprint = "SHA256:abc",
-            InheritCredentials = false, Credentials = { Username = "admin", Password = Services.Secret.From("pw") } };
+            InheritCredentials = false, Credentials = { Username = "admin", Password = Services.Secret.From(Guid.NewGuid().ToString("N")) } };
         Assert.True(SaveWith(owner, share, e => Pick(e, ShareProtocol.Ssh)));
         Assert.Equal(ShareProtocol.Ssh, share.Protocol);
         Assert.Equal("SHA256:abc", share.TrustedFingerprint);

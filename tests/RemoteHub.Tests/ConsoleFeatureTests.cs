@@ -161,7 +161,7 @@ public class ConsoleFeatureTests
         var key = Secret.From("-----BEGIN OPENSSH PRIVATE KEY-----")!;
         var data = new AppData();
         var ssh = new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01", InheritCredentials = false,
-            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From("p") } };
+            Credentials = { Username = "deploy", PrivateKey = key, KeyPassphrase = Secret.From(Guid.NewGuid().ToString("N")) } };
         WithPolicy(Set(("AllowSavedPasswords", 0)), () =>
         {
             var (cred, _) = Inheritance.ResolveCredentials(ssh, data);

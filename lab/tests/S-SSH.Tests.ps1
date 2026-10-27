@@ -31,8 +31,8 @@ BeforeAll {
     $script:task = $null
     $notServer = "the harness part runs on the run's Server VM (against its own OpenSSH); $VmName is not a Server VM"
     $notClient = "the UI part runs on the admin PC (a Console VM, or a client Windows VM in a lab without one) with its lane's Server VM as the device; $VmName is not that PC"
-    # a throwaway passphrase for a throwaway key - not the lab password
-    $phrase = 'rh-lab-key-phrase'
+    # a throwaway passphrase for a throwaway key, made for the run - not the lab password
+    $phrase = "rh-$([guid]::NewGuid().ToString('N'))"
     $keyDir = Join-Path ([IO.Path]::GetTempPath()) "rh-lab-ssh-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $EvidenceDir "s-ssh-$name.json") -Encoding UTF8 }
@@ -161,7 +161,7 @@ Describe 'S-SSH harness <VmName>' -Tag Share, Ssh, 'S-SSH' {
             $r = [ordered]@{}
             $r.keyOnly = Ssh @('--user', $admin, '--key', $key.Path, '--passphrase', $phrase, '--trusted', $script:first.accepted,
                 '--command', 'hostname', '--expect', (NameLine $computer))
-            $r.wrongPassphrase = Ssh @('--user', $admin, '--key', $key.Path, '--passphrase', 'not-the-phrase', '--trusted', $script:first.accepted)
+            $r.wrongPassphrase = Ssh @('--user', $admin, '--key', $key.Path, '--passphrase', "wrong-$([guid]::NewGuid().ToString('N'))", '--trusted', $script:first.accepted)
             $r.noPassphrase = Ssh @('--user', $admin, '--key', $key.Path, '--trusted', $script:first.accepted)
             $r.unknownKey = Ssh @('--user', $admin, '--key', $unknownKey.Path, '--trusted', $script:first.accepted)
             $r.unknownKeyAndPassword = Ssh @('--user', $admin, '--key', $unknownKey.Path, '--password', $password, '--trusted', $script:first.accepted,
