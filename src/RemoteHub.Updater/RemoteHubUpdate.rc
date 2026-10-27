@@ -1,0 +1,35 @@
+// What Windows' approval prompt shows: the icon, and the file description as the program's name (with the publisher
+// from the signature). Version.g.h is written by the project from $(RhVersion).
+#include <winres.h>
+#include "Version.g.h"
+
+1 ICON "..\\RemoteHub\\Assets\\app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION RH_VERSION
+ PRODUCTVERSION RH_VERSION
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Grischa Ernst"
+            VALUE "FileDescription", "RemoteHub Update"
+            VALUE "FileVersion", RH_VERSION_TEXT
+            VALUE "InternalName", "RemoteHubUpdate"
+            VALUE "LegalCopyright", "\251 2026 Grischa Ernst"
+            VALUE "OriginalFilename", "RemoteHubUpdate.exe"
+            VALUE "ProductName", "RemoteHub"
+            VALUE "ProductVersion", RH_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -53,15 +53,33 @@ public partial class MainWindow
     private void FillNewConnection(ItemsControl menu)
     {
         menu.Items.Clear();
-        foreach (var k in NewConnectionKinds())
+        foreach (var shown in NewConnectionMenu())
         {
-            // The file shares come after a line.
-            if (k.Kind is not (null or ShareProtocol.Ssh) && menu.Items[^1] is not Separator) menu.Items.Add(new Separator());
+            if (shown is not { } k)
+            {
+                menu.Items.Add(new Separator());
+                continue;
+            }
             var kind = k.Kind;
             var entry = MenuEntry(k.Header, Enum.Parse<SymbolRegular>(k.Symbol),
                 () => { if (kind is { } p) NewShare(p); else NewConnection_Click(this, new RoutedEventArgs()); }, tip: k.Tip);
             if (kind is null) entry.InputGestureText = "Ctrl+N";
             menu.Items.Add(entry);
+        }
+    }
+
+    /// <summary>New → Connection as it is shown: the kinds, and null for the one line before the first file share.</summary>
+    internal static IEnumerable<(ShareProtocol? Kind, string Header, string Symbol, string Tip)?> NewConnectionMenu(Agent.IPolicySource? policy = null)
+    {
+        var line = false;
+        foreach (var k in NewConnectionKinds(policy))
+        {
+            if (k.Kind is not (null or ShareProtocol.Ssh) && !line)
+            {
+                line = true;
+                yield return null;
+            }
+            yield return k;
         }
     }
 

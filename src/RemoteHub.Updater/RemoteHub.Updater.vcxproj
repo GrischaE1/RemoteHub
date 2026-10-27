@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  RemoteHubUpdate.exe (Update.h): what Windows asks administrator approval for when RemoteHub installs an update. Built
+  by build\build-updater.ps1 (MSBuild from the Visual Studio C++ tools), not by RemoteHub.sln; build-installer.ps1 puts
+  it next to RemoteHub.exe and signs it with the other programs. Hardened like the credential provider.
+    RhVersion  the version in its file properties (four numbers, e.g. 0.22.0.0; default 0.0.0.0).
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{3C7A9E21-6B4D-4F8A-9C2E-5D1B0A7F3E94}</ProjectGuid>
+    <RootNamespace>RemoteHubUpdater</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <SpectreMitigation>Spectre</SpectreMitigation>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' != 'Debug'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <PropertyGroup>
+    <TargetName>RemoteHubUpdate</TargetName>
+    <OutDir>$(MSBuildThisFileDirectory)bin\$(Configuration)\</OutDir>
+    <IntDir>$(MSBuildThisFileDirectory)obj\$(Configuration)\</IntDir>
+    <RhVersion Condition="'$(RhVersion)' == ''">0.0.0.0</RhVersion>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <GuardEHContMetadata>true</GuardEHContMetadata>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalOptions>/Qspectre %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <!-- Windows system DLLs only. -->
+      <AdditionalDependencies>shell32.lib;ole32.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- It only ever runs elevated: Windows asks for approval before it starts. -->
+      <EnableUAC>true</EnableUAC>
+      <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
+      <RandomizedBaseAddress>true</RandomizedBaseAddress>
+      <DataExecutionPrevention>true</DataExecutionPrevention>
+      <CETCompat>true</CETCompat>
+      <!-- /DEPENDENTLOADFLAG: its imports, too, come from System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32). -->
+      <AdditionalOptions>/HIGHENTROPYVA /guard:ehcont /DEPENDENTLOADFLAG:0x800 %(AdditionalOptions)</AdditionalOptions>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)' != 'Debug'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)' == 'Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="Main.cpp" />
+    <ClCompile Include="Update.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Update.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="RemoteHubUpdate.rc" />
+  </ItemGroup>
+
+  <!-- The version for the file properties, from $(RhVersion). -->
+  <Target Name="RhVersionHeader" BeforeTargets="ResourceCompile">
+    <MakeDir Directories="$(IntDir)" />
+    <WriteLinesToFile File="$(IntDir)Version.g.h" Overwrite="true" WriteOnlyWhenDifferent="true"
+                      Lines="#define RH_VERSION $(RhVersion.Replace('.', ','));#define RH_VERSION_TEXT &quot;$(RhVersion)&quot;" />
+  </Target>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

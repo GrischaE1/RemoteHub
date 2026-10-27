@@ -100,10 +100,10 @@ jobs:
           "java=$java" >> $env:GITHUB_OUTPUT
           "enabled=true" >> $env:GITHUB_OUTPUT
 
-      # A signed release builds the credential provider, whose hardening flags need the Spectre-mitigated libraries
-      # (MSB8040), as in ci.yml. Before the first signing, so a missing component can't fail the build halfway.
+      # RemoteHubUpdate.exe (every release) and the credential provider (a signed one) are built with hardening flags
+      # that need the Spectre-mitigated libraries (MSB8040), as in ci.yml. Before the first signing, so a missing
+      # component can't fail the build halfway.
       - name: Spectre-mitigated libraries
-        if: steps.signing.outputs.enabled == 'true'
         shell: pwsh
         run: ./build/Install-SpectreLibraries.ps1
 

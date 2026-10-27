@@ -7685,6 +7685,19 @@ P2 · How: H PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 **Expected:**
 - inbound and outbound UDP of the agent blocked by firewall rules on the device: the request answers relayed within 10 s, without an error
 
+#### B-BRK-08 · A connection that silently stops carrying
+P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Steps:**
+1. The device policy `BrokerKeepAliveSeconds` = 30; the agent restarted and online at the broker.
+2. The agent's established connection to the broker and the next hop to it (`Find-NetRoute`); that hop's neighbour entry replaced by a permanent one with a MAC nobody has – the device's frames go nowhere, with no close and no network change (PowerShell Direct runs over VMBus).
+3. Read the agent log until it gives the connection up, at most 150 s.
+4. Remove the entry; wait until the device is online at the broker again and the log says it connected again; a request through the broker.
+
+**Expected:**
+- within 110 s (two 30 s intervals and 15 s): "RemoteHub Broker …: the connection was given up – nothing from the broker for … s"
+- afterwards "RemoteHub Broker …: connected again", the device online, and the request through the broker answers with its device id
+
 #### B-BRK-04 · Leave and join
 P2 · How: PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
@@ -7891,6 +7904,20 @@ P3 · How: U M · Needs: – · Status: ✅ Automated – `C-POLUPD2.Tests.ps1`
 
 **Expected:**
 - "Install cancelled. The verified download is kept until the next update."; no install started – no msiexec other than the Windows Installer service (`msiexec.exe /V`, which the client install before leaves running for a few minutes) and no `install-update.cmd`; *Download and install* enabled again
+
+#### C-UPD-11 · The approval names RemoteHub
+P1 · How: U M C PS · Needs: the lab signing certificate · Status: ◐ Test written – `C-POLUPD2.Tests.ps1`
+
+**Preconditions:** as SEC-UPD-02 (the same run).
+
+**Steps:**
+1. Read `C:\Program Files\RemoteHub\RemoteHubUpdate.exe`: its file description, its signature and whether `RemoteHub.exe` has the same signer; whether `InstallUpdate.ps1` is next to it.
+2. While Windows asks for approval in SEC-UPD-02, a screenshot of the VM's console (the secure desktop).
+3. After *Yes* in SEC-UPD-02's second install, read the command line of the Windows PowerShell running `InstallUpdate.ps1`.
+
+**Expected:**
+- `RemoteHubUpdate.exe` is installed next to `InstallUpdate.ps1`; its file description is "RemoteHub Update"; its signature is valid and by the certificate that signed `RemoteHub.exe` – the prompt shows that name and publisher
+- the step runs as `-File "C:\Program Files\RemoteHub\InstallUpdate.ps1"` with `-Signer "C:\Program Files\RemoteHub\RemoteHubUpdate.exe"`, not with `-Publisher` or `-EncodedCommand` (the Windows PowerShell fallback)
 
 #### C-TEL-03 · Off discards local records
 P2 · How: PS U M · Needs: – · Status: ✅ Automated – `C-POLUPD2.Tests.ps1`
@@ -8524,6 +8551,18 @@ P2 · How: U · Needs: – · Status: ◐ Test written – `C-FAV.Tests.ps1`
 **Expected:**
 - a connection's row takes one line (name, address, the last use short: "never"); *Compact rows* off in the filter menu: the address and the full last use ("never connected") on a second line; kept after a restart; on again: one line
 
+#### C-NAV-02 · A submenu that opens upwards
+P2 · How: U · Needs: – · Status: ◐ Test written – `C-FAV.Tests.ps1`
+
+**Steps:**
+1. `RhPerson.ps1 -Do uia -Text Beta -Value place:New>Connection`: RemoteHub's window moved so *Beta* sits 150 px above the bottom of the working area, right-click, *New* and *Connection* opened (Expand).
+2. Read the rectangles of *Connection* and of its submenu's entries.
+
+**Expected:**
+- the entries are Remote Control, SSH, SFTP, FTP / FTPS, SMB, WebDAV
+- they open upwards (their top more than 16 px above *Connection*'s), and the last one ends within 16 px of *Connection*'s bottom – before the fix 50–60 px higher (WPF-UI's offset and shadow margin counted from the top)
+- beside *Connection* (within 24 px of its edge: WPF-UI lets a submenu overlap its entry a little)
+
 #### C-RAIL-01 · The rail's version
 P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 
@@ -8565,6 +8604,34 @@ P1 · How: U M C PS · Needs: the lab signing certificate · Status: ✅ Automat
 - the approval prompt comes while RemoteHub still runs
 - after the swap: RemoteHub starts again and says "The update wasn't installed: the downloaded file changed after RemoteHub had checked it…"; the outcome file says `refused changed`; no `.msi` in the staging folder; its permissions are not inherited and name only SYSTEM and Administrators; the installed version is unchanged
 - without the swap: the newest outcome is `installed 0` (or 3010), no `.msi` left, RemoteHub runs again and shows no update message
+
+#### SEC-UPD-04 · The user's environment and the elevated step
+P1 · How: U M C PS E · Needs: the lab signing certificate · Status: ◐ Test written – `C-POLUPD2.Tests.ps1`
+
+**Preconditions:** as SEC-UPD-02 (the same run), before its second install.
+
+**Steps:**
+1. In the console account's `HKCU\Environment`: `COR_ENABLE_PROFILING` = 1, `COR_PROFILER` = a new CLSID, `COR_PROFILER_PATH` = a file that doesn't exist (a .NET profiler for every program of the user's, elevated ones too). Then RemoteHub starts again.
+2. SEC-UPD-02's second install: approve; note the process id of the Windows PowerShell running the step.
+3. As a control, a Windows PowerShell started with the same three values.
+4. Remove the values; read the Application log's .NET Runtime events since step 1 that name the CLSID, with their process ids.
+
+**Expected:**
+- the control's process id is among them (Windows PowerShell does try to load the profiler, so the check can see it)
+- the step's process id is not: RemoteHubUpdate.exe gave it an environment of system folders only
+
+#### SEC-UPD-05 · RemoteHubUpdate.exe called directly
+P1 · How: PS M · Needs: the lab signing certificate · Status: ◐ Test written – `C-POLUPD2.Tests.ps1`
+
+**Preconditions:** as SEC-UPD-02 (the same run), after it; the session is an administrator's, so Windows doesn't ask.
+
+**Steps:**
+1. Run `RemoteHubUpdate.exe` with values it doesn't take: the checksum one character short; an extra `--publisher CN=Someone`; `--msi C:\LabClient\swap\a:b.msi` (a stream); a UNC path (`\\localhost\C$\…`); a path with a `..` segment. Count the outcome files before and after.
+2. Run it with well-formed values for the rebuilt MSI (`C:\LabClient\swap\RemoteHub-99.0.0-x64.msi`, its real SHA-256, a process id that has ended, a new id) and wait for the step.
+
+**Expected:**
+- each call in step 1 ends with exit code 0 and no new outcome file (nothing started)
+- step 2: the exit code is the step's process id; its outcome is `refused signature` (the rebuild's signature doesn't match it); no `.msi` left in the staging folder
 
 #### SEC-VDD-01 · Rogue display-driver pipe
 P1 · How: H S PS E · Needs: normaluser signed in at the console · Status: ✅ Automated – `SEC-VDD.Tests.ps1`

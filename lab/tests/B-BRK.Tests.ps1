@@ -3,7 +3,8 @@
 # the console secret, the sealed record, the agent's health through a relayed session pinned to that record), the
 # device's policy BrokerEnabled, broker leave and broker join with the secret on standard input (what Assign to
 # RemoteHub Broker runs), the direct path (QUIC on a punched port through the device firewall, relayed with the policy
-# BrokerDirect = 0 or with UDP blocked), and that the device secret is kept nowhere on the device (SEC-BRK).
+# BrokerDirect = 0 or with UDP blocked), a broker connection that silently stops carrying anything given up and made
+# again (B-BRK-08), and that the device secret is kept nowhere on the device (SEC-BRK).
 # Needs the lab's broker: lab.json "Broker" and lab.local.json "BrokerToken" (docs/test-lab-spec.md); without them
 # every case is skipped with that reason. Each run makes its own organisation and deletes it again.
 # See docs/test-lab-cases.md section 9.14.
@@ -199,6 +200,73 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         $wrong = Invoke-AgentExe @('broker', 'join', $broker.Url) -Secret $org.consoleSecret
         $wrong.ExitCode | Should -Be 1
         $wrong.Output | Should -Match 'console secret'
+    }
+
+    It 'B-BRK-08 a broker connection that silently stops carrying anything is given up and made again' -Tag 'B-BRK-08' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        # a 30 s keep-alive (the policy's minimum): given up after 75 s without a frame (two intervals and 15 s)
+        Set-LabAgentPolicy -Name $VmName -Values @{ BrokerKeepAliveSeconds = 30 }
+        try {
+            Invoke-LabGuest -Name $VmName -ScriptBlock { Restart-Service RemoteHubAgent }
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
+            # The connection dies without a close and without a network change: the next hop's address answers to a MAC
+            # nobody has, so the device's frames go nowhere (PowerShell Direct runs over VMBus and keeps working).
+            $cut = Invoke-LabGuest -Name $VmName -ArgumentList $broker.Url -ScriptBlock {
+                param($url)
+                $agent = (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId
+                $conn = Get-NetTCPConnection -OwningProcess $agent -State Established -RemotePort ([Uri]$url).Port -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $conn) { return [pscustomobject]@{ error = 'the agent has no connection to the broker' } }
+                $route = Find-NetRoute -RemoteIPAddress $conn.RemoteAddress | Where-Object { $_.PSObject.Properties['NextHop'] } | Select-Object -First 1
+                $hop = if ($route.NextHop -and $route.NextHop -notin '0.0.0.0', '::') { $route.NextHop } else { $conn.RemoteAddress }
+                $log = Join-Path 'C:\ProgramData\RemoteHub\Agent\logs' "agent-$(Get-Date -Format yyyyMMdd).log"
+                $lines = @(Get-Content $log -ErrorAction SilentlyContinue).Count
+                Remove-NetNeighbor -IPAddress $hop -InterfaceIndex $route.InterfaceIndex -Confirm:$false -ErrorAction SilentlyContinue
+                $null = New-NetNeighbor -IPAddress $hop -InterfaceIndex $route.InterfaceIndex -LinkLayerAddress '02-00-5e-10-00-01' -State Permanent
+                [pscustomobject]@{ hop = "$hop"; ifIndex = $route.InterfaceIndex; log = $log; lines = $lines; remote = "$($conn.RemoteAddress):$($conn.RemotePort)" }
+            }
+            $cut.PSObject.Properties['error'] | Should -BeNullOrEmpty -Because "$(if ($cut.PSObject.Properties['error']) { $cut.error })"
+            # the agent's log: the line saying it gave the connection up (an en dash in it: matched with '.')
+            $gaveUp = Invoke-LabGuest -Name $VmName -ArgumentList $cut.log, $cut.lines -ScriptBlock {
+                param($log, $skip)
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                do {
+                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'the connection was given up . nothing from the broker for' })[0]
+                    if ($line) { break }
+                    Start-Sleep -Seconds 2
+                } while ($sw.Elapsed.TotalSeconds -lt 150)
+                [pscustomobject]@{ line = $line; seconds = [int]$sw.Elapsed.TotalSeconds }
+            }
+            # the way back: the neighbour entry removed, the agent connects again and is reachable through the broker
+            Invoke-LabGuest -Name $VmName -ArgumentList $cut.hop, $cut.ifIndex -ScriptBlock {
+                param($hop, $if)
+                Remove-NetNeighbor -IPAddress $hop -InterfaceIndex $if -Confirm:$false -ErrorAction SilentlyContinue
+            }
+            # the attempts while cut off grew the back-off (at most 60 s and as much jitter)
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer -TimeoutSec 240
+            $again = Invoke-LabGuest -Name $VmName -ArgumentList $cut.log, $cut.lines -ScriptBlock {
+                param($log, $skip)
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                do {
+                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'RemoteHub Broker .*: connected again' })[0]
+                    if ($line) { break }
+                    Start-Sleep -Seconds 2
+                } while ($sw.Elapsed.TotalSeconds -lt 180)
+                $line
+            }
+            $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
+            Save 'silent-link' ([pscustomobject]@{ cut = $cut; gaveUp = $gaveUp; again = $again; health = $r.health })
+            $gaveUp.line | Should -Not -BeNullOrEmpty -Because "the agent gives a connection up that carries nothing (waited $($gaveUp.seconds) s)"
+            $gaveUp.seconds | Should -BeLessThan 110 -Because 'two 30 s intervals and 15 s, read every 2 s'
+            $again | Should -Not -BeNullOrEmpty -Because 'the agent logs that it is connected again'
+            $r.health.deviceId | Should -Be $script:device.id
+        }
+        finally {
+            if ($cut -and $cut.PSObject.Properties['hop']) {
+                Invoke-LabGuest -Name $VmName -ArgumentList $cut.hop, $cut.ifIndex -ScriptBlock { param($hop, $if) Remove-NetNeighbor -IPAddress $hop -InterfaceIndex $if -Confirm:$false -ErrorAction SilentlyContinue }
+            }
+            Set-LabAgentPolicy -Name $VmName -Clear
+        }
     }
 
     It 'SEC-BRK-01 the device secret is kept nowhere on the device' -Tag 'SEC-BRK-01' {

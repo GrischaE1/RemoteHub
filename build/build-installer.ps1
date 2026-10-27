@@ -7,12 +7,12 @@
 #              are numbers only (major.minor.build, each part at most 255.255.65535).
 # -OutputPath  Where the MSIs end up (default: artifacts). Publish folders: <OutputPath>\publish, <OutputPath>\publish-agent.
 #
-# Signing (Authenticode, SHA-256; Sign-Files.ps1): RemoteHubAgent.exe, RemoteHub.exe, RemoteHubDecoder.exe and both
-# MSIs, each before it is packed into the next step.
+# Signing (Authenticode, SHA-256; Sign-Files.ps1): RemoteHubAgent.exe, RemoteHub.exe, RemoteHubDecoder.exe,
+# RemoteHubUpdate.exe and both MSIs, each before it is packed into the next step.
 # -SigningCertificate  Thumbprint of the code-signing certificate: in the certificate store, or with -ESigner the one
 #                      every signature is checked against.
 # -ESigner             Signs through SSL.com eSigner (release.yml; Sign-Files.ps1 has the environment it needs). Each
-#                      signed file counts against the yearly signings: 5 per release, 6 with -CredentialProvider.
+#                      signed file counts against the yearly signings: 6 per release, 7 with -CredentialProvider.
 # -LabSigning          The lab certificate instead (lab\New-LabSigningCertificate.ps1); only the lab VMs trust it.
 # -TimestampServer     Defaults to DigiCert's for -SigningCertificate; the lab signs without a timestamp, eSigner with its own.
 # Without -SigningCertificate or -LabSigning, nothing is signed.
@@ -20,6 +20,9 @@
 # -CredentialProvider  Builds the credential provider (build-credential-provider.ps1, needs the Visual Studio C++ tools)
 #                      and adds it to the agent MSI behind AUTOSIGNIN (credential-provider-design.md §8.4). Only with a
 #                      signing certificate: the provider is never built unsigned.
+#
+# RemoteHubUpdate.exe (build-updater.ps1) is always built: it is what Windows asks approval for when RemoteHub installs
+# an update, so the Visual Studio C++ tools are needed for every MSI.
 param(
     [string]$Version,
     [string]$Configuration = "Release",
@@ -84,6 +87,10 @@ if ($CredentialProvider) {
     if ($LASTEXITCODE) { throw "credential provider build failed" }
     $built = @($providerBuild)[-1]
 }
+# RemoteHubUpdate.exe for the same reason before anything is signed; the four-part version for its file properties.
+& "$PSScriptRoot\build-updater.ps1" -Configuration Release -Version "$msiVersion.0" | Tee-Object -Variable updaterBuild | Out-Host
+$updater = @($updaterBuild)[-1]
+if (-not (Test-Path $updater)) { throw "RemoteHubUpdate.exe was not built." }
 
 # --- Agent
 dotnet publish "$root\src\RemoteHub.Agent\RemoteHub.Agent.csproj" -c $Configuration -r win-x64 --self-contained true `
@@ -122,7 +129,11 @@ dotnet publish "$root\src\RemoteHub.Decoder\RemoteHub.Decoder.csproj" -c $Config
     -p:Version=$Version -p:DebugType=none -o $publish
 if ($LASTEXITCODE) { throw "decoder publish failed" }
 if (-not (Test-Path "$publish\RemoteHubDecoder.exe")) { throw "RemoteHubDecoder.exe was not published." }
-Sign "$publish\RemoteHub.exe", "$publish\RemoteHubDecoder.exe"
+# The update step's program next to the script it runs (UpdateService.StartInstall): both from the install folder, which
+# only administrators can change.
+Copy-Item $updater "$publish\RemoteHubUpdate.exe" -Force
+if (-not (Test-Path "$publish\InstallUpdate.ps1")) { throw "InstallUpdate.ps1 was not published." }
+Sign "$publish\RemoteHub.exe", "$publish\RemoteHubDecoder.exe", "$publish\RemoteHubUpdate.exe"
 New-Item -ItemType Directory -Force -Path "$publish\Agent" | Out-Null
 Copy-Item $agentMsi "$publish\Agent\RemoteHub-Agent-x64.msi"
 

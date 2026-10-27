@@ -11,6 +11,10 @@
 #   SEC-UPD-01 an installer with the right checksum but a broken signature: refused before the approval prompt
 #   SEC-UPD-02 the download swapped while Windows asks for approval: the elevated step checks its own copy and refuses
 #             it; without a swap it installs that copy (docs/security-test-lab-design.md 4.11, test-lab-cases.md 13)
+#   C-UPD-11  the approval is for "RemoteHub Update" (RemoteHubUpdate.exe, signed like RemoteHub), which starts the step
+#             from RemoteHub's folder
+#   SEC-UPD-04 a .NET profiler set in the user's environment (HKCU\Environment) doesn't reach the elevated step
+#   SEC-UPD-05 RemoteHubUpdate.exe run directly: malformed values refused, a package checked like an update's
 #   C-TEL-03  telemetry off discards local records (install-id deleted under the policy too)
 #   C-CRASH-03 native crash -> app_crash NativeCrash (a synthetic Application Error 1000 event; there is no crash switch)
 #   C-CRASH-04 crash-queue limits (newest 5 sent, older than 30 days deleted; refusal-persistence and the 3-per-session
@@ -429,6 +433,21 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 [bool]$n
             }
 
+            # C-UPD-11: what Windows asks approval for - the installed RemoteHubUpdate.exe next to the step's script
+            $u.updater = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $exe = 'C:\Program Files\RemoteHub\RemoteHubUpdate.exe'
+                if (-not (Test-Path $exe)) { return [pscustomobject]@{ exists = $false } }
+                $sig = Get-AuthenticodeSignature $exe
+                $rh = Get-AuthenticodeSignature 'C:\Program Files\RemoteHub\RemoteHub.exe'
+                [pscustomobject]@{
+                    exists      = $true
+                    description = (Get-Item $exe).VersionInfo.FileDescription
+                    status      = "$($sig.Status)"
+                    sameSigner  = [bool]($sig.SignerCertificate -and $sig.SignerCertificate.Thumbprint -eq $rh.SignerCertificate.Thumbprint)
+                    script      = Test-Path 'C:\Program Files\RemoteHub\InstallUpdate.ps1'
+                }
+            }
+
             # SEC-UPD-01: right checksum and size, broken signature -> refused before Windows asks, nothing kept
             Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $rebuilt.FullName -Leaf)
             Restart-Client
@@ -453,6 +472,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $until = (Get-Date).AddSeconds(180)
             while (-not (Consent) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
             $u.swapConsent = Consent
+            Shot 'c-upd-11-prompt'   # the secure desktop as the VM's console shows it: the program and its publisher
             $u.swap = Invoke-LabGuest -Name $VmName -ArgumentList $updates -ScriptBlock {
                 param($d)
                 $msi = @(Get-ChildItem $d -Filter *.msi)[0]
@@ -474,9 +494,21 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             # the same without the swap: the elevated step installs its own checked copy and RemoteHub starts again.
             # Nothing of the swap left: no prompt still open, no elevated step still waiting for RemoteHub
             if (Consent) { $null = Answer-Consent 0x12, 0x4E }
+            # (RemoteHubUpdate.exe runs InstallUpdate.ps1; the Windows PowerShell fallback names the staging folder)
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
-                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'RemoteHub Updates' } |
+                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'InstallUpdate\.ps1|RemoteHub Updates' } |
                     ForEach-Object { Wait-Process -Id $_.ProcessId -Timeout 120 -ErrorAction SilentlyContinue }
+            }
+            # SEC-UPD-04: a .NET profiler in the user's own environment, which Windows gives their elevated processes too.
+            # Windows PowerShell would try to load it and write a .NET Runtime event naming its process id; the profiler's
+            # file doesn't exist, so nothing runs either way. Set before RemoteHub starts again, so it has it as well.
+            $profiler = '{' + [guid]::NewGuid().ToString().ToUpperInvariant() + '}'
+            $profilerSince = Invoke-LabGuest -Name $VmName -ArgumentList $profiler -ScriptBlock {
+                param($clsid)
+                foreach ($v in @(@('COR_ENABLE_PROFILING', '1'), @('COR_PROFILER', $clsid), @('COR_PROFILER_PATH', 'C:\Users\Public\rh-lab-profiler.dll'))) {
+                    Set-ItemProperty -Path 'HKCU:\Environment' -Name $v[0] -Value $v[1]
+                }
+                Get-Date
             }
             Close-Rh
             Restart-Client
@@ -485,12 +517,66 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             while (-not (Consent) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
             $u.okConsent = Consent
             if ($u.okConsent) { $u.okApproved = Answer-Consent 0x12, 0x59 }
+            # the step while it installs (msiexec takes a while): its command line and process id
+            $until = (Get-Date).AddSeconds(60)
+            do {
+                $u.step = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'InstallUpdate\.ps1|RemoteHub Updates' } |
+                        Select-Object -First 1 ProcessId, CommandLine
+                }
+                if (-not $u.step) { Start-Sleep -Seconds 1 }
+            } while (-not $u.step -and (Get-Date) -lt $until)
             $u.okRestarted = Wait-Restarted
             $until = (Get-Date).AddSeconds(120)
             do { Start-Sleep -Seconds 5; $u.okStaging = Staging } while (@($u.okStaging.results).Count -lt 2 -and (Get-Date) -lt $until)
             $u.okMessage = "$(WinText 'RemoteHub updates')`n$(WinText 'RemoteHub')"
             Close-Rh
             try { Get-LabFile -Name $VmName -Path 'C:\Program Files\RemoteHub Updates\results\*.log' -Destination (Join-Path $EvidenceDir 'c-polupd2-sec-upd-msi-logs') } catch { }
+
+            # SEC-UPD-04: which processes tried to load the profiler. A Windows PowerShell started here with the same
+            # values shows that the event is written at all (otherwise "not in the step" would prove nothing).
+            $u.profiler = Invoke-LabGuest -Name $VmName -ArgumentList $profiler, $profilerSince -ScriptBlock {
+                param($clsid, $since)
+                $env:COR_ENABLE_PROFILING = '1'; $env:COR_PROFILER = $clsid; $env:COR_PROFILER_PATH = 'C:\Users\Public\rh-lab-profiler.dll'
+                $control = (Start-Process "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile', '-Command', 'exit' -WindowStyle Hidden -PassThru -Wait).Id
+                foreach ($n in 'COR_ENABLE_PROFILING', 'COR_PROFILER', 'COR_PROFILER_PATH') { Remove-ItemProperty -Path 'HKCU:\Environment' -Name $n -ErrorAction SilentlyContinue }
+                Start-Sleep -Seconds 2
+                $pids = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = '.NET Runtime'; StartTime = $since } -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Message -match [regex]::Escape($clsid) -and $_.Message -match 'Process ID \(decimal\): (\d+)' } | ForEach-Object { [int]$Matches[1] })
+                [pscustomobject]@{ control = $control; pids = $pids }
+            }
+
+            # SEC-UPD-05: RemoteHubUpdate.exe run directly (this session is elevated, so Windows doesn't ask): values it
+            # doesn't take start nothing; a package it takes is checked like an update's - the rebuild isn't installed.
+            $u.direct = Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $exe = 'C:\Program Files\RemoteHub\RemoteHubUpdate.exe'
+                $msi = 'C:\LabClient\swap\RemoteHub-99.0.0-x64.msi'
+                $sha = (Get-FileHash $msi -Algorithm SHA256).Hash
+                $results = 'C:\Program Files\RemoteHub Updates\results'
+                # a process id that has already ended: the step doesn't wait
+                $gone = "$((Start-Process "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c', 'exit' -WindowStyle Hidden -PassThru -Wait).Id)"
+                function Run([string[]]$Arguments) { (Start-Process $exe -ArgumentList $Arguments -PassThru -Wait).ExitCode }
+                function NewId { [guid]::NewGuid().ToString('N') }
+                $before = @(Get-ChildItem $results -Filter *.txt -ErrorAction SilentlyContinue).Count
+                $refused = [ordered]@{
+                    shortSha  = Run '--msi', $msi, '--sha256', $sha.Substring(1), '--pid', $gone, '--id', (NewId)
+                    publisher = Run '--msi', $msi, '--sha256', $sha, '--pid', $gone, '--id', (NewId), '--publisher', 'CN=Someone'
+                    stream    = Run '--msi', 'C:\LabClient\swap\a:b.msi', '--sha256', $sha, '--pid', $gone, '--id', (NewId)
+                    unc       = Run '--msi', '\\localhost\C$\LabClient\swap\RemoteHub-99.0.0-x64.msi', '--sha256', $sha, '--pid', $gone, '--id', (NewId)
+                    traversal = Run '--msi', 'C:\LabClient\swap\..\swap\RemoteHub-99.0.0-x64.msi', '--sha256', $sha, '--pid', $gone, '--id', (NewId)
+                }
+                $afterRefused = @(Get-ChildItem $results -Filter *.txt -ErrorAction SilentlyContinue).Count
+                $id = NewId
+                $step = Run '--msi', $msi, '--sha256', $sha, '--pid', $gone, '--id', $id
+                if ($step -gt 0) { Wait-Process -Id $step -Timeout 120 -ErrorAction SilentlyContinue }
+                [pscustomobject]@{
+                    refused          = $refused
+                    refusedResults   = $afterRefused - $before
+                    step             = $step
+                    result           = "$(Get-Content (Join-Path $results "$id.txt") -ErrorAction SilentlyContinue)".Trim()
+                    msiLeft          = @(Get-ChildItem 'C:\Program Files\RemoteHub Updates' -Filter *.msi -Force -ErrorAction SilentlyContinue).Count
+                }
+            }
             Save 'sec-upd' $u
         }
 
@@ -519,6 +605,32 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             @($u.okStaging.results)[-1] | Should -Match '^installed (0|3010)$' -Because "the step's outcomes: $(@($u.okStaging.results) -join ' / '); msiexec: $(@($u.okStaging.logErrors) -join ' | ')"
             $u.okStaging.msi | Should -Be 0
             "$($u.okMessage)" | Should -Not -Match 'wasn''t installed|couldn''t be installed'
+        }
+
+        It 'C-UPD-11 the approval is for RemoteHub Update, signed like RemoteHub, which starts the step from RemoteHub''s folder' -Tag 'C-UPD-11' {
+            $u.updater.exists | Should -BeTrue -Because 'the MSI installs RemoteHubUpdate.exe next to RemoteHub.exe'
+            $u.updater.description | Should -Be 'RemoteHub Update' -Because 'Windows shows the file description as the program''s name'
+            $u.updater.status | Should -Be 'Valid'
+            $u.updater.sameSigner | Should -BeTrue -Because 'the prompt''s publisher is RemoteHub''s'
+            $u.updater.script | Should -BeTrue
+            $u.step | Should -Not -BeNullOrEmpty -Because 'the step runs while the package installs'
+            $u.step.CommandLine | Should -Match '-File "C:\\Program Files\\RemoteHub\\InstallUpdate\.ps1"'
+            $u.step.CommandLine | Should -Match '-Signer "C:\\Program Files\\RemoteHub\\RemoteHubUpdate\.exe"'
+            $u.step.CommandLine | Should -Not -Match '-Publisher|-EncodedCommand' -Because 'not the Windows PowerShell fallback'
+        }
+
+        It 'SEC-UPD-04 a .NET profiler set in the user''s environment doesn''t reach the elevated step' -Tag 'SEC-UPD-04' {
+            $u.profiler.pids | Should -Contain $u.profiler.control -Because 'Windows PowerShell with the profiler set writes a .NET Runtime event (the check can see it)'
+            $u.step.ProcessId | Should -BeGreaterThan 0
+            $u.profiler.pids | Should -Not -Contain $u.step.ProcessId -Because "RemoteHubUpdate.exe gives the step a fresh environment - events from: $(@($u.profiler.pids) -join ', ')"
+        }
+
+        It 'SEC-UPD-05 RemoteHubUpdate.exe run directly: values it doesn''t take start nothing, a package it takes is checked like an update''s' -Tag 'SEC-UPD-05' {
+            foreach ($case in $u.direct.refused.Keys) { $u.direct.refused[$case] | Should -Be 0 -Because "$case is refused before anything starts" }
+            $u.direct.refusedResults | Should -Be 0
+            $u.direct.step | Should -BeGreaterThan 0 -Because 'well-formed values start the step (its process id is the exit code)'
+            $u.direct.result | Should -Be 'refused signature' -Because 'the rebuilt package''s signature doesn''t match it'
+            $u.direct.msiLeft | Should -Be 0
         }
     }
 

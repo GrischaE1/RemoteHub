@@ -140,6 +140,16 @@ public class ConsoleFeatureTests
     }
 
     [Fact]
+    public void New_connection_has_one_line_before_the_file_shares()
+    {
+        static string[] Menu(FakeSource policy) => [.. MainWindow.NewConnectionMenu(policy).Select(k => k?.Header ?? "line")];
+        Assert.Equal(["Remote Control", "SSH", "line", "SFTP", "FTP / FTPS", "SMB", "WebDAV"], Menu(Set()));
+        Assert.Equal(["Remote Control", "line", "SMB"], Menu(Set(("AllowSsh", 0), ("AllowSftp", 0), ("AllowFtp", 0), ("AllowWebDav", 0))));
+        // No file share allowed: no line at the end either.
+        Assert.Equal(["Remote Control", "SSH"], Menu(Set(("AllowNetworkShares", 0))));
+    }
+
+    [Fact]
     public void The_editor_offers_only_the_kinds_policy_allows_and_the_items_own()
     {
         static List<ShareProtocol> Kinds(bool standalone, ShareProtocol? current, FakeSource policy) =>

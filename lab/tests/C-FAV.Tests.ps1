@@ -1,7 +1,8 @@
 # C-FAV / C-NAV / C-RAIL - RemoteHub's navigation on a Windows client: a connection in a folder pinned to the
 # Favourites group (a link, drawn as a chip: the connection stays in its folder), the link's menu and Edit, unpinning
 # with Del, favourites kept after a restart and gone when the folder is deleted; one-line rows by default and two with
-# Compact rows off, kept after a restart; the rail's version opens About. The client VM only, RemoteHub driven by UI
+# Compact rows off, kept after a restart; a submenu that opens upwards ends level with its entry (C-NAV-02); the rail's
+# version opens About. The client VM only, RemoteHub driven by UI
 # Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.9.
 # LabRole: console
 param(
@@ -152,6 +153,24 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-NAV', 'C-RAIL' -Skip:(-no
             $n.twoLines | Should -BeTrue
             $n.keptAfterRestart | Should -BeTrue
             $n.backToOneLine | Should -BeTrue
+        }
+    }
+
+    Context 'menus' {
+        BeforeAll {
+            # New > Connection from a connection near the bottom of the screen: the kinds have no room below and open
+            # upwards (RhPerson place: moves the window so)
+            $p = Ui 'Beta' -Value 'place:New>Connection'
+            Shot 'submenu-up'
+            Save 'menus' $p
+        }
+
+        It 'C-NAV-02 a submenu that opens upwards ends level with its entry, beside it' -Tag 'C-NAV-02' {
+            $p.PSObject.Properties['error'] | Should -BeNullOrEmpty -Because "$(if ($p.PSObject.Properties['error']) { $p.error })"
+            @($p.entries) | Should -Be @('Remote Control', 'SSH', 'SFTP', 'FTP / FTPS', 'SMB', 'WebDAV')
+            $p.submenu.top | Should -BeLessThan ($p.item.top - 16) -Because 'the kinds open upwards here (the case being checked)'
+            [math]::Abs($p.submenu.bottom - $p.item.bottom) | Should -BeLessOrEqual 16 -Because "its last entry ends level with Connection (item $($p.item.top)-$($p.item.bottom), submenu $($p.submenu.top)-$($p.submenu.bottom)) - it ended 50 px higher"
+            ($p.submenu.left -ge $p.item.right - 24 -or $p.submenu.right -le $p.item.left + 24) | Should -BeTrue -Because "beside its entry (item $($p.item.left)-$($p.item.right), submenu $($p.submenu.left)-$($p.submenu.right))"
         }
     }
 
