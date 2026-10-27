@@ -68,12 +68,19 @@ public abstract partial class NodeBase : ObservableObject
     internal void ForgetStoredJumpHost() => _storedJumpHostId = null;
 
     /// <summary>
-    /// Beside the address in the navigation: "via JUMP01"; for a device of a synced broker folder its state at the broker
-    /// (online, offline, not sealed); null when it is reached directly.
+    /// Beside the address in the navigation: "via JUMP01"; "not sealed" for a device of a synced broker folder whose record
+    /// isn't sealed (online or offline shows as <see cref="BrokerPresence"/>'s dot); null when it is reached directly.
     /// </summary>
     [JsonIgnore] public string? RouteHint => JumpHost is { } j ? $"via {j.Name}"
-        : Broker is { Kind: BrokerItemKind.Device } r ? (!r.Sealed ? "not sealed" : !r.Connected ? null : r.Online switch { true => "online", false => "offline", null => null })
+        : Broker is { Kind: BrokerItemKind.Device, Sealed: false } ? "not sealed"
         : null;
+    /// <summary>
+    /// The dot before a broker device's icon: online or offline at the broker, or unknown – not sealed, this PC isn't
+    /// connected to that broker (it shares the settings), or no presence has arrived yet. None for everything else.
+    /// </summary>
+    [JsonIgnore] public BrokerPresence BrokerPresence => Broker is not { Kind: BrokerItemKind.Device } r ? BrokerPresence.None
+        : !r.Sealed || !r.Connected ? BrokerPresence.Unknown
+        : r.Online switch { true => BrokerPresence.Online, false => BrokerPresence.Offline, null => BrokerPresence.Unknown };
     /// <summary>
     /// The jump host can be used: it has a RemoteHub Agent. A broker device: its record is sealed (offline it may still
     /// answer directly, so that isn't a warning).
@@ -85,9 +92,10 @@ public abstract partial class NodeBase : ObservableObject
             : $"{j.Name} has no RemoteHub Agent – install it there to reach the items below it."
         : Broker is { Kind: BrokerItemKind.Device } r
             ? !r.Sealed ? "Not sealed by your organisation – RemoteHub doesn't connect to it. The broker may have been tampered with; tell your administrator."
+            : !r.Connected ? "State unknown – this PC isn't connected to the RemoteHub Broker."
             : r.Online == true ? "Online at the RemoteHub Broker – reached directly in the same network, otherwise through the broker (Reach)."
             : r.Online == false ? "Offline at the RemoteHub Broker. In the same network it may still answer directly."
-            : null
+            : "State unknown – the RemoteHub Broker hasn't reported it yet."
         : null;
     /// <summary>A device of a synced broker folder whose record isn't sealed by the organisation: shown greyed, can't be opened.</summary>
     [JsonIgnore] public bool BrokerUnsealed => Broker is { Kind: BrokerItemKind.Device, Sealed: false };
@@ -99,6 +107,7 @@ public abstract partial class NodeBase : ObservableObject
         OnPropertyChanged(nameof(RouteUsable));
         OnPropertyChanged(nameof(RouteToolTip));
         OnPropertyChanged(nameof(BrokerUnsealed));
+        OnPropertyChanged(nameof(BrokerPresence));
     }
 
     /// <summary>The items it holds (folders: their items; jump hosts: the items reached through them), or null.</summary>
@@ -283,6 +292,9 @@ public enum AgentStatus { NotInstalled, Installed }
 
 /// <summary>Active: agent installed and the connection uses it. Available: installed, but the connection uses WinRM.</summary>
 public enum AgentMode { None, Available, Active }
+
+/// <summary>A broker device's state at the broker, shown as a dot before its icon; None for everything else.</summary>
+public enum BrokerPresence { None, Online, Offline, Unknown }
 
 /// <summary>
 /// A device's RemoteHub Agent identity, stored with the connection: where it listens and the SHA-256 fingerprint of

@@ -305,6 +305,8 @@ public sealed partial class EditorViewModel : ObservableObject
         // Settings of a feature this PC's policy blocks stay visible, greyed out (settings are never hidden, only actions are).
         var remotingOff = Features.IsAllowed(Feature.PowerShellRemoting) ? null : Features.TurnedOff;
         var agentOff = Features.IsAllowed(Feature.Agent) ? null : Features.TurnedOff;
+        // In a synced broker folder there is no choice: the broker reaches nothing but the device's agent (Inheritance.UsesAgent).
+        var connectThroughFixed = agentOff ?? (_node?.BrokerRoot is not null ? "Devices of the RemoteHub Broker are always reached through their RemoteHub Agent." : null);
         var agentDesktopOff = Features.IsAllowed(Feature.AgentDesktop) ? null : Features.TurnedOff;
         // Below a jump host an installed agent is used unless the connection itself says WinRM (Inheritance.UsesAgent).
         var jumpNote = _node?.JumpHost is { } jump
@@ -318,7 +320,7 @@ public sealed partial class EditorViewModel : ObservableObject
             [(false, "PowerShell remoting (WinRM)"), (true, "RemoteHub Agent")],
             (o, v) => o.UseAgent = (bool?)v,
             "RemoteHub Agent: for devices where WinRM isn't allowed. PowerShell, files, registry, services and processes then go through the agent " +
-            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent." + jumpNote, agentOff));
+            "(port 58732, TLS with the device's own certificate). Install it with right-click → Install RemoteHub Agent." + jumpNote, connectThroughFixed));
         PsRows.Add(Row("Remote desktop through", own.RemoteDesktopVia, parent.RemoteDesktopVia,
             [(DesktopVia.Automatic, "Automatic – the agent if installed, otherwise RDP"), (DesktopVia.Rdp, "RDP"), (DesktopVia.Agent, "RemoteHub Agent")],
             (o, v) => o.RemoteDesktopVia = (DesktopVia?)v,
