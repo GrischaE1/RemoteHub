@@ -2264,7 +2264,8 @@ public partial class MainWindow : FluentWindow
     private void UnusedFilter_Click(object sender, RoutedEventArgs e)
     {
         if (UnusedFilterButton.ContextMenu is not { } menu) return;
-        foreach (var item in menu.Items.OfType<MenuItem>()) item.IsChecked = Equals(item.Tag, _vm.UnusedDays.ToString());
+        // The filter entries (a Tag of days) show which filter is on; Compact rows keeps its own binding.
+        foreach (var item in menu.Items.OfType<MenuItem>().Where(i => i.Tag is string)) item.IsChecked = Equals(item.Tag, _vm.UnusedDays.ToString());
         menu.PlacementTarget = UnusedFilterButton;
         menu.IsOpen = true;
     }

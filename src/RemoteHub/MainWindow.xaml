@@ -148,7 +148,7 @@
                               Background="Transparent" BorderThickness="0"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                               VirtualizingPanel.ScrollUnit="Pixel" ScrollViewer.CanContentScroll="True"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" Padding="0,0,12,0"
                               Visibility="{Binding IsSearching, Converter={StaticResource InvBoolToVis}}"
                               SelectedItemChanged="Tree_SelectedItemChanged"
                               PreviewMouseLeftButtonDown="Tree_PreviewMouseLeftButtonDown"
@@ -286,8 +286,8 @@
                             <!-- Favourites: links to pinned connections, as chips in a row; the connections stay in their folders -->
                             <HierarchicalDataTemplate DataType="{x:Type m:FavoritesGroup}" ItemsSource="{Binding Children}">
                                 <StackPanel Orientation="Horizontal" Margin="0,2">
-                                    <ui:SymbolIcon Symbol="Star24" Filled="True" FontSize="14" Margin="0,0,8,0" Foreground="{DynamicResource SystemAccentColorPrimaryBrush}" />
-                                    <TextBlock Text="Favourites" FontWeight="SemiBold" FontSize="12" VerticalAlignment="Center" />
+                                    <ui:SymbolIcon Symbol="Star24" Filled="True" FontSize="16" Margin="0,0,8,0" Foreground="{DynamicResource SystemAccentColorPrimaryBrush}" />
+                                    <TextBlock Text="Favourites" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 </StackPanel>
                             </HierarchicalDataTemplate>
                             <DataTemplate DataType="{x:Type m:FavoriteLink}">
@@ -296,13 +296,16 @@
                                     <Border Width="3" Height="12" CornerRadius="1.5" Margin="0,0,6,0" Background="{Binding TagBrush}"
                                             Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
                                     <Grid Margin="0,0,6,0" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="12"
-                                                       Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorSecondaryBrush}}" />
+                                        <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="14"
+                                                       Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorSecondaryBrush}}"
+                                                       Visibility="{Binding IconImage, Converter={StaticResource InvBoolToVis}}" />
+                                        <Image Source="{Binding IconImage, Converter={StaticResource Base64Image}}" Width="14" Height="14"
+                                               Visibility="{Binding IconImage, Converter={StaticResource BoolToVis}}" />
                                         <Ellipse Width="6" Height="6" Fill="{Binding LiveState, Converter={StaticResource StateBrush}}" HorizontalAlignment="Right"
                                                  VerticalAlignment="Bottom" Margin="0,0,-2,-1"
                                                  Visibility="{Binding OpenSessions, Converter={StaticResource BoolToVis}}" />
                                     </Grid>
-                                    <TextBlock Text="{Binding Name}" FontSize="12" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
                                 </StackPanel>
                             </DataTemplate>
                             <!-- A connection: its shares, then the connections and folders reached through it (a jump host) -->
@@ -403,7 +406,7 @@
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
                                                 <Setter Property="Text" Value="{Binding LastUsedShort}" />
-                                                <Setter Property="ToolTip" Value="{Binding LastUsedText}" />
+                                                <Setter Property="ToolTip" Value="{Binding LastUsedToolTip}" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}}" Value="False">
                                                         <Setter Property="Text" Value="{Binding LastUsedText}" />

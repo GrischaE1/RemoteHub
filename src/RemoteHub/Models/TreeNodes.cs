@@ -236,6 +236,8 @@ public sealed partial class Connection : NodeBase
     [JsonIgnore] public string LastUsedText => LastConnectedUtc is { } last ? When(last, DateTime.Now) : "never connected";
     /// <summary>The same, short, for a one-line row: "15:42", "yesterday", "Mon", "12 Oct", "Oct 2025" or "never" (the tooltip has the rest).</summary>
     [JsonIgnore] public string LastUsedShort => LastConnectedUtc is { } last ? ShortWhen(last, DateTime.Now) : "never";
+    /// <summary>The short label's tooltip: "Last connected today 15:42" (the never-connected one says so itself).</summary>
+    [JsonIgnore] public string LastUsedToolTip => "Last connected " + LastUsedText;
     [JsonIgnore] public bool NeverConnected => LastConnectedUtc is null;
 
     /// <summary>The agent shield's tooltip: how the agent is used, and its version.</summary>
@@ -258,6 +260,7 @@ public sealed partial class Connection : NodeBase
     {
         OnPropertyChanged(nameof(LastUsedText));
         OnPropertyChanged(nameof(LastUsedShort));
+        OnPropertyChanged(nameof(LastUsedToolTip));
         OnPropertyChanged(nameof(NeverConnected));
         OnPropertyChanged(nameof(AgentToolTip));
     }

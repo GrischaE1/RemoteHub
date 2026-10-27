@@ -175,7 +175,7 @@
 
     <!-- A favourite: a chip in the Favourites row (the tree's own item – selection, keys and menu stay the tree's) -->
     <ControlTemplate x:Key="FavoriteChipTemplate" TargetType="TreeViewItem">
-        <Border x:Name="Chip" CornerRadius="12" Padding="8,2,10,2" Margin="0,2,6,2" BorderThickness="1" BorderBrush="Transparent"
+        <Border x:Name="Chip" CornerRadius="12" Padding="8,2,8,2" Margin="0,2,6,2" BorderThickness="1" BorderBrush="Transparent"
                 Background="{DynamicResource SubtleFillColorSecondaryBrush}">
             <ContentPresenter x:Name="PART_Header" ContentSource="Header" />
         </Border>

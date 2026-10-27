@@ -32,6 +32,7 @@ public class ConnectionUsageTests
         // Short enough for the right edge of a one-line row; the full text stays for the tooltip and two-line rows.
         Assert.All(new[] { -2.0, -30, -24 * 3, -24 * 40, -24 * 400 }, h => Assert.True(Connection.ShortWhen(Now.AddHours(h).ToUniversalTime(), Now).Length <= 9));
         Assert.Equal("never", new Connection { Host = "pc" }.LastUsedShort);
+        Assert.Equal("Last connected just now", new Connection { Host = "pc", LastConnectedUtc = DateTime.UtcNow }.LastUsedToolTip);
     }
 
     [Fact]
