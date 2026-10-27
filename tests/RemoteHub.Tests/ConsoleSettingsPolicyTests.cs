@@ -95,6 +95,14 @@ public class ConsoleSettingsPolicyTests
     }
 
     [Fact]
+    public void UseAgent_by_policy_decides_for_broker_devices_too()
+    {
+        var c = new Connection { Name = "PC-0815", Broker = new BrokerRef { Connection = "b1", Kind = BrokerItemKind.Device, Item = "d1" } };
+        Assert.True(Inheritance.UsesAgent(c, new AppData()));
+        WithPolicy(Set((Conn, "UseAgent", 0)), () => Assert.False(Inheritance.UsesAgent(c, new AppData())));
+    }
+
+    [Fact]
     public void The_editor_shows_the_policys_value_greyed_out_and_saving_keeps_the_stored_one()
     {
         var data = new AppData();
