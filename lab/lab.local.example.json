@@ -1,3 +1,4 @@
 {
-  "Password": "the-one-lab-password"
+  "Password": "the-one-lab-password",
+  "BrokerToken": "the-lab-broker-admin-token (optional, for B-BRK)"
 }

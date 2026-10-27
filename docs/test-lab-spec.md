@@ -152,6 +152,12 @@ Adding a VM: provide it as in §5.1, then `Start-LabRun.ps1 -Vm <Id> -Tag Smoke`
 `Vms` is optional: an entry with a VM's full `Name` overrides any value for that VM (e.g. other account names on a
 German image).
 
+`Broker` is optional too: the RemoteHub Broker the B-BRK cases use (test-lab-cases.md §9.14), for example
+`"Broker": { "Url": "http://{host}:8787" }` for a broker running on the host (`npx wrangler dev --ip 0.0.0.0 --port 8787`
+in the broker's repository, with the port open to the lab network) – `{host}` stands for the host's address towards
+the VM. Its admin token is `BrokerToken` in `lab.local.json` (§7). Without either the B-BRK cases are skipped and say
+why. Every run makes its own organisation there and deletes it again.
+
 ## 6. Accounts and sign-ins
 
 ### 6.1 Accounts
@@ -195,7 +201,9 @@ in the guest with that user as principal (`LogonType Interactive`), runs it, wai
 
 One lab password for every account (§6.1), in `lab/lab.local.json` next to `lab.json`, ignored by git and copied to
 `LabRoot` with the rest of `lab\`. `lab.local.example.json` shows the format. Agent enrollment files (`.rhagent`)
-created by tests are deleted after use, like in production.
+created by tests are deleted after use, like in production. The optional `BrokerToken` there is the lab broker's admin
+token (§5.3); like the password it is never logged or written to evidence. The organisations B-BRK makes, and their
+secrets, exist for one run only.
 
 ## 8. PowerShell module `RemoteHub.TestLab`
 

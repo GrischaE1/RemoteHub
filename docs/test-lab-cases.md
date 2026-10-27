@@ -327,6 +327,26 @@ account isn't covered here: the agent admits only administrators by default (the
 | S-SCRIPT-08 | User run with nobody signed in | refused: "No user is signed in on the device." | H | 2 | ✅ |
 | S-SCRIPT-09 | GPO-set execution policy | `AllSigned` set by policy (HKLM\SOFTWARE\Policies\Microsoft\Windows\PowerShell) → refused: "The device's group policy only allows signed scripts."; no task created | H PS | 1 | ✅ |
 
+### 7.3 Device actions (T-DEV)
+
+A connection's Device actions (README → Remote tools) through RemoteHub's `DeviceActions` in the harness
+(`tool --op dev-users`, `dev-action`): once over the agent, once over WinRM HTTPS, each time with the standard user
+signed in on the console (`-AutoLogon User`). Sessions are read over PowerShell Direct as WTS lists them
+(`Get-LabSessions`), the message on the console screen (OCR), the shut-down VM on the host. Automatic sign-in may sign
+the user in again after a sign-out or restart: the old session's programs are what must end. `T-DEV.Tests.ps1`.
+
+| ID | Test | Pass when | How | P | St |
+|---|---|---|---|---|---|
+| T-DEV-01 | Who is signed in | the console user with the console session's id; no `DWM-n` / `UMFD-n`, nothing in session 0 | H PS | 2 | ◐ |
+| T-DEV-02 | Send message | answered "Message shown on <device> to …"; the text appears on the console within 60 s | H C | 2 | ◐ |
+| T-DEV-03 | Lock | the user's session *Disconnected* within 60 s with the same explorer.exe; the console shows the sign-in screen | H PS | 1 | ◐ |
+| T-DEV-04 | Sign out | answered "Signed out on <device>: …"; the session's explorer.exe gone within 90 s | H PS | 1 | ◐ |
+| T-DEV-05 | Update Group Policy | "Group Policy was updated on …"; a manual run (event 4004 / 4005) in Group Policy's log after the request | H PS E | 2 | ◐ |
+| T-DEV-06 | Sync with Intune | on a device without an MDM enrollment: "isn't enrolled in Intune"; with one, the sync task started | H PS | 3 | ◐ |
+| T-DEV-07 | No administrator's rights (agent) | an account with the agent's PowerShell right but not an administrator: "RemoteHub can't see who is signed in: the account isn't an administrator on the device" – not "nobody is signed in" | H PS | 2 | ◐ |
+| T-DEV-08 | Restart | a new boot time within 10 min; event 1074 with "Requested from RemoteHub"; the agent answers again | H PS E | 1 | ◐ |
+| T-DEV-09 | Shut down | the VM is off within 5 min | H | 1 | ◐ |
+
 ## 8. WinRM setup script (W)
 
 The script RemoteHub generates, run in the guest by PS Direct (`Invoke-LabSetupScript`), then RemoteHub's own
@@ -717,6 +737,21 @@ From [jump-host-design.md](jump-host-design.md) §11 (J0…J12 there). `lab/test
 | J-28 | Unreadable policy entries | TunnelTargets / TunnelPorts with only invalid entries (`not a host!`, `0`, `99999`) refuse every Open with `policy`, never "any" | PS H | 3 | ✅ | Jump |
 | J-29 | Bad tunnel traffic | more than 256 KB unacknowledged on a stream resets it; a text or garbled frame or a duplicate stream id ends the tunnel, 1202 "(protocol error: …)"; a target not closing within 60 s after Close is reset | H E | 3 | ✅ | Jump |
 | J-30 | A name with allowed and disallowed addresses | one name, two addresses (hosts file), one in TunnelTargets → connects to the allowed one (each address checked on its own; the design said all must be allowed) | PS H | 3 | ✅ | Jump |
+
+### 9.14 RemoteHub Broker (B)
+
+The agent's side of the RemoteHub Broker and RemoteHub's way to a device through it (the broker's own design and tests live with the broker). `lab/tests/B-BRK.Tests.ps1` needs the lab's broker – lab.json `Broker` and lab.local.json `BrokerToken` ([test-lab-spec.md](test-lab-spec.md) §5.3, §7); without them every case is skipped with that reason. Each run makes its own organisation through the broker's admin API (harness `broker --kind org`) and deletes it afterwards. RemoteHub's side runs through its own client code in the harness (`broker --kind health`: Connect with the console secret, the device's sealed record, `AgentClientTransport.ThroughBroker`); the settings page, the synced folder and the menu are covered by `BrokerUiTests` (STA) and the broker tests in `tests/RemoteHub.Tests`.
+
+| ID | Test | Pass when | How | P | St | Needs |
+|---|---|---|---|---|---|---|
+| B-BRK-01 | MSI with the broker's properties | `BROKER_URL`, `BROKER_SECRET`, `BROKER_ONLY=1` on a device without an enrollment file: installed (0 / 3010), no inbound firewall rule, the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json has the organisation; audit 1303 (registered) and 1300 (connected) | PS E | 1 | ◐ | Broker |
+| B-BRK-02 | Through the broker | RemoteHub's way: Connect with the console secret, the device's record sealed, the agent's health through a relayed session pinned to the record's fingerprint answers the device's id; audit 1301 (session started) | H E | 1 | ◐ | Broker |
+| B-BRK-03 | Device policy | `BrokerEnabled=0` → the device goes offline at the broker; the policy cleared → online again | PS | 1 | ◐ | Broker |
+| B-BRK-05 | Direct on the lab network | The device's firewall on: the agent's health through the broker answers over the direct path (`DirectLocal`: QUIC on a punched port, the host candidates of the lab network); audit 1301 says "direct local"; the firewall rule the agent opened for the try ("RemoteHub Agent direct path") is gone within 30 s of the session ending | H PS E | 1 | ◐ | Broker |
+| B-BRK-06 | Relayed by device policy | `BrokerDirect=0`: the same request answers relayed; audit 1301 says "relayed" | H PS E | 1 | ◐ | Broker |
+| B-BRK-07 | UDP blocked | Inbound and outbound UDP of the agent blocked on the device: the request answers relayed, within 10 s, without an error | H PS E | 2 | ◐ | Broker |
+| B-BRK-04 | Leave and join | `broker leave` → "Left the RemoteHub Broker …", offline, `broker status` "No RemoteHub Broker."; `broker join <url>` with the device secret on standard input (what *Assign to RemoteHub Broker* runs) → "Joined …", online; the console secret refused ("… console secret …", exit 1) | PS | 2 | ◐ | Broker |
+| SEC-BRK-01 | The device secret is kept nowhere | not in the installer log (`BROKER_SECRET` hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status` | PS E | 1 | ◐ | Broker |
 
 ## 10. RemoteHub on a Windows client (C, R)
 

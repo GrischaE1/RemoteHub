@@ -237,7 +237,7 @@ Events (`AuditEvents`, grouped as in the viewer's filter):
 | Sessions | Connected (`session.connected`), Disconnected (`session.ended`), Connection failed (`session.failed`) |
 | Changes to connections and settings | Added, Changed, Deleted (`data.added` / `data.changed` / `data.deleted`) – field names only, never values |
 | Passwords and protection | Password copied (`password.copied`), RemoteHub unlocked (`app.unlocked`), Unlock failed (`app.unlock_failed`), RemoteHub locked (`app.locked`, auto-lock), Startup protection changed (`app.protection_changed`), Audit log retention changed (`audit.retention_changed`) |
-| Files, recordings and agents | Files transferred (`files.transferred`), Recording started / saved (`recording.started` / `recording.stopped`), Agent installed (`agent.installed`), Credential provider installed or removed (`agent.credential_provider`), Automatic sign-in (`agent.auto_sign_in`: requested, signed in, failed) |
+| Files, recordings and agents | Files transferred (`files.transferred`), Device action (`device.action`: lock, restart … and its result, never a message's text), Recording started / saved (`recording.started` / `recording.stopped`), Agent installed (`agent.installed`), Credential provider installed or removed (`agent.credential_provider`), Automatic sign-in (`agent.auto_sign_in`: requested, signed in, failed) |
 | Backups and storage | Backup exported / imported (`backup.exported` / `backup.imported`), Settings moved to the database (`storage.migrated`), Database check failed (`storage.check_failed`), Database restored (`storage.restored`), Settings location changed (`storage.location_changed`) |
 
 Not built: "password shown" (RemoteHub logs copying a password; it never shows a stored one, section 17). "Sync

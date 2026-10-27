@@ -68,6 +68,7 @@ public sealed record PolicyReport(IReadOnlyList<PolicyRow> Console, IReadOnlyLis
             nameof(Models.RdpOptions.UseAgent) when Equals(value, 1) => (Feature.Agent, "the tools go over PowerShell remoting"),
             nameof(Models.RdpOptions.AgentAutoSignIn) when Equals(value, 1) => (Feature.AgentAutoSignIn, "RemoteHub doesn't sign in automatically"),
             nameof(Models.RdpOptions.PsRemoting) or nameof(Models.RdpOptions.PsUseSsl) when Equals(value, 1) => (Feature.PowerShellRemoting, "it isn't used"),
+            nameof(Models.RdpOptions.Reach) when Equals(value, "Broker") => (Feature.Broker, "devices in synced folders can't be reached"),
             _ => ((Feature?)null, ""),
         };
         return needs is { } f && Features.WhyNot(f, source) is { } why ? $"{why.Split(" – ")[0]}, so {what}." : null;

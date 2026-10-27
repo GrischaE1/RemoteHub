@@ -285,7 +285,7 @@ public class NotesTests : IDisposable
             foreach (var table in new[] { "notes_fts", "note_links", "note_files", "notes", "note_sections", "notebooks" })
                 LocalDb.Exec(c, $"DROP TABLE {table}");
             // The later schema's tables too: a version 1 database had none of them.
-            foreach (var table in new[] { "scripts_fts", "script_runs", "script_versions", "scripts", "script_folders", "deleted_nodes" })
+            foreach (var table in new[] { "scripts_fts", "script_runs", "script_versions", "scripts", "script_folders", "deleted_nodes", "broker_connections", "broker_items" })
                 LocalDb.Exec(c, $"DROP TABLE {table}");
             LocalDb.Exec(c, "PRAGMA user_version = 1");
         });

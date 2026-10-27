@@ -363,6 +363,31 @@
                     </StackPanel>
                 </StackPanel>
 
+                <!-- RemoteHub Broker: one section per connected organisation (built in code), then Connect -->
+                <StackPanel x:Name="PageBroker" Visibility="Collapsed">
+                    <TextBlock x:Name="BrokerPolicyText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10" Visibility="Collapsed" />
+                    <StackPanel x:Name="BrokerList" />
+
+                    <StackPanel x:Name="BrokerConnectSection">
+                        <TextBlock x:Name="BrokerConnectHeader" Text="Connect to a RemoteHub Broker" Style="{StaticResource SectionHeader}" Margin="0,0,0,4" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"
+                                   Text="Your administrator gives you the broker's address and the console secret – or a .rhbroker file with both. RemoteHub makes a key for this PC and Windows user; the secret is kept encrypted in this PC's database. Every device of the organisation then shows in a synced folder in the navigation." />
+                        <TextBlock Text="Broker address" Margin="0,0,0,4" />
+                        <ui:TextBox x:Name="BrokerUrlBox" Width="440" HorizontalAlignment="Left" PlaceholderText="https://broker.contoso.com" Margin="0,0,0,10" />
+                        <TextBlock Text="Console secret" Margin="0,0,0,4" />
+                        <ui:PasswordBox x:Name="BrokerSecretBox" Width="440" HorizontalAlignment="Left" PlaceholderText="rhc1.…" Margin="0,0,0,10" />
+                        <TextBlock Text="This PC's name at the broker" Margin="0,0,0,4" />
+                        <ui:TextBox x:Name="BrokerNameBox" Width="440" HorizontalAlignment="Left" Margin="0,0,0,4" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,10"
+                                   Text="Other consoles of the organisation see this name in their list of consoles." />
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button x:Name="BrokerConnectButton" Content="Connect" Icon="{ui:SymbolIcon PlugConnected24}" Margin="0,0,8,0" />
+                            <ui:Button x:Name="BrokerImportButton" Content="Import .rhbroker file…" Icon="{ui:SymbolIcon ArrowImport24}" />
+                        </StackPanel>
+                        <TextBlock x:Name="BrokerStatusText" Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,8,0,0" Visibility="Collapsed" />
+                    </StackPanel>
+                </StackPanel>
+
                 <StackPanel x:Name="PageLogs" Visibility="Collapsed">
                     <TextBlock Text="Audit log" Style="{StaticResource SectionHeader}" Margin="0,0,0,4" />
                     <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" TextTrimming="None" Margin="0,0,0,6"

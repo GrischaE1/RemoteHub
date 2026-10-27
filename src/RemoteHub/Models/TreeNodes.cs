@@ -30,6 +30,20 @@ public abstract partial class NodeBase : ObservableObject
     /// <summary>What it is in: a folder, or the connection it is reached through (a jump host); null = top level.</summary>
     [JsonIgnore] public NodeBase? Parent { get; set; }
 
+    /// <summary>Set on the items of a synced RemoteHub Broker folder; null for the user's own items.</summary>
+    public BrokerRef? Broker { get; set; }
+
+    /// <summary>The synced broker folder this item is in (or is), or null.</summary>
+    [JsonIgnore] public NodeBase? BrokerRoot
+    {
+        get
+        {
+            for (NodeBase? n = this; n is not null; n = n.Parent)
+                if (n.Broker is { Kind: BrokerItemKind.Root }) return n;
+            return null;
+        }
+    }
+
     /// <summary>The connection this item is reached through (directly or in folders below it), or null.</summary>
     [JsonIgnore] public Connection? JumpHost
     {
@@ -53,20 +67,38 @@ public abstract partial class NodeBase : ObservableObject
     private Guid? _storedJumpHostId;
     internal void ForgetStoredJumpHost() => _storedJumpHostId = null;
 
-    /// <summary>Beside the address in the navigation: "via JUMP01", or null when it is reached directly.</summary>
-    [JsonIgnore] public string? RouteHint => JumpHost is { } j ? $"via {j.Name}" : null;
-    /// <summary>The jump host can be used: it has a RemoteHub Agent.</summary>
-    [JsonIgnore] public bool RouteUsable => JumpHost is not { } j || j.Agent is { Fingerprint.Length: > 0 };
-    [JsonIgnore] public string? RouteToolTip => JumpHost is not { } j ? null
-        : RouteUsable ? $"Reached through {j.Name} (its RemoteHub Agent is the jump host). Move it out of {j.Name} to connect directly."
-        : $"{j.Name} has no RemoteHub Agent – install it there to reach the items below it.";
+    /// <summary>
+    /// Beside the address in the navigation: "via JUMP01"; for a device of a synced broker folder its state at the broker
+    /// (online, offline, not sealed); null when it is reached directly.
+    /// </summary>
+    [JsonIgnore] public string? RouteHint => JumpHost is { } j ? $"via {j.Name}"
+        : Broker is { Kind: BrokerItemKind.Device } r ? (!r.Sealed ? "not sealed" : !r.Connected ? null : r.Online switch { true => "online", false => "offline", null => null })
+        : null;
+    /// <summary>
+    /// The jump host can be used: it has a RemoteHub Agent. A broker device: its record is sealed (offline it may still
+    /// answer directly, so that isn't a warning).
+    /// </summary>
+    [JsonIgnore] public bool RouteUsable => JumpHost is { } j ? j.Agent is { Fingerprint.Length: > 0 }
+        : Broker is not { Kind: BrokerItemKind.Device } r || r.Sealed;
+    [JsonIgnore] public string? RouteToolTip => JumpHost is { } j
+        ? RouteUsable ? $"Reached through {j.Name} (its RemoteHub Agent is the jump host). Move it out of {j.Name} to connect directly."
+            : $"{j.Name} has no RemoteHub Agent – install it there to reach the items below it."
+        : Broker is { Kind: BrokerItemKind.Device } r
+            ? !r.Sealed ? "Not sealed by your organisation – RemoteHub doesn't connect to it. The broker may have been tampered with; tell your administrator."
+            : r.Online == true ? "Online at the RemoteHub Broker – reached directly in the same network, otherwise through the broker (Reach)."
+            : r.Online == false ? "Offline at the RemoteHub Broker. In the same network it may still answer directly."
+            : null
+        : null;
+    /// <summary>A device of a synced broker folder whose record isn't sealed by the organisation: shown greyed, can't be opened.</summary>
+    [JsonIgnore] public bool BrokerUnsealed => Broker is { Kind: BrokerItemKind.Device, Sealed: false };
 
-    /// <summary>After the tree changed (moved, renamed, agent installed): the route labels again.</summary>
+    /// <summary>After the tree changed (moved, renamed, agent installed, broker state): the route labels again.</summary>
     public void RefreshRoute()
     {
         OnPropertyChanged(nameof(RouteHint));
         OnPropertyChanged(nameof(RouteUsable));
         OnPropertyChanged(nameof(RouteToolTip));
+        OnPropertyChanged(nameof(BrokerUnsealed));
     }
 
     /// <summary>The items it holds (folders: their items; jump hosts: the items reached through them), or null.</summary>

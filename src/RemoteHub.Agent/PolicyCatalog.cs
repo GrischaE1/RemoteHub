@@ -206,6 +206,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowAgentRegistry = Feature("AllowAgentRegistry", "RemoteHub Agent", "Allow the registry through the agent");
     public static readonly PolicyEntry AllowAgentServices = Feature("AllowAgentServices", "RemoteHub Agent", "Allow services through the agent");
     public static readonly PolicyEntry AllowAgentProcesses = Feature("AllowAgentProcesses", "RemoteHub Agent", "Allow processes through the agent");
+    public static readonly PolicyEntry AllowAgentDeviceActions = Feature("AllowAgentDeviceActions", "RemoteHub Agent", "Allow device actions through the agent", DeviceActionsSince);
     public static readonly PolicyEntry AllowAgentInstall = Feature("AllowAgentInstall", "RemoteHub Agent", "Allow installing and updating the agent");
     public static readonly PolicyEntry AllowCredentialProviderInstall = Feature("AllowCredentialProviderInstall", "RemoteHub Agent", "Allow installing and removing the credential provider");
     public static readonly PolicyEntry AllowPowerShellRemoting = Feature("AllowPowerShellRemoting", "PowerShell remoting", "Allow PowerShell remoting (WinRM)");
@@ -214,9 +215,12 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingRegistry = Feature("AllowRemotingRegistry", "PowerShell remoting", "Allow the registry over WinRM");
     public static readonly PolicyEntry AllowRemotingServices = Feature("AllowRemotingServices", "PowerShell remoting", "Allow services over WinRM");
     public static readonly PolicyEntry AllowRemotingProcesses = Feature("AllowRemotingProcesses", "PowerShell remoting", "Allow processes over WinRM");
+    public static readonly PolicyEntry AllowRemotingDeviceActions = Feature("AllowRemotingDeviceActions", "PowerShell remoting", "Allow device actions over WinRM", DeviceActionsSince);
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
     public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
+    /// <summary>Reaching devices through a RemoteHub Broker and its synced folders.</summary>
+    public static readonly PolicyEntry AllowBroker = Feature("AllowBroker", "RemoteHub Agent", "Allow the RemoteHub Broker", "0.22.0");
     public static readonly PolicyEntry AllowNetworkShares = Feature("AllowNetworkShares", "Jump hosts and network shares", "Allow network shares");
     public static readonly PolicyEntry AllowSmb = Feature("AllowSmb", "Jump hosts and network shares", "Allow SMB shares");
     public static readonly PolicyEntry AllowSftp = Feature("AllowSftp", "Jump hosts and network shares", "Allow SFTP shares");
@@ -291,7 +295,12 @@ public static class PolicyCatalog
         ConnWords("RemoteDesktopVia", "Remoting and agent", "Remote desktop through", "Automatic", "Rdp", "Agent"),
         ConnFlag("AgentAutoSignIn", "Remoting and agent", "Sign in automatically when nobody is signed in"),
         ConnWords("AgentAutoSignInEndAction", "Remoting and agent", "When an automatic sign-in's connection ends", "Lock", "SignOut"),
+        new(PolicyProduct.Console, ConnectionsKey, "Reach", PolicyKind.Text, "Connection settings – Remoting and agent", "Reach – directly or through the RemoteHub Broker",
+            Words: ["Automatic", "Direct", "Broker"], Since: BrokerSince),
     ];
+
+    /// <summary>0: this PC never tries the direct path through a RemoteHub Broker – every session relayed.</summary>
+    public static readonly PolicyEntry ConsoleBrokerDirect = Console("BrokerDirect", PolicyKind.Number, "RemoteHub Broker", "Direct connections through the broker", 0, 1, labels: OnOff, since: BrokerSince);
 
     public const string ConnectionsKey = "Connections";
     private const string Phase4 = "0.19.0";
@@ -338,6 +347,23 @@ public static class PolicyCatalog
 
     private const string Phase2 = "0.19.0";
 
+    // The RemoteHub Broker on the device.
+    public static readonly PolicyEntry BrokerEnabled = Agent("BrokerEnabled", PolicyKind.Number, "RemoteHub Broker", "Allow the RemoteHub Broker", 0, 1, labels: OnOff, since: BrokerSince);
+    public static readonly PolicyEntry BrokerUrl = Agent("BrokerUrl", PolicyKind.Text, "RemoteHub Broker", "Broker address", max: 200, since: BrokerSince,
+        rule: s => BrokerProtocol.ParseBrokerUrl(s) is null ? "isn't a broker address (https://name)" : null);
+    public static readonly PolicyEntry BrokerConsoles = Agent("BrokerConsoles", PolicyKind.List, "RemoteHub Broker", "Consoles allowed through the broker", since: BrokerSince);
+    public static readonly PolicyEntry BrokerProxy = Agent("BrokerProxy", PolicyKind.Text, "RemoteHub Broker", "Proxy for the broker", max: 200, since: BrokerSince,
+        rule: s => Uri.TryCreate(s.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? null : "isn't a proxy address (http://proxy:8080)");
+    public static readonly PolicyEntry BrokerKeepAliveSeconds = Agent("BrokerKeepAliveSeconds", PolicyKind.Number, "RemoteHub Broker", "Keep-alive interval (seconds)", 30, 90, since: BrokerSince);
+    public static readonly PolicyEntry BrokerDirect = Agent("BrokerDirect", PolicyKind.Number, "RemoteHub Broker", "Direct connections through the broker", 0, 2,
+        labels: new Dictionary<string, string> { ["0"] = "Off – relayed only", ["1"] = "Over public addresses", ["2"] = "Over public and local addresses" }, since: BrokerSince);
+    public static readonly PolicyEntry BrokerStun = Agent("BrokerStun", PolicyKind.Text, "RemoteHub Broker", "STUN service for direct connections", max: 200, since: BrokerSince,
+        rule: s => Stun.ParseServer(s) is null ? "isn't a STUN service (name:port)" : null);
+    /// <summary>Ports on the device itself that its tunnel opens (RDP through the agent, port forwarding) – "RDP" = its RDP port.</summary>
+    public static readonly PolicyEntry TunnelOwnPorts = Agent("TunnelOwnPorts", PolicyKind.List, "Jump host", "Ports on this device itself", since: BrokerSince);
+
+    private const string BrokerSince = "0.22.0";
+
     /// <summary>Subkey Rights: one list of groups per AgentRight, in the enum's order.</summary>
     public static readonly IReadOnlyList<PolicyEntry> Rights =
     [
@@ -356,11 +382,11 @@ public static class PolicyCatalog
     [
         AllowRdp,
         AllowAgent, AllowAgentDesktop, AllowAgentPowerShell, AllowAgentFileTransfer, AllowAgentRegistry, AllowAgentServices, AllowAgentProcesses,
-        AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
+        AllowAgentDeviceActions, AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
-        AllowRemotingSetup,
+        AllowRemotingDeviceActions, AllowRemotingSetup,
         AllowQuickConnect, AllowConnectionEditing,
-        AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav,
+        AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav, AllowBroker,
         AllowSavedPasswords, AllowPasswordCopy,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,
         AllowNotes,
@@ -378,6 +404,7 @@ public static class PolicyCatalog
         AuditRetentionDays, DiagnosticLog, DiagnosticLogRetentionDays,
         DisableRecording, RecordingFolder, RecordingFps, RecordingResolution, RecordingUseGpu, RecordingIncludeDetails,
         ProcessRefreshSeconds, ServiceRefreshSeconds,
+        ConsoleBrokerDirect,
         AgentDesktopQuality, AgentDesktopConsent, AgentDesktopViewOnly, AgentDesktopFitToWindow, AgentDesktopShowInfo, AgentDesktopKeyCombinations,
         AgentDesktopClipboard,
         .. AgentInstallEntries,
@@ -392,7 +419,8 @@ public static class PolicyCatalog
         AllowedConsentModes, ConsentTimeoutSeconds,
         PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
-        TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams,
+        TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams, TunnelOwnPorts,
+        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerProxy, BrokerKeepAliveSeconds, BrokerDirect, BrokerStun,
         AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
     ];
 
@@ -447,12 +475,16 @@ public static class PolicyCatalog
         Console(name, kind, group, title, min, max, words, labels, since: Phase4);
 
     /// <summary>A console feature: DWORD 0 = blocked, 1 = allowed.</summary>
-    private static PolicyEntry Feature(string name, string group, string title) =>
-        Console(name, PolicyKind.Number, group, title, 0, 1, labels: Allowed, since: Phase3);
+    private static PolicyEntry Feature(string name, string group, string title, string since = Phase3) =>
+        Console(name, PolicyKind.Number, group, title, 0, 1, labels: Allowed, since: since);
+
+    /// <summary>Lock, restart, shut down and the other device actions in the connection's menu.</summary>
+    private const string DeviceActionsSince = "0.21.0";
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
-        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11") =>
-        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels, Since: since);
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11",
+        Func<string, string?>? rule = null) =>
+        new(PolicyProduct.Agent, AgentKey, name, kind, group, title, min, max, words, labels, Since: since, Rule: rule);
 
     private static PolicyEntry Right(string name, string title) => new(PolicyProduct.Agent, RightsKey, name, PolicyKind.List, "Access rights", title);
 }

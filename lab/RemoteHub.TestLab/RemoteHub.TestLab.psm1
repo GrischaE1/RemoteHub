@@ -26,6 +26,9 @@ function Get-LabConfig {
     }
     $local = Get-Content $localPath -Raw | ConvertFrom-Json
     $cfg | Add-Member -NotePropertyName Password -NotePropertyValue $local.Password -Force
+    # the RemoteHub Broker's admin token for B-BRK (optional, like lab.json "Broker")
+    $token = if ($local.PSObject.Properties['BrokerToken']) { $local.BrokerToken } else { '' }
+    $cfg | Add-Member -NotePropertyName BrokerToken -NotePropertyValue $token -Force
     $script:Config = $cfg
     $cfg
 }
@@ -2347,6 +2350,63 @@ function Unlock-LabSession {
     Wait-LabDesktop -Name $Name -Account $Account -TimeoutSec $TimeoutSec
 }
 
+# The guest's Windows sessions as WTS lists them: Id, State (Active / Disconnected / ...), User (DOMAIN\user or ''),
+# Console (the active console session), Explorer (explorer.exe PIDs in it) and LogonUI (the sign-in or lock screen
+# shows in it). The same view C-END builds for itself.
+$script:LabWtsCode = @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class RhLabWtsSessions {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SessionInfo { public int Id; public IntPtr Station; public int State; }
+    [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSEnumerateSessionsW(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+    [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSQuerySessionInformationW(IntPtr server, int session, int infoClass, out IntPtr buffer, out int bytes);
+    [DllImport("wtsapi32.dll")] private static extern void WTSFreeMemory(IntPtr memory);
+    [DllImport("kernel32.dll")] public static extern int WTSGetActiveConsoleSessionId();
+    private static string Query(int session, int infoClass) {
+        IntPtr b; int n;
+        if (!WTSQuerySessionInformationW(IntPtr.Zero, session, infoClass, out b, out n)) return "";
+        try { return Marshal.PtrToStringUni(b) ?? ""; } finally { WTSFreeMemory(b); }
+    }
+    public static string[] List() {
+        var list = new List<string>();
+        IntPtr info; int count;
+        if (!WTSEnumerateSessionsW(IntPtr.Zero, 0, 1, out info, out count)) return list.ToArray();
+        try {
+            var size = Marshal.SizeOf(typeof(SessionInfo));
+            for (var i = 0; i < count; i++) {
+                var s = (SessionInfo)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(SessionInfo));
+                var user = Query(s.Id, 5);
+                list.Add(s.Id + "|" + s.State + "|" + (user.Length > 0 ? Query(s.Id, 7) + "\\" + user : ""));
+            }
+        } finally { WTSFreeMemory(info); }
+        return list.ToArray();
+    }
+}
+'@
+
+function Get-LabSessions {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-LabGuest -Name $Name -ArgumentList $script:LabWtsCode -ScriptBlock {
+        param($code)
+        if (-not ('RhLabWtsSessions' -as [type])) { Add-Type -TypeDefinition $code }
+        $names = 'Active', 'Connected', 'ConnectQuery', 'Shadow', 'Disconnected', 'Idle', 'Listen', 'Reset', 'Down', 'Init'
+        $console = [RhLabWtsSessions]::WTSGetActiveConsoleSessionId()
+        $explorer = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'")
+        $logonUi = @(Get-Process LogonUI -ErrorAction SilentlyContinue | ForEach-Object SessionId)
+        foreach ($line in [RhLabWtsSessions]::List()) {
+            $id, $st, $user = $line -split '\|', 3
+            $id = [int]$id
+            [pscustomobject]@{
+                Id = $id; State = $names[[int]$st]; User = $user; Console = ($id -eq $console)
+                Explorer = @($explorer | Where-Object SessionId -eq $id | ForEach-Object { [int]$_.ProcessId }); LogonUI = ($logonUi -contains $id)
+            }
+        }
+    }
+}
+
 #endregion
 
 #region RemoteHub Agent
@@ -3102,6 +3162,70 @@ function Get-LabAgentPolicy {
         foreach ($prop in $p.PSObject.Properties) { if ($prop.Name -notlike 'PS*') { $o[$prop.Name] = $prop.Value } }
         [pscustomobject]$o
     }
+}
+
+# The RemoteHub Broker the lab uses (docs/test-lab-spec.md, "RemoteHub Broker"): lab.json "Broker": { "Url": ... } -
+# "{host}" in it stands for the host's address towards the VM - and the admin token from lab.local.json "BrokerToken".
+# $null when either is missing: B-BRK then skips with the reason. The token is never logged or written to evidence.
+function Get-LabBroker {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    $cfg = Get-LabConfig
+    if (-not $cfg.PSObject.Properties['Broker'] -or -not $cfg.Broker.Url -or -not $cfg.BrokerToken) { return $null }
+    $url = $cfg.Broker.Url
+    if ($url -like '*{host}*') { $url = $url.Replace('{host}', (Get-LabHostAddress -Name $Name)) }
+    [pscustomobject]@{ Url = $url.TrimEnd('/'); Token = $cfg.BrokerToken }
+}
+
+# A throwaway organisation at the lab's broker (harness "broker --kind org"): Org, Name, DeviceSecret, DeviceSecretId,
+# ConsoleSecret - test values made for this run only.
+function New-LabBrokerOrg {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker)
+    Invoke-LabHarness @('broker', '--kind', 'org', '--url', $Broker.Url, '--token', $Broker.Token) -TimeoutSec 60
+}
+
+function Remove-LabBrokerOrg {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)][string]$Org)
+    $null = Invoke-LabHarness @('broker', '--kind', 'remove-org', '--url', $Broker.Url, '--token', $Broker.Token, '--org', $Org) -TimeoutSec 60
+}
+
+# The organisation's devices as the broker's admin API lists them (id, record, secretId, online, removed).
+function Get-LabBrokerDevice {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)][string]$Org)
+    @(Invoke-LabHarness @('broker', '--kind', 'devices', '--url', $Broker.Url, '--token', $Broker.Token, '--org', $Org) -TimeoutSec 60)
+}
+
+# Waits until the organisation lists a device with the VM's computer name in the online state wanted (-Offline: gone
+# offline); returns it. The timeout says what didn't happen.
+function Wait-LabBrokerDevice {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Broker,
+        [Parameter(Mandatory)][string]$Org,
+        [Parameter(Mandatory)][string]$ComputerName,
+        [switch]$Offline,
+        [int]$TimeoutSec = 120
+    )
+    $until = (Get-Date).AddSeconds($TimeoutSec)
+    do {
+        $d = Get-LabBrokerDevice -Broker $Broker -Org $Org | ForEach-Object { $_ } |
+            Where-Object { $_.record.computerName -eq $ComputerName -and -not $_.removed } | Select-Object -First 1
+        if ($d -and [bool]$d.online -ne $Offline.IsPresent) { return $d }
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $until)
+    $state = if ($Offline) { 'offline' } else { 'online' }
+    throw "Timed out after $TimeoutSec s: $ComputerName didn't show $state at the RemoteHub Broker (organisation $Org)."
+}
+
+# RemoteHub's way to the device through the broker (harness "broker --kind health"): Connect with the console secret,
+# the device's sealed record, then the agent's health through a relayed session pinned to that record.
+function Test-LabBrokerHealth {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)]$OrgInfo, [Parameter(Mandatory)][string]$DeviceId)
+    Invoke-LabHarness @('broker', '--kind', 'health', '--url', $Broker.Url, '--console-secret', $OrgInfo.consoleSecret, '--device', $DeviceId) -TimeoutSec 120
 }
 
 # GET /v1/health over TLS from the host, pinned to the fingerprint (AgentInstaller.HealthAsync).

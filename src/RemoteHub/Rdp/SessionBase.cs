@@ -56,4 +56,46 @@ public abstract partial class SessionBase : ObservableObject, IDisposable
     public abstract void Dispose();
 
     protected void RaiseClosed() => Closed?.Invoke();
+
+    // ---- a device reached through a RemoteHub Broker: the transport says which path the session is on, and follows it
+
+    private string? _brokerRoute;
+    private string _transportText = "";
+
+    /// <summary>
+    /// <see cref="Transport"/> for a remote tool tab's target: "RemoteHub Agent", and through a RemoteHub Broker with the
+    /// path new streams take – "RemoteHub Agent · through RemoteHub Broker (direct)" or "(relayed)".
+    /// </summary>
+    protected void ShowTransport(Remoting.PsTarget target)
+    {
+        _transportText = target.Transport;
+        var route = target.Agent?.Broker;
+        if (_brokerRoute is null && route is not null) Broker.PeerSessions.PathChanged += OnBrokerPath;
+        else if (_brokerRoute is not null && route is null) Broker.PeerSessions.PathChanged -= OnBrokerPath;
+        _brokerRoute = route?.Key;
+        Transport = route is null ? _transportText : WithPath(Broker.PeerSessions.PathOf(route));
+    }
+
+    /// <summary>Called when the tab goes: no more path changes for it.</summary>
+    protected void StopFollowingPath()
+    {
+        if (_brokerRoute is null) return;
+        Broker.PeerSessions.PathChanged -= OnBrokerPath;
+        _brokerRoute = null;
+    }
+
+    private string WithPath(Broker.PeerPath? path) => TransportWithPath(_transportText, path);
+
+    internal static string TransportWithPath(string transport, Broker.PeerPath? path) => path switch
+    {
+        null => $"{transport} · through RemoteHub Broker",
+        Broker.PeerPath.Relayed => $"{transport} · through RemoteHub Broker (relayed)",
+        _ => $"{transport} · through RemoteHub Broker (direct)",
+    };
+
+    private void OnBrokerPath(string route, Broker.PeerPath path)
+    {
+        if (route != _brokerRoute) return;
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => { if (route == _brokerRoute) Transport = WithPath(path); });
+    }
 }

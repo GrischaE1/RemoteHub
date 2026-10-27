@@ -76,6 +76,13 @@ public static class PolicyCommand
             "TunnelTargets" => ("anywhere (except this device's special addresses)", "default"),
             "TunnelPorts" => ("every port", "default"),
             "MaxTunnelStreams" => (Num(p.MaxTunnelStreams), "default"),
+            "TunnelOwnPorts" => (string.Join("; ", p.TunnelOwnPorts), "default"),
+            "BrokerEnabled" => (p.BrokerEnabled ? "On" : "Off", "default"),
+            // The broker itself comes from agent.json (broker join, MSI); never its keys.
+            "BrokerUrl" => (config?.Broker?.Url is { } url ? url : "(none – not joined)", json),
+            "BrokerConsoles" => ("every registered console", "default"),
+            "BrokerProxy" => ("the system's proxy", "default"),
+            "BrokerKeepAliveSeconds" => (Num(p.BrokerKeepAliveSeconds), "default"),
             _ => ("", "default"),
         };
 

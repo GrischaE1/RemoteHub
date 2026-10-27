@@ -291,6 +291,16 @@
                                     </MultiBinding>
                                 </HierarchicalDataTemplate.ItemsSource>
                                 <Grid Margin="0,2" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
+                                    <!-- A broker device whose record isn't sealed by the organisation: greyed, it can't be opened -->
+                                    <Grid.Style>
+                                        <Style TargetType="Grid">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding BrokerUnsealed}" Value="True">
+                                                    <Setter Property="Opacity" Value="0.55" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Grid.Style>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
@@ -352,7 +362,8 @@
                                             <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
                                         </DockPanel>
                                         <DockPanel>
-                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used) -->
+                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used);
+                                                 a device of a synced broker folder: online / offline / not sealed (the last in the warning colour) -->
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
                                                        Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
                                                 <TextBlock.Style>
@@ -424,11 +435,16 @@
                                     <MenuItem x:Name="CmAddShare" Header="Add network share…" Click="CmAddShare_Click" Icon="{ui:SymbolIcon FolderLink24}"
                                               ToolTip="An SMB, SFTP, FTP or WebDAV share of this server – opened in a file tab, no agent needed" />
                                 </MenuItem>
+                                <!-- Lock, restart and the other device actions: filled when the menu opens, as in the session tab's menu (MainWindow.DeviceActions.cs) -->
+                                <MenuItem x:Name="CmDevice" Header="Device actions" Icon="{ui:SymbolIcon Flash24}" />
                                 <MenuItem x:Name="CmManage" Header="RemoteHub Agent" Icon="{ui:SymbolIcon Shield24}">
                                     <MenuItem x:Name="CmPsSetup" Header="Set up PowerShell remoting on the target…" Click="CmPsSetup_Click" Icon="{ui:SymbolIcon Code24}" />
                                     <MenuItem x:Name="CmAgent" Header="Install RemoteHub Agent…" Click="CmAgent_Click" Icon="{ui:SymbolIcon Shield24}" />
                                     <MenuItem x:Name="CmAgentClaim" Header="Claim RemoteHub Agent…" Click="CmAgentClaim_Click" Icon="{ui:SymbolIcon ShieldCheckmark24}"
                                               ToolTip="For an agent installed with this RemoteHub's enrollment file (Intune, software distribution): pins the certificate it made" />
+                                    <!-- One entry per connected organisation, or a single item: filled when the menu opens (MainWindow.Broker.cs) -->
+                                    <MenuItem x:Name="CmAgentBroker" Header="Assign to RemoteHub Broker…" Click="CmAgentBroker_Click" Icon="{ui:SymbolIcon CloudLink24}"
+                                              ToolTip="Joins the device's agent to your organisation at the RemoteHub Broker, so every console reaches it from anywhere" />
                                     <MenuItem x:Name="CmCredentialProvider" Header="Install credential provider" Click="CmCredentialProvider_Click" Icon="{ui:SymbolIcon Key24}"
                                               ToolTip="Lets the RemoteHub Agent sign in automatically on the device's sign-in screen" />
                                     <MenuItem x:Name="CmAgentUninstall" Header="Uninstall RemoteHub Agent…" Click="CmAgentUninstall_Click" Icon="{ui:SymbolIcon Delete24}"

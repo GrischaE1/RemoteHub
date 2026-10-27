@@ -25,6 +25,9 @@ public sealed record AgentHostOptions(
     /// <summary>Name resolution for jump connections (tests set their own); null = the system's.</summary>
     internal TunnelNetwork? TunnelNetwork { get; init; }
 
+    /// <summary>Streams that come through the RemoteHub Broker (<see cref="PeerTransport"/>); null = TCP only.</summary>
+    internal PeerTransport? Peers { get; init; }
+
     /// <summary>The policy for this connection (read again each time, so changes apply without a restart).</summary>
     public AgentPolicy CurrentPolicy() => Policy?.Invoke() ?? AgentPolicy.Load(Config);
 }
@@ -55,6 +58,8 @@ public static class AgentHost
                 throw new SocketException((int)SocketError.AddressAlreadyInUse);
             return SocketTransportOptions.CreateDefaultBoundListenSocket(endpoint);
         });
+        // Kestrel picks the transport whose selector can bind the endpoint: sockets for the port, this one for the broker.
+        if (o.Peers is { } peers) builder.Services.AddSingleton<Microsoft.AspNetCore.Connections.IConnectionListenerFactory>(peers);
         builder.WebHost.ConfigureKestrel(k =>
         {
             k.AddServerHeader = false;
@@ -69,6 +74,7 @@ public static class AgentHost
             }
             if (o.BindAddress is null) k.ListenAnyIP(o.Config.ListenPort, Https);
             else k.Listen(o.BindAddress, o.Config.ListenPort, Https);
+            if (o.Peers is not null) k.Listen(PeerEndPoint.Instance, Https);
         });
         var app = builder.Build();
         var gate = new SignInGate();

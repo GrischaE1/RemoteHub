@@ -87,26 +87,34 @@ public static class JumpTunnels
     }
 }
 
-/// <summary>One signed-in connection to a jump host's agent, carrying any number of <see cref="TunnelStream"/>s.</summary>
+/// <summary>
+/// One signed-in connection to a jump host's agent, carrying any number of <see cref="TunnelStream"/>s – or a relayed
+/// RemoteHub Broker session, where every stream goes to the device's own agent and an Open names no target:
+/// the same framing and flow control.
+/// </summary>
 public sealed class JumpTunnel
 {
     internal static TimeSpan IdleClose = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(40);
 
     private readonly ClientWebSocket _ws;
-    private readonly JumpRoute _route;
+    /// <summary>"the jump host JUMP01", or "PC-0815 through the RemoteHub Broker" – for messages.</summary>
+    private readonly string _what;
+    private readonly bool _targetless;
     private readonly ConcurrentDictionary<uint, TunnelStream> _streams = new();
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<TunnelStream>> _opening = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private int _nextId;
     private int _closed;
+    private TaskCompletionSource<string[]>? _path;
     private System.Threading.Timer? _idle;
 
-    private JumpTunnel(ClientWebSocket ws, JumpRoute route)
+    private JumpTunnel(ClientWebSocket ws, string what, bool targetless = false)
     {
         _ws = ws;
-        _route = route;
+        _what = what;
+        _targetless = targetless;
         _ = Task.Run(ReceiveLoop);
         StartIdle();
     }
@@ -119,13 +127,16 @@ public sealed class JumpTunnel
         try
         {
             var ws = await Task.Run(() => AgentClientTransport.Connect(info, CancellationToken.None, TunnelProtocol.Path)).ConfigureAwait(false);
-            return new JumpTunnel(ws, route);
+            return new JumpTunnel(ws, $"the jump host {route.Name}");
         }
         catch (Exception ex)
         {
             throw new JumpHostException($"Can't use the jump host {route.Name}: {ex.Message}", inner: ex);
         }
     }
+
+    /// <summary>A relayed broker session (<see cref="Broker.PeerSessions"/>): streams to the device's own agent only.</summary>
+    internal static JumpTunnel OverRelay(ClientWebSocket ws, string deviceName) => new(ws, $"{deviceName} through the RemoteHub Broker", targetless: true);
 
     public async Task<TunnelStream> OpenAsync(string host, int port, CancellationToken ct, bool probe = false)
     {
@@ -137,14 +148,15 @@ public sealed class JumpTunnel
         TunnelStream? result = null;
         try
         {
-            await Send(TunnelProtocol.Json(TunnelMessage.Open, id, new TunnelOpen(host.Trim().Trim('[', ']'), port, probe), TunnelJson.Default.TunnelOpen)).ConfigureAwait(false);
+            await Send(_targetless ? TunnelProtocol.Frame(TunnelMessage.Open, id)
+                : TunnelProtocol.Json(TunnelMessage.Open, id, new TunnelOpen(host.Trim().Trim('[', ']'), port, probe), TunnelJson.Default.TunnelOpen)).ConfigureAwait(false);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(OpenTimeout);
             return result = await opened.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested && !IsClosed)
         {
-            throw new JumpHostException($"The jump host {_route.Name} didn't answer in time when connecting to {host}:{port}.", TunnelRefusal.Timeout);
+            throw new JumpHostException(_targetless ? $"{Cap(_what)} didn't answer in time." : $"{Cap(_what)} didn't answer in time when connecting to {host}:{port}.", TunnelRefusal.Timeout);
         }
         catch (Exception ex) when (ex is WebSocketException || (ex is OperationCanceledException && IsClosed))
         {
@@ -160,12 +172,31 @@ public sealed class JumpTunnel
         }
     }
 
+    /// <summary>
+    /// A broker session only: RemoteHub's candidates for another try at the direct path, the agent's in return (none:
+    /// it won't try). One question at a time; 10 s for the answer.
+    /// </summary>
+    internal async Task<string[]> AskPathAsync(string[] cands, CancellationToken ct)
+    {
+        if (!_targetless) throw new InvalidOperationException("Only a RemoteHub Broker session has a direct path.");
+        ObjectDisposedException.ThrowIf(IsClosed, this);
+        var answer = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref _path, answer, null) is not null) throw new InvalidOperationException("A path question is already open.");
+        try
+        {
+            await Send(TunnelProtocol.Json(TunnelMessage.Path, 0, new TunnelPath(cands), TunnelJson.Default.TunnelPath)).ConfigureAwait(false);
+            return await answer.Task.WaitAsync(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        }
+        finally { Interlocked.CompareExchange(ref _path, null, answer); }
+    }
+
     public void Close()
     {
         if (Interlocked.Exchange(ref _closed, 1) == 1) return;
         _idle?.Dispose();
         foreach (var s in _streams.Values) s.Reset("The connection to the jump host was closed.");
         foreach (var o in _opening.Values) o.TrySetException(new ObjectDisposedException(nameof(JumpTunnel)));
+        _path?.TrySetException(new ObjectDisposedException(nameof(JumpTunnel)));
         // Still open (idle, or RemoteHub closing): a proper close, so the jump host's audit says so – not "connection lost".
         try
         {
@@ -228,8 +259,15 @@ public sealed class JumpTunnel
                         if (_streams.TryGetValue(id, out var closed)) closed.RemoteClosed();
                         break;
                     case TunnelMessage.Reset:
-                        if (_streams.TryGetValue(id, out var reset)) reset.Reset($"The jump host {_route.Name} ended the connection.");
+                        if (_streams.TryGetValue(id, out var reset)) reset.Reset($"{Cap(_what)} ended the connection.");
                         break;
+                    case TunnelMessage.Path when _targetless && id == 0:
+                    {
+                        var path = JsonSerializer.Deserialize(payload, TunnelJson.Default.TunnelPath);
+                        if (path?.Cands is not { Length: <= BrokerProtocol.MaxCandidates } cands) throw new InvalidDataException("path answer out of range");
+                        _path?.TrySetResult(cands); // an answer nobody asked for is dropped
+                        break;
+                    }
                     default:
                         throw new InvalidDataException($"unexpected frame {type}");
                 }
@@ -237,7 +275,7 @@ public sealed class JumpTunnel
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            why = $"The connection to the jump host {_route.Name} was lost ({ex.GetBaseException().Message}).";
+            why = $"The connection to {_what} was lost ({ex.GetBaseException().Message}).";
         }
         catch (OperationCanceledException) { /* closed */ }
         finally
@@ -248,8 +286,10 @@ public sealed class JumpTunnel
     }
 
     private string Explain(TunnelRefused r) => r.Reason == TunnelRefusal.Policy
-        ? $"The jump host {_route.Name} doesn't allow this connection. {r.Message}"
-        : $"Through the jump host {_route.Name}: {r.Message}";
+        ? $"{Cap(_what)} doesn't allow this connection. {r.Message}"
+        : $"Through {_what}: {r.Message}";
+
+    private static string Cap(string s) => s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
 
     /// <summary>A send nobody waits for: its failure (the tunnel closing) is expected and ignored.</summary>
     internal void SendQuietly(byte[] frame) => Send(frame).ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);

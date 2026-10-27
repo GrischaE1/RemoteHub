@@ -35,7 +35,7 @@ public abstract class RemoteToolSession : SessionBase
     {
         if (_closed) return;
         Target = target;
-        Transport = target.Transport;
+        ShowTransport(target);
         AccentBrush = accent;
         CredentialInfo = $"Credentials from {credentialSource} · {target.Display}";
         DropRunspace();
@@ -127,6 +127,7 @@ public abstract class RemoteToolSession : SessionBase
     {
         if (_closed) return;
         _closed = true;
+        StopFollowingPath();
         _generation++;
         OnDisposed();
         DropRunspace();

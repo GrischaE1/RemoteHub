@@ -7,6 +7,8 @@
              (AUTOSIGNIN only in MSIs built with the credential provider, build-installer.ps1 -CredentialProvider)
              Without ENROLLMENT the .rhagent file next to the MSI is used. An already enrolled agent can be updated
              without any enrollment file.
+  Broker:    msiexec /i RemoteHub-Agent-<ver>-x64.msi BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… [BROKER_ONLY=1] /qn
+             – no enrollment file needed: the device makes its own identity and registers with the RemoteHub Broker.
   Uninstall: msiexec /x RemoteHub-Agent-<ver>-x64.msi /qn   (removes firewall rule, certificate and configuration)
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -34,6 +36,12 @@
          RemoteHub's install again repairs (A-SAME-01), or an admin runs the MSI with REINSTALL=ALL (A-REPAIR-01). -->
     <Property Id="ARPNOREPAIR" Value="1" />
     <Property Id="ENROLLMENT" Secure="yes" />
+    <!-- RemoteHub Broker: BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… lets a device enroll
+         itself without an enrollment file and register with the broker; on an enrolled agent it adds the broker.
+         BROKER_SECRET is hidden – never in the installer log. BROKER_ONLY=1: no inbound firewall rule for a new device. -->
+    <Property Id="BROKER_URL" Secure="yes" />
+    <Property Id="BROKER_SECRET" Secure="yes" Hidden="yes" />
+    <Property Id="BROKER_ONLY" Secure="yes" />
     <!-- Virtual monitor for devices without one: 1 install, 0 don't (removes it), empty = the device keeps its setting (default on). -->
     <Property Id="VIRTUALDISPLAY" Secure="yes" />
 <?ifdef CredentialProviderDll?>
@@ -74,9 +82,10 @@
     <!-- auto-sign-in=[AUTOSIGNIN]: 1 allows automatic sign-in for the allowed groups in agent.json, 0 turns it off there,
          empty leaves agent.json as it is (a first install: allowed, the agent's default). A policy IT has set
          (NoUserBehavior, right AutoSignIn) wins either way. -->
-    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot; &quot;broker-url=[BROKER_URL]&quot; &quot;broker-secret=[BROKER_SECRET]&quot; &quot;broker-only=[BROKER_ONLY]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <!-- HideTarget: the command line carries the device secret, so it stays out of the log (with BROKER_SECRET hidden). -->
     <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
-                  Execute="deferred" Impersonate="no" Return="check" />
+                  Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
 
     <!-- A first install that fails after enrolling: remove the firewall rule, certificate and configuration again.
          Only for a first install – a failed upgrade must keep the enrolled agent that was there before. -->
@@ -94,7 +103,7 @@
       <!-- Only when this product is installed (first install or upgrade), or the same package is reinstalled with a new
            enrollment (A-SAME-02: same product code, so no upgrade) – not when an installed agent only adds or removes a
            feature (credential provider) or is repaired, which leaves the service's enrollment alone. -->
-      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT Installed OR (REINSTALL AND ENROLLMENTGIVEN)" />
+      <Custom Action="AgentEnroll" Before="StartServices" Condition="NOT Installed OR (REINSTALL AND (ENROLLMENTGIVEN OR BROKER_URL))" />
       <Custom Action="AgentCleanup" After="StopServices" Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>
   </Package>

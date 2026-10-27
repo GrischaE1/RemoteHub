@@ -18,9 +18,11 @@
       <definition name="SUPPORTED_RemoteHub_0_19_0" displayName="$(string.SUPPORTED_RemoteHub_0_19_0)" />
       <definition name="SUPPORTED_RemoteHub_0_20_2" displayName="$(string.SUPPORTED_RemoteHub_0_20_2)" />
       <definition name="SUPPORTED_RemoteHub_0_21_0" displayName="$(string.SUPPORTED_RemoteHub_0_21_0)" />
+      <definition name="SUPPORTED_RemoteHub_0_22_0" displayName="$(string.SUPPORTED_RemoteHub_0_22_0)" />
       <definition name="SUPPORTED_Agent_0_18_11" displayName="$(string.SUPPORTED_Agent_0_18_11)" />
       <definition name="SUPPORTED_Agent_0_18_12" displayName="$(string.SUPPORTED_Agent_0_18_12)" />
       <definition name="SUPPORTED_Agent_0_19_0" displayName="$(string.SUPPORTED_Agent_0_19_0)" />
+      <definition name="SUPPORTED_Agent_0_22_0" displayName="$(string.SUPPORTED_Agent_0_22_0)" />
     </definitions>
   </supportedOn>
 
@@ -64,6 +66,7 @@
     <category name="Agent_Privacy" displayName="$(string.Cat_Agent_Privacy)"><parentCategory ref="Agent" /></category>
     <category name="Agent_AutoSignIn" displayName="$(string.Cat_Agent_AutoSignIn)"><parentCategory ref="Agent" /></category>
     <category name="Agent_JumpHost" displayName="$(string.Cat_Agent_JumpHost)"><parentCategory ref="Agent" /></category>
+    <category name="Agent_Broker" displayName="$(string.Cat_Agent_Broker)"><parentCategory ref="Agent" /></category>
     <category name="Agent_Service" displayName="$(string.Cat_Agent_Service)"><parentCategory ref="Agent" /></category>
   </categories>
 
@@ -200,6 +203,27 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="Console_AllowAgentDeviceActions" class="Both" displayName="$(string.Console_AllowAgentDeviceActions)" explainText="$(string.Console_AllowAgentDeviceActions_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentDeviceActions">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowBroker" class="Both" displayName="$(string.Console_AllowBroker)" explainText="$(string.Console_AllowBroker_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowBroker">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_BrokerDirect" class="Both" displayName="$(string.Console_BrokerDirect)" explainText="$(string.Console_BrokerDirect_Help)"
+            key="Software\Policies\RemoteHub" valueName="BrokerDirect">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="Console_AllowAgentInstall" class="Both" displayName="$(string.Console_AllowAgentInstall)" explainText="$(string.Console_AllowAgentInstall_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowAgentInstall">
       <parentCategory ref="Console_Agent" />
@@ -254,6 +278,13 @@
             key="Software\Policies\RemoteHub" valueName="AllowRemotingProcesses">
       <parentCategory ref="Console_Remoting" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_19_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingDeviceActions" class="Both" displayName="$(string.Console_AllowRemotingDeviceActions)" explainText="$(string.Console_AllowRemotingDeviceActions_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingDeviceActions">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_21_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
@@ -806,6 +837,18 @@
         </enum>
       </elements>
     </policy>
+    <policy name="Console_ConnReach" class="Both" displayName="$(string.Console_ConnReach)" explainText="$(string.Console_ConnReach_Help)" presentation="$(presentation.Console_ConnReach)"
+            key="Software\Policies\RemoteHub\Connections">
+      <parentCategory ref="Console_ConnRemoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <elements>
+        <enum id="Reach" valueName="Reach" required="true">
+          <item displayName="$(string.Console_ConnReach_Automatic)"><value><string>Automatic</string></value></item>
+          <item displayName="$(string.Console_ConnReach_Direct)"><value><string>Direct</string></value></item>
+          <item displayName="$(string.Console_ConnReach_Broker)"><value><string>Broker</string></value></item>
+        </enum>
+      </elements>
+    </policy>
     <policy name="Console_ConnAgentAutoSignIn" class="Both" displayName="$(string.Console_ConnAgentAutoSignIn)" explainText="$(string.Console_ConnAgentAutoSignIn_Help)"
             key="Software\Policies\RemoteHub\Connections" valueName="AgentAutoSignIn">
       <parentCategory ref="Console_ConnRemoting" />
@@ -1153,6 +1196,73 @@
       <elements>
         <decimal id="MaxTunnelStreams" valueName="MaxTunnelStreams" minValue="1" maxValue="1024" required="true" />
       </elements>
+    </policy>
+
+    <policy name="Agent_TunnelOwnPorts" class="Machine" displayName="$(string.Agent_TunnelOwnPorts)" explainText="$(string.Agent_TunnelOwnPorts_Help)"
+            presentation="$(presentation.Agent_TunnelOwnPorts)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_JumpHost" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><multiText id="TunnelOwnPorts" valueName="TunnelOwnPorts" required="true" /></elements>
+    </policy>
+
+    <!-- ================================================================ RemoteHub Agent: RemoteHub Broker -->
+
+    <policy name="Agent_BrokerEnabled" class="Machine" displayName="$(string.Agent_BrokerEnabled)" explainText="$(string.Agent_BrokerEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="BrokerEnabled">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_BrokerUrl" class="Machine" displayName="$(string.Agent_BrokerUrl)" explainText="$(string.Agent_BrokerUrl_Help)"
+            presentation="$(presentation.Agent_BrokerUrl)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerUrl" valueName="BrokerUrl" maxLength="200" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerConsoles" class="Machine" displayName="$(string.Agent_BrokerConsoles)" explainText="$(string.Agent_BrokerConsoles_Help)"
+            presentation="$(presentation.Agent_BrokerConsoles)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><multiText id="BrokerConsoles" valueName="BrokerConsoles" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerProxy" class="Machine" displayName="$(string.Agent_BrokerProxy)" explainText="$(string.Agent_BrokerProxy_Help)"
+            presentation="$(presentation.Agent_BrokerProxy)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerProxy" valueName="BrokerProxy" maxLength="200" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_BrokerKeepAliveSeconds" class="Machine" displayName="$(string.Agent_BrokerKeepAliveSeconds)" explainText="$(string.Agent_BrokerKeepAliveSeconds_Help)"
+            presentation="$(presentation.Agent_BrokerKeepAliveSeconds)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements>
+        <decimal id="BrokerKeepAliveSeconds" valueName="BrokerKeepAliveSeconds" minValue="30" maxValue="90" required="true" />
+      </elements>
+    </policy>
+
+    <policy name="Agent_BrokerDirect" class="Machine" displayName="$(string.Agent_BrokerDirect)" explainText="$(string.Agent_BrokerDirect_Help)"
+            presentation="$(presentation.Agent_BrokerDirect)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements>
+        <enum id="BrokerDirect" valueName="BrokerDirect" required="true">
+          <item displayName="$(string.Agent_BrokerDirect_2)"><value><decimal value="2" /></value></item>
+          <item displayName="$(string.Agent_BrokerDirect_1)"><value><decimal value="1" /></value></item>
+          <item displayName="$(string.Agent_BrokerDirect_0)"><value><decimal value="0" /></value></item>
+        </enum>
+      </elements>
+    </policy>
+
+    <policy name="Agent_BrokerStun" class="Machine" displayName="$(string.Agent_BrokerStun)" explainText="$(string.Agent_BrokerStun_Help)"
+            presentation="$(presentation.Agent_BrokerStun)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Broker" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><text id="BrokerStun" valueName="BrokerStun" maxLength="200" required="true" /></elements>
     </policy>
 
     <!-- ================================================================ RemoteHub Agent: service -->

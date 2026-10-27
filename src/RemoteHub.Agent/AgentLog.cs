@@ -97,6 +97,13 @@ public enum AuditEvent
     /// <summary>A connection through this jump host ended: where to, how long, how much.</summary>
     TunnelStream = 1201,
     TunnelEnded = 1202,
+    /// <summary>The broker connection is up (once per broker and service run, not per reconnect).</summary>
+    BrokerConnected = 1300,
+    /// <summary>A console's session through the broker was accepted: console, source, path.</summary>
+    BrokerSessionStarted = 1301,
+    BrokerSessionEnded = 1302,
+    /// <summary>The device registered itself with the broker (first time, or again after the broker lost its data).</summary>
+    BrokerRegistered = 1303,
     SignInRefused = 2000,
     DesktopRefused = 2100,
     /// <summary>The user who signed in or unlocked refused the running remote desktop; it ended.</summary>
@@ -112,6 +119,8 @@ public enum AuditEvent
     TunnelRefused = 2200,
     /// <summary>agent.json couldn't be read at service start; the service started with its last good copy (docs/agent-spec.md §7.2).</summary>
     ConfigRestored = 2300,
+    /// <summary>A session through the broker was refused: an offer that didn't check out, the policy, or a limit.</summary>
+    BrokerSessionRefused = 2400,
     DesktopError = 3100,
     /// <summary>Automatic sign-in: another account than the one asked for ended up on the console – it was signed out.</summary>
     AutoSignInMismatch = 3101,
@@ -119,6 +128,8 @@ public enum AuditEvent
     AutoSignInUnavailable = 3102,
     /// <summary>Neither agent.json nor its backup could be read; the service started with a fresh install's defaults (§7.2).</summary>
     ConfigDefaults = 3300,
+    /// <summary>The broker refused this device (removed, secret retired) or the organisation was deleted.</summary>
+    BrokerError = 3400,
 }
 
 /// <summary>
