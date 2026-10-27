@@ -165,6 +165,25 @@ public class BrokerUiTests
     }
 
     [Fact]
+    public void A_sealed_broker_device_offers_its_agent_tools_without_a_test_first()
+    {
+        var t = Synced();
+        // Registered at the broker with its agent: tools, Run script and device actions without Test RemoteHub Agent.
+        Assert.True(MainWindow.ToolsReady(t.Device, viaAgent: true, PsRemotingState.Unknown));
+        Assert.True(MainWindow.ToolsReady(t.Device, viaAgent: true, PsRemotingState.Unavailable));
+        // Not sealed: RemoteHub doesn't connect to it, so nothing is offered.
+        t.Device.Broker!.Sealed = false;
+        Assert.False(MainWindow.ToolsReady(t.Device, viaAgent: true, PsRemotingState.Unknown));
+        t.Device.Broker.Sealed = true;
+        // UseAgent = 0 by policy (WinRM): as for any connection, once its test passed.
+        Assert.False(MainWindow.ToolsReady(t.Device, viaAgent: false, PsRemotingState.Unknown));
+        // Ordinary connections as before: after a passed test.
+        var own = new Connection { Name = "SRV01", Host = "srv01" };
+        Assert.False(MainWindow.ToolsReady(own, viaAgent: true, PsRemotingState.Unknown));
+        Assert.True(MainWindow.ToolsReady(own, viaAgent: true, PsRemotingState.Available));
+    }
+
+    [Fact]
     public void A_presence_snapshot_sets_every_device_at_once_and_tells_only_the_ones_that_changed()
     {
         var top = new ObservableCollection<NodeBase>();

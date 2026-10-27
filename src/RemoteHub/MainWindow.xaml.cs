@@ -850,7 +850,7 @@ public partial class MainWindow : FluentWindow
         var psOn = c is not null && Features.AnyTool(viaAgent); // manual test always offered; the setting only controls the automatic check
         var st = c is null ? PsRemotingState.Unknown : PsState(c);
         var name = viaAgent ? "RemoteHub Agent" : "PowerShell remoting";
-        var available = psOn && st == PsRemotingState.Available;
+        var available = psOn && ToolsReady(c!, viaAgent, st);
         CmPsSep.Visibility = V(c is not null);
         CmPs.Visibility = V(available && Features.IsAllowed(RemoteTool.PowerShell, viaAgent));
         // A run is the PowerShell tool used another way (scripts-view-design.md §6.5, §9).
@@ -860,7 +860,7 @@ public partial class MainWindow : FluentWindow
         CmServices.Visibility = V(available && Features.IsAllowed(RemoteTool.Services, viaAgent));
         CmProcesses.Visibility = V(available && Features.IsAllowed(RemoteTool.Processes, viaAgent));
         FillDeviceActions(CmDevice, c, DeviceActions.Offered(available, viaAgent));
-        CmPsTest.Visibility = V(psOn && st != PsRemotingState.Available);
+        CmPsTest.Visibility = V(psOn && !ToolsReady(c!, viaAgent, st));
         CmPsTest.Header = c?.PsChecking == true ? $"Testing {name}…"
                         : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}";
         CmPsTest.IsEnabled = c?.PsChecking != true;
@@ -985,7 +985,7 @@ public partial class MainWindow : FluentWindow
             if (Features.IsAllowed(tool, toolsViaAgent)) tools.Items.Add(MenuEntry(header, icon, open));
         }
         // No tool allowed over the connection's transport: nothing to test either.
-        if (Features.AnyTool(toolsViaAgent) && st == PsRemotingState.Available)
+        if (Features.AnyTool(toolsViaAgent) && ToolsReady(c, toolsViaAgent, st))
         {
             Tool(RemoteTool.PowerShell, "PowerShell", SymbolRegular.WindowConsole20, () => OpenPowerShell(c));
             if (Features.IsAllowed(Feature.ScriptRun)) Tool(RemoteTool.PowerShell, "Run script…", SymbolRegular.Play24, () => RunScriptOn(c, ps?.Target ?? KnownTarget(c)));
@@ -1010,7 +1010,7 @@ public partial class MainWindow : FluentWindow
         if (tools.Items.Count > 0) cm.Items.Add(tools);
 
         var device = Submenu("Device actions", SymbolRegular.Flash24);
-        FillDeviceActions(device, c, DeviceActions.Offered(Features.AnyTool(toolsViaAgent) && st == PsRemotingState.Available, toolsViaAgent));
+        FillDeviceActions(device, c, DeviceActions.Offered(Features.AnyTool(toolsViaAgent) && ToolsReady(c, toolsViaAgent, st), toolsViaAgent));
         if (device.Items.Count > 0) cm.Items.Add(device);
 
         var manage = Submenu("RemoteHub Agent", SymbolRegular.Shield24);
@@ -1137,6 +1137,15 @@ public partial class MainWindow : FluentWindow
 
     /// <summary>The connection goes through the RemoteHub Agent instead of WinRM.</summary>
     private bool UsesAgent(Connection c) => Inheritance.UsesAgent(c, _vm.Data);
+
+    /// <summary>
+    /// The remote tools (and device actions, Run script) are offered: the last test passed the way the connection works
+    /// now – or it is a device of a synced RemoteHub Broker folder whose record the organisation sealed, reached through
+    /// its agent. Such a device registered with its agent, so there is nothing to find out first; a tool that can't
+    /// reach it says so in its tab.
+    /// </summary>
+    internal static bool ToolsReady(Connection c, bool viaAgent, PsRemotingState lastTest) =>
+        lastTest == PsRemotingState.Available || (viaAgent && c.Broker is { Kind: BrokerItemKind.Device, Sealed: true });
 
     /// <summary>Last check result – only if it was made the way the connection works now (agent or WinRM).</summary>
     private PsRemotingState PsState(Connection c) =>
