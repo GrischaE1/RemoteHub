@@ -29,10 +29,17 @@ public sealed class CredentialsWindow : FluentWindow
     };
     private readonly PasswordBox _password = new();
     private readonly Button _removePassword = new() { Content = "Remove stored password", Margin = new Thickness(8, 0, 0, 0) };
+    // SSH and SFTP: a private key and its passphrase, written like the connection editor's (docs/network-shares.md §6.2).
+    private readonly Button _importKey = new() { Content = "Import key…", Margin = new Thickness(0, 0, 8, 0) };
+    private readonly Button _removeKey = new() { Content = "Remove key" };
+    private readonly TextBlock _keyText = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 0, 0, 10) };
+    private readonly PasswordBox _passphrase = new();
+    private readonly Button _removePassphrase = new() { Content = "Remove stored passphrase", Margin = new Thickness(8, 0, 0, 0) };
     private readonly TextBlock _usage = new() { Margin = new Thickness(0, 12, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly StackPanel _details = new();
     private SavedCredential? _current;
     private Secret? _storedPassword; // the selected credential's password when it was selected – an emptied box goes back to it
+    private Secret? _storedPassphrase; // the same for the key's passphrase
 
     public CredentialsWindow(AppData data, Func<IEnumerable<NodeBase>> allNodes)
     {
@@ -82,8 +89,39 @@ public sealed class CredentialsWindow : FluentWindow
             _password.Password = "";
             ShowPasswordState(_current);
         };
-        if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
+        _passphrase.PasswordChanged += (_, _) =>
+        {
+            if (_current is { PrivateKey: not null }) _current.KeyPassphrase = Secret.From(_passphrase.Password) ?? _storedPassphrase;
+        };
+        ToolTipService.SetShowOnDisabled(_passphrase, true);
+        // A wrong passphrase is said when the box is left, not at the next connect.
+        _passphrase.LostFocus += (_, _) => { if (_current is not null) ShowKeyState(_current); };
+        _removePassphrase.Click += (_, _) =>
+        {
+            if (_current is null) return;
+            _current.KeyPassphrase = _storedPassphrase = null;
+            _passphrase.Password = "";
+            ShowKeyState(_current);
+        };
+        _importKey.Click += async (_, _) =>
+        {
+            if (_current is not { } c || await PrivateKeyPicker.Pick(this, "Saved credentials") is not { } key) return;
+            c.PrivateKey = key;
+            c.KeyPassphrase = _storedPassphrase = null;
+            _passphrase.Password = "";
+            ShowKeyState(c);
+        };
+        _removeKey.Click += (_, _) =>
+        {
+            if (_current is null) return;
+            _current.PrivateKey = _current.KeyPassphrase = _storedPassphrase = null;
+            _passphrase.Password = "";
+            ShowKeyState(_current);
+        };
+        // Policy AllowSavedPasswords = 0 (§5.6): no password and no passphrase is stored; the key itself isn't a password.
+        if (!Features.IsAllowed(Feature.SavedPasswords)) { PolicyLock.TurnedOff(_password); PolicyLock.TurnedOff(_passphrase); }
         _usage.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+        _keyText.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
 
         _details.Children.Add(Label("Name")); _details.Children.Add(_name);
         _details.Children.Add(Label("Username")); _details.Children.Add(_user);
@@ -96,6 +134,17 @@ public sealed class CredentialsWindow : FluentWindow
         Grid.SetColumn(_removePassword, 1);
         passwordRow.Children.Add(_removePassword);
         _details.Children.Add(Label("Password")); _details.Children.Add(passwordRow);
+        var keyButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        keyButtons.Children.Add(_importKey);
+        keyButtons.Children.Add(_removeKey);
+        _details.Children.Add(Label("Private key (SSH and SFTP)", top: 10)); _details.Children.Add(keyButtons); _details.Children.Add(_keyText);
+        var passphraseRow = new Grid();
+        passphraseRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        passphraseRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        passphraseRow.Children.Add(_passphrase);
+        Grid.SetColumn(_removePassphrase, 1);
+        passphraseRow.Children.Add(_removePassphrase);
+        _details.Children.Add(Label("Key passphrase")); _details.Children.Add(passphraseRow);
         _details.Children.Add(_usage);
 
         var hint = new TextBlock
@@ -136,7 +185,7 @@ public sealed class CredentialsWindow : FluentWindow
 
     private static string? NullIfEmpty(string? s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
-    private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 0, 0, 4) };
+    private static TextBlock Label(string text, double top = 0) => new() { Text = text, Margin = new Thickness(0, top, 0, 4) };
 
     private static DataTemplate BuildItemTemplate()
     {
@@ -162,7 +211,10 @@ public sealed class CredentialsWindow : FluentWindow
         _domain.Text = c?.Domain ?? "";
         _storedPassword = c?.Password;
         _password.Password = "";
+        _storedPassphrase = c?.KeyPassphrase;
+        _passphrase.Password = "";
         ShowPasswordState(c);
+        ShowKeyState(c);
         _usage.Text = c is null ? "Click Add to create a credential."
             : $"Used by {Inheritance.UsageCount(_data, c.Id, _allNodes())} item(s).";
         _current = c;
@@ -173,6 +225,20 @@ public sealed class CredentialsWindow : FluentWindow
         var stored = c?.Password is not null;
         _password.PlaceholderText = stored ? "A password is stored – type a new one to replace it" : "Leave empty to be asked when connecting";
         _removePassword.Visibility = stored ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ShowKeyState(SavedCredential? c)
+    {
+        var key = c?.PrivateKey;
+        _importKey.Content = key is not null ? "Replace key…" : "Import key…";
+        _removeKey.Visibility = key is not null ? Visibility.Visible : Visibility.Collapsed;
+        _passphrase.IsEnabled = key is not null && Features.IsAllowed(Feature.SavedPasswords);
+        // Greyed until there is a key, and says so (with saved passwords off, PolicyLock's reason stays).
+        if (Features.IsAllowed(Feature.SavedPasswords)) _passphrase.ToolTip = key is null ? "Import a key first – the passphrase belongs to it" : null;
+        _passphrase.PlaceholderText = c?.KeyPassphrase is not null ? "A passphrase is stored – type a new one to replace it"
+            : "Leave empty if the key has none, or to be asked when connecting";
+        _removePassphrase.Visibility = c?.KeyPassphrase is not null ? Visibility.Visible : Visibility.Collapsed;
+        _keyText.Text = PrivateKeyPicker.Describe(key, c?.KeyPassphrase);
     }
 
     private void AddNew()

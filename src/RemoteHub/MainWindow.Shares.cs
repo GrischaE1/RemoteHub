@@ -32,25 +32,68 @@ public partial class MainWindow
 
     private void CmAddShare_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) AddShare(c); }
 
-    /// <summary>New → Network share: a share on its own, in the selected folder.</summary>
-    private void NewShare_Click(object sender, RoutedEventArgs e)
+    /// <summary>New → Connection → SSH, SFTP, FTP, SMB or WebDAV: an item on its own, in the selected folder.</summary>
+    private void NewShare(ShareProtocol kind)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
-        if (Refused(Feature.NetworkShares)) return;
-        var share = new NetworkShare();
+        if (Refused(Features.For(kind))) return; // AllowSsh, or AllowNetworkShares and the protocol's switch
+        var share = new NetworkShare { Protocol = kind };
         var parent = TreeLayout.Allowed(share, _vm.TargetFolderForNew());
         share.Parent = parent;
         if (new ShareEditorWindow(share, null, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         _vm.AddNow(share, parent);
         RevealInTree(share);
-        DiagLog.Write($"Network share added on its own: {share.ProtocolLabel}");
+        DiagLog.Write(share.IsSsh ? "SSH connection added" : $"Network share added on its own: {share.ProtocolLabel}");
+    }
+
+    /// <summary>
+    /// The kinds of connection under New → Connection, the same in every New menu: Remote Control (a Windows device), SSH,
+    /// then the file shares. A kind this PC's policy blocks isn't offered.
+    /// </summary>
+    private void FillNewConnection(ItemsControl menu)
+    {
+        menu.Items.Clear();
+        foreach (var k in NewConnectionKinds())
+        {
+            // The file shares come after a line.
+            if (k.Kind is not (null or ShareProtocol.Ssh) && menu.Items[^1] is not Separator) menu.Items.Add(new Separator());
+            var kind = k.Kind;
+            var entry = MenuEntry(k.Header, Enum.Parse<SymbolRegular>(k.Symbol),
+                () => { if (kind is { } p) NewShare(p); else NewConnection_Click(this, new RoutedEventArgs()); }, tip: k.Tip);
+            if (kind is null) entry.InputGestureText = "Ctrl+N";
+            menu.Items.Add(entry);
+        }
+    }
+
+    /// <summary>The entries of New → Connection in their order (Kind null: Remote Control), without the ones policy blocks.</summary>
+    internal static IEnumerable<(ShareProtocol? Kind, string Header, string Symbol, string Tip)> NewConnectionKinds(Agent.IPolicySource? policy = null)
+    {
+        yield return (null, "Remote Control", "Desktop24", "A Windows device – opened in a remote desktop tab (RDP or the RemoteHub Agent), with PowerShell and the remote tools");
+        if (Features.IsAllowed(Feature.Ssh, policy))
+            yield return (ShareProtocol.Ssh, "SSH", NetworkShare.Symbol(ShareProtocol.Ssh),
+                "A Linux or macOS server, a NAS or a network device – opened in a terminal tab, signs in with a private key or a password");
+        foreach (var (kind, header, tip) in new (ShareProtocol Kind, string Header, string Tip)[]
+                 {
+                     (ShareProtocol.Sftp, "SFTP", "Files over SSH – opened in a file tab"),
+                     (ShareProtocol.Ftp, "FTP / FTPS", "Files over FTP or FTPS – opened in a file tab"),
+                     (ShareProtocol.Smb, "SMB", "A Windows file share or a NAS – opened in a file tab"),
+                     (ShareProtocol.WebDav, "WebDAV", "Files over WebDAV, e.g. Nextcloud – opened in a file tab"),
+                 })
+            if (Features.IsAllowed(kind, policy)) yield return (kind, header, NetworkShare.Symbol(kind), tip);
     }
 
     private void AddShare(Connection c)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (Refused(Feature.NetworkShares)) return;
-        var share = new NetworkShare { Server = c };
+        // The editor offers the kinds policy allows; with every one of them blocked there is nothing to add.
+        var kinds = ShareEditorWindow.Kinds(standalone: false, current: null).ToList();
+        if (kinds.Count == 0)
+        {
+            _ = Dialogs.Info(this, "Network share", "Every kind of network share is turned off by your organisation – see Settings → Policies.");
+            return;
+        }
+        var share = new NetworkShare { Server = c, Protocol = kinds[0].Kind };
         if (new ShareEditorWindow(share, c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() != true) return;
         c.Shares.Add(share);
         c.IsExpanded = true;
@@ -63,17 +106,21 @@ public partial class MainWindow
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         if (new ShareEditorWindow(share, share.Server, _vm.Data, isNew: false) { Owner = this }.ShowDialog() != true) return;
         var server = ServerOf(share);
-        foreach (var s in _vm.Sessions.OfType<ShareSession>().Where(s => s.Share == share)) s.Title = server.Name;
+        foreach (var s in TabsOf(share)) s.Title = server.Name;
         _vm.RequestSave();
     }
 
     private async Task DeleteShare(NetworkShare share)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
-        var open = _vm.Sessions.OfType<ShareSession>().Where(s => s.Share == share).ToList();
-        if (!await Dialogs.Confirm(this, "Delete network share",
+        var open = TabsOf(share).ToList();
+        var confirmed = share.IsSsh
+            ? await Dialogs.Confirm(this, "Delete SSH connection", $"Remove the SSH connection \"{share.Name}\" ({share.Address})?" +
+                (open.Count > 0 ? "\n\nIts open tab is closed." : "") + "\n\nNothing on the server is changed.", "Remove")
+            : await Dialogs.Confirm(this, "Delete network share",
                 $"Remove the share \"{share.Name}\" ({share.Address}){(share.Server is { } c ? $" from {c.Name}" : "")}?" +
-                (open.Count > 0 ? "\n\nIts open tab is closed." : "") + "\n\nNothing on the share itself is deleted.", "Remove")) return;
+                (open.Count > 0 ? "\n\nIts open tab is closed." : "") + "\n\nNothing on the share itself is deleted.", "Remove");
+        if (!confirmed) return;
         foreach (var s in open) s.Close();
         if (share.Server is { } server)
         {
@@ -135,9 +182,9 @@ public partial class MainWindow
             // Like the tree's own menu: new items go next to the share (it is selected above)
             cm.Items.Add(new Separator());
             var add = Submenu("New", SymbolRegular.Add24);
-            add.Items.Add(MenuEntry("Connection", SymbolRegular.Add24, () => NewConnection_Click(this, new RoutedEventArgs())));
-            if (Features.IsAllowed(Feature.NetworkShares))
-                add.Items.Add(MenuEntry("Network share", SymbolRegular.FolderLink24, () => NewShare_Click(this, new RoutedEventArgs())));
+            var connection = Submenu("Connection", SymbolRegular.Add24);
+            FillNewConnection(connection);
+            add.Items.Add(connection);
             add.Items.Add(MenuEntry("Folder", SymbolRegular.FolderAdd24, () => NewFolder_Click(this, new RoutedEventArgs())));
             cm.Items.Add(add);
         }
@@ -145,6 +192,10 @@ public partial class MainWindow
         cm.Placement = PlacementMode.MousePoint;
         cm.IsOpen = true;
     }
+
+    /// <summary>The open tabs of a share or SSH connection.</summary>
+    private IEnumerable<Rdp.SessionBase> TabsOf(NetworkShare share) =>
+        _vm.Sessions.Where(s => s is ShareSession sh && sh.Share == share || s is SshSession ssh && ssh.Entry == share);
 
     private static string ShareLabel(NetworkShare share) => share.Server is { } c ? $"{c.Name} › {share.Name}" : share.Name;
 
@@ -161,6 +212,7 @@ public partial class MainWindow
     /// <summary>Opens the share in a new tab: this PC on the left, the share on the right.</summary>
     private void OpenShare(NetworkShare share)
     {
+        if (share.IsSsh) { OpenSsh(share); return; }
         if (Refused(Features.For(share.Protocol))) return;
         if (WhyNotOpen(share) is not null)
         {
@@ -219,20 +271,46 @@ public partial class MainWindow
 
     /// <summary>
     /// The share's account (its own or the server's). Without a stored password the user is asked – kept in memory
-    /// only. SMB and WebDAV without an account use the Windows account, FTP signs in anonymously. Null: cancelled.
+    /// only. SMB and WebDAV without an account use the Windows account, FTP signs in anonymously. An account with a
+    /// private key (SSH, SFTP) isn't asked for a password, but for the key's passphrase when it has one that isn't stored.
+    /// Null: cancelled.
     /// </summary>
     private (CredentialSet Credentials, string Source)? ShareAccount(NetworkShare share, CredentialSet? previous)
     {
         var (resolved, source) = Inheritance.ResolveCredentials(share, _vm.Data);
         var cred = resolved.Clone();
+        var topic = share.IsSsh ? "SSH connection" : "Network share";
         if (cred.IsEmpty)
         {
             if (!ShareConnector.AccountOptional(share.Protocol))
             {
-                _ = Dialogs.Info(this, "Network share", $"{share.Name} ({share.ProtocolLabel}) needs an account. Right-click it → Edit… and set one, or set credentials on {(share.Server is { } c ? c.Name : "its folder")}.");
+                _ = Dialogs.Info(this, topic, $"{share.Name} ({share.ProtocolLabel}) needs an account. Right-click it → Edit… and set one, or set credentials on {(share.Server is { } c ? c.Name : "its folder")}.");
                 return null;
             }
             return (cred, share.Protocol == ShareProtocol.Ftp ? "anonymous sign-in (no account set)" : "your Windows account (no account set)");
+        }
+        // A key is only for SSH and SFTP; an account a folder passes on keeps its key for those and signs in to the rest
+        // with its password.
+        if (!ShareConnector.TakesKey(share.Protocol)) cred.PrivateKey = cred.KeyPassphrase = null;
+        if (cred.PrivateKey is { } key)
+        {
+            if (SshSignIn.NeedsPassphrase(key, cred.KeyPassphrase))
+            {
+                if (previous is { KeyPassphrase: { } known } && Secret.AreEqual(previous.PrivateKey, key)) cred.KeyPassphrase = known;
+                else
+                {
+                    var dlg = new PasswordDialog(confirm: false, title: topic,
+                        message: $"The private key for {cred.Username} is protected by a passphrase. Enter it to open {ShareLabel(share)} – it is kept in memory only.",
+                        okText: "Connect") { Owner = this };
+                    if (dlg.ShowDialog() != true) return null;
+                    cred.KeyPassphrase = Secret.From(dlg.Password);
+                    // Checked here, so a mistyped passphrase isn't kept for the next reconnect.
+                    try { SshSignIn.Describe(key, cred.KeyPassphrase); }
+                    catch (SshKeyException ex) { _ = Dialogs.Info(this, topic, ex.Message); return null; }
+                    source += ", key passphrase entered";
+                }
+            }
+            return (cred, source + ", private key");
         }
         if (cred.Password is null)
         {
@@ -240,7 +318,7 @@ public partial class MainWindow
             else
             {
                 var user = string.IsNullOrEmpty(cred.Domain) || cred.Username!.Contains('\\') ? cred.Username : $"{cred.Domain}\\{cred.Username}";
-                var dlg = new PasswordDialog(confirm: false, title: "Network share",
+                var dlg = new PasswordDialog(confirm: false, title: topic,
                     message: $"No password is stored for {user}. Enter it to open {ShareLabel(share)} – it is kept in memory only.",
                     okText: "Connect") { Owner = this };
                 if (dlg.ShowDialog() != true) return null;

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using RemoteHub.Models;
+using RemoteHub.Remoting.Shares;
 using RemoteHub.Services;
 using Wpf.Ui.Controls;
 using Button = Wpf.Ui.Controls.Button;
@@ -42,8 +43,18 @@ public sealed class ShareEditorWindow : FluentWindow
     private readonly Button _removePassword = new() { Content = "Remove stored password", Margin = new Thickness(8, 0, 0, 0) };
     private Secret? _storedPassword; // never shown: the box starts empty and a typed password replaces it
     private readonly Grid _customFields = new();
+    // SSH and SFTP: a private key, imported into the encrypted database, and its passphrase (docs/network-shares.md §6.2).
+    private readonly StackPanel _keyFields = new() { Margin = new Thickness(0, 10, 0, 0) };
+    private readonly TextBlock _keyText = Caption();
+    private readonly Button _importKey = new() { Content = "Import key…", Margin = new Thickness(0, 0, 8, 0) };
+    private readonly Button _removeKey = new() { Content = "Remove key" };
+    private readonly PasswordBox _passphrase = new();
+    private readonly Button _removePassphrase = new() { Content = "Remove stored passphrase", Margin = new Thickness(8, 0, 0, 0) };
+    private Secret? _storedKey, _storedPassphrase; // never shown; an imported key or a typed passphrase replaces them
     private readonly TextBlock _accountHint = Caption();
     private readonly StackPanel _trustRow = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+    private readonly TitleBar _titleBar = new() { ShowMaximize = false, ShowMinimize = false };
+    private readonly bool _isNew;
     private string? _trusted;
 
     public ShareEditorWindow(NetworkShare share, Connection? server, AppData data, bool isNew)
@@ -51,9 +62,8 @@ public sealed class ShareEditorWindow : FluentWindow
         _share = share;
         _server = server;
         _data = data;
+        _isNew = isNew;
         _trusted = share.TrustedFingerprint;
-        Title = server is null ? (isNew ? "New network share" : $"Network share {share.Name}")
-            : isNew ? $"Add network share to {server.Name}" : $"Network share {share.Name} on {server.Name}";
         Width = 560; SizeToContent = SizeToContent.Height; MinHeight = 300;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -61,19 +71,15 @@ public sealed class ShareEditorWindow : FluentWindow
         ExtendsContentIntoTitleBar = true;
         WindowBackdropType = WindowBackdropType.Mica;
 
-        foreach (var (p, text) in new[]
-                 {
-                     (ShareProtocol.Smb, "SMB – Windows file share, NAS"),
-                     (ShareProtocol.Sftp, "SFTP – over SSH"),
-                     (ShareProtocol.Ftp, "FTP / FTPS"),
-                     (ShareProtocol.WebDav, "WebDAV – e.g. Nextcloud"),
-                 })
+        // SSH is a terminal of its own, never one of a server's shares; a kind this PC's policy blocks isn't offered
+        // (the item's own kind stays, so a blocked item can still be edited).
+        foreach (var (p, text) in Kinds(server is null, isNew ? null : share.Protocol))
             _protocol.Items.Add(new ComboBoxItem { Content = text, Tag = p });
         foreach (var (s, text) in new[] { (FtpSecurity.Explicit, "TLS (explicit, port 21)"), (FtpSecurity.Implicit, "TLS (implicit, port 990)"), (FtpSecurity.None, "None – not encrypted") })
             _ftpSecurity.Items.Add(new ComboBoxItem { Content = text, Tag = s });
 
         _name.Text = share.Name;
-        _protocol.SelectedIndex = (int)share.Protocol;
+        _protocol.SelectedItem = _protocol.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (ShareProtocol)i.Tag == share.Protocol) ?? _protocol.Items[0];
         // Filled in, not only a placeholder: a server's share uses its address unless another is entered (saved as "the server's").
         _host.Text = share.Host ?? server?.Host.Trim() ?? "";
         _host.PlaceholderText = server is null ? "e.g. nas or 192.168.1.10" : $"{server.Host} (the server's)";
@@ -91,9 +97,16 @@ public sealed class ShareEditorWindow : FluentWindow
         _user.Text = share.Credentials.Username ?? "";
         _domain.Text = share.Credentials.Domain ?? "";
         _storedPassword = share.Credentials.Password;
+        _storedKey = share.Credentials.PrivateKey;
+        _storedPassphrase = share.Credentials.KeyPassphrase;
         ShowPasswordState();
         _removePassword.Click += (_, _) => { _storedPassword = null; _password.Password = ""; ShowPasswordState(); };
-        if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(_password); // policy AllowSavedPasswords = 0 (§5.6)
+        _removePassphrase.Click += (_, _) => { _storedPassphrase = null; _passphrase.Password = ""; ShowPasswordState(); };
+        ToolTipService.SetShowOnDisabled(_passphrase, true);
+        _importKey.Click += (_, _) => ImportKey();
+        _removeKey.Click += (_, _) => { _storedKey = _storedPassphrase = null; _passphrase.Password = ""; ShowPasswordState(); };
+        // Policy AllowSavedPasswords = 0 (§5.6): no password and no passphrase is stored; the key itself isn't a password.
+        if (!Features.IsAllowed(Feature.SavedPasswords)) { PolicyLock.TurnedOff(_password); PolicyLock.TurnedOff(_passphrase); }
 
         var (inherited, source) = server is null ? Inheritance.ResolveCredentials(share, data, includeSelf: false) : Inheritance.ResolveCredentials(server, data);
         _inherit.Content = server is null ? "Inherit from parent folder" : $"Same as the server ({server.Name})";
@@ -154,6 +167,25 @@ public sealed class ShareEditorWindow : FluentWindow
         _customFields.Children.Add(userCol);
         _customFields.Children.Add(domainCol);
         _customFields.Children.Add(pwCol);
+        _customFields.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _keyFields.Children.Add(Label("Private key"));
+        var keyButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+        keyButtons.Children.Add(_importKey);
+        keyButtons.Children.Add(_removeKey);
+        _keyFields.Children.Add(keyButtons);
+        _keyText.Margin = new Thickness(0, 0, 0, 10);
+        _keyFields.Children.Add(_keyText);
+        var passphraseRow = new Grid();
+        passphraseRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        passphraseRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        passphraseRow.Children.Add(_passphrase);
+        Grid.SetColumn(_removePassphrase, 1);
+        passphraseRow.Children.Add(_removePassphrase);
+        _keyFields.Children.Add(Label("Key passphrase"));
+        _keyFields.Children.Add(passphraseRow);
+        Grid.SetRow(_keyFields, 2);
+        Grid.SetColumnSpan(_keyFields, 2);
+        _customFields.Children.Add(_keyFields);
         body.Children.Add(_customFields);
         _accountHint.Margin = new Thickness(0, 8, 0, 0);
         body.Children.Add(_accountHint);
@@ -167,10 +199,9 @@ public sealed class ShareEditorWindow : FluentWindow
         buttons.Children.Add(cancel);
 
         var root = new DockPanel();
-        var tb = new TitleBar { Title = Title, ShowMaximize = false, ShowMinimize = false };
-        DockPanel.SetDock(tb, Dock.Top);
+        DockPanel.SetDock(_titleBar, Dock.Top);
         DockPanel.SetDock(buttons, Dock.Bottom);
-        root.Children.Add(tb);
+        root.Children.Add(_titleBar);
         root.Children.Add(buttons);
         root.Children.Add(body);
         Content = root;
@@ -191,9 +222,43 @@ public sealed class ShareEditorWindow : FluentWindow
     private ShareProtocol Protocol => (ShareProtocol)((ComboBoxItem)_protocol.SelectedItem).Tag;
     private FtpSecurity Security => (FtpSecurity)((ComboBoxItem)_ftpSecurity.SelectedItem).Tag;
 
+    /// <summary>
+    /// The kinds the type list offers, in its order: SSH only for an item on its own, and only the kinds this PC's policy
+    /// allows – besides <paramref name="current"/>, the kind of an item being edited (a new item gets only allowed ones).
+    /// </summary>
+    internal static IEnumerable<(ShareProtocol Kind, string Text)> Kinds(bool standalone, ShareProtocol? current, Agent.IPolicySource? policy = null)
+    {
+        (ShareProtocol, string)[] all =
+        [
+            (ShareProtocol.Ssh, "SSH – terminal"),
+            (ShareProtocol.Smb, "SMB – Windows file share, NAS"),
+            (ShareProtocol.Sftp, "SFTP – over SSH"),
+            (ShareProtocol.Ftp, "FTP / FTPS"),
+            (ShareProtocol.WebDav, "WebDAV – e.g. Nextcloud"),
+        ];
+        return all.Where(k => (standalone || k.Item1 != ShareProtocol.Ssh) && (k.Item1 == current || Features.IsAllowed(k.Item1, policy)));
+    }
+
+    /// <summary>"New SSH connection" for SSH, the share titles for the rest – following the type while it is changed.</summary>
+    private void UpdateTitle()
+    {
+        Title = Protocol == ShareProtocol.Ssh ? (_isNew ? "New SSH connection" : $"SSH connection {_share.Name}")
+            : _server is null ? (_isNew ? "New network share" : $"Network share {_share.Name}")
+            : _isNew ? $"Add network share to {_server.Name}" : $"Network share {_share.Name} on {_server.Name}";
+        _titleBar.Title = Title;
+    }
+
+    /// <summary>What the dialog's messages are titled.</summary>
+    private string Topic => Protocol == ShareProtocol.Ssh ? "SSH connection" : "Network share";
+
     private void Update()
     {
         var p = Protocol;
+        UpdateTitle();
+        _name.PlaceholderText = p == ShareProtocol.Ssh ? "e.g. web01" : "e.g. share";
+        _custom.Content = p == ShareProtocol.Ssh ? "Enter an account for this connection" : "Enter an account for this share";
+        _pathLabel.Visibility = _path.Visibility = p == ShareProtocol.Ssh ? Visibility.Collapsed : Visibility.Visible;
+        _keyFields.Visibility = ShareConnector.TakesKey(p) ? Visibility.Visible : Visibility.Collapsed;
         _pathLabel.Text = p switch
         {
             ShareProtocol.Smb => "Share name",
@@ -223,7 +288,7 @@ public sealed class ShareEditorWindow : FluentWindow
         _accountHint.Text = p switch
         {
             ShareProtocol.Smb => "Without an account, your Windows account is used. Another account for a server Windows already uses with a different account works too – RemoteHub then connects with its own SMB client.",
-            ShareProtocol.Sftp => "SFTP signs in with user name and password. The server's key is shown for you to confirm the first time.",
+            ShareProtocol.Sftp or ShareProtocol.Ssh => "Signs in with a private key, a password, or both (the key first). The server's key is shown for you to confirm the first time.",
             ShareProtocol.Ftp => "Without an account, RemoteHub signs in anonymously.",
             _ => "Without an account, your Windows account is used (intranet servers).",
         };
@@ -231,9 +296,9 @@ public sealed class ShareEditorWindow : FluentWindow
         if (_trusted is not null)
         {
             var text = Caption();
-            text.Text = $"Accepted {(Protocol == ShareProtocol.Sftp ? "host key" : "certificate")}: {Short(_trusted)}";
+            text.Text = $"Accepted {(ShareConnector.TakesKey(Protocol) ? "host key" : "certificate")}: {Short(_trusted)}";
             text.VerticalAlignment = VerticalAlignment.Center;
-            var forget = new Button { Content = "Forget", Margin = new Thickness(10, 0, 0, 0), ToolTip = "Ask again next time the share is opened" };
+            var forget = new Button { Content = "Forget", Margin = new Thickness(10, 0, 0, 0), ToolTip = "Ask again the next time it is opened" };
             forget.Click += (_, _) => { _trusted = null; Update(); };
             _trustRow.Children.Add(text);
             _trustRow.Children.Add(forget);
@@ -279,8 +344,14 @@ public sealed class ShareEditorWindow : FluentWindow
             _path.Text = path;
         }
         if (name.Length == 0) name = Protocol == ShareProtocol.Smb && path.Length > 0 ? Remoting.Shares.ShareConnector.SplitSmbPath(path).Share : "";
-        if (name.Length == 0) { await Dialogs.Info(this, "Network share", "Enter a name for the share."); return; }
-        if (_server is null && _host.Text.Trim().Length == 0) { await Dialogs.Info(this, "Network share", "Enter the host the share is on (name or address)."); return; }
+        var ssh = Protocol == ShareProtocol.Ssh;
+        if (ssh) path = "";
+        if (name.Length == 0) { await Dialogs.Info(this, Topic, ssh ? "Enter a name for the connection." : "Enter a name for the share."); return; }
+        if (_server is null && _host.Text.Trim().Length == 0)
+        {
+            await Dialogs.Info(this, Topic, ssh ? "Enter the host to connect to (name or address)." : "Enter the host the share is on (name or address).");
+            return;
+        }
         if (Protocol == ShareProtocol.Smb && Remoting.Shares.ShareConnector.SplitSmbPath(path).Share.Length == 0)
         {
             await Dialogs.Info(this, "Network share", "Enter the name of the share, e.g. \"share\" for \\\\" + (_host.Text.Trim().Length > 0 ? _host.Text.Trim() : _server!.Host) + "\\share.");
@@ -289,18 +360,28 @@ public sealed class ShareEditorWindow : FluentWindow
         int? port = null;
         if (_port.Text.Trim().Length > 0)
         {
-            if (!int.TryParse(_port.Text.Trim(), out var n) || n is < 1 or > 65535) { await Dialogs.Info(this, "Network share", "The port must be a number from 1 to 65535."); return; }
+            if (!int.TryParse(_port.Text.Trim(), out var n) || n is < 1 or > 65535) { await Dialogs.Info(this, Topic, "The port must be a number from 1 to 65535."); return; }
             port = n;
         }
         if (port == NetworkShare.DefaultPort(Protocol, Security, _https.IsChecked == true)) port = null; // the default: follows the type
         var host = HostToSave();
-        if (Protocol == ShareProtocol.Sftp && _inherit.IsChecked != true && _custom.IsChecked == true && _user.Text.Trim().Length == 0)
+        if (ShareConnector.TakesKey(Protocol) && _inherit.IsChecked != true && _custom.IsChecked == true && _user.Text.Trim().Length == 0)
         {
-            await Dialogs.Info(this, "Network share", "SFTP needs a user name.");
+            await Dialogs.Info(this, Topic, $"{NetworkShare.Label(Protocol)} needs a user name.");
             return;
         }
+        var takesKey = ShareConnector.TakesKey(Protocol) && _custom.IsChecked == true;
+        var typedPassphrase = Features.IsAllowed(Feature.SavedPasswords) ? Secret.From(_passphrase.Password) : null;
+        if (takesKey && _storedKey is { } key && typedPassphrase is not null)
+        {
+            // A wrong passphrase is said now, not at the next connect.
+            try { SshSignIn.Describe(key, typedPassphrase); }
+            catch (SshKeyException ex) { await Dialogs.Info(this, Topic, ex.Message); return; }
+        }
 
-        var changedTarget = _share.Protocol != Protocol || !string.Equals(_share.Host ?? "", host ?? "", StringComparison.OrdinalIgnoreCase) || _share.Port != port;
+        // SFTP and SSH to the same host and port meet the same server key: switching between them keeps it.
+        var sameServer = ShareConnector.TakesKey(_share.Protocol) && ShareConnector.TakesKey(Protocol);
+        var changedTarget = (_share.Protocol != Protocol && !sameServer) || !string.Equals(_share.Host ?? "", host ?? "", StringComparison.OrdinalIgnoreCase) || _share.Port != port;
         _share.Name = name;
         _share.Protocol = Protocol;
         _share.Host = host;
@@ -314,7 +395,10 @@ public sealed class ShareEditorWindow : FluentWindow
         _share.Credentials = _custom.IsChecked == true
             // Policy AllowSavedPasswords = 0: the password box is greyed out and what was stored is kept (§14 Q2).
             ? new CredentialSet { Username = Null(_user.Text), Domain = Null(_domain.Text),
-                                  Password = (Features.IsAllowed(Feature.SavedPasswords) ? Secret.From(_password.Password) : null) ?? _storedPassword }
+                                  Password = (Features.IsAllowed(Feature.SavedPasswords) ? Secret.From(_password.Password) : null) ?? _storedPassword,
+                                  // A key is kept only for the kinds that sign in with one.
+                                  PrivateKey = takesKey ? _storedKey : null,
+                                  KeyPassphrase = takesKey && _storedKey is not null ? typedPassphrase ?? _storedPassphrase : null }
             : new CredentialSet();
         // A key or certificate belongs to one machine: another host or type asks again.
         _share.TrustedFingerprint = changedTarget ? null : _trusted;
@@ -325,8 +409,28 @@ public sealed class ShareEditorWindow : FluentWindow
 
     private void ShowPasswordState()
     {
-        _password.PlaceholderText = _storedPassword is not null ? "A password is stored – type a new one to replace it" : "Leave empty to be asked when connecting";
+        _password.PlaceholderText = _storedPassword is not null ? "A password is stored – type a new one to replace it"
+            : _storedKey is not null ? "Optional with a key – tried after it" : "Leave empty to be asked when connecting";
         _removePassword.Visibility = _storedPassword is not null ? Visibility.Visible : Visibility.Collapsed;
+        _removeKey.Visibility = _storedKey is not null ? Visibility.Visible : Visibility.Collapsed;
+        _importKey.Content = _storedKey is not null ? "Replace key…" : "Import key…";
+        _passphrase.IsEnabled = _storedKey is not null && Features.IsAllowed(Feature.SavedPasswords);
+        // Greyed until there is a key, and says so (with saved passwords off, PolicyLock's reason stays).
+        if (Features.IsAllowed(Feature.SavedPasswords)) _passphrase.ToolTip = _storedKey is null ? "Import a key first – the passphrase belongs to it" : null;
+        _passphrase.PlaceholderText = _storedPassphrase is not null ? "A passphrase is stored – type a new one to replace it"
+            : "Leave empty if the key has none, or to be asked when connecting";
+        _removePassphrase.Visibility = _storedPassphrase is not null ? Visibility.Visible : Visibility.Collapsed;
+        _keyText.Text = PrivateKeyPicker.Describe(_storedKey, _storedPassphrase);
+    }
+
+    /// <summary>Reads a private key file into the database (encrypted, like a password); the file itself isn't needed afterwards.</summary>
+    private async void ImportKey()
+    {
+        if (await PrivateKeyPicker.Pick(this, Topic) is not { } key) return;
+        _storedKey = key;
+        _storedPassphrase = null;
+        _passphrase.Password = "";
+        ShowPasswordState();
     }
 
     private static TextBlock Label(string text) => new() { Text = text, Margin = new Thickness(0, 0, 0, 4) };

@@ -191,6 +191,7 @@ both main switches off, there are no remote tools at all, only RDP and network s
 |---|---|
 | `AllowQuickConnect` | Connecting to a typed name or address that is not a saved connection (Ctrl+F → Enter) |
 | `AllowConnectionEditing` | Creating, editing, moving, duplicating and deleting folders, connections and shares. The tree becomes read-only, for connections IT provides through a shared folder. |
+| `AllowSsh` *(0.22.0)* | SSH connections (a terminal tab): *SSH* under *New → New connection* and opening them. Saved ones stay in the tree. A switch of its own: `AllowNetworkShares` = 0 doesn't block SSH, and `AllowSsh` = 0 doesn't block SFTP shares (network-shares.md §6.4). |
 
 #### 5.5 Jump hosts, network shares, recording
 

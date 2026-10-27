@@ -6628,7 +6628,7 @@ P3 · How: H PS · Needs: Server · Status: ✅ Automated – `S-SHARE2.Tests.ps
 P2 · How: U H · Needs: Server · Status: ✅ Automated – `S-SHARE2.Tests.ps1`
 
 **Expected:**
-- no account → "<name> (SFTP) needs an account. Right-click it → Edit… and set one …"; editor "SFTP needs a user name."; password and keyboard-interactive only (no key authentication)
+- no account → "<name> (SFTP) needs an account. Right-click it → Edit… and set one …"; editor "SFTP needs a user name."; without a key, password and keyboard-interactive only (a key-only server refuses it like a wrong password; keys: S-SSH-04, S-SSH-05)
 
 #### S-SFTP-05 · Wrong password
 P2 · How: H · Needs: Server · Status: ✅ Automated – `S-SHARE2.Tests.ps1`
@@ -6689,13 +6689,57 @@ P3 · How: H U · Needs: Server · Status: ✅ Automated – `S-SHARE2.Tests.ps1
 P2 · How: U · Needs: Server · Status: ✅ Automated – `S-SHARE2.Tests.ps1`
 
 **Expected:**
-- New → Network share: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed
+- New → New connection → SMB: host required ("Enter the host the share is on (name or address)."), inherits the folder's account, Duplicate / Move under in its menu; Remove: "Nothing on the share itself is deleted." and its open tabs closed
 
 #### W-NAME-01 · Setup by computer name
 P3 · How: PS · Needs: – · Status: ✅ Automated – `A-MORE2.Tests.ps1`
 
 **Expected:**
 - certificate CN=<name>, SAN `DNS=<fqdn>` and `DNS=<short>`; reuse needs the same CN; a name with other characters refused by RemoteHub "… isn't a computer name or IP address."
+
+### 7.1a SSH connections and private keys (S-SSH)
+
+#### S-SSH-01 · Terminal over SSH
+P1 · How: H · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- password sign-in on port 2222; "Trust this server?" asked once (SSH host key) and the fingerprint kept; the tab's status "Connected – SSH · OpenSSH…"; `hostname` typed into the terminal prints the device's name; `exit` → "The session ended."
+
+#### S-SSH-02 · Host key
+P1 · How: H · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- an accepted key → no question; refused → "The server's key wasn't accepted – nothing was sent."; a different key than the accepted one → asked as "SSH host key (changed!)" and, refused, the same message
+
+#### S-SSH-03 · Terminal size
+P2 · How: H · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- the shell gets the tab's size; after a resize to 100×30 `mode con` shows 100 columns
+
+#### S-SSH-04 · Private key sign-in
+P1 · How: H · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- an ed25519 key with a passphrase in `administrators_authorized_keys` signs in without a password; a wrong passphrase → "The passphrase is wrong …"; none → "… protected by a passphrase …"; a key the server doesn't know → "The server didn't accept the private key for this user (is its public key in the user's authorized_keys?)"; that key and the password → signs in (the key first, then the password)
+
+#### S-SSH-05 · SFTP with a private key
+P2 · How: H PS · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- SFTP signs in with the key alone and copies both ways; the host key SSH accepted is the SFTP share's too (no question)
+
+#### S-SSH-06 · SSH in RemoteHub's window
+P2 · How: U · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- New → New connection → SSH opens "New SSH connection" (no start folder, *Import key…* in the account); *Add*, *Open* → "Trust this server?" → *Trust and connect*; `hostname` typed into the terminal shows the device's name (read through the terminal's UI Automation value); Ctrl+W goes to the shell (the tab stays); `exit` → "The session ended."
+
+#### S-SSH-07 · Nothing identifying in DiagLog
+P1 · How: H E · Needs: Server · Status: ◐ Test written – `S-SSH.Tests.ps1`
+
+**Expected:**
+- after the SSH sessions this PC's `remotehub.log` has "SSH: connected" and names neither the device, its address nor the account
 
 ### 9.1 Connect, Hello, sessions
 
@@ -7881,11 +7925,11 @@ P1 · How: U · Needs: – · Status: ✅ Automated – `POL-CLIENT.Tests.ps1`
 7. `AllowQuickConnect` = 0: type `pol14-quick.invalid` in the search box and press Enter. Remove it.
 
 **Expected:**
-- Without policies: PolLocal offers *Update RemoteHub Agent…* and its tools through the agent, PolWinRm its tools over WinRM, PolOffline *Connect* and *Add network share…*; *New* has *New network share* and *Import .rdp files…*; Settings has *Export backup…*.
+- Without policies: PolLocal offers *Update RemoteHub Agent…* and its tools through the agent, PolWinRm its tools over WinRM, PolOffline *Connect* and *Add network share…*; *New → New connection* has *Remote Control*, *SSH*, *SFTP*, *FTP / FTPS*, *SMB* and *WebDAV*, and *New* has *Import .rdp files…*; Settings has *Export backup…*.
 - `AllowAgent` = 0: no *Remote desktop via RemoteHub Agent*, *Install / Update RemoteHub Agent…* or credential provider entry in the tree menu or the *+* menu; *Tools* offers *Test PowerShell remoting*, not *Test RemoteHub Agent* (the tools go over WinRM); in the editor *Connect through* and *Remote desktop through* are greyed out with "Turned off by your organisation"; Settings → Policies marks `AllowAgentDesktop` with *Off because "Allow the RemoteHub Agent" is off*.
 - `AllowPowerShellRemoting` = 0: PolWinRm has no *PowerShell*, *File transfer*, *Registry*, *Test PowerShell remoting* or *Set up PowerShell remoting on the target…*; PolLocal still offers *PowerShell* and *File transfer*.
 - `AllowAgentFileTransfer` = 0: *File transfer* gone for PolLocal (*PowerShell* stays), still there for PolWinRm.
-- The RDP tab's *Reconnect* fails in the tab: "Remote desktop over RDP is turned off by your organisation – see Settings → Policies."; PolOffline has no *Connect* or *Open additional session* and no *Add network share…*; *New* has neither *New network share* nor *Import .rdp files…*; Settings has no *Export backup…*, *Import backup…* stays.
+- The RDP tab's *Reconnect* fails in the tab: "Remote desktop over RDP is turned off by your organisation – see Settings → Policies."; PolOffline has no *Connect* or *Open additional session* and no *Add network share…*; *New → New connection* has none of the share kinds (*SSH* stays) and *New* no *Import .rdp files…*; Settings has no *Export backup…*, *Import backup…* stays.
 - Quick connect: "Quick connect is turned off by your organisation – see Settings → Policies."; no tab opens.
 - Not checked: the tab's own context menu, the detached window and the toolbar's *File transfer* (they use the same checks as the *+* menu).
 

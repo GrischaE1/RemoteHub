@@ -200,6 +200,9 @@ to do – and prove the **agent** enforces it (review rule: policy, consent and 
 | T10.5 Certificate to CurrentUser\Root | Verified: any presented certificate could be added. Fixed 2026-10-21: only an end-entity certificate (`RemotingSetup.IsEndEntity`), behind the Windows confirmation | UI-TL-08, W-TRUST-01 | SEC-RDP-03 (unit test) |
 | T10.6 `.rdp` import with `password 51:b` | Risk list before connecting (`RdpFileParser.Risks`) | R-RDP-08, C-MSI-03 | SEC-RDP-02 |
 | (new) Host key / certificate changed on a share | Asked before anything is sent | S-SFTP-03, S-FTP-02 | SEC-SH-03 |
+| (new, 0.22.0) Hostile SSH server output to the terminal emulator | Mitigated: RemoteHub's own parser, bounded (32 parameters, values ≤ 65535, repeats ≤ one screen, OSC/DCS/APC strings dropped unstored); no clipboard write (OSC 52), no title, no window reports (`CSI t`) – it answers only DA, DSR and the cursor position (network-shares.md §6.3) | S-SSH-01, S-SSH-03; unit tests `TerminalTests` (incl. 1.2 MB of escape-heavy random output, an endless OSC) | – (unit tests; a rogue SSH server case is a candidate for SEC-SHARE) |
+| (new, 0.22.0) Paste into a terminal runs commands | A paste of several lines without bracketed paste is asked first; with bracketed paste ESC is taken out, so a pasted end marker can't end the paste | S-SSH-06; unit tests `TerminalTests` | – |
+| (new, 0.22.0) SSH private keys at rest | Sealed in `secrets` like passwords, never in a record; the editors show only the fingerprint; a passphrase follows `AllowSavedPasswords` | S-SSH-04, S-SSH-05; unit tests `SshKeyTests` | SEC-BAK / SEC-DPAPI cover the store |
 
 ### TB12 – Update channel (A5, A6)
 

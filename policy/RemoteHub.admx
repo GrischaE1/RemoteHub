@@ -876,6 +876,13 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="Console_AllowSsh" class="Both" displayName="$(string.Console_AllowSsh)" explainText="$(string.Console_AllowSsh_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowSsh">
+      <parentCategory ref="Console_Connections" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
 
     <policy name="Console_AllowSavedPasswords" class="Both" displayName="$(string.Console_AllowSavedPasswords)" explainText="$(string.Console_AllowSavedPasswords_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowSavedPasswords">

@@ -44,6 +44,8 @@ using RemoteHub.Remoting;
 //       Automatic sign-in on the console's sign-in screen through the agent desktop, as RemoteHub's desktop tab does it.
 //   share ... [--windows-user <COMPUTER\user>] [--safety 1] / share-conflict ... / share-lifetime ... / share-session ...
 //       network shares: copy scenario, transfer safety, Windows SMB connection lifetime, the share tab's connection (see ShareHarness.cs)
+//   ssh --host .. --user .. [--password ..] [--key <file> [--passphrase ..]] [--command .. --expect ..] [--resize WxH ..]
+//       an SSH connection as the SSH tab runs it: sign-in, a command, a resize, exit (see SshHarness.cs)
 //   seed --connections n [--folders n] [--shares n] [--standalone n]   test data for the start-time test (see SeedHarness.cs)
 //   tool --op <op> --via agent|winrm ...   RemoteHub's PowerShell connection and remote tools (see LabTools.cs)
 //   probe --kind <kind> ...                raw HTTP/TLS/WebSocket checks of the agent (see LabProbes.cs)
@@ -77,6 +79,7 @@ try
         "share-conflict" => ShareHarness.Conflict(opt),
         "share-lifetime" => ShareHarness.Lifetime(opt),
         "share-session" => ShareHarness.Session(opt),
+        "ssh" => SshHarness.Run(opt),
         "seed" => SeedHarness.Run(opt),
         "old-backup" => OldBackup.Run(opt),
         "tool" => await LabTools.Run(opt),

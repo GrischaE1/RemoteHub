@@ -171,7 +171,22 @@ public class NetworkShareTests : IDisposable
     [InlineData(ShareProtocol.Ftp, FtpSecurity.Implicit, true, 990)]
     [InlineData(ShareProtocol.WebDav, FtpSecurity.Explicit, true, 443)]
     [InlineData(ShareProtocol.WebDav, FtpSecurity.Explicit, false, 80)]
+    [InlineData(ShareProtocol.Ssh, FtpSecurity.Explicit, true, 22)]
     public void Default_ports(ShareProtocol p, FtpSecurity ftp, bool https, int port) => Assert.Equal(port, NetworkShare.DefaultPort(p, ftp, https));
+
+    [Fact]
+    public void An_SSH_connection_is_a_terminal_not_a_share()
+    {
+        var ssh = new NetworkShare { Name = "web01", Protocol = ShareProtocol.Ssh, Host = "web01", Port = 2222 };
+        Assert.Equal("ssh://web01:2222", ssh.Address);
+        Assert.Equal("SSH", ssh.ProtocolLabel);
+        Assert.Equal("WindowConsole20", ssh.DisplaySymbol);
+        Assert.True(ssh.IsSsh);
+        Assert.False(ShareConnector.AccountOptional(ShareProtocol.Ssh));
+        Assert.True(ShareConnector.TakesKey(ShareProtocol.Ssh) && ShareConnector.TakesKey(ShareProtocol.Sftp));
+        Assert.False(ShareConnector.TakesKey(ShareProtocol.Ftp) || ShareConnector.TakesKey(ShareProtocol.Smb) || ShareConnector.TakesKey(ShareProtocol.WebDav));
+        Assert.Throws<ShareException>(() => ShareConnector.Open(ssh, new CredentialSet { Username = "u" }, _ => false, _ => { }));
+    }
 
     [Theory]
     [InlineData("share", "share", "")]

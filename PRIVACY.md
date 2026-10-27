@@ -41,6 +41,7 @@ fails it isn't retried (except crash reports, see below), and RemoteHub never wa
 | `connections` | Number of connections |
 | `agents` | Number of connections with the RemoteHub Agent installed |
 | `shares` | Number of network shares (SMB, SFTP, FTP, WebDAV) |
+| `ssh` | Number of SSH connections |
 | `folders` | Number of folders |
 
 **`app_session` – how long RemoteHub ran last time**, sent at the next start:

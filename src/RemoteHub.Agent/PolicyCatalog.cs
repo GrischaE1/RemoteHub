@@ -218,6 +218,8 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingDeviceActions = Feature("AllowRemotingDeviceActions", "PowerShell remoting", "Allow device actions over WinRM", DeviceActionsSince);
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
+    /// <summary>SSH connections: a terminal tab (docs/network-shares.md §6).</summary>
+    public static readonly PolicyEntry AllowSsh = Feature("AllowSsh", "Connections", "Allow SSH connections", "0.22.0");
     public static readonly PolicyEntry AllowJumpHosts = Feature("AllowJumpHosts", "Jump hosts and network shares", "Allow jump hosts");
     /// <summary>Reaching devices through a RemoteHub Broker and its synced folders.</summary>
     public static readonly PolicyEntry AllowBroker = Feature("AllowBroker", "RemoteHub Agent", "Allow the RemoteHub Broker", "0.22.0");
@@ -385,7 +387,7 @@ public static class PolicyCatalog
         AllowAgentDeviceActions, AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
         AllowRemotingDeviceActions, AllowRemotingSetup,
-        AllowQuickConnect, AllowConnectionEditing,
+        AllowQuickConnect, AllowConnectionEditing, AllowSsh,
         AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav, AllowBroker,
         AllowSavedPasswords, AllowPasswordCopy,
         AllowRdpFileImport, AllowRdpFileExport, AllowBackupExport, AllowBackupImport,

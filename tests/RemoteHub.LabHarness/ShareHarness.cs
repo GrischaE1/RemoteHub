@@ -19,7 +19,7 @@ using RemoteHub.Remoting.Shares;
 
 /// <summary>
 /// Network shares against a lab VM with RemoteHub's own code (ShareConnector, ShareTransfer, ShareSession):
-///   share --protocol smb|sftp|ftp|webdav --host .. [--port n] --path .. [--user .. --password ..] [--https 0|1]
+///   share --protocol smb|sftp|ftp|webdav --host .. [--port n] --path .. [--user .. --password ..] [--key &lt;file&gt; [--passphrase ..]] [--https 0|1]
 ///         [--ftp-security explicit|implicit|none] [--trusted &lt;fingerprint&gt;] [--accept 0|1]
 ///         [--windows-user &lt;COMPUTER\user&gt;] [--safety 1]
 ///       Connects (a key or certificate seen for the first time is accepted only with --accept 1, as a user would),
@@ -48,6 +48,18 @@ internal static class ShareHarness
 {
     private const string PartSuffix = ".remotehub-part";
 
+    /// <summary>
+    /// The account from --user and --password; for SFTP (and SSH, SshHarness.cs) also --key &lt;private key file&gt; and
+    /// --passphrase, read as the editor's Import key… reads it.
+    /// </summary>
+    internal static CredentialSet Credentials(Dictionary<string, string> o) => new()
+    {
+        Username = o.GetValueOrDefault("user"),
+        Password = RemoteHub.Services.Secret.From(o.GetValueOrDefault("password")),
+        PrivateKey = o.TryGetValue("key", out var key) ? SshSignIn.ReadKeyFile(key) : null,
+        KeyPassphrase = RemoteHub.Services.Secret.From(o.GetValueOrDefault("passphrase")),
+    };
+
     public static object Run(Dictionary<string, string> o) =>
         o.TryGetValue("windows-user", out var account)
             ? AsWindowsUser(account, o.GetValueOrDefault("password") ?? "", () => Scenario(o))
@@ -68,7 +80,7 @@ internal static class ShareHarness
     private static object Scenario(Dictionary<string, string> o)
     {
         var share = ShareFrom(o);
-        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = RemoteHub.Services.Secret.From(o.GetValueOrDefault("password")) };
+        var cred = Credentials(o);
         var accept = o.GetValueOrDefault("accept") == "1";
         var windowsUser = o.GetValueOrDefault("windows-user");
         var asked = new List<object>();
@@ -468,7 +480,7 @@ internal static class ShareHarness
         var idleSec = int.Parse(o.GetValueOrDefault("idle-sec") ?? "5");
         ShareSession.IdleTime = TimeSpan.FromSeconds(idleSec); // a settable static property: no test seam needed
         var share = ShareFrom(o);
-        var cred = new CredentialSet { Username = o.GetValueOrDefault("user"), Password = RemoteHub.Services.Secret.From(o.GetValueOrDefault("password")) };
+        var cred = Credentials(o);
         var accept = o.GetValueOrDefault("accept") == "1";
         var via = LabJump.Route(o);
         var asked = new List<object>();
