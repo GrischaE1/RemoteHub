@@ -96,21 +96,49 @@ public class BrokerUiTests
     }
 
     [Fact]
-    public void A_synced_device_shows_its_state_at_the_broker_beside_its_address()
+    public void A_synced_device_shows_its_state_at_the_broker_as_a_dot_and_only_not_sealed_as_text()
     {
         var d = Synced().Device;
-        Assert.Equal("online", d.RouteHint);
+        Assert.Equal(BrokerPresence.Online, d.BrokerPresence);
+        Assert.Null(d.RouteHint);
         Assert.True(d.RouteUsable);
         d.Broker!.Online = false;
-        Assert.Equal("offline", d.RouteHint);
+        Assert.Equal(BrokerPresence.Offline, d.BrokerPresence);
         Assert.True(d.RouteUsable); // no warning: in the same network it may still answer directly
+        d.Broker.Online = null;
+        Assert.Equal(BrokerPresence.Unknown, d.BrokerPresence);
+        Assert.Contains("hasn't reported it yet", d.RouteToolTip);
+        d.Broker.Online = true;
         d.Broker.Connected = false;
-        Assert.Null(d.RouteHint); // a PC that shares the settings but isn't connected doesn't know
+        Assert.Equal(BrokerPresence.Unknown, d.BrokerPresence); // a PC that shares the settings but isn't connected doesn't know
+        Assert.Contains("isn't connected", d.RouteToolTip);
+        Assert.Equal(BrokerPresence.None, new Connection { Name = "SRV01" }.BrokerPresence);
         d.Broker.Sealed = false;
+        Assert.Equal(BrokerPresence.Unknown, d.BrokerPresence);
         Assert.Equal("not sealed", d.RouteHint);
         Assert.True(d.BrokerUnsealed); // greyed
         Assert.False(d.RouteUsable); // in the warning colour
         Assert.Contains("Not sealed by your organisation", d.RouteToolTip);
+    }
+
+    [Fact]
+    public void A_synced_device_always_uses_its_agent_and_the_editor_says_why_it_cant_be_changed()
+    {
+        var t = Synced();
+        var data = new AppData();
+        t.Root.Options.UseAgent = false; // an inherited "PowerShell remoting" doesn't reach through the broker
+        t.Device.Options.UseAgent = false;
+        Assert.True(Inheritance.UsesAgent(t.Device, data));
+        Assert.True(Inheritance.UsesAgent(t.Placed, data));
+        Assert.False(Inheritance.UsesAgent(new Connection { Name = "SRV01", Host = "srv01" }, data)); // ordinary items as before
+
+        foreach (NodeBase n in new NodeBase[] { t.Device, t.Servers })
+        {
+            var row = new EditorViewModel(n, data, isNew: false).PsRows.Single(r => r.Label == "Connect through");
+            Assert.False(row.IsEditable);
+            Assert.Contains("always reached through their RemoteHub Agent", row.PolicyNote);
+        }
+        Assert.True(new EditorViewModel(new Connection { Name = "SRV01", Host = "srv01" }, data, isNew: false).PsRows.Single(r => r.Label == "Connect through").IsEditable);
     }
 
     [Fact]
@@ -129,10 +157,10 @@ public class BrokerUiTests
 
         sync.SetConnected(b, true);
         sync.Presence(b, "d1", online: true);
-        Assert.Equal("online", device.RouteHint);
-        Assert.Contains(nameof(NodeBase.RouteHint), changed);
+        Assert.Equal(BrokerPresence.Online, device.BrokerPresence);
+        Assert.Contains(nameof(NodeBase.BrokerPresence), changed);
         sync.Presence(b, "d1", online: false);
-        Assert.Equal("offline", device.RouteHint);
+        Assert.Equal(BrokerPresence.Offline, device.BrokerPresence);
     }
 
     [Fact]

@@ -7,13 +7,15 @@ public static class Inheritance
 {
     /// <summary>
     /// Tools go through the RemoteHub Agent instead of WinRM. Below a jump host a device with an agent uses it unless the
-    /// connection itself is set to WinRM: an inherited choice was made for devices reached directly. With the agent blocked
-    /// by this PC's policy (AllowAgent = 0) the setting is greyed out and tools go over WinRM; with UseAgent fixed by policy
-    /// that value decides, below a jump host too.
+    /// connection itself is set to WinRM: an inherited choice was made for devices reached directly. A device of a synced
+    /// broker folder always does – the broker reaches nothing but its agent. With the agent blocked by this PC's policy
+    /// (AllowAgent = 0) the setting is greyed out and tools go over WinRM; with UseAgent fixed by policy that value decides,
+    /// below a jump host and for broker devices too.
     /// </summary>
     public static bool UsesAgent(Connection c, AppData data) => Features.IsAllowed(Feature.Agent) &&
         (AppPolicy.Connections().UseAgent is { } fixedByPolicy ? fixedByPolicy
-            : (c.JumpHost is not null && c.Options.UseAgent is null && c.Agent is { Fingerprint.Length: > 0 }) || ResolveOptions(c, data).UseAgent == true);
+            : c.Broker is { Kind: BrokerItemKind.Device }
+              || (c.JumpHost is not null && c.Options.UseAgent is null && c.Agent is { Fingerprint.Length: > 0 }) || ResolveOptions(c, data).UseAgent == true);
 
     public static RdpOptions ResolveOptions(NodeBase? node, AppData data, bool includeSelf = true)
     {

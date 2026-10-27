@@ -330,8 +330,29 @@
                                             </Style>
                                         </ui:SymbolIcon.Style>
                                     </ui:SymbolIcon>
-                                    <Border Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}"
-                                            Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}"
+                                                Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
+                                        <!-- A broker device: online (green), offline (red) or unknown (yellow) at the broker, next to the icon -->
+                                        <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="{Binding RouteToolTip}">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Fill" Value="{DynamicResource SystemFillColorCautionBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding BrokerPresence}" Value="None">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding BrokerPresence}" Value="Online">
+                                                            <Setter Property="Fill" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding BrokerPresence}" Value="Offline">
+                                                            <Setter Property="Fill" Value="{DynamicResource SystemFillColorCriticalBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                    </StackPanel>
                                     <Grid Grid.Column="1" Margin="0,0,5,0" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="16"
                                                        Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorPrimaryBrush}}"
@@ -363,7 +384,7 @@
                                         </DockPanel>
                                         <DockPanel>
                                             <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used);
-                                                 a device of a synced broker folder: online / offline / not sealed (the last in the warning colour) -->
+                                                 a device of a synced broker folder whose record isn't sealed: "not sealed", in the warning colour -->
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
                                                        Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
                                                 <TextBlock.Style>
