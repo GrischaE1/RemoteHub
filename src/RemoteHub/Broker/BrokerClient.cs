@@ -65,6 +65,18 @@ public sealed class BrokerClient : IAsyncDisposable
     /// <summary>Raised on a thread-pool thread – the receiver marshals to the dispatcher.</summary>
     public event Action<BrokerClient, IReadOnlyList<JsonObject>>? Changed;
     public event Action<BrokerClient, string, bool, long>? Presence;
+    /// <summary>Every device's online state (a <c>presenceList</c> snapshot): after connecting and every <see cref="PresenceInterval"/>.</summary>
+    public event Action<BrokerClient, IReadOnlyList<(string DeviceId, bool Online)>>? PresenceSnapshot;
+
+    /// <summary>
+    /// How often the online state of every device is read again while connected. The shared list doesn't carry it (it
+    /// changes without moving the cursor) and a push can be missed – a connection that drops, a debounce – so each dot is
+    /// at most this old.
+    /// </summary>
+    internal static TimeSpan PresenceInterval { get; set; } = TimeSpan.FromSeconds(45);
+    /// <summary>A snapshot reads at most this many pages (500 devices each); a broker that keeps saying "more" is stopped there.</summary>
+    internal const int MaxPresencePages = 200;
+    private bool _presenceList;
     public event Action<BrokerClient>? StateChanged;
 
     private BrokerClient(BrokerConnection info, string consoleSecret)
@@ -180,17 +192,21 @@ public sealed class BrokerClient : IAsyncDisposable
         }
         var orgName = Text(welcome, "orgName", 200);
         if (welcome["stun"] is JsonValue stun && stun.TryGetValue<string>(out var server) && Stun.ParseServer(server) is not null) StunServer = server.Trim();
+        // An older broker closes the connection on a request it doesn't know: ask only for what it names.
+        _presenceList = HasFeature(welcome, "presenceList");
         if (orgName != _info.OrgName && orgName.Length > 0) BrokerStore.SetOrgName(_info.Id, orgName);
 
         _ws = ws;
         var reader = Task.Run(() => ReadLoop(ws, ct), ct);
         using var alive = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var keepAlive = PingLoop(ws, alive.Token);
+        var presence = Task.CompletedTask;
         try
         {
             await LoadKeyringAsync().ConfigureAwait(false);
             await SyncAsync().ConfigureAwait(false);
             SetState(true, $"Connected to {orgName} on {Host}");
+            if (_presenceList) presence = PresenceLoop(alive.Token);
             await reader.ConfigureAwait(false);
         }
         finally
@@ -199,6 +215,7 @@ public sealed class BrokerClient : IAsyncDisposable
             _ws = null;
             SetState(false, $"The connection to the RemoteHub Broker {Host} was lost.");
             try { await keepAlive.ConfigureAwait(false); } catch { /* ended with it */ }
+            try { await presence.ConfigureAwait(false); } catch { /* ended with it */ }
         }
     }
 
@@ -253,6 +270,61 @@ public sealed class BrokerClient : IAsyncDisposable
             if (page["more"]?.GetValue<bool>() != true) return;
         }
     }
+
+    /// <summary>Every device's online state now, then again every <see cref="PresenceInterval"/> until the connection ends.</summary>
+    private async Task PresenceLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try { PresenceSnapshot?.Invoke(this, await PresenceListAsync(ct).ConfigureAwait(false)); }
+            catch (Exception ex) when (ex is BrokerException or InvalidDataException) { DiagLog.Write("Broker: the online state wasn't read: " + ex.Message); }
+            await Task.Delay(PresenceInterval, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>The <c>presenceList</c> pages, in device id order.</summary>
+    private async Task<IReadOnlyList<(string DeviceId, bool Online)>> PresenceListAsync(CancellationToken ct)
+    {
+        var all = new List<(string, bool)>();
+        string? after = null;
+        for (var page = 0; page < MaxPresencePages; page++)
+        {
+            var request = new JsonObject { ["t"] = "presenceList" };
+            if (after is not null) request["after"] = after;
+            var (items, more) = ReadPresencePage(await RequestAsync(request, ct).ConfigureAwait(false), after);
+            all.AddRange(items);
+            if (!more || items.Count == 0) return all;
+            after = items[^1].DeviceId;
+        }
+        DiagLog.Write($"Broker: the online state stopped after {MaxPresencePages} pages");
+        return all;
+    }
+
+    /// <summary>
+    /// One <c>presenceList</c> answer, checked: device ids as GUIDs, each one after <paramref name="after"/> and the one
+    /// before it – a page out of order or repeating itself is refused rather than read without end.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The page isn't one.</exception>
+    internal static (List<(string DeviceId, bool Online)> Items, bool More) ReadPresencePage(JsonObject answer, string? after)
+    {
+        if (answer["items"] is not JsonArray array) throw new InvalidDataException("presenceList from the broker has no items");
+        var items = new List<(string, bool)>(array.Count);
+        var last = after;
+        foreach (var node in array)
+        {
+            if (node is not JsonObject i) throw new InvalidDataException("presenceList from the broker has an item that isn't an object");
+            var id = Text(i, "deviceId", 36);
+            if (!Guid.TryParseExact(id, "D", out _)) throw new InvalidDataException("presenceList from the broker has an item without a device id");
+            if (last is not null && string.CompareOrdinal(id, last) <= 0) throw new InvalidDataException("presenceList from the broker isn't in device id order");
+            items.Add((id, i["online"] is JsonValue v && v.TryGetValue<bool>(out var on) && on));
+            last = id;
+        }
+        return (items, answer["more"] is JsonValue m && m.TryGetValue<bool>(out var more) && more);
+    }
+
+    /// <summary>Whether a broker's <c>welcome</c> names <paramref name="feature"/> among the requests beyond the first version.</summary>
+    internal static bool HasFeature(JsonObject welcome, string feature) =>
+        welcome["features"] is JsonArray list && list.Any(f => f is JsonValue v && v.TryGetValue<string>(out var s) && s == feature);
 
     private void Cache(IReadOnlyList<JsonObject> items, long cursor) =>
         BrokerStore.PutItems(_info.Id, items.Select(i => (i["kind"]?.GetValue<string>() ?? "", i["id"]?.GetValue<string>() ?? "", i.ToJsonString())), cursor);

@@ -8518,6 +8518,12 @@ P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 **Expected:**
 - *Alpha* pinned again, then *Lab* deleted (right-click → *Delete*, confirmed): the group is gone, *Alpha* doesn't show
 
+#### C-NAV-01 · One-line rows
+P2 · How: U · Needs: – · Status: ◐ Test written – `C-FAV.Tests.ps1`
+
+**Expected:**
+- a connection's row takes one line (name, address, the last use short: "never"); *Compact rows* off in the filter menu: the address and the full last use ("never connected") on a second line; kept after a restart; on again: one line
+
 #### C-RAIL-01 · The rail's version
 P3 · How: U · Needs: – · Status: ✅ Automated – `C-FAV.Tests.ps1`
 

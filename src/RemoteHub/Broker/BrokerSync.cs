@@ -63,6 +63,23 @@ public sealed class BrokerSync(ObservableCollection<NodeBase> top, Action change
         node.RefreshRoute();
     }
 
+    /// <summary>
+    /// Every device's online state at once (a <c>presenceList</c> snapshot): one pass over the organisation's folder, and
+    /// only the devices whose state changed are told.
+    /// </summary>
+    public void PresenceAll(BrokerConnection b, IReadOnlyList<(string DeviceId, bool Online)> states)
+    {
+        var devices = Root(b).Descendants().OfType<Connection>()
+            .Where(c => c.Broker is { Kind: BrokerItemKind.Device })
+            .GroupBy(c => c.Broker!.Item).ToDictionary(g => g.Key, g => g.First());
+        foreach (var (id, online) in states)
+        {
+            if (!devices.TryGetValue(id, out var node) || node.Broker!.Online == online) continue;
+            node.Broker.Online = online;
+            node.RefreshRoute();
+        }
+    }
+
     /// <summary>Applies changed items: folders first (so places exist), then devices, then placements.</summary>
     public void Apply(BrokerClient client, IReadOnlyList<JsonObject> items)
     {

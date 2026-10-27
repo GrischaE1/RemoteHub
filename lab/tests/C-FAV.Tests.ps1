@@ -1,7 +1,8 @@
-# C-FAV / C-RAIL - RemoteHub's navigation on a Windows client: a connection in a folder pinned to the Favourites group
-# (a link: the connection stays in its folder), the link's menu and Edit, unpinning with Del, favourites kept after a
-# restart and gone when the folder is deleted; the rail's version opens About. The client VM only, RemoteHub driven by
-# UI Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.9.
+# C-FAV / C-NAV / C-RAIL - RemoteHub's navigation on a Windows client: a connection in a folder pinned to the
+# Favourites group (a link, drawn as a chip: the connection stays in its folder), the link's menu and Edit, unpinning
+# with Del, favourites kept after a restart and gone when the folder is deleted; one-line rows by default and two with
+# Compact rows off, kept after a restart; the rail's version opens About. The client VM only, RemoteHub driven by UI
+# Automation in the console account's session (RhPerson.ps1 -Do uia). See docs/test-lab-cases.md section 10.9.
 # LabRole: console
 param(
     [Parameter(Mandatory)][string]$VmName,
@@ -43,7 +44,7 @@ AfterAll {
     }
 }
 
-Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-RAIL' -Skip:(-not $isClient) {
+Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-NAV', 'C-RAIL' -Skip:(-not $isClient) {
 
     Context 'favourites' {
         BeforeAll {
@@ -122,6 +123,35 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-RAIL' -Skip:(-not $isClie
         It 'C-FAV-05 deleting the folder of a pinned connection removes its link too' -Tag 'C-FAV-05' {
             $f.groupAfterFolderDelete | Should -BeFalse
             $f.countAfterFolderDelete | Should -Be 0
+        }
+    }
+
+    Context 'rows' {
+        BeforeAll {
+            $n = [ordered]@{}
+            # a connection nobody connected to yet: a one-line row says "never", a two-line row "never connected"
+            New-LabClientConnection -Name $VmName -Display 'Beta' -TargetHost 'beta.lab.invalid'
+            $n.oneLine = (Ui 'never' -Value exists -Optional -TimeoutSec 15).found
+            $n.oneLineLong = (Ui 'never connected' -Value exists -Optional -TimeoutSec 2).found
+            Shot 'one-line'
+            # the filter button's menu: Compact rows off
+            $null = Ui 'Filter: not used for' -Value 'pick:Compact rows'
+            $n.twoLines = (Ui 'never connected' -Value exists -Optional -TimeoutSec 15).found
+            Shot 'two-lines'
+            Stop-LabClient -Name $VmName -Task $script:task
+            $script:task = Start-LabClient -Name $VmName
+            $n.keptAfterRestart = (Ui 'never connected' -Value exists -Optional -TimeoutSec 30).found
+            $null = Ui 'Filter: not used for' -Value 'pick:Compact rows'
+            $n.backToOneLine = (Ui 'never' -Value exists -Optional -TimeoutSec 15).found
+            Save 'rows' $n
+        }
+
+        It 'C-NAV-01 rows take one line by default; Compact rows off puts the address and the full last use on a second line, kept after a restart' -Tag 'C-NAV-01' {
+            $n.oneLine | Should -BeTrue -Because 'a one-line row shows the short last use'
+            $n.oneLineLong | Should -BeFalse
+            $n.twoLines | Should -BeTrue
+            $n.keptAfterRestart | Should -BeTrue
+            $n.backToOneLine | Should -BeTrue
         }
     }
 

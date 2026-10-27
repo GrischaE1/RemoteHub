@@ -483,13 +483,10 @@ public sealed class ScriptsView : Grid
         return item;
     }
 
-    /// <summary>The look the TagBrush bindings of the shared folder frame read.</summary>
-    private sealed record FolderLook(Brush? TagBrush)
-    {
-        public bool IsJumpHost => false;
-    }
+    /// <summary>What the TagBrush bindings of the shared folder template read.</summary>
+    private sealed record FolderLook(Brush? TagBrush);
 
-    /// <summary>Frames a folder in its colour with the connection tree's template (Themes/Styles.xaml).</summary>
+    /// <summary>Shows a folder as the connection tree does – a header row, its contents beside a guide line in its colour (Themes/Styles.xaml).</summary>
     private TreeViewItem Framed(TreeViewItem item, string? colour)
     {
         if (TryFindResource("FolderItemTemplate") is ControlTemplate frame)

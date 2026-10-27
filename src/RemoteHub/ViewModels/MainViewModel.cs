@@ -49,6 +49,19 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public AppData Data { get; private set; }
+
+    /// <summary>One-line rows in the navigation (<see cref="UiState.TreeCompact"/>); the row templates follow it.</summary>
+    public bool CompactTree
+    {
+        get => Data.Ui.TreeCompact;
+        set
+        {
+            if (Data.Ui.TreeCompact == value) return;
+            Data.Ui.TreeCompact = value;
+            OnPropertyChanged();
+            RequestSave();
+        }
+    }
     public ObservableCollection<NodeBase> Items => Data.Items;
     /// <summary>The Favourites group while anything is pinned (shown above <see cref="Items"/>), else empty.</summary>
     public ObservableCollection<FavoritesGroup> FavoriteRoots { get; } = [];
@@ -301,6 +314,7 @@ public sealed partial class MainViewModel : ObservableObject
         Data = data;
         OnPropertyChanged(nameof(Data));
         OnPropertyChanged(nameof(Items));
+        OnPropertyChanged(nameof(CompactTree));
         RefreshFavorites();
         RefreshTags();
         if (save) SaveNow();

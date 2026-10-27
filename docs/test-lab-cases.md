@@ -1080,11 +1080,12 @@ RemoteHub alone in the client VM (no device), driven by UI Automation in `Admin`
 | C-FIRST-05 | Pages left out by policy | `AllowNotes` = 0 and `AllowAgent` = 0 → the tour has 3 pages, without Notes and the agent | U PS | 3 | ✅ |
 | C-FIRST-06 | What's new after an upgrade | the previous release with a connection, then this one: the first start shows What's new (not the tour) for the entries newer than that release – "What's new in RemoteHub <newest entry>" and *All release notes* – or, with none newer (previous 0.21.0, newest entry 0.21.0), nothing opens | U PS | 2 | ✅ |
 | C-FIRST-07 | What's new once | the next start shows nothing | U | 2 | ✅ |
-| C-FAV-01 | Pin a connection | a connection in folder *Lab* → right-click → *Add to favourites*: a *Favourites* group at the top with a link; the connection stays in *Lab* (its name shows twice) | U | 2 | ✅ |
+| C-FAV-01 | Pin a connection | a connection in folder *Lab* → right-click → *Add to favourites*: a *Favourites* group at the top with a link (a chip); the connection stays in *Lab* (its name shows twice) | U | 2 | ✅ |
 | C-FAV-02 | The link's menu and Edit | the link's menu offers *Remove from favourites*, no *Delete* / *Duplicate*; F2 on the link opens *Edit connection* for the connection itself | U | 2 | ✅ |
 | C-FAV-03 | Kept after a restart | the Favourites group is there after RemoteHub restarts | U | 2 | ✅ |
 | C-FAV-04 | Del unpins | Del on the link removes it without a question; the connection stays | U | 2 | ✅ |
 | C-FAV-05 | Deleted with its folder | deleting *Lab* removes the link too | U | 3 | ✅ |
+| C-NAV-01 | One-line rows | a connection's row takes one line (name, address, the last use short: "never"); *Compact rows* off in the filter menu: the address and the full last use ("never connected") on a second line; kept after a restart; on again: one line | U | 2 | ◐ |
 | C-RAIL-01 | The rail's version | clicking the version on the rail opens *About RemoteHub* (not the update window) | U | 3 | ✅ |
 
 ## 11. Report in the PR

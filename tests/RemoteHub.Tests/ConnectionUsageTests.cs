@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using RemoteHub.Models;
 using RemoteHub.Services;
 
@@ -17,6 +18,40 @@ public class ConnectionUsageTests
         Assert.DoesNotContain("2026", Connection.When(Now.AddDays(-40).ToUniversalTime(), Now));
         Assert.Contains("2025", Connection.When(Now.AddYears(-1).ToUniversalTime(), Now));
         Assert.Equal("0.13.0", Connection.ShortVersion("0.13.0+4dd1aa1"));
+    }
+
+    [Fact]
+    public void A_one_line_row_shows_the_last_connection_short()
+    {
+        Assert.Equal("just now", Connection.ShortWhen(Now.AddSeconds(-20).ToUniversalTime(), Now));
+        Assert.Equal(Now.AddHours(-2).ToString("t", System.Globalization.CultureInfo.CurrentCulture), Connection.ShortWhen(Now.AddHours(-2).ToUniversalTime(), Now));
+        Assert.Equal("yesterday", Connection.ShortWhen(Now.AddDays(-1).ToUniversalTime(), Now));
+        Assert.Equal(Now.AddDays(-3).ToString("ddd", System.Globalization.CultureInfo.CurrentCulture), Connection.ShortWhen(Now.AddDays(-3).ToUniversalTime(), Now));
+        Assert.DoesNotContain("2026", Connection.ShortWhen(Now.AddDays(-40).ToUniversalTime(), Now));
+        Assert.Contains("2025", Connection.ShortWhen(Now.AddYears(-1).ToUniversalTime(), Now));
+        // Short enough for the right edge of a one-line row; the full text stays for the tooltip and two-line rows.
+        Assert.All(new[] { -2.0, -30, -24 * 3, -24 * 40, -24 * 400 }, h => Assert.True(Connection.ShortWhen(Now.AddHours(h).ToUniversalTime(), Now).Length <= 9));
+        Assert.Equal("never", new Connection { Host = "pc" }.LastUsedShort);
+    }
+
+    [Fact]
+    public void One_line_rows_are_the_default_and_the_choice_is_kept()
+    {
+        var data = new AppData();
+        Assert.True(data.Ui.TreeCompact);
+        var vm = new RemoteHub.ViewModels.MainViewModel(data);
+        var changed = new List<string?>();
+        vm.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        vm.CompactTree = false;
+        Assert.False(data.Ui.TreeCompact);
+        Assert.Contains(nameof(vm.CompactTree), changed);
+        // Another settings database brings its own choice.
+        var other = new AppData();
+        other.Ui.TreeCompact = true;
+        changed.Clear();
+        vm.ReplaceData(other, save: false);
+        Assert.True(vm.CompactTree);
+        Assert.Contains(nameof(vm.CompactTree), changed);
     }
 
     [Fact]

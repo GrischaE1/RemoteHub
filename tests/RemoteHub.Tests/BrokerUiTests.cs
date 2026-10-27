@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Text.Json.Nodes;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -161,6 +162,64 @@ public class BrokerUiTests
         Assert.Contains(nameof(NodeBase.BrokerPresence), changed);
         sync.Presence(b, "d1", online: false);
         Assert.Equal(BrokerPresence.Offline, device.BrokerPresence);
+    }
+
+    [Fact]
+    public void A_presence_snapshot_sets_every_device_at_once_and_tells_only_the_ones_that_changed()
+    {
+        var top = new ObservableCollection<NodeBase>();
+        var sync = new BrokerSync(top, () => { });
+        var b = new BrokerConnection("b1", "https://rh.contoso.com", Org, "Contoso Ltd", Guid.NewGuid().ToString(), "Test", DateTime.UtcNow, 0);
+        var fresh = (Folder)sync.Root(b).Children.Single();
+        Connection Device(string id, string name)
+        {
+            var c = new Connection { Name = name, Broker = new BrokerRef { Connection = "b1", Kind = BrokerItemKind.Device, Item = id }, Parent = fresh };
+            fresh.Children.Add(c);
+            return c;
+        }
+        var hv01 = Device("d1", "HV01");
+        var hv02 = Device("d2", "HV02");
+        var hv03 = Device("d3", "HV03");
+        sync.SetConnected(b, true);
+        // Restarted: nothing known yet, every dot yellow until the snapshot arrives.
+        Assert.All(new[] { hv01, hv02, hv03 }, d => Assert.Equal(BrokerPresence.Unknown, d.BrokerPresence));
+
+        var told = new List<string>();
+        foreach (var d in new[] { hv01, hv02, hv03 }) d.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(NodeBase.BrokerPresence)) told.Add(d.Name); };
+        sync.PresenceAll(b, [("d1", true), ("d2", false), ("d9", true)]); // d9: not in this tree (yet) – ignored
+        Assert.Equal((BrokerPresence.Online, BrokerPresence.Offline, BrokerPresence.Unknown), (hv01.BrokerPresence, hv02.BrokerPresence, hv03.BrokerPresence));
+        Assert.Equal(["HV01", "HV02"], told);
+
+        // The next snapshot a minute later: only HV02 changed.
+        told.Clear();
+        sync.PresenceAll(b, [("d1", true), ("d2", true), ("d3", true)]);
+        Assert.Equal(["HV02", "HV03"], told);
+        Assert.All(new[] { hv01, hv02, hv03 }, d => Assert.Equal(BrokerPresence.Online, d.BrokerPresence));
+    }
+
+    [Fact]
+    public void A_presence_page_is_checked_and_asked_for_only_when_the_broker_names_it()
+    {
+        static JsonObject Page(bool more, params (string Id, bool Online)[] items) => new()
+        {
+            ["t"] = "presenceList",
+            ["items"] = new JsonArray(items.Select(i => (JsonNode)new JsonObject { ["deviceId"] = i.Id, ["online"] = i.Online, ["lastSeen"] = 1793023426 }).ToArray()),
+            ["more"] = more,
+        };
+        const string a = "0d3f5c1e-1111-4a2b-9c3d-000000000001", c = "0d3f5c1e-1111-4a2b-9c3d-000000000003";
+        var (items, more) = BrokerClient.ReadPresencePage(Page(true, (a, true), (c, false)), null);
+        Assert.Equal([(a, true), (c, false)], items);
+        Assert.True(more);
+        // Out of order, repeating the last page, or not a device id: refused (a broker can't keep the console reading).
+        Assert.Throws<InvalidDataException>(() => BrokerClient.ReadPresencePage(Page(false, (c, true), (a, true)), null));
+        Assert.Throws<InvalidDataException>(() => BrokerClient.ReadPresencePage(Page(false, (c, true)), c));
+        Assert.Throws<InvalidDataException>(() => BrokerClient.ReadPresencePage(Page(false, ("../../etc", true)), null));
+        Assert.Throws<InvalidDataException>(() => BrokerClient.ReadPresencePage(new JsonObject { ["t"] = "presenceList" }, null));
+
+        Assert.True(BrokerClient.HasFeature(new JsonObject { ["t"] = "welcome", ["features"] = new JsonArray("presenceList") }, "presenceList"));
+        // A broker before it sends no features: the request isn't sent (it would close the connection).
+        Assert.False(BrokerClient.HasFeature(new JsonObject { ["t"] = "welcome" }, "presenceList"));
+        Assert.False(BrokerClient.HasFeature(new JsonObject { ["t"] = "welcome", ["features"] = "presenceList" }, "presenceList"));
     }
 
     [Fact]
