@@ -96,8 +96,8 @@ Today only folders contain items (`Folder.Children`, `NodeBase.Parent` is a `Fol
   **Move under** (a submenu, §13).
 - **New folder** and **New connection** on a jump host's context menu create them under it; inside a folder under a
   jump host they work as in any folder.
-- A jump host shows its children below its shares, framed like a folder; its connections, folders and shares sit a step
-  (12 px) further in than a folder's items. Folders under it look like any folder.
+- A jump host shows its children below its shares, a step in beside a guide line like a folder's contents (0.22.0;
+  before, framed like a folder). Folders under it look like any folder.
 - Each connection (and share on its own) below a jump host shows a route hint beside the address – **"via JUMP01"** – in
   the secondary text colour, in the warning colour when the jump host has no agent. Folders don't (their contents do).
   Its tooltip: "Reached through JUMP01 (its RemoteHub Agent is the jump host). Move it out of JUMP01 to connect

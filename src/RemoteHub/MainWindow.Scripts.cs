@@ -47,7 +47,7 @@ public partial class MainWindow
     private Connection? PickConnection(string title, string info)
     {
         var candidates = _vm.AllNodes().OfType<Connection>()
-            .Where(c => PsState(c) == PsRemotingState.Available && Features.IsAllowed(RemoteTool.PowerShell, UsesAgent(c)))
+            .Where(c => ToolsReady(c, UsesAgent(c), PsState(c)) && Features.IsAllowed(RemoteTool.PowerShell, UsesAgent(c)))
             .ToList();
         // Favourite connections first, then by path.
         var favourites = _vm.Data.Ui.FavoriteConnections;

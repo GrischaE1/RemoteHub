@@ -234,6 +234,10 @@ public sealed partial class Connection : NodeBase
 
     /// <summary>Beside the name in the navigation: when it was last used ("today 15:42"), or "never connected".</summary>
     [JsonIgnore] public string LastUsedText => LastConnectedUtc is { } last ? When(last, DateTime.Now) : "never connected";
+    /// <summary>The same, short, for a one-line row: "15:42", "yesterday", "Mon", "12 Oct", "Oct 2025" or "never" (the tooltip has the rest).</summary>
+    [JsonIgnore] public string LastUsedShort => LastConnectedUtc is { } last ? ShortWhen(last, DateTime.Now) : "never";
+    /// <summary>The short label's tooltip: "Last connected today 15:42" (the never-connected one says so itself).</summary>
+    [JsonIgnore] public string LastUsedToolTip => "Last connected " + LastUsedText;
     [JsonIgnore] public bool NeverConnected => LastConnectedUtc is null;
 
     /// <summary>The agent shield's tooltip: how the agent is used, and its version.</summary>
@@ -255,6 +259,8 @@ public sealed partial class Connection : NodeBase
     public void RefreshLabels()
     {
         OnPropertyChanged(nameof(LastUsedText));
+        OnPropertyChanged(nameof(LastUsedShort));
+        OnPropertyChanged(nameof(LastUsedToolTip));
         OnPropertyChanged(nameof(NeverConnected));
         OnPropertyChanged(nameof(AgentToolTip));
     }
@@ -270,6 +276,18 @@ public sealed partial class Connection : NodeBase
         if (local.Date == now.Date.AddDays(-1)) return "yesterday " + time;
         if (local.Date > now.Date.AddDays(-7) && local.Date < now.Date) return local.ToString("ddd", culture) + " " + time;
         return local.ToString(local.Year == now.Year ? "d MMM" : "d MMM yyyy", culture);
+    }
+
+    /// <summary>"just now", "15:42" (today), "yesterday", "Mon" (this week), "12 Oct", "Oct 2025".</summary>
+    public static string ShortWhen(DateTime utc, DateTime now)
+    {
+        var local = utc.ToLocalTime();
+        if (now - local < TimeSpan.FromMinutes(1) && now >= local) return "just now";
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        if (local.Date == now.Date) return local.ToString("t", culture);
+        if (local.Date == now.Date.AddDays(-1)) return "yesterday";
+        if (local.Date > now.Date.AddDays(-7) && local.Date < now.Date) return local.ToString("ddd", culture);
+        return local.ToString(local.Year == now.Year ? "d MMM" : "MMM yyyy", culture);
     }
 
     /// <summary>"0.13.0+4dd1aa1…" → "0.13.0".</summary>
@@ -442,6 +460,8 @@ public sealed class UiState
     public List<Guid> FavoriteConnections { get; set; } = [];
     /// <summary>The Favourites group is collapsed.</summary>
     public bool FavoritesCollapsed { get; set; }
+    /// <summary>The navigation's rows take one line (the address beside the name); off = two lines, the address below.</summary>
+    public bool TreeCompact { get; set; } = true;
     /// <summary>Folder for session recordings; null = Videos\RemoteHub (see <see cref="Services.Recordings.Folder"/>).</summary>
     public string? RecordingFolder { get; set; }
     /// <summary>Frames per second of recordings (5, 10, 15, 30, 60).</summary>

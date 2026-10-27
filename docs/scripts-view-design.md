@@ -93,8 +93,8 @@ The view is three cards, like Notes: the same `Card`, `GridSplitter` and `EmptyH
   then topic, and the catalog alone has five areas with up to 24 entries each. The tree works like the connection tree:
   drag a folder onto a folder to move it, drag scripts onto a folder, Del deletes, F2 renames.
 - **Colours work as for connections** (README *Icons & colours*): a folder or script takes a colour from the shared
-  swatches (§4.9) – the palette or a custom `#RRGGBB` – or inherits its folder's colour when it has none. Folders are
-  framed in their colour like folders in the connection tree.
+  swatches (§4.9) – the palette or a custom `#RRGGBB` – or inherits its folder's colour when it has none. A folder's
+  contents sit beside a guide line in its colour, like folders in the connection tree (0.22.0; before, a frame).
 - **Favourites work as for connections** (0.21.0, `Models/Favorites.cs`): a **Favourites** group at the top of the
   folder tree holds **links** to pinned scripts. The script stays in its folder.
   - Pin with *Add to favourites* in a script's context menu or by dragging it onto the group. *Remove from favourites*
@@ -769,8 +769,8 @@ What differs from the plan above, and why:
 - **Settings:** *Keep the output of runs* is in *Settings → Logs*, next to the audit log, not on a page of its own.
   Turning it off removes the output already kept.
 - **Run history:** for a script in its ⋯ menu, for a connection in *More → Run history…*.
-- **The folder frame is shared:** the connection tree's `FolderItemTemplate` moved to `Themes/Styles.xaml`, so Scripts folders
-  get the same frame in their colour. *Versions…* uses the branch icon, so the clock means *Run history…* everywhere.
+- **The folder look is shared:** the connection tree's `FolderItemTemplate` moved to `Themes/Styles.xaml`, so Scripts folders
+  look the same – since 0.22.0 a header row and a guide line in their colour instead of a frame. *Versions…* uses the branch icon, so the clock means *Run history…* everywhere.
 - **Library copies:** *Duplicate to My scripts* deploys the copy as version 1, by "RemoteHub", with a note naming the
   release – the library is part of the app (§4.10).
 - **`script_versions.number`:** the version number column is `number`, because `version` is the row's sync counter

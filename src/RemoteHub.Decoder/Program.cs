@@ -29,9 +29,14 @@ internal static unsafe class Program
         using var output = new AnonymousPipeClientStream(PipeDirection.Out, fromDecoder);
         var view = (byte*)Native.MapViewOfFile((IntPtr)long.Parse(section), Native.FILE_MAP_WRITE, 0, 0, (UIntPtr)(2L * DecoderProtocol.VideoBufferBytes));
         if (view == null) return 3;
+        // Media Foundation and its H.264 decoder load here, before Ready: the first time on a PC (or a busy one) that takes
+        // seconds, which the start's time limit allows and a frame's 2 s don't. Without a decoder on this PC (Windows N),
+        // the first frame says so, as before.
+        H264Decoder? video = null;
+        try { video = new H264Decoder(); }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { video = null; }
         DecoderProtocol.Write(output, DecoderProtocol.Bare(DecoderMessage.Ready));
 
-        H264Decoder? video = null;
         var next = 0;
         try
         {

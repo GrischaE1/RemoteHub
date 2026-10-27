@@ -15,6 +15,8 @@ public sealed partial class FavoritesGroup : ObservableObject
     /// <summary>What a screen reader (and UI Automation) calls the group.</summary>
     public override string ToString() => "Favourites";
     [ObservableProperty] private bool _isSelected;
+    /// <summary>For the tree: its links are laid out as chips in a row (MainWindow.xaml).</summary>
+    public bool IsFavorites => true;
 }
 
 /// <summary>A pinned connection in the Favourites group: opening or editing it acts on the connection itself.</summary>
@@ -23,6 +25,8 @@ public sealed partial class FavoriteLink(Connection target) : ObservableObject
     public Connection Target { get; } = target;
     [ObservableProperty] private bool _isSelected;
     public bool IsExpanded { get; set; }
+    /// <summary>For the tree: drawn as a chip (MainWindow.xaml).</summary>
+    public bool IsFavoriteLink => true;
     /// <summary>What a screen reader (and UI Automation) calls the link: the connection, marked as a favourite.</summary>
     public override string ToString() => $"{Target.Name} (favourite)";
 }

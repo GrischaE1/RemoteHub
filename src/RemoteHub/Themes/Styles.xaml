@@ -82,97 +82,110 @@
         <Setter Property="TextTrimming" Value="CharacterEllipsis" />
     </Style>
 
-    <!-- Folders in the connection tree and the Scripts view: a frame in the folder's colour around the folder and
-         everything in it (MainWindow.xaml, Views/ScriptsView.cs). Folders without a colour get a neutral frame. -->
+    <!-- Beside an item's address in the navigation: how it is reached ("via JUMP01") or "not sealed" – in the warning
+         colour when that route can't be used; the tooltip says why -->
+    <Style x:Key="RouteHintText" TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+        <Setter Property="ToolTip" Value="{Binding RouteToolTip}" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding RouteUsable}" Value="False">
+                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- The chevron of an item with contents: points right when closed, down when open -->
+    <ControlTemplate x:Key="TreeChevron" TargetType="ToggleButton">
+        <Grid x:Name="ChevronContainer" Width="15" Height="15" Background="Transparent" RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
+                <RotateTransform Angle="0" />
+            </Grid.RenderTransform>
+            <ui:SymbolIcon Symbol="ChevronRight28" FontSize="10" VerticalAlignment="Center" />
+        </Grid>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Trigger.EnterActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation To="90" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
+                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.EnterActions>
+                <Trigger.ExitActions>
+                    <BeginStoryboard>
+                        <Storyboard>
+                            <DoubleAnimation To="0" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
+                                             Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
+                        </Storyboard>
+                    </BeginStoryboard>
+                </Trigger.ExitActions>
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+
+    <!-- An item with contents in the connection tree (a folder, a jump host, a server with shares, the Favourites) and the
+         Scripts view's folders (MainWindow.xaml, Views/ScriptsView.cs): a header row, and its contents a step in beside a
+         thin guide line in its colour tag's colour – the line, not a frame, shows what belongs to it. -->
     <ControlTemplate x:Key="FolderItemTemplate" TargetType="TreeViewItem">
-        <Border x:Name="Frame" Margin="0,3,2,3" CornerRadius="7" BorderThickness="1.5" Padding="0,0,0,3"
-                Background="{Binding TagBrush, Converter={StaticResource BrushTint}, ConverterParameter=0.07}">
-            <Border.Style>
-                <Style TargetType="Border">
-                    <Setter Property="BorderBrush" Value="{Binding TagBrush}" />
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding TagBrush}" Value="{x:Null}">
-                            <Setter Property="BorderBrush" Value="{DynamicResource ChromeStrokeBrush}" />
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Border.Style>
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
-                <Border x:Name="Border" CornerRadius="{TemplateBinding Border.CornerRadius}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" MinWidth="19" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Rectangle x:Name="ActiveRectangle" RadiusX="2" RadiusY="2" Width="3" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
-                                   Fill="{DynamicResource TreeViewItemSelectionIndicatorForeground}" Visibility="Collapsed" />
-                        <ToggleButton x:Name="Expander" Margin="8,0,8,0" ClickMode="Press" Focusable="False"
-                                      IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
-                            <ToggleButton.Template>
-                                <ControlTemplate TargetType="ToggleButton">
-                                    <Grid x:Name="ChevronContainer" Width="15" Height="15" Background="Transparent" RenderTransformOrigin="0.5,0.5">
-                                        <Grid.RenderTransform>
-                                            <RotateTransform Angle="0" />
-                                        </Grid.RenderTransform>
-                                        <ui:SymbolIcon Symbol="ChevronRight28" FontSize="10" VerticalAlignment="Center" />
-                                    </Grid>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsChecked" Value="True">
-                                            <Trigger.EnterActions>
-                                                <BeginStoryboard>
-                                                    <Storyboard>
-                                                        <DoubleAnimation To="90" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
-                                                                         Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </Trigger.EnterActions>
-                                            <Trigger.ExitActions>
-                                                <BeginStoryboard>
-                                                    <Storyboard>
-                                                        <DoubleAnimation To="0" Duration="0:0:0.16" Storyboard.TargetName="ChevronContainer"
-                                                                         Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)" />
-                                                    </Storyboard>
-                                                </BeginStoryboard>
-                                            </Trigger.ExitActions>
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </ToggleButton.Template>
-                        </ToggleButton>
-                        <ContentPresenter x:Name="PART_Header" Grid.Column="1" ContentSource="Header" Margin="{TemplateBinding Padding}"
-                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
-                    </Grid>
-                </Border>
-                <Grid Grid.Row="1">
+        <StackPanel>
+            <Border x:Name="Border" CornerRadius="4">
+                <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" MinWidth="19" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
-                    <ItemsPresenter x:Name="ItemsHost" Grid.Column="1" Visibility="Collapsed" />
+                    <Rectangle x:Name="ActiveRectangle" RadiusX="2" RadiusY="2" Width="3" Height="16" HorizontalAlignment="Left" VerticalAlignment="Center"
+                               Fill="{DynamicResource TreeViewItemSelectionIndicatorForeground}" Visibility="Collapsed" />
+                    <ToggleButton x:Name="Expander" Margin="6,0,6,0" ClickMode="Press" Focusable="False" Template="{StaticResource TreeChevron}"
+                                  IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}" />
+                    <ContentPresenter x:Name="PART_Header" Grid.Column="1" ContentSource="Header" Margin="{TemplateBinding Padding}"
+                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
                 </Grid>
-            </Grid>
-        </Border>
+            </Border>
+            <Border x:Name="Guide" Margin="13,0,0,2" Padding="6,0,0,0" BorderThickness="1,0,0,0" Visibility="Collapsed">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{Binding TagBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding TagBrush}" Value="{x:Null}">
+                                <Setter Property="BorderBrush" Value="{DynamicResource ChromeStrokeBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <ItemsPresenter x:Name="ItemsHost" />
+            </Border>
+        </StackPanel>
         <ControlTemplate.Triggers>
             <Trigger Property="HasItems" Value="False">
                 <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
             </Trigger>
             <Trigger Property="IsExpanded" Value="True">
-                <Setter TargetName="ItemsHost" Property="Visibility" Value="Visible" />
+                <Setter TargetName="Guide" Property="Visibility" Value="Visible" />
             </Trigger>
-            <!-- A jump host: what is reached through it sits a step further in than a folder's items -->
-            <DataTrigger Binding="{Binding IsJumpHost}" Value="True">
-                <Setter TargetName="ItemsHost" Property="Margin" Value="12,0,0,0" />
-            </DataTrigger>
             <Trigger Property="IsMouseOver" SourceName="Border" Value="True">
                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource TreeViewItemBackgroundPointerOver}" />
             </Trigger>
             <Trigger Property="IsSelected" Value="True">
                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource TreeViewItemBackgroundSelected}" />
                 <Setter TargetName="ActiveRectangle" Property="Visibility" Value="Visible" />
+            </Trigger>
+        </ControlTemplate.Triggers>
+    </ControlTemplate>
+
+    <!-- A favourite: a chip in the Favourites row (the tree's own item – selection, keys and menu stay the tree's) -->
+    <ControlTemplate x:Key="FavoriteChipTemplate" TargetType="TreeViewItem">
+        <Border x:Name="Chip" CornerRadius="12" Padding="8,2,8,2" Margin="0,2,6,2" BorderThickness="1" BorderBrush="Transparent"
+                Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+            <ContentPresenter x:Name="PART_Header" ContentSource="Header" />
+        </Border>
+        <ControlTemplate.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Chip" Property="Background" Value="{DynamicResource TreeViewItemBackgroundPointerOver}" />
+            </Trigger>
+            <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="Chip" Property="Background" Value="{DynamicResource TreeViewItemBackgroundSelected}" />
+                <Setter TargetName="Chip" Property="BorderBrush" Value="{DynamicResource TreeViewItemSelectionIndicatorForeground}" />
             </Trigger>
         </ControlTemplate.Triggers>
     </ControlTemplate>

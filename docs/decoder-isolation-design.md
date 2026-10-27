@@ -255,7 +255,10 @@ PC and gets its own test in phase 4 (done – §12).
   next to `RemoteHub.exe`; there its folder gets read access for all application packages (as Program Files has), or
   the decoder starts at low integrity.
 - **Time limits:** 10 s to start (≈ 0.3 s usually; the first picture of a session waits for it), 2 s per frame, 10 s
-  per image. A decoder past its limit is ended by closing its job.
+  per image. A decoder past its limit is ended by closing its job. The start includes loading Media Foundation's H.264
+  decoder (before `Ready`), so a cold or busy PC spends those seconds inside the start's limit, not the first frame's
+  (a CI runner took over 2 s for that first frame). A PC without the decoder (Windows N) still starts; its first frame
+  fails with the reason.
 - **Job:** as §3.2, plus `DIE_ON_UNHANDLED_EXCEPTION`, so a crash never waits on an error dialog.
 - **Video section:** committed at creation (`PAGE_READWRITE`): 75 MB of commit charge per open desktop session, but
   physical memory only for the pages the decoder writes. `SEC_RESERVE` would save the charge at the cost of committing

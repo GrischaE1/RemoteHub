@@ -1,4 +1,5 @@
 extern alias agent;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json.Nodes;
@@ -52,8 +53,12 @@ public class BrokerConsoleTests : IDisposable
             foreach (var i in items)
                 if (i["kind"]?.GetValue<string>() == "device" && i["id"]?.GetValue<string>() == agentHost.DeviceId) device.TrySetResult(i);
         };
+        // The online state of every device arrives right after connecting (presenceList), not only with a change.
+        var snapshot = new TaskCompletionSource<IReadOnlyList<(string DeviceId, bool Online)>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.PresenceSnapshot += (_, states) => snapshot.TrySetResult(states);
         var item = await device.Task.WaitAsync(TimeSpan.FromSeconds(20));
         Assert.True(SpinWait.SpinUntil(() => client.IsConnected, TimeSpan.FromSeconds(10)), client.State); // connected once the first sync is in
+        Assert.Contains((agentHost.DeviceId, true), await snapshot.Task.WaitAsync(TimeSpan.FromSeconds(20)));
         // The record's seal checks with the organisation's record key from the keyring; a changed name doesn't.
         var record = item["record"]!.AsObject();
         Assert.True(client.RecordIsSealed(record, item["seal"]!.GetValue<string>()));

@@ -130,6 +130,9 @@
                                 <MenuItem Header="Not used for a year" Tag="365" Click="UnusedFilterItem_Click" />
                                 <Separator />
                                 <MenuItem Header="Never connected" Tag="-1" Click="UnusedFilterItem_Click" />
+                                <Separator />
+                                <!-- One line per item, or the address on a second line (the setting is kept) -->
+                                <MenuItem x:Name="CompactRowsItem" Header="Compact rows" IsCheckable="True" IsChecked="{Binding CompactTree, Mode=TwoWay}" />
                             </ContextMenu>
                         </ui:Button.ContextMenu>
                     </ui:Button>
@@ -145,6 +148,7 @@
                               Background="Transparent" BorderThickness="0"
                               VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
                               VirtualizingPanel.ScrollUnit="Pixel" ScrollViewer.CanContentScroll="True"
+                              ScrollViewer.HorizontalScrollBarVisibility="Disabled" Padding="0,0,12,0"
                               Visibility="{Binding IsSearching, Converter={StaticResource InvBoolToVis}}"
                               SelectedItemChanged="Tree_SelectedItemChanged"
                               PreviewMouseLeftButtonDown="Tree_PreviewMouseLeftButtonDown"
@@ -155,7 +159,7 @@
                               DragOver="Tree_DragOver" Drop="Tree_Drop" DragLeave="Tree_DragLeave">
                         <TreeView.Resources>
                             <HierarchicalDataTemplate DataType="{x:Type m:Folder}" ItemsSource="{Binding Children}">
-                                <StackPanel Orientation="Horizontal" Margin="0,3" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
+                                <StackPanel Orientation="Horizontal" Margin="0,2" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
                                     <Grid Margin="0,0,8,0" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="16"
                                                        Foreground="{Binding TagBrush, TargetNullValue={StaticResource BrandAccentBrush}}"
@@ -186,25 +190,20 @@
                                     </Border>
                                 </StackPanel>
                             </HierarchicalDataTemplate>
-                            <!-- Network shares: below a server (one line), or on their own in a folder like a connection (with the address below) -->
+                            <!-- Network shares and SSH: below a server (one line), or on their own in a folder like a connection – the
+                                 address beside the name (Compact rows), or below it -->
                             <DataTemplate DataType="{x:Type m:NetworkShare}">
-                                <Grid Background="Transparent" ToolTip="{Binding Address}" ContextMenuOpening="ShareItem_ContextMenuOpening">
-                                    <Grid.Style>
-                                        <Style TargetType="Grid">
-                                            <Setter Property="Margin" Value="0,1" />
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsStandalone}" Value="True">
-                                                    <Setter Property="Margin" Value="0,2" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Grid.Style>
+                                <Grid Margin="0,1" Background="Transparent" ToolTip="{Binding Address}" ContextMenuOpening="ShareItem_ContextMenuOpening">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <Border Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.RowSpan="2" Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}">
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="Visibility" Value="Visible" />
@@ -219,11 +218,7 @@
                                             </Style>
                                         </Border.Style>
                                     </Border>
-                                    <!-- A server's share: a connector to the server above ("belongs to"), unlike items reached through it -->
-                                    <Path Data="M 3,0 V 9 H 11" Width="12" Height="18" Margin="0,0,4,0" VerticalAlignment="Top" StrokeThickness="1.2"
-                                          Stroke="{DynamicResource TextFillColorTertiaryBrush}" SnapsToDevicePixels="True"
-                                          Visibility="{Binding IsStandalone, Converter={StaticResource InvBoolToVis}}" />
-                                    <Grid Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center">
+                                    <Grid Grid.Column="1" Grid.RowSpan="2" Margin="0,0,8,0" VerticalAlignment="Center">
                                         <ui:SymbolIcon Symbol="{Binding DisplaySymbol}">
                                             <ui:SymbolIcon.Style>
                                                 <Style TargetType="ui:SymbolIcon">
@@ -238,49 +233,80 @@
                                                 </Style>
                                             </ui:SymbolIcon.Style>
                                         </ui:SymbolIcon>
-                                        <Ellipse Width="6" Height="6" Fill="{DynamicResource SystemFillColorSuccessBrush}" HorizontalAlignment="Right"
+                                        <Ellipse Width="7" Height="7" Fill="{DynamicResource SystemFillColorSuccessBrush}" HorizontalAlignment="Right"
                                                  VerticalAlignment="Bottom" Margin="0,0,-2,-1"
                                                  Visibility="{Binding OpenTabs, Converter={StaticResource BoolToVis}}" />
                                     </Grid>
-                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding ProtocolLabel}" Style="{StaticResource Caption}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                        <DockPanel Visibility="{Binding IsStandalone, Converter={StaticResource BoolToVis}}">
-                                            <!-- Reached through a jump host: "via JUMP01", as on a connection -->
+                                    <DockPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock DockPanel.Dock="Left" Text="{Binding ProtocolLabel}" Style="{StaticResource Caption}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                        <!-- Compact rows, on its own: the route and the address beside the name -->
+                                        <DockPanel Margin="8,0,0,0">
+                                            <DockPanel.Style>
+                                                <Style TargetType="DockPanel">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding IsStandalone}" Value="True" />
+                                                                <Condition Binding="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}}" Value="True" />
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </MultiDataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </DockPanel.Style>
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
-                                                        <Setter Property="ToolTip" Value="{Binding RouteToolTip}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding RouteUsable}" Value="False">
-                                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}" Style="{StaticResource RouteHintText}" />
+                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
                                         </DockPanel>
-                                    </StackPanel>
+                                    </DockPanel>
+                                    <!-- Two-line rows, on its own: the route and the address below -->
+                                    <DockPanel Grid.Column="2" Grid.Row="1">
+                                        <DockPanel.Style>
+                                            <Style TargetType="DockPanel">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <MultiDataTrigger>
+                                                        <MultiDataTrigger.Conditions>
+                                                            <Condition Binding="{Binding IsStandalone}" Value="True" />
+                                                            <Condition Binding="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}}" Value="False" />
+                                                        </MultiDataTrigger.Conditions>
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </MultiDataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </DockPanel.Style>
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}" Style="{StaticResource RouteHintText}" />
+                                        <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                    </DockPanel>
                                 </Grid>
                             </DataTemplate>
-                            <!-- Favourites: links to pinned connections; the connections stay in their folders -->
+                            <!-- Favourites: links to pinned connections, as chips in a row; the connections stay in their folders -->
                             <HierarchicalDataTemplate DataType="{x:Type m:FavoritesGroup}" ItemsSource="{Binding Children}">
-                                <StackPanel Orientation="Horizontal" Margin="0,4">
+                                <StackPanel Orientation="Horizontal" Margin="0,2">
                                     <ui:SymbolIcon Symbol="Star24" Filled="True" FontSize="16" Margin="0,0,8,0" Foreground="{DynamicResource SystemAccentColorPrimaryBrush}" />
                                     <TextBlock Text="Favourites" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 </StackPanel>
                             </HierarchicalDataTemplate>
                             <DataTemplate DataType="{x:Type m:FavoriteLink}">
-                                <!-- The connection as it shows in its folder, with a link arrow in front -->
-                                <DockPanel>
-                                    <ui:SymbolIcon DockPanel.Dock="Left" Symbol="ArrowUpRight16" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center"
-                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
-                                    <ContentPresenter Content="{Binding Target}" />
-                                </DockPanel>
+                                <!-- The connection's colour tag, icon (with its session state) and name; the tooltip says where it lives -->
+                                <StackPanel Orientation="Horizontal" DataContext="{Binding Target}" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
+                                    <Border Width="3" Height="12" CornerRadius="1.5" Margin="0,0,6,0" Background="{Binding TagBrush}"
+                                            Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
+                                    <Grid Margin="0,0,6,0" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="14"
+                                                       Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorSecondaryBrush}}"
+                                                       Visibility="{Binding IconImage, Converter={StaticResource InvBoolToVis}}" />
+                                        <Image Source="{Binding IconImage, Converter={StaticResource Base64Image}}" Width="14" Height="14"
+                                               Visibility="{Binding IconImage, Converter={StaticResource BoolToVis}}" />
+                                        <Ellipse Width="6" Height="6" Fill="{Binding LiveState, Converter={StaticResource StateBrush}}" HorizontalAlignment="Right"
+                                                 VerticalAlignment="Bottom" Margin="0,0,-2,-1"
+                                                 Visibility="{Binding OpenSessions, Converter={StaticResource BoolToVis}}" />
+                                    </Grid>
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                </StackPanel>
                             </DataTemplate>
                             <!-- A connection: its shares, then the connections and folders reached through it (a jump host) -->
                             <HierarchicalDataTemplate DataType="{x:Type m:Connection}">
@@ -290,7 +316,9 @@
                                         <Binding Path="Children" />
                                     </MultiBinding>
                                 </HierarchicalDataTemplate.ItemsSource>
-                                <Grid Margin="0,2" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
+                                <!-- One line (Compact rows): colour tag, the icon with its marks, the name, the address and route, when it
+                                     was last used. Two-line rows put the address and route below the name. -->
+                                <Grid Margin="0,1" Background="Transparent" ToolTip="" ToolTipOpening="TreeItem_ToolTipOpening">
                                     <!-- A broker device whose record isn't sealed by the organisation: greyed, it can't be opened -->
                                     <Grid.Style>
                                         <Style TargetType="Grid">
@@ -304,37 +332,45 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
-                                        <!-- the agent shield: a fixed slot, so names line up with and without an agent -->
-                                        <ColumnDefinition Width="20" />
                                         <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <!-- RemoteHub Agent: active (installed and used) or available (installed, connection uses WinRM) -->
-                                    <ui:SymbolIcon Grid.Column="2" Symbol="Shield24" FontSize="14" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                        <ui:SymbolIcon.Style>
-                                            <Style TargetType="ui:SymbolIcon">
-                                                <!-- No agent: a red outline (every connection has a shield, so the names line up) -->
-                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCriticalBrush}" />
-                                                <Setter Property="Opacity" Value="0.75" />
-                                                <Setter Property="ToolTip" Value="{Binding AgentToolTip}" />
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding AgentMode}" Value="Active">
-                                                        <Setter Property="Filled" Value="True" />
-                                                        <Setter Property="Opacity" Value="1" />
-                                                        <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding AgentMode}" Value="Available">
-                                                        <Setter Property="Opacity" Value="0.55" />
-                                                        <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ui:SymbolIcon.Style>
-                                    </ui:SymbolIcon>
-                                    <StackPanel Orientation="Horizontal">
-                                        <Border Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}"
-                                                Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
-                                        <!-- A broker device: online (green), offline (red) or unknown (yellow) at the broker, next to the icon -->
-                                        <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="{Binding RouteToolTip}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.RowSpan="2" Width="3" CornerRadius="1.5" Margin="0,2,7,2" Background="{Binding TagBrush}"
+                                            Visibility="{Binding TagBrush, Converter={StaticResource BoolToVis}}" />
+                                    <!-- The icon carries the marks: the RemoteHub Agent (a shield at the top, filled while it is used), the state
+                                         at a RemoteHub Broker (a dot: green online, red offline, yellow unknown) and an open tab's state (a dot, over it) -->
+                                    <Grid Grid.Column="1" Grid.RowSpan="2" Margin="0,0,8,0" VerticalAlignment="Center">
+                                        <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="16"
+                                                       Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorPrimaryBrush}}"
+                                                       Visibility="{Binding IconImage, Converter={StaticResource InvBoolToVis}}" />
+                                        <Image Source="{Binding IconImage, Converter={StaticResource Base64Image}}" Width="16" Height="16"
+                                               Visibility="{Binding IconImage, Converter={StaticResource BoolToVis}}" />
+                                        <ui:SymbolIcon Symbol="Shield24" FontSize="10" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-4,-5,0"
+                                                       ToolTip="{Binding AgentToolTip}">
+                                            <ui:SymbolIcon.Style>
+                                                <Style TargetType="ui:SymbolIcon">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AgentMode}" Value="Active">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Setter Property="Filled" Value="True" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource SystemFillColorSuccessBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding AgentMode}" Value="Available">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ui:SymbolIcon.Style>
+                                        </ui:SymbolIcon>
+                                        <Ellipse Width="8" Height="8" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-3,-2"
+                                                 StrokeThickness="1.5" Stroke="{DynamicResource SidebarBackgroundBrush}" ToolTip="{Binding RouteToolTip}">
                                             <Ellipse.Style>
                                                 <Style TargetType="Ellipse">
                                                     <Setter Property="Fill" Value="{DynamicResource SystemFillColorCautionBrush}" />
@@ -352,58 +388,49 @@
                                                 </Style>
                                             </Ellipse.Style>
                                         </Ellipse>
-                                    </StackPanel>
-                                    <Grid Grid.Column="1" Margin="0,0,5,0" VerticalAlignment="Center">
-                                        <ui:SymbolIcon Symbol="{Binding DisplaySymbol}" FontSize="16"
-                                                       Foreground="{Binding TagBrush, TargetNullValue={StaticResource TextFillColorPrimaryBrush}}"
-                                                       Visibility="{Binding IconImage, Converter={StaticResource InvBoolToVis}}" />
-                                        <Image Source="{Binding IconImage, Converter={StaticResource Base64Image}}" Width="16" Height="16"
-                                               Visibility="{Binding IconImage, Converter={StaticResource BoolToVis}}" />
-                                        <Ellipse Width="7" Height="7" Fill="{Binding LiveState, Converter={StaticResource StateBrush}}" HorizontalAlignment="Right"
-                                                 VerticalAlignment="Bottom" Margin="0,0,-2,-1"
+                                        <Ellipse Width="8" Height="8" Fill="{Binding LiveState, Converter={StaticResource StateBrush}}" HorizontalAlignment="Right"
+                                                 VerticalAlignment="Bottom" Margin="0,0,-3,-2" StrokeThickness="1.5" Stroke="{DynamicResource SidebarBackgroundBrush}"
                                                  Visibility="{Binding OpenSessions, Converter={StaticResource BoolToVis}}" />
                                     </Grid>
-                                    <StackPanel Grid.Column="3">
-                                        <DockPanel>
-                                            <!-- When it was last used (any tab), or that it never was -->
-                                            <TextBlock DockPanel.Dock="Right" Text="{Binding LastUsedText}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                    <DockPanel Grid.Column="2" VerticalAlignment="Center">
+                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                        <!-- Compact rows: the address and the route beside the name -->
+                                        <DockPanel Margin="8,0,0,0" Visibility="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="6,0,0,0" VerticalAlignment="Center"
+                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}" Style="{StaticResource RouteHintText}" />
+                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        </DockPanel>
+                                    </DockPanel>
+                                    <!-- When it was last used (any tab), or that it never was: short in one line, in full on two -->
+                                    <TextBlock Grid.Column="3" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
+                                                <Setter Property="Text" Value="{Binding LastUsedShort}" />
+                                                <Setter Property="ToolTip" Value="{Binding LastUsedToolTip}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}}" Value="False">
+                                                        <Setter Property="Text" Value="{Binding LastUsedText}" />
                                                         <Setter Property="ToolTip" Value="Last connected" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding NeverConnected}" Value="True">
-                                                                <Setter Property="FontStyle" Value="Italic" />
-                                                                <Setter Property="Opacity" Value="0.7" />
-                                                                <Setter Property="ToolTip" Value="No connection recorded yet" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                        </DockPanel>
-                                        <DockPanel>
-                                            <!-- Reached through a jump host: "via JUMP01" (in the warning colour when the jump host can't be used);
-                                                 a device of a synced broker folder whose record isn't sealed: "not sealed", in the warning colour -->
-                                            <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
-                                                       Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock" BasedOn="{StaticResource Caption}">
-                                                        <Setter Property="ToolTip" Value="{Binding RouteToolTip}" />
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding RouteUsable}" Value="False">
-                                                                <Setter Property="Foreground" Value="{DynamicResource SystemFillColorCautionBrush}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                            <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
-                                        </DockPanel>
-                                        <TextBlock Text="Checking PowerShell remoting…" Style="{StaticResource Caption}" FontSize="11"
-                                                   Foreground="{DynamicResource SystemAccentColorPrimaryBrush}"
-                                                   Visibility="{Binding PsChecking, Converter={StaticResource BoolToVis}}" />
-                                    </StackPanel>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding NeverConnected}" Value="True">
+                                                        <Setter Property="FontStyle" Value="Italic" />
+                                                        <Setter Property="Opacity" Value="0.7" />
+                                                        <Setter Property="ToolTip" Value="No connection recorded yet" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <!-- Two-line rows: the address and the route below the name -->
+                                    <DockPanel Grid.Column="2" Grid.ColumnSpan="2" Grid.Row="1"
+                                               Visibility="{Binding DataContext.CompactTree, RelativeSource={RelativeSource AncestorType=TreeView}, Converter={StaticResource InvBoolToVis}}">
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding RouteHint}" FontSize="11" Margin="8,0,0,0" VerticalAlignment="Center"
+                                                   Visibility="{Binding RouteHint, Converter={StaticResource BoolToVis}}" Style="{StaticResource RouteHintText}" />
+                                        <TextBlock Text="{Binding Address}" Style="{StaticResource Caption}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                    </DockPanel>
+                                    <TextBlock Grid.Column="2" Grid.ColumnSpan="2" Grid.Row="2" Text="Checking PowerShell remoting…" Style="{StaticResource Caption}" FontSize="11"
+                                               Foreground="{DynamicResource SystemAccentColorPrimaryBrush}"
+                                               Visibility="{Binding PsChecking, Converter={StaticResource BoolToVis}}" />
                                 </Grid>
                             </HierarchicalDataTemplate>
                         </TreeView.Resources>
@@ -424,13 +451,29 @@
                                 </Setter>
                                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
                                 <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                <!-- Rows take the tree's width: long addresses are cut with "…", and the last use sits at the right edge -->
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 <Style.Triggers>
+                                    <!-- Whatever holds something – a folder (also an empty one), a jump host, a server with shares – shows
+                                         its contents a step in beside a guide line -->
+                                    <Trigger Property="HasItems" Value="True">
+                                        <Setter Property="Template" Value="{StaticResource FolderItemTemplate}" />
+                                    </Trigger>
                                     <DataTrigger Binding="{Binding IsFolder}" Value="True">
                                         <Setter Property="Template" Value="{StaticResource FolderItemTemplate}" />
                                     </DataTrigger>
-                                    <!-- A jump host holds what is reached through it: framed like a folder -->
-                                    <DataTrigger Binding="{Binding IsJumpHost}" Value="True">
-                                        <Setter Property="Template" Value="{StaticResource FolderItemTemplate}" />
+                                    <!-- Favourites: the links as chips, side by side -->
+                                    <DataTrigger Binding="{Binding IsFavorites}" Value="True">
+                                        <Setter Property="ItemsPanel">
+                                            <Setter.Value>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Margin="0,2,0,4" />
+                                                </ItemsPanelTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsFavoriteLink}" Value="True">
+                                        <Setter Property="Template" Value="{StaticResource FavoriteChipTemplate}" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>

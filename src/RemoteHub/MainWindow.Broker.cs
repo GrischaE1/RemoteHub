@@ -43,6 +43,7 @@ public partial class MainWindow
         var client = BrokerClient.Start(b);
         client.Changed += (c, items) => Dispatcher.BeginInvoke(() => Sync.Apply(c, items));
         client.Presence += (c, id, online, _) => Dispatcher.BeginInvoke(() => Sync.Presence(c.Info, id, online));
+        client.PresenceSnapshot += (c, states) => Dispatcher.BeginInvoke(() => Sync.PresenceAll(c.Info, states));
         client.StateChanged += c => Dispatcher.BeginInvoke(() =>
         {
             Sync.SetConnected(c.Info, c.IsConnected);
