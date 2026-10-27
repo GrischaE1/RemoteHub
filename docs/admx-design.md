@@ -362,7 +362,7 @@ desktop.
 | `RemoteDesktopVia` | SZ `Automatic`, `Rdp`, `Agent` | Automatic |
 | `AgentAutoSignIn` | DWORD 0/1 | 0 |
 | `AgentAutoSignInEndAction` | SZ `Lock`, `SignOut` | Lock |
-| `Reach` *(0.22.0)* | SZ `Automatic`, `Direct`, `Broker` | Automatic |
+| `Reach` *(0.22.0)* | SZ `Automatic`, `Direct`, `Broker` | Automatic – the device's name, then the addresses its agent reported, before the broker |
 
 Enums are written as words, not numbers, so a policy doesn't depend on the order of a C# enum.
 

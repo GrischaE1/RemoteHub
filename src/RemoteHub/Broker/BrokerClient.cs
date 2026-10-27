@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
@@ -20,6 +21,13 @@ public sealed class BrokerException(string message, string? code = null, Excepti
     /// <summary>The broker's error code or refusal reason (unknown, offline, policy, …), null when it wasn't the broker's answer.</summary>
     public string? Code { get; } = code;
 }
+
+/// <summary>
+/// Where a device's agent said it can be reached (its latest hello, through the broker): tried before the broker path,
+/// pinned to its sealed record – never trusted for more than a try. <paramref name="Inbound"/> false: the device takes no
+/// direct connections (MSI BROKER_ONLY=1); null: an older agent didn't say.
+/// </summary>
+public sealed record DeviceAddresses(IReadOnlyList<IPAddress> Addresses, int? Port, bool? Inbound, DateTimeOffset? ReportedAt);
 
 /// <summary>
 /// This console's connection to one RemoteHub Broker organisation: registration or proof with
@@ -85,6 +93,9 @@ public sealed class BrokerClient : IAsyncDisposable
     /// <summary>A snapshot reads at most this many pages (500 devices each); a broker that keeps saying "more" is stopped there.</summary>
     internal const int MaxPresencePages = 200;
     private bool _presenceList;
+    private bool _deviceAddresses;
+    /// <summary>Addresses read from a <c>deviceAddresses</c> answer at most (the broker keeps no more).</summary>
+    internal const int MaxDeviceAddresses = 16;
     public event Action<BrokerClient>? StateChanged;
 
     private BrokerClient(BrokerConnection info, string consoleSecret)
@@ -235,6 +246,7 @@ public sealed class BrokerClient : IAsyncDisposable
         if (welcome["stun"] is JsonValue stun && stun.TryGetValue<string>(out var server) && Stun.ParseServer(server) is not null) StunServer = server.Trim();
         // An older broker closes the connection on a request it doesn't know: ask only for what it names.
         _presenceList = HasFeature(welcome, "presenceList");
+        _deviceAddresses = HasFeature(welcome, "deviceAddresses");
         if (orgName != _info.OrgName && orgName.Length > 0) BrokerStore.SetOrgName(_info.Id, orgName);
 
         var live = new BrokerLiveness(KeepAlive);
@@ -468,6 +480,35 @@ public sealed class BrokerClient : IAsyncDisposable
             ["kind"] = e.Kind, ["id"] = e.Body["id"]!.GetValue<string>(), ["body"] = e.Body.DeepClone(), ["seal"] = SealLayout(e.Kind, e.Body),
         })]);
         return RequestAsync(new JsonObject { ["t"] = "write", ["items"] = items });
+    }
+
+    /// <summary>
+    /// The device's addresses as its agent last reported them; null when this broker doesn't know the request (an older
+    /// one) or the device. Throws <see cref="BrokerException"/> when the broker can't be asked now.
+    /// </summary>
+    public async Task<DeviceAddresses?> DeviceAddressesAsync(string deviceId, CancellationToken ct)
+    {
+        if (!_deviceAddresses) return null;
+        try { return ReadDeviceAddresses(await RequestAsync(new JsonObject { ["t"] = "deviceAddresses", ["id"] = deviceId }, ct).ConfigureAwait(false)); }
+        catch (BrokerException ex) when (ex.Code == "unknown") { return null; }
+    }
+
+    /// <summary>
+    /// A <c>deviceAddresses</c> answer, checked: bare IPv4 and IPv6 addresses only (a host name or a short form like "10.1"
+    /// is dropped), none that can't be another computer's (loopback, link-local, multicast), at most 16.
+    /// </summary>
+    internal static DeviceAddresses ReadDeviceAddresses(JsonObject answer)
+    {
+        var list = new List<IPAddress>();
+        if (answer["addresses"] is JsonArray all)
+            foreach (var node in all.Take(MaxDeviceAddresses))
+                if (node is JsonValue v && v.TryGetValue<string>(out var text) && text.Length <= 45 && (text.Count(c => c == '.') == 3 || text.Contains(':'))
+                    && IPAddress.TryParse(text, out var ip) && !PeerDirect.IsSpecial(ip) && (ip.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6 || ip.ScopeId == 0) && !list.Contains(ip))
+                    list.Add(ip);
+        int? port = answer["port"] is JsonValue p && p.TryGetValue<int>(out var n) && n is > 0 and <= 65535 ? n : null;
+        bool? inbound = answer["inbound"] is JsonValue i && i.TryGetValue<bool>(out var b) ? b : null;
+        DateTimeOffset? at = answer["reportedAt"] is JsonValue r && r.TryGetValue<long>(out var seconds) && seconds > 0 ? DateTimeOffset.FromUnixTimeSeconds(seconds) : null;
+        return new DeviceAddresses(list, port, inbound, at);
     }
 
     public Task<JsonObject> RemoveDeviceAsync(string deviceId) => RequestAsync(new JsonObject { ["t"] = "removeDevice", ["id"] = deviceId });

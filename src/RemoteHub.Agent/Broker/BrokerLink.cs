@@ -46,6 +46,12 @@ internal sealed class BrokerLink(
     private volatile BrokerLiveness? _live;
     /// <summary>Completed by a network change while not connected: the next attempt starts at once.</summary>
     private volatile TaskCompletionSource _retryNow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Completed by every network change: the connected link tells the broker its addresses again once they settle.</summary>
+    private volatile TaskCompletionSource _networkChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>How long the addresses must stay the same after a change before they are sent (Windows reports one change in bursts).</summary>
+    internal static TimeSpan AddressSettle { get; set; } = TimeSpan.FromSeconds(2);
+    /// <summary>How many addresses the hello carries at most (the broker refuses more).</summary>
+    internal const int MaxAddresses = 16;
 
     /// <summary>For tests: the state the link is in, and each session's end.</summary>
     internal string State { get; private set; } = "idle";
@@ -64,6 +70,7 @@ internal sealed class BrokerLink(
     {
         if (_live is { } live) live.Check();
         else _retryNow.TrySetResult();
+        _networkChanged.TrySetResult();
     }
 
     private async Task RunLoopAsync(CancellationToken stop)
@@ -163,8 +170,10 @@ internal sealed class BrokerLink(
         _lastProblem = null;
         State = "connected";
 
-        await Send(ws, Hello(p), stop);
+        var sent = Hello(p, config);
+        await Send(ws, sent, stop);
         using var alive = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        var addresses = HelloOnChangesAsync(ws, p, config, sent, alive.Token);
         var live = new BrokerLiveness(TimeSpan.FromSeconds(Math.Clamp(p.BrokerKeepAliveSeconds, BrokerProtocol.KeepAliveMin, BrokerProtocol.KeepAliveMax)));
         _live = live;
         // "ping" is answered at the broker's edge without waking anything.
@@ -177,7 +186,40 @@ internal sealed class BrokerLink(
             string? gaveUp = null;
             try { gaveUp = await keepAlive; } catch { /* ended with the connection */ }
             if (gaveUp is not null) log.Write($"RemoteHub Broker {host}: the connection was given up – {gaveUp}");
+            try { await addresses; } catch { /* ended with the connection */ }
         }
+    }
+
+    /// <summary>
+    /// After a network change (a new Wi-Fi, a VPN, another DHCP lease) the broker gets the device's addresses again – once
+    /// they have stayed the same for <see cref="AddressSettle"/>, and only when they differ from what it has – so a
+    /// console finds the device at its new address. A move that ends this connection sends them with the next one.
+    /// </summary>
+    private async Task HelloOnChangesAsync(ClientWebSocket ws, AgentPolicy p, AgentConfig config, JsonObject sent, CancellationToken ct)
+    {
+        var last = sent["addresses"]?.ToJsonString();
+        while (!ct.IsCancellationRequested)
+        {
+            if (!await WaitChange(Timeout.InfiniteTimeSpan, ct)) return;
+            // Settle: every further change within AddressSettle starts the wait again.
+            while (await WaitChange(AddressSettle, ct)) { }
+            if (ct.IsCancellationRequested) return;
+            var hello = Hello(p, config);
+            var now = hello["addresses"]?.ToJsonString();
+            if (now == last) continue;
+            await Send(ws, hello, ct);
+            last = now;
+        }
+    }
+
+    /// <summary>True when the network changed within <paramref name="within"/> (the change is taken); false after the wait, or when <paramref name="ct"/> ends.</summary>
+    private async Task<bool> WaitChange(TimeSpan within, CancellationToken ct)
+    {
+        var changed = _networkChanged.Task;
+        try { await changed.WaitAsync(within, ct); }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException) { return false; }
+        _networkChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        return true;
     }
 
     private async Task<Outcome> ReceiveLoop(ClientWebSocket ws, BrokerLiveness live, AgentConfig config, BrokerSettings broker, Uri baseUri, CancellationToken stop)
@@ -323,13 +365,22 @@ internal sealed class BrokerLink(
         ["registered"] = new DateTimeOffset(certificate.NotBefore.ToUniversalTime()).ToUnixTimeSeconds(),
     };
 
-    private static JsonObject Hello(AgentPolicy p) => new()
+    /// <summary>
+    /// What the broker keeps about the device besides its sealed record: version, adapters (Wake-on-LAN), and the
+    /// addresses and port a console tries before it uses the broker – <c>inbound</c> false when the agent's firewall rule
+    /// isn't there (MSI BROKER_ONLY=1), so a console doesn't wait for an answer that can't come.
+    /// </summary>
+    internal static JsonObject Hello(AgentPolicy p, AgentConfig config) => new()
     {
         ["t"] = "hello",
         ["agentVersion"] = AgentHost.AgentVersion,
         ["os"] = Environment.OSVersion.VersionString,
         ["keepAlive"] = Math.Clamp(p.BrokerKeepAliveSeconds, BrokerProtocol.KeepAliveMin, BrokerProtocol.KeepAliveMax),
         ["macs"] = new JsonArray([.. Adapters().Take(16)]),
+        // The addresses the direct path offers too – adapters with a gateway first, Hyper-V switches last.
+        ["addresses"] = new JsonArray([.. PeerDirect.HostAddresses().Take(MaxAddresses).Select(a => JsonValue.Create(a.ToString()))]),
+        ["port"] = config.ListenPort,
+        ["inbound"] = Enrollment.HasFirewallRule(),
     };
 
     /// <summary>MAC address, IPv4 address and prefix of each adapter that is up – for Wake-on-LAN later.</summary>

@@ -3222,10 +3222,14 @@ function Wait-LabBrokerDevice {
 
 # RemoteHub's way to the device through the broker (harness "broker --kind health"): Connect with the console secret,
 # the device's sealed record, then the agent's health through a relayed session pinned to that record.
+# -DirectFirst: as RemoteHub with Reach Automatic - the device's name, then the addresses its agent reported, before the
+# broker path (DirectReach); the answer then names the host that answered (path "Network") and the reported addresses.
 function Test-LabBrokerHealth {
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)]$OrgInfo, [Parameter(Mandatory)][string]$DeviceId)
-    Invoke-LabHarness @('broker', '--kind', 'health', '--url', $Broker.Url, '--console-secret', $OrgInfo.consoleSecret, '--device', $DeviceId) -TimeoutSec 120
+    param([Parameter(Mandatory)]$Broker, [Parameter(Mandatory)]$OrgInfo, [Parameter(Mandatory)][string]$DeviceId, [switch]$DirectFirst)
+    $a = @('broker', '--kind', 'health', '--url', $Broker.Url, '--console-secret', $OrgInfo.consoleSecret, '--device', $DeviceId)
+    if ($DirectFirst) { $a += '--direct-first', '1' }
+    Invoke-LabHarness $a -TimeoutSec 120
 }
 
 # GET /v1/health over TLS from the host, pinned to the fingerprint (AgentInstaller.HealthAsync).

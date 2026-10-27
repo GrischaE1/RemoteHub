@@ -90,6 +90,7 @@ public abstract partial class SessionBase : ObservableObject, IDisposable
     {
         null => $"{transport} · through RemoteHub Broker",
         Broker.PeerPath.Relayed => $"{transport} · through RemoteHub Broker (relayed)",
+        Broker.PeerPath.Network => $"{transport} · direct (the device's own address)",
         _ => $"{transport} · through RemoteHub Broker (direct)",
     };
 
