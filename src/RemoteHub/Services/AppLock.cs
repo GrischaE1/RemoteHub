@@ -53,24 +53,53 @@ public static class AppLock
 
     public static string FilePath => Path.Combine(SettingsStore.Directory, "lock.json");
 
+    /// <summary>
+    /// A copy of lock.json as last written and read back: it holds the only wrapped copy of the settings key, so when
+    /// lock.json itself is damaged (cut off or zero-filled by a power loss) this copy opens the same key.
+    /// </summary>
+    internal static string BackupPath => FilePath + ".bak";
+
+    /// <summary>For tests: runs once the new lock file's data is on disk, before it replaces lock.json.</summary>
+    internal static Action? BeforeReplace { get; set; }
+
     public static bool IsEnabled => File.Exists(FilePath);
     public static bool IsUnlocked => _key is not null;
     public static bool HasHello => Read()?.Hello is not null;
 
     public static string Describe() => !IsEnabled ? "Off" : HasHello ? "Startup password and Windows Hello" : "Startup password";
 
-    private static LockFile? Read()
+    /// <summary>lock.json, or its last good copy when lock.json is there but can't be read; null when the protection is off.</summary>
+    private static LockFile? Read() => File.Exists(FilePath) ? Parse(FilePath) ?? Parse(BackupPath) : null;
+
+    private static LockFile? Parse(string path)
     {
-        try { return File.Exists(FilePath) ? JsonSerializer.Deserialize<LockFile>(File.ReadAllBytes(FilePath)) : null; }
+        try { return File.Exists(path) && JsonSerializer.Deserialize<LockFile>(File.ReadAllBytes(path)) is { Salt.Length: > 0 } f ? f : null; }
         catch { return null; }
     }
 
+    /// <summary>
+    /// Replaces lock.json so that a power loss leaves either the old or the new file, never a torn one: the data is flushed
+    /// to the disk before the name points at it. The copy (<see cref="BackupPath"/>) is written only after the new file
+    /// reads back – so after a password change it, too, opens with the new password only.
+    /// </summary>
     private static void Write(LockFile f)
     {
         System.IO.Directory.CreateDirectory(SettingsStore.Directory);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(f, new JsonSerializerOptions { WriteIndented = true });
         var tmp = FilePath + ".tmp";
-        File.WriteAllBytes(tmp, JsonSerializer.SerializeToUtf8Bytes(f, new JsonSerializerOptions { WriteIndented = true }));
+        WriteFlushed(tmp, bytes);
+        BeforeReplace?.Invoke();
         File.Move(tmp, FilePath, overwrite: true);
+        if (Parse(FilePath) is null) throw new IOException("The startup protection's lock file couldn't be read back after writing it.");
+        WriteFlushed(BackupPath + ".tmp", bytes);
+        File.Move(BackupPath + ".tmp", BackupPath, overwrite: true);
+    }
+
+    private static void WriteFlushed(string path, byte[] bytes)
+    {
+        using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
+        fs.Write(bytes);
+        fs.Flush(flushToDisk: true);
     }
 
     // ------------------------------------------------------------------ unlock
@@ -130,6 +159,8 @@ public static class AppLock
     internal static async Task Disable()
     {
         if (Read()?.Hello is { } h) await WindowsHello.DeleteAsync(h.Credential);
+        // the copy first: a stop in between leaves lock.json, so the protection stays on rather than half off
+        File.Delete(BackupPath);
         File.Delete(FilePath);
         if (_key is not null) CryptographicOperations.ZeroMemory(_key);
         _key = null;

@@ -164,6 +164,69 @@ public class AppLockTests
     }
 
     [Fact]
+    public async Task The_lock_file_is_replaced_only_after_its_data_is_on_disk()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        try
+        {
+            AppLock.Enable("first password");
+            var before = File.ReadAllBytes(AppLock.FilePath);
+            string? seen = null;
+            AppLock.BeforeReplace = () =>
+            {
+                // the new file is complete next to the old one, which is still in place
+                seen = File.ReadAllText(AppLock.FilePath + ".tmp");
+                Assert.Equal(before, File.ReadAllBytes(AppLock.FilePath));
+            };
+            await AppLock.ChangePassword("second password");
+            Assert.NotNull(seen);
+            Assert.Equal(seen, File.ReadAllText(AppLock.FilePath));
+            Assert.Equal(File.ReadAllBytes(AppLock.FilePath), File.ReadAllBytes(AppLock.BackupPath));
+            Assert.False(File.Exists(AppLock.FilePath + ".tmp"));
+        }
+        finally
+        {
+            AppLock.BeforeReplace = null;
+            AppLock.Forget();
+            StoreReset.Clean();
+        }
+    }
+
+    [Fact]
+    public async Task A_damaged_lock_file_falls_back_to_the_last_good_copy()
+    {
+        Assert.StartsWith(Path.GetTempPath(), SettingsStore.Directory); // isolation guard
+        StoreReset.Clean();
+        try
+        {
+            AppLock.Enable("first password");
+            await AppLock.ChangePassword("second password");
+            AppLock.Forget();
+            // a power loss left lock.json zero-filled, then cut off: the copy opens the same key, with the new password only
+            var length = new FileInfo(AppLock.FilePath).Length;
+            File.WriteAllBytes(AppLock.FilePath, new byte[length]);
+            Assert.True(AppLock.IsEnabled);
+            Assert.False(AppLock.TryUnlock("first password"));
+            Assert.True(AppLock.TryUnlock("second password"));
+            AppLock.Forget();
+            File.WriteAllText(AppLock.FilePath, "{\"Version\":1,\"Kdf\":\"PBKDF2");
+            Assert.True(AppLock.TryUnlock("second password"));
+
+            // the copy alone isn't the protection: without lock.json it is off
+            AppLock.Forget();
+            File.Delete(AppLock.FilePath);
+            Assert.False(AppLock.IsEnabled);
+            Assert.False(AppLock.TryUnlock("second password"));
+        }
+        finally
+        {
+            AppLock.Forget();
+            StoreReset.Clean();
+        }
+    }
+
+    [Fact]
     public void Nothing_can_be_sealed_while_locked()
     {
         AppLock.Forget();

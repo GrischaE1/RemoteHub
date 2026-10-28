@@ -5026,7 +5026,7 @@ P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-DATA.Tests.ps1`
 
 **Expected:**
 - RemoteHub opens without asking.
-- `lock.json` is gone; `db.key` starts with `RHDK` + 0x01.
+- `lock.json` and `lock.json.bak` are gone; `db.key` starts with `RHDK` + 0x01.
 - Older backups, `.bak` and `settings.dat.migrated` are removed (only a new backup with the new key may exist).
 - The copied old key opens nothing.
 

@@ -335,7 +335,8 @@ no longer rewrites the shared file.
   `%APPDATA%\RemoteHub\keys.dat` (DPAPI; header `RHK2` when also sealed with the startup lock). "Forget remembered
   passwords on this PC" clears it.
 - `lock.json` (startup lock: the settings key wrapped by the password – PBKDF2-SHA256, 600,000 iterations – and
-  optionally Windows Hello), `keys.dat` and `local.json` are in `%APPDATA%\RemoteHub`; the database and `db.key` in
+  optionally Windows Hello; written flushed to disk, with `lock.json.bak` – the same content, read back first – standing
+  in when `lock.json` is damaged), `keys.dat` and `local.json` are in `%APPDATA%\RemoteHub`; the database and `db.key` in
   `%LOCALAPPDATA%\RemoteHub`.
 - Policy `SettingsFolder` (HKLM or HKCU\SOFTWARE\Policies\RemoteHub) fixes the folder; the location can't be changed in
   the app. No file is created there: if none exists (or it can't be opened), RemoteHub says "The shared settings file
