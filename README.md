@@ -315,7 +315,7 @@ For desktops where RDP is turned off: with the agent installed, RemoteHub shows 
   - Information: 1000/1001 PowerShell session started/ended, 1100/1101 remote desktop started/ended, 1102 the user who signed in or unlocked allowed it, 1103 continued after a dropped connection.
   - Warning: 2000 sign-in refused, 2100 remote desktop refused, 2101 the user who signed in or unlocked refused it, 2102 ended for no input.
   - Error: 3100 remote desktop error.
-- **Not yet:** signing in automatically with stored credentials (on the backlog), audio, file drag and drop into the picture.
+- **Not yet:** audio, dragging files out of the tab onto this PC.
 
 ### Jump hosts (devices RemoteHub can't reach directly)
 
