@@ -7720,6 +7720,20 @@ P2 · How: H PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 - the new address is at the broker within 45 s – the agent tells the broker again once its addresses have settled, not only with its next connection
 - it is gone again after it was removed
 
+#### B-BRK-12 · Listener off by policy
+P1 · How: H PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
+
+**Steps:**
+1. Add the agent's inbound rule (`RemoteHub Agent`, TCP 58732) as an install without BROKER_ONLY makes it.
+2. Set the device policy `ListenEnabled = 0`, restart the agent and wait until it is online at the broker.
+3. Look at the listeners on 58732 and the rule; `Test-LabBrokerHealth -DirectFirst`.
+4. Set `ListenEnabled = 1`, restart, wait, and look again.
+5. Clear the policy, remove the rule, restart.
+
+**Expected:**
+- with 0: nothing listens on 58732; the rule is still there, switched off (its scope kept); the health answers through the broker (direct local or relayed); the broker has no addresses for the device and `inbound` false
+- with 1: 58732 listens again, the rule is switched on, and the answer has path `Network`
+
 #### B-BRK-08 · A connection that silently stops carrying
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
