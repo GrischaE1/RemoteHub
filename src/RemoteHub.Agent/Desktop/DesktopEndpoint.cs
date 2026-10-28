@@ -26,6 +26,15 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private int _pinAttempts = 3;
     private string _endReason = "closed by RemoteHub";
     private long _lastInput = Environment.TickCount64;
+    private volatile int _monitorCount; // in the helper's last layout; 0 before one arrived
+    private const int MaxMonitors = 64;
+
+    /// <summary>
+    /// A monitor index from the wire: all monitors, or one the device has as far as the helper's last layout says (at
+    /// most <see cref="MaxMonitors"/> before one arrived) – the helper never sees an index outside that.
+    /// </summary>
+    internal static int ClampMonitor(int requested, int known) =>
+        requested == DesktopProtocol.AllMonitors ? requested : Math.Clamp(requested, 0, (known > 0 ? known : MaxMonitors) - 1);
     private volatile bool _idleWarned;
     private bool _paused; // the session has no screen (disconnected RDP session): RemoteHub shows why the picture stands still
     private DesktopResume.Entry? _resume;
@@ -161,7 +170,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 return;
             }
             _helperSession = session.Id;
-            var monitor = start.Monitor == DesktopProtocol.AllMonitors ? DesktopProtocol.AllMonitors : Math.Max(0, start.Monitor);
+            var monitor = ClampMonitor(start.Monitor, 0);
             var init = new HelperInit(identity.Account, o.Config.DeviceLabel, consent, _pin, policy.ConsentTimeoutSeconds, _viewOnly, _secureRight,
                 Math.Clamp(start.FramesPerSecond, 1, policy.MaxFramesPerSecond), Math.Clamp(start.Quality, 1, policy.MaxQuality), monitor,
                 HoldUserDesktop: !active && !(session.State == DesktopSessionState.Locked && SameUser(session.User, _allowedBy)), Clipboard: _clipboard,
@@ -747,7 +756,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     var all = s.Monitor == DesktopProtocol.AllMonitors;
                     // Changing the device's resolution is control: not for view-only, and not for the picture of all monitors.
                     var (fitWidth, fitHeight) = _viewOnly || all ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight);
-                    _settings = new DesktopSettings(all ? DesktopProtocol.AllMonitors : Math.Max(0, s.Monitor), Math.Clamp(s.FramesPerSecond, 1, policy.MaxFramesPerSecond),
+                    _settings = new DesktopSettings(all ? DesktopProtocol.AllMonitors : ClampMonitor(s.Monitor, _monitorCount), Math.Clamp(s.FramesPerSecond, 1, policy.MaxFramesPerSecond),
                         Math.Clamp(s.Quality, 1, policy.MaxQuality), fitWidth, fitHeight);
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
                     break;
@@ -1068,7 +1077,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     case (byte)DesktopMessage.Layout or (byte)DesktopMessage.Video or (byte)DesktopMessage.CursorShape
                         or (byte)DesktopMessage.CursorPosition or (byte)DesktopMessage.Stats when _live && helper == _helper:
                         if (m[0] == (byte)DesktopMessage.Video) Interlocked.Increment(ref _framesSinceSwitch);
-                        else if (m[0] == (byte)DesktopMessage.Layout) LogDesktopSwitch(DesktopWire.ReadJson(m, DesktopJson.Default.DesktopLayout).SecureDesktop);
+                        else if (m[0] == (byte)DesktopMessage.Layout)
+                        {
+                            var layout = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopLayout);
+                            _monitorCount = layout.Monitors.Length;
+                            LogDesktopSwitch(layout.SecureDesktop);
+                        }
                         await SendWs(m, ct);
                         break;
                     case (byte)HelperMessage.HiddenApps when helper == _helper:

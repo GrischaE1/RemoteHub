@@ -375,6 +375,15 @@ public partial class AgentDesktopFlowTests
         }
     }
 
+    [Theory]
+    [InlineData(-1, 0, -1)]            // all monitors
+    [InlineData(-5, 2, 0)]
+    [InlineData(1, 2, 1)]
+    [InlineData(2_000_000_000, 2, 1)]  // beyond the layout: its last monitor
+    [InlineData(2_000_000_000, 0, 63)] // no layout yet: bounded all the same
+    public void A_monitor_index_beyond_the_layout_is_clamped_before_it_reaches_the_helper(int requested, int known, int sent) =>
+        Assert.Equal(sent, A.DesktopEndpoint.ClampMonitor(requested, known));
+
     [Fact]
     public async Task Asked_user_allows_then_picture_input_and_clipboard_flow()
     {
