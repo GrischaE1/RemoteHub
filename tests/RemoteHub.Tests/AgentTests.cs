@@ -117,6 +117,33 @@ public class AgentTests
             new AgentEndpoint(a.Port, fingerprint ?? a.Fingerprint));
 
     [Fact]
+    public async Task With_ListenEnabled_0_the_host_binds_no_TCP_port_and_still_answers_through_peer_streams()
+    {
+        var free = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        free.Start();
+        var port = ((IPEndPoint)free.LocalEndpoint).Port;
+        free.Stop();
+        using var cert = SelfSigned();
+        var config = new A.AgentConfig { DeviceId = "dev-quiet", ListenPort = port };
+        var peers = new A.PeerTransport();
+        await using var app = A.AgentHost.Build(new A.AgentHostOptions(config, cert, new FakeAuth(), new CurrentUserLauncher(), A.AgentLog.Null) { Peers = peers, Listen = false });
+        await app.StartAsync();
+
+        Assert.False(A.AgentHost.PortInUse(port)); // nothing on the network, on any address
+        // A stream the broker relays (the console's address as the source) reaches the same endpoints.
+        await using var stream = peers.Connect(new IPEndPoint(IPAddress.Parse("203.0.113.7"), 50123)) ?? throw new InvalidOperationException("no peer listener");
+        await using var tls = new System.Net.Security.SslStream(stream, false, (_, c, _, _) => c is not null && AgentProtocol.Fingerprint(c.GetRawCertData()) == AgentProtocol.Fingerprint(cert.RawData));
+        await tls.AuthenticateAsClientAsync(new System.Net.Security.SslClientAuthenticationOptions { TargetHost = "agent" });
+        await tls.WriteAsync("GET /v1/health HTTP/1.1\r\nHost: agent\r\nConnection: close\r\n\r\n"u8.ToArray());
+        var response = await new StreamReader(tls, System.Text.Encoding.UTF8).ReadToEndAsync();
+        Assert.StartsWith("HTTP/1.1 200", response);
+        Assert.Contains("dev-quiet", response);
+
+        // Without the broker's streams there would be nothing to answer on: refused rather than Kestrel's localhost:5000.
+        Assert.Throws<ArgumentException>(() => A.AgentHost.Build(new A.AgentHostOptions(config, cert, new FakeAuth(), new CurrentUserLauncher(), A.AgentLog.Null) { Listen = false }));
+    }
+
+    [Fact]
     public async Task A_full_PowerShell_session_runs_through_the_agent()
     {
         await using var a = await StartAgent();

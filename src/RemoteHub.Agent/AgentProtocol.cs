@@ -50,6 +50,8 @@ public static class AgentManaged
     public const string VirtualDisplay = "virtualDisplay";
     /// <summary>The port (policy ListenPort).</summary>
     public const string Port = "port";
+    /// <summary>Whether the agent listens on the network at all (policy ListenEnabled).</summary>
+    public const string Listen = "listen";
 }
 
 public static class AgentFeatures

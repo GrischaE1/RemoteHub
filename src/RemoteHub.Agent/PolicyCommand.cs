@@ -56,6 +56,7 @@ public static class PolicyCommand
             "NoUserBehavior" => (p.NoUserBehavior, config?.NoUserBehavior is not null ? "agent.json" : "default"),
             "VirtualDisplay" => (p.VirtualDisplay, json),
             "ListenPort" => (p.ListenPort.ToString(System.Globalization.CultureInfo.InvariantCulture), json),
+            "ListenEnabled" => (p.ListenEnabled ? "On" : "Off", "default"),
             "LogRetentionDays" => (p.LogRetentionDays.ToString(System.Globalization.CultureInfo.InvariantCulture), json),
             "MaxSessions" => (p.MaxSessions.ToString(System.Globalization.CultureInfo.InvariantCulture), json),
             "PowerShellEnabled" => (p.PowerShellEnabled ? "On" : "Off", "default"),

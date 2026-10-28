@@ -31,6 +31,11 @@ public sealed record AgentHostOptions(
     /// <summary>Streams that come through the RemoteHub Broker (<see cref="PeerTransport"/>); null = TCP only.</summary>
     internal PeerTransport? Peers { get; init; }
 
+    /// <summary>
+    /// False (policy ListenEnabled = 0): no TCP endpoint at all – the agent answers only through <see cref="Peers"/>.
+    /// </summary>
+    internal bool Listen { get; init; } = true;
+
     /// <summary>The policy for this connection (read again each time, so changes apply without a restart).</summary>
     public AgentPolicy CurrentPolicy() => Policy?.Invoke() ?? AgentPolicy.Load(Config);
 }
@@ -49,6 +54,8 @@ public static class AgentHost
 
     public static WebApplication Build(AgentHostOptions o, string[]? args = null)
     {
+        // Kestrel with no endpoint of its own would fall back to http://localhost:5000.
+        if (!o.Listen && o.Peers is null) throw new ArgumentException("An agent that doesn't listen needs the broker's peer streams.", nameof(o));
         var builder = WebApplication.CreateSlimBuilder(args ?? []);
         builder.Logging.ClearProviders();
         builder.Services.AddWindowsService(w => w.ServiceName = "RemoteHubAgent"); // no effect when run from a console
@@ -75,8 +82,8 @@ public static class AgentHost
                     SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
                 });
             }
-            if (o.BindAddress is null) k.ListenAnyIP(o.Config.ListenPort, Https);
-            else k.Listen(o.BindAddress, o.Config.ListenPort, Https);
+            if (o.Listen && o.BindAddress is null) k.ListenAnyIP(o.Config.ListenPort, Https);
+            else if (o.Listen) k.Listen(o.BindAddress!, o.Config.ListenPort, Https);
             if (o.Peers is not null) k.Listen(PeerEndPoint.Instance, Https);
         });
         var app = builder.Build();

@@ -344,6 +344,8 @@ public static class PolicyCatalog
         labels: new Dictionary<string, string> { ["auto"] = "Only when the device has no usable resolution", ["always"] = "Always", ["off"] = "Never" }, since: Phase2);
     public static readonly PolicyEntry PrivacyScreenMessage = Agent("PrivacyScreenMessage", PolicyKind.Text, "Privacy", "Privacy screen heading", max: 120, since: Phase2);
     public static readonly PolicyEntry ListenPort = Agent("ListenPort", PolicyKind.Number, "Service", "Port", 1, 65535, since: Phase2);
+    /// <summary>0: no TCP listener and no firewall rule – the device is reachable only through the RemoteHub Broker.</summary>
+    public static readonly PolicyEntry ListenEnabled = Agent("ListenEnabled", PolicyKind.Number, "Service", "Listen on the network", 0, 1, labels: OnOff, since: BrokerSince);
     public static readonly PolicyEntry LogRetentionDays = Agent("LogRetentionDays", PolicyKind.Number, "Service", "Keep log files (days)", 1, 3650, since: Phase2);
     public static readonly PolicyEntry MaxSessions = Agent("MaxSessions", PolicyKind.Number, "Service", "Sessions at once", 1, 200, since: Phase2);
 
@@ -423,7 +425,7 @@ public static class PolicyCatalog
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
         TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams, TunnelOwnPorts,
         BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerHttpProxy, BrokerKeepAliveSeconds, BrokerDirect, BrokerStun,
-        AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
+        AuditToEventLog, ListenPort, ListenEnabled, LogRetentionDays, MaxSessions,
     ];
 
     public static IEnumerable<PolicyEntry> All => ConsoleEntries.Concat(AgentEntries);

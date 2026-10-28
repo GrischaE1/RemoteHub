@@ -1438,6 +1438,14 @@ RemoteHub connects to the port stored for each device. After changing it, set th
 Not configured: the port chosen when the agent was installed (58732 by default).
 
 Registry: ListenPort (REG_DWORD).</string>
+      <string id="Agent_ListenEnabled">Listen on the network</string>
+      <string id="Agent_ListenEnabled_Help">Enabled or Not configured: the agent listens on its port (ListenPort), and RemoteHub can reach it over the network – directly, or through a jump host.
+
+Disabled: the agent opens no port and switches its firewall rule off. The device is then reachable only through a RemoteHub Broker, which the agent connects to outbound. Without a broker set up, nothing can reach the device from the network – only someone at the device itself can change that.
+
+Read when the service starts: restart the RemoteHub Agent service (or the device) after changing it. Enabled again, the firewall rule is switched back on with the scope it was installed with; a device installed with BROKER_ONLY=1 has no rule and keeps having none.
+
+Registry: ListenEnabled (REG_DWORD) = 1 or 0.</string>
       <string id="Agent_LogRetentionDays">Keep log files</string>
       <string id="Agent_LogRetentionDays_Help">How many days the agent keeps its daily log files in %ProgramData%\RemoteHub\Agent\logs (1–3650). Older files are removed once a day.
 

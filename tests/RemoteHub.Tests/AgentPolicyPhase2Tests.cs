@@ -157,6 +157,32 @@ public class AgentPolicyPhase2Tests
     public void The_firewall_rule_port_is_read_from_netsh(string output, string expected) =>
         Assert.Equal([expected], A.Enrollment.RulePorts(output));
 
+    [Theory]
+    [InlineData("Rule Name:   RemoteHub Agent\r\nEnabled:                              Yes\r\nDirection: In", true)]
+    [InlineData("Rule Name:   RemoteHub Agent\r\nEnabled:                              No\r\n", false)]
+    [InlineData("Regelname:   RemoteHub Agent\r\nAktiviert:                            Ja", null)] // other languages: unknown, switched anyway
+    public void Whether_the_firewall_rule_is_switched_on_is_read_from_netsh(string output, bool? expected) =>
+        Assert.Equal(expected, A.Enrollment.RuleEnabled(output));
+
+    [Fact]
+    public void ListenEnabled_outside_0_1_keeps_the_default_and_is_reported()
+    {
+        var config = new A.AgentConfig { AllowedGroups = [Admins] };
+        Assert.True(From(config, null).ListenEnabled);
+        Assert.True(From(config, []).ListenEnabled);
+        Assert.False(From(config, new() { ["ListenEnabled"] = 0 }).ListenEnabled);
+        Assert.True(From(config, new() { ["ListenEnabled"] = 1 }).ListenEnabled);
+        Assert.True(From(config, new() { ["ListenEnabled"] = 7 }).ListenEnabled); // invalid: listening, as without the policy
+        // A policy key that can't be read never cuts the device off the network.
+        Assert.True(A.AgentPolicy.Refused("denied").ListenEnabled);
+
+        A.PolicyValue Set(object value, string? problem = null) => new(A.PolicyCatalog.ListenEnabled, value, A.PolicyScope.Computer, problem);
+        Assert.Equal([A.AgentManaged.Listen], A.AgentPolicy.ManagedNames([Set(0)]));
+        Assert.Empty(A.AgentPolicy.ManagedNames([Set(7, "7 is outside 0–1")]));
+        var report = A.PolicyCommand.Report(config, null, From(config, new() { ["ListenEnabled"] = 0 }), [Set(0)]);
+        Assert.Matches(@"ListenEnabled\s+Off\s+\[policy\]", report);
+    }
+
     // ------------------------------------------------------------------ automatic sign-in setup (agent.json) and the migration
 
     private sealed class FakeKey(Dictionary<string, object> values) : A.AutoSignInSetup.IPolicyKey

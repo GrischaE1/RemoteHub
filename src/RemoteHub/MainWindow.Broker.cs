@@ -279,7 +279,7 @@ public partial class MainWindow
     private AgentEndpoint? BrokerEndpointOf(Connection c, AgentDevice device, bool quiet)
     {
         var reach = ReachOf(c);
-        if (reach == BrokerReach.Direct) return new AgentEndpoint(device.Port, device.Fingerprint);
+        if (reach == BrokerReach.Direct) return new AgentEndpoint(device.Port, device.Fingerprint) { DirectCheck = BrokerRouteFor(c, quiet: true) };
         if (BrokerRouteFor(c, quiet) is not { } route)
             return reach == BrokerReach.Automatic && c.Agent is { Fingerprint.Length: > 0 } && c.Broker is { Sealed: true } ? new AgentEndpoint(device.Port, device.Fingerprint) : null;
         return new AgentEndpoint(device.Port, device.Fingerprint, Broker: route, DirectFirst: reach == BrokerReach.Automatic);

@@ -48,6 +48,7 @@ public enum AgentRight
 /// <item><c>NoUserBehavior</c> (REG_SZ) – <c>SignInScreen</c>: nobody on the console shows the sign-in screen; <c>AutoSignIn</c> (default, unless agent.json turns it off): the admin may sign in automatically there (right AutoSignIn).</item>
 /// <item><c>AutoSignInRequirePrivacyScreen</c> (DWORD) – 1: no automatic sign-in where the privacy screen can't be shown.</item>
 /// <item><c>AutoSignInEndAction</c> (REG_SZ) – <c>Lock</c> or <c>SignOut</c>: what happens to an automatically signed-in session when its connection ends; wins over RemoteHub's setting.</item>
+/// <item><c>ListenEnabled</c> (DWORD) – 0: no TCP listener and no firewall rule; the device is reachable only through the RemoteHub Broker. Read when the service starts.</item>
 /// <item>Subkey <c>Rights</c>: PowerShell, Desktop, DesktopViewOnly, SecureDesktop, ConsentBypass, PrivacyScreen, Tunnel, AutoSignIn (REG_MULTI_SZ) – group SIDs or names.</item>
 /// </list>
 /// </summary>
@@ -106,6 +107,11 @@ public sealed record AgentPolicy
     public string? PrivacyScreenMessage { get; init; }
     /// <summary>ListenPort (policy, else agent.json); read when the service starts.</summary>
     public int ListenPort { get; init; } = AgentProtocol.DefaultPort;
+    /// <summary>
+    /// ListenEnabled: false – no TCP listener and no firewall rule, so the device is reachable only through the RemoteHub
+    /// Broker. Read when the service starts, like <see cref="ListenPort"/>; a policy that can't be read keeps the listener.
+    /// </summary>
+    public bool ListenEnabled { get; init; } = true;
     /// <summary>LogRetentionDays (policy, else agent.json).</summary>
     public int LogRetentionDays { get; init; } = 30;
     /// <summary>MaxSessions (policy, else agent.json).</summary>
@@ -185,6 +191,7 @@ public sealed record AgentPolicy
             managed.Add(AgentManaged.AutoSignIn);
         if (names.Contains(PolicyCatalog.VirtualDisplay)) managed.Add(AgentManaged.VirtualDisplay);
         if (names.Contains(PolicyCatalog.ListenPort)) managed.Add(AgentManaged.Port);
+        if (names.Contains(PolicyCatalog.ListenEnabled)) managed.Add(AgentManaged.Listen);
         return managed;
     }
 
@@ -250,6 +257,7 @@ public sealed record AgentPolicy
             PrivacyScreenMessage = values.Text(null, PolicyCatalog.PrivacyScreenMessage.Name) is { } heading
                 && PolicyCatalog.PrivacyScreenMessage.Check(heading) is { Problem: null, Value: string checkedHeading } ? checkedHeading : null,
             ListenPort = Number(PolicyCatalog.ListenPort) ?? d.ListenPort,
+            ListenEnabled = Raw(PolicyCatalog.ListenEnabled) is not 0,
             LogRetentionDays = Number(PolicyCatalog.LogRetentionDays) ?? d.LogRetentionDays,
             MaxSessions = Number(PolicyCatalog.MaxSessions) ?? d.MaxSessions,
         };
