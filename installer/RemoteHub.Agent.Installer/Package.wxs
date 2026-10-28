@@ -9,6 +9,8 @@
              without any enrollment file.
   Broker:    msiexec /i RemoteHub-Agent-<ver>-x64.msi BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… [BROKER_ONLY=1] /qn
              – no enrollment file needed: the device makes its own identity and registers with the RemoteHub Broker.
+             BROKER_SECRET_FILE=C:\Deploy\device-secret.txt instead of BROKER_SECRET keeps the secret off every command
+             line (process-creation events record them); the file is deleted once the device has registered.
   Uninstall: msiexec /x RemoteHub-Agent-<ver>-x64.msi /qn   (removes firewall rule, certificate and configuration)
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
@@ -38,9 +40,11 @@
     <Property Id="ENROLLMENT" Secure="yes" />
     <!-- RemoteHub Broker: BROKER_URL=rh.contoso.com BROKER_SECRET=rhd1.… lets a device enroll
          itself without an enrollment file and register with the broker; on an enrolled agent it adds the broker.
-         BROKER_SECRET is hidden – never in the installer log. BROKER_ONLY=1: no inbound firewall rule for a new device. -->
+         BROKER_SECRET is hidden – never in the installer log. BROKER_SECRET_FILE: the secret's first line in a local file
+         instead, so it is on no command line, msiexec's included. BROKER_ONLY=1: no inbound firewall rule for a new device. -->
     <Property Id="BROKER_URL" Secure="yes" />
     <Property Id="BROKER_SECRET" Secure="yes" Hidden="yes" />
+    <Property Id="BROKER_SECRET_FILE" Secure="yes" />
     <Property Id="BROKER_ONLY" Secure="yes" />
     <!-- Virtual monitor for devices without one: 1 install, 0 don't (removes it), empty = the device keeps its setting (default on). -->
     <Property Id="VIRTUALDISPLAY" Secure="yes" />
@@ -82,8 +86,9 @@
     <!-- auto-sign-in=[AUTOSIGNIN]: 1 allows automatic sign-in for the allowed groups in agent.json, 0 turns it off there,
          empty leaves agent.json as it is (a first install: allowed, the agent's default). A policy IT has set
          (NoUserBehavior, right AutoSignIn) wins either way. -->
-    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot; &quot;broker-url=[BROKER_URL]&quot; &quot;broker-secret=[BROKER_SECRET]&quot; &quot;broker-only=[BROKER_ONLY]&quot;" Before="AgentEnroll" Sequence="execute" />
-    <!-- HideTarget: the command line carries the device secret, so it stays out of the log (with BROKER_SECRET hidden). -->
+    <SetProperty Id="AgentEnroll" Value="&quot;[#AgentExe]&quot; enroll &quot;[ENROLLMENT]&quot; &quot;virtual-display=[VIRTUALDISPLAY]&quot; &quot;auto-sign-in=[AUTOSIGNIN]&quot; &quot;broker-url=[BROKER_URL]&quot; &quot;broker-secret=[BROKER_SECRET]&quot; &quot;broker-secret-file=[BROKER_SECRET_FILE]&quot; &quot;broker-only=[BROKER_ONLY]&quot;" Before="AgentEnroll" Sequence="execute" />
+    <!-- HideTarget: with BROKER_SECRET the command line carries the device secret, so it stays out of the log (with
+         BROKER_SECRET hidden); BROKER_SECRET_FILE passes only the file's path. -->
     <CustomAction Id="AgentEnroll" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64"
                   Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
 

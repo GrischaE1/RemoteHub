@@ -1,4 +1,4 @@
-# B-BRK - the RemoteHub Broker on a device: the agent MSI with BROKER_URL / BROKER_SECRET / BROKER_ONLY on a device
+# B-BRK - the RemoteHub Broker on a device: the agent MSI with BROKER_URL / BROKER_SECRET_FILE / BROKER_ONLY on a device
 # without an enrollment file (it enrolls itself and registers), RemoteHub's way to it through the broker (Connect with
 # the console secret, the sealed record, the agent's health through a relayed session pinned to that record), the
 # device's policy BrokerEnabled, broker leave and broker join with the secret on standard input (what Assign to
@@ -27,17 +27,32 @@ BeforeAll {
         Copy-LabFile -Name $VmName -Path (Get-LabAgentMsi) -Destination 'C:\LabBroker'
         $org = New-LabBrokerOrg -Broker $broker
         $computer = Invoke-LabGuest -Name $VmName -ScriptBlock { $env:COMPUTERNAME }
-        # msiexec as PSAdmin with the broker's properties; the secret is a test value of this run's organisation
+        # msiexec as PSAdmin with the broker's properties; the secret is a test value of this run's organisation and goes
+        # in a file (BROKER_SECRET_FILE), so no process's command line carries it - checked while the install runs
         $install = Invoke-LabGuest -Name $VmName -ArgumentList $broker.Url, $org.deviceSecret -ScriptBlock {
             param($url, $secret)
             $msi = (Get-ChildItem 'C:\LabBroker' -Filter *.msi | Select-Object -First 1).FullName
             $log = 'C:\LabBroker\install.log'
-            $a = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$log`"", "BROKER_URL=$url", "BROKER_SECRET=$secret", 'BROKER_ONLY=1')
-            $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -Wait -PassThru -WindowStyle Hidden
+            $file = 'C:\LabBroker\device-secret.txt'
+            Set-Content -Path $file -Value $secret -Encoding ASCII
+            $key = $secret.Split('.')[-1]
+            $a = @('/i', "`"$msi`"", '/qn', '/norestart', '/l*v', "`"$log`"", "BROKER_URL=$url", "BROKER_SECRET_FILE=$file", 'BROKER_ONLY=1')
+            $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList $a -PassThru -WindowStyle Hidden
+            $seen = @{}
+            $deadline = (Get-Date).AddMinutes(10)
+            while (-not $p.HasExited -and (Get-Date) -lt $deadline) {
+                foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+                    if ($proc.CommandLine -and $proc.CommandLine.Contains($key)) { $seen[$proc.Name] = $true }
+                }
+                Start-Sleep -Milliseconds 200
+            }
+            if (-not $p.HasExited) { throw 'the agent MSI did not finish within 10 minutes' }
             [pscustomobject]@{
-                ExitCode     = $p.ExitCode
-                LogHasSecret = [bool](Select-String -Path $log -SimpleMatch $secret -Quiet -ErrorAction SilentlyContinue)
-                Firewall     = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'RemoteHub Agent*' }).Count
+                ExitCode          = $p.ExitCode
+                LogHasSecret      = [bool](Select-String -Path $log -SimpleMatch $key -Quiet -ErrorAction SilentlyContinue)
+                CommandLinesWith  = @($seen.Keys)
+                SecretFileLeft    = Test-Path $file
+                Firewall          = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'RemoteHub Agent*' }).Count
             }
         }
         # what the device keeps: agent.json's broker entry, and whether the secret is anywhere in it, the agent's logs or
@@ -97,7 +112,7 @@ AfterAll {
 Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
 
 
-    It 'B-BRK-01 the MSI with BROKER_URL and BROKER_SECRET enrolls the device, registers it and brings it online' -Tag 'B-BRK-01' {
+    It 'B-BRK-01 the MSI with BROKER_URL and BROKER_SECRET_FILE enrolls the device, registers it and brings it online' -Tag 'B-BRK-01' {
         if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
         Save 'install' $install
         $install.ExitCode | Should -BeIn 0, 3010
@@ -342,7 +357,9 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
 
     It 'SEC-BRK-01 the device secret is kept nowhere on the device' -Tag 'SEC-BRK-01' {
         if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
-        $install.LogHasSecret | Should -BeFalse -Because 'BROKER_SECRET is hidden in the installer log'
+        $install.LogHasSecret | Should -BeFalse -Because 'the installer log names only the secret file'
+        @($install.CommandLinesWith) | Should -BeNullOrEmpty -Because "BROKER_SECRET_FILE keeps the secret off every command line - seen in: $(@($install.CommandLinesWith) -join ', ')"
+        $install.SecretFileLeft | Should -BeFalse -Because 'the agent deletes the secret file once the device has registered'
         $kept = Get-Kept
         $kept.JsonHasSecret | Should -BeFalse -Because 'agent.json holds only the keys derived from it'
         $kept.Broker.enrollKey | Should -Not -BeNullOrEmpty

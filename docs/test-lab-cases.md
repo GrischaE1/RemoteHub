@@ -758,7 +758,7 @@ The agent's side of the RemoteHub Broker and RemoteHub's way to a device through
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
-| B-BRK-01 | MSI with the broker's properties | `BROKER_URL`, `BROKER_SECRET`, `BROKER_ONLY=1` on a device without an enrollment file: installed (0 / 3010), no inbound firewall rule, the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json has the organisation; audit 1303 (registered) and 1300 (connected) | PS E | 1 | ◐ | Broker |
+| B-BRK-01 | MSI with the broker's properties | `BROKER_URL`, `BROKER_SECRET_FILE`, `BROKER_ONLY=1` on a device without an enrollment file: installed (0 / 3010), no inbound firewall rule, the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json has the organisation; audit 1303 (registered) and 1300 (connected) | PS E | 1 | ◐ | Broker |
 | B-BRK-02 | Through the broker | RemoteHub's way: Connect with the console secret, the device's record sealed, the agent's health through a relayed session pinned to the record's fingerprint answers the device's id; audit 1301 (session started) | H E | 1 | ◐ | Broker |
 | B-BRK-03 | Device policy | `BrokerEnabled=0` → the device goes offline at the broker; the policy cleared → online again | PS | 1 | ◐ | Broker |
 | B-BRK-05 | Direct on the lab network | The device's firewall on: the agent's health through the broker answers over the direct path (`DirectLocal`: QUIC on a punched port, the host candidates of the lab network); audit 1301 says "direct local"; the firewall rule the agent opened for the try ("RemoteHub Agent direct path") is gone within 30 s of the session ending | H PS E | 1 | ◐ | Broker |
@@ -769,7 +769,7 @@ The agent's side of the RemoteHub Broker and RemoteHub's way to a device through
 | B-BRK-10 | Reached at its own address | the agent's inbound rule added and the agent restarted (it tells the broker it takes direct connections): the harness answers with path `Network` – the device's name or one of its reported addresses – and no BrokerSessionStarted (1301) event follows | H PS E | 1 | ◐ | Broker |
 | B-BRK-11 | A new address reported | a second address (10.250.x.y/24) added to the device's adapter: within 45 s the broker has it among the device's addresses; removed: it goes again | H PS | 2 | ◐ | Broker |
 | B-BRK-04 | Leave and join | `broker leave` → "Left the RemoteHub Broker …", offline, `broker status` "No RemoteHub Broker."; `broker join <url>` with the device secret on standard input (what *Assign to RemoteHub Broker* runs) → "Joined …", online; the console secret refused ("… console secret …", exit 1) | PS | 2 | ◐ | Broker |
-| SEC-BRK-01 | The device secret is kept nowhere | not in the installer log (`BROKER_SECRET` hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status` | PS E | 1 | ◐ | Broker |
+| SEC-BRK-01 | The device secret is kept nowhere | on no command line while the MSI runs (`BROKER_SECRET_FILE`), the file deleted once registered, not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status` | PS E | 1 | ◐ | Broker |
 
 ## 10. RemoteHub on a Windows client (C, R)
 

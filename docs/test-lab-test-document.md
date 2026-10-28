@@ -7647,7 +7647,7 @@ All cases need the lab's broker (lab.json `Broker`, lab.local.json `BrokerToken`
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
 **Expected:**
-- `msiexec /i … BROKER_URL=<broker> BROKER_SECRET=<device secret> BROKER_ONLY=1 /qn` on a device without an enrollment file ends with 0 or 3010 and leaves no inbound firewall rule
+- `msiexec /i … BROKER_URL=<broker> BROKER_SECRET_FILE=<file with the device secret> BROKER_ONLY=1 /qn` on a device without an enrollment file ends with 0 or 3010 and leaves no inbound firewall rule
 - the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json names the organisation
 - the Application log has 1303 (registered) and 1300 (connected)
 
@@ -7745,7 +7745,8 @@ P2 · How: PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
 **Expected:**
-- not in the installer log (`BROKER_SECRET` is hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
+- on no process's command line while the MSI runs (msiexec's and the agent's enrollment included – `BROKER_SECRET_FILE` passes only the path), and the file is gone once the device has registered
+- not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
 
 ### 10.1 Installer
 
