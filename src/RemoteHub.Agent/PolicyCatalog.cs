@@ -354,7 +354,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry BrokerUrl = Agent("BrokerUrl", PolicyKind.Text, "RemoteHub Broker", "Broker address", max: 200, since: BrokerSince,
         rule: s => BrokerProtocol.ParseBrokerUrl(s) is null ? "isn't a broker address (https://name)" : null);
     public static readonly PolicyEntry BrokerConsoles = Agent("BrokerConsoles", PolicyKind.List, "RemoteHub Broker", "Consoles allowed through the broker", since: BrokerSince);
-    public static readonly PolicyEntry BrokerProxy = Agent("BrokerProxy", PolicyKind.Text, "RemoteHub Broker", "Proxy for the broker", max: 200, since: BrokerSince,
+    public static readonly PolicyEntry BrokerHttpProxy = Agent("BrokerHttpProxy", PolicyKind.Text, "RemoteHub Broker", "HTTP proxy for the broker", max: 200, since: BrokerSince,
         rule: s => Uri.TryCreate(s.Trim(), UriKind.Absolute, out var u) && u.Scheme is "http" or "https" ? null : "isn't a proxy address (http://proxy:8080)");
     public static readonly PolicyEntry BrokerKeepAliveSeconds = Agent("BrokerKeepAliveSeconds", PolicyKind.Number, "RemoteHub Broker", "Keep-alive interval (seconds)", 30, 90, since: BrokerSince);
     public static readonly PolicyEntry BrokerDirect = Agent("BrokerDirect", PolicyKind.Number, "RemoteHub Broker", "Direct connections through the broker", 0, 2,
@@ -422,7 +422,7 @@ public static class PolicyCatalog
         PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
         TunnelEnabled, TunnelTargets, TunnelPorts, MaxTunnelStreams, TunnelOwnPorts,
-        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerProxy, BrokerKeepAliveSeconds, BrokerDirect, BrokerStun,
+        BrokerEnabled, BrokerUrl, BrokerConsoles, BrokerHttpProxy, BrokerKeepAliveSeconds, BrokerDirect, BrokerStun,
         AuditToEventLog, ListenPort, LogRetentionDays, MaxSessions,
     ];
 

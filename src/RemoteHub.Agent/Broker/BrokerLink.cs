@@ -425,7 +425,7 @@ internal sealed class BrokerLink(
     {
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.Zero; // the application keep-alive (BrokerLiveness)
-        if (p.BrokerProxy is { } proxy) ws.Options.Proxy = new WebProxy(proxy);
+        if (p.BrokerHttpProxy is { } proxy) ws.Options.Proxy = new WebProxy(proxy);
         return ws;
     }
 

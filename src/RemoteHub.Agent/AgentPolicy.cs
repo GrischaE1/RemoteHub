@@ -82,8 +82,8 @@ public sealed record AgentPolicy
     public string? BrokerUrl { get; init; }
     /// <summary>BrokerConsoles: console ids allowed through the broker; empty = every registered console.</summary>
     public IReadOnlyList<string> BrokerConsoles { get; init; } = [];
-    /// <summary>BrokerProxy: http://proxy:port for the broker's connections; null = the system's.</summary>
-    public string? BrokerProxy { get; init; }
+    /// <summary>BrokerHttpProxy: http://proxy:port for the broker's connections; null = the system's.</summary>
+    public string? BrokerHttpProxy { get; init; }
     /// <summary>BrokerKeepAliveSeconds: keep-alive on the broker connection (30–90).</summary>
     public int BrokerKeepAliveSeconds { get; init; } = BrokerProtocol.KeepAliveDefault;
     /// <summary>BrokerDirect: 0 relay only, 1 direct over public addresses, 2 also over local ones.</summary>
@@ -234,7 +234,7 @@ public sealed record AgentPolicy
             BrokerEnabled = Raw(PolicyCatalog.BrokerEnabled) is not 0,
             BrokerUrl = Checked(PolicyCatalog.BrokerUrl),
             BrokerConsoles = Strings(PolicyCatalog.BrokerConsoles)?.Select(c => c.Trim().ToLowerInvariant()).Where(c => c.Length > 0).ToList() ?? d.BrokerConsoles,
-            BrokerProxy = Checked(PolicyCatalog.BrokerProxy),
+            BrokerHttpProxy = Checked(PolicyCatalog.BrokerHttpProxy),
             BrokerKeepAliveSeconds = Number(PolicyCatalog.BrokerKeepAliveSeconds) ?? d.BrokerKeepAliveSeconds,
             // Set but out of range: relay only – a value that restricts must not turn into the default.
             BrokerDirect = Raw(PolicyCatalog.BrokerDirect) is null ? d.BrokerDirect : Number(PolicyCatalog.BrokerDirect) ?? 0,

@@ -413,7 +413,7 @@ read, nothing is allowed (unchanged). **New** marks values the agent doesn't rea
 | `PowerShellEnabled` **(new)** | DWORD 0/1 | 1 | Every PowerShell session through the agent, and so PowerShell, files, registry, services, processes and updates through the agent. They all run in that session, which is why the agent can't block them one by one (§14 Q4). |
 | `DesktopEnabled` | DWORD 0/1 | 1 | The remote desktop. |
 | `TunnelEnabled` | DWORD 0/1 | 1 | Use as a jump host. |
-| `BrokerEnabled` *(0.22.0)* | DWORD 0/1 | 1 | The RemoteHub Broker: no connection to it, no session through it. With it: `BrokerUrl` (the only broker), `BrokerConsoles` (the only consoles), `BrokerProxy`, `BrokerKeepAliveSeconds` (30–90, 60), `BrokerDirect` (2 public and local addresses, 1 public only, 0 relayed only; 2), `BrokerStun` (name:port); category *RemoteHub Agent → RemoteHub Broker*. |
+| `BrokerEnabled` *(0.22.0)* | DWORD 0/1 | 1 | The RemoteHub Broker: no connection to it, no session through it. With it: `BrokerUrl` (the only broker), `BrokerConsoles` (the only consoles), `BrokerHttpProxy`, `BrokerKeepAliveSeconds` (30–90, 60), `BrokerDirect` (2 public and local addresses, 1 public only, 0 relayed only; 2), `BrokerStun` (name:port); category *RemoteHub Agent → RemoteHub Broker*. |
 | `TunnelOwnPorts` *(0.22.0)* | MULTI_SZ | `RDP` | Ports of the device itself a jump or broker session may open (`RDP` = its RDP port, or numbers). |
 | `AuditToEventLog` | DWORD 0/1 | 1 | Audit entries in the Windows Application log. |
 

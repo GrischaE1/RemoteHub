@@ -1236,11 +1236,11 @@
       <elements><multiText id="BrokerConsoles" valueName="BrokerConsoles" required="true" /></elements>
     </policy>
 
-    <policy name="Agent_BrokerProxy" class="Machine" displayName="$(string.Agent_BrokerProxy)" explainText="$(string.Agent_BrokerProxy_Help)"
-            presentation="$(presentation.Agent_BrokerProxy)" key="Software\Policies\RemoteHub\Agent">
+    <policy name="Agent_BrokerHttpProxy" class="Machine" displayName="$(string.Agent_BrokerHttpProxy)" explainText="$(string.Agent_BrokerHttpProxy_Help)"
+            presentation="$(presentation.Agent_BrokerHttpProxy)" key="Software\Policies\RemoteHub\Agent">
       <parentCategory ref="Agent_Broker" />
       <supportedOn ref="SUPPORTED_Agent_0_22_0" />
-      <elements><text id="BrokerProxy" valueName="BrokerProxy" maxLength="200" required="true" /></elements>
+      <elements><text id="BrokerHttpProxy" valueName="BrokerHttpProxy" maxLength="200" required="true" /></elements>
     </policy>
 
     <policy name="Agent_BrokerKeepAliveSeconds" class="Machine" displayName="$(string.Agent_BrokerKeepAliveSeconds)" explainText="$(string.Agent_BrokerKeepAliveSeconds_Help)"
