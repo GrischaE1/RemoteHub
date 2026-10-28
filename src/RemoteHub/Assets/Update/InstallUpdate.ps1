@@ -13,6 +13,7 @@ param(
     [Parameter(Mandatory)][string]$Id,
     [int]$WaitPid,
     [string]$Publisher = '',
+    [string]$PublisherKey = '',
     [string]$Signer = '',
     [string]$Stage = ''
 )
@@ -26,6 +27,12 @@ if (-not $Stage) { $Stage = Join-Path $env:ProgramFiles 'RemoteHub Updates' } # 
 $sha = $Sha256.ToUpperInvariant()
 $results = Join-Path $Stage 'results'
 $target = Join-Path $Stage ($Id + '.msi')
+# The publisher is a certificate's subject and its public key (hex, as .NET's GetPublicKeyString): the subject alone
+# could come from any CA this PC trusts. Properties and -f only, so it runs in Constrained Language Mode.
+function KeyOf($cert) { (@($cert.PublicKey.EncodedKeyValue.RawData) | ForEach-Object { '{0:X2}' -f $_ }) -join '' }
+# Keys of the publisher's next certificate, shipped one release ahead of a renewal that brings a new key - the same list
+# as Authenticode.NextPublisherKeys.
+$NextKeys = @()
 function Result([string]$text) { Set-Content -LiteralPath (Join-Path $results ($Id + '.txt')) -Value $text -Encoding UTF8 }
 try {
     foreach ($dir in $Stage, $results) {
@@ -49,6 +56,7 @@ try {
         if ($own.SignerCertificate) {
             if ($own.Status -ne 'Valid') { Result 'refused signature'; return }
             $Publisher = $own.SignerCertificate.Subject
+            $PublisherKey = KeyOf $own.SignerCertificate
         }
     }
     if ($WaitPid -gt 0) { Wait-Process -Id $WaitPid -Timeout 60 -ErrorAction SilentlyContinue }
@@ -57,6 +65,8 @@ try {
     if ($Publisher) {
         $sig = Get-AuthenticodeSignature -LiteralPath $target
         if ($sig.Status -ne 'Valid' -or -not $sig.SignerCertificate -or $sig.SignerCertificate.Subject -cne $Publisher) { Result 'refused signature'; return }
+        $key = KeyOf $sig.SignerCertificate
+        if (-not $key -or ($key -ne $PublisherKey -and $NextKeys -notcontains $key)) { Result 'refused signature'; return }
     }
     # msiexec's log next to the outcome (readable by users like it, gone after 7 days): an exit code like 1603
     # alone doesn't say why the install failed (lab SEC-UPD-02, run 20261021-222745)

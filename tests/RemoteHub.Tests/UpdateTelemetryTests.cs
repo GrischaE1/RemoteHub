@@ -155,7 +155,7 @@ public class UpdateTelemetryTests
     }
 
     /// <summary>A download as RemoteHub makes it; <paramref name="publisher"/>: the running build's signer (null: an unsigned build).</summary>
-    private static async Task<(string? Path, Exception? Error, string Folder)> Download(byte[] served, UpdateInfo info, string current = "0.8.0", string? publisher = null)
+    private static async Task<(string? Path, Exception? Error, string Folder)> Download(byte[] served, UpdateInfo info, string current = "0.8.0", Authenticode.Publisher? publisher = null)
     {
         var folder = Path.Combine(Path.GetTempPath(), "rh-update-test-" + Guid.NewGuid().ToString("N"));
         var oldHttp = UpdateService.Http;
@@ -176,7 +176,7 @@ public class UpdateTelemetryTests
     public async Task A_signed_build_installs_only_downloads_signed_by_its_own_publisher()
     {
         var signed = File.ReadAllBytes(SignedFile);
-        var publisher = Authenticode.SignerSubject(SignedFile);
+        var publisher = Authenticode.Signer(SignedFile);
         Assert.NotNull(publisher);
         var unsigned = new byte[100_000];
         Random.Shared.NextBytes(unsigned);
@@ -190,11 +190,13 @@ public class UpdateTelemetryTests
             Assert.Null(ok.Error);
             Assert.True(File.Exists(ok.Path));
 
-            foreach (var (served, signer, why) in new (byte[], string, string)[]
+            foreach (var (served, signer, why) in new (byte[], Authenticode.Publisher, string)[]
                      {
                          (unsigned, publisher!, "isn't signed"),
                          (tampered, publisher!, "doesn't match the file"),
-                         (signed, "CN=Someone Else, O=Someone Else, C=DE", "not by RemoteHub's publisher"),
+                         (signed, publisher! with { Subject = "CN=Someone Else, O=Someone Else, C=DE" }, "not by RemoteHub's publisher"),
+                         // A certificate in the publisher's name from another CA the PC trusts: same subject, another key.
+                         (signed, publisher! with { Key = "3082010A0282010100" + new string('0', 32) }, "not with its key"),
                      })
             {
                 var refused = await Download(served, Info(served), publisher: signer);
@@ -216,13 +218,40 @@ public class UpdateTelemetryTests
     }
 
     [Fact]
-    public void The_publisher_is_compared_by_subject_with_a_trusted_chain()
+    public void The_publisher_is_compared_by_subject_and_key_with_a_trusted_chain()
     {
-        var publisher = Authenticode.SignerSubject(SignedFile)!;
+        var publisher = Authenticode.Signer(SignedFile)!;
         Assert.Null(Authenticode.Refusal(SignedFile, publisher));
+        Assert.Null(Authenticode.Refusal(SignedFile, publisher with { Key = publisher.Key.ToLowerInvariant() }));
         Assert.Null(Authenticode.Refusal(SignedFile, null));
-        Assert.Contains("not by RemoteHub's publisher", Authenticode.Refusal(SignedFile, publisher.ToUpperInvariant() + "X"));
-        Assert.Null(Authenticode.SignerSubject(Path.Combine(Path.GetTempPath(), "rh-missing-" + Guid.NewGuid().ToString("N"))));
+        Assert.Contains("not by RemoteHub's publisher", Authenticode.Refusal(SignedFile, publisher with { Subject = publisher.Subject.ToUpperInvariant() + "X" }));
+        Assert.Contains("not with its key", Authenticode.Refusal(SignedFile, publisher with { Key = "00" }));
+        Assert.Null(Authenticode.Signer(Path.Combine(Path.GetTempPath(), "rh-missing-" + Guid.NewGuid().ToString("N"))));
+    }
+
+    [Fact]
+    public async Task The_step_script_reads_a_signers_key_as_RemoteHub_does()
+    {
+        var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, UpdateService.StepScriptName));
+        var keyOf = System.Text.RegularExpressions.Regex.Match(script, @"^function KeyOf.*$", System.Text.RegularExpressions.RegexOptions.Multiline).Value.TrimEnd('\r');
+        Assert.NotEmpty(keyOf);
+        var command = keyOf + $"; KeyOf (Get-AuthenticodeSignature -LiteralPath '{SignedFile}').SignerCertificate";
+        var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command)))
+        { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        using var p = System.Diagnostics.Process.Start(start)!;
+        var output = await p.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.Equal(Authenticode.Signer(SignedFile)!.Key, output.Trim());
+    }
+
+    [Fact]
+    public void The_step_script_accepts_the_same_next_publisher_keys_as_RemoteHub()
+    {
+        var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, UpdateService.StepScriptName));
+        var list = System.Text.RegularExpressions.Regex.Match(script, @"^\$NextKeys = @\(([^)]*)\)", System.Text.RegularExpressions.RegexOptions.Multiline);
+        Assert.True(list.Success, "InstallUpdate.ps1 defines $NextKeys");
+        var keys = System.Text.RegularExpressions.Regex.Matches(list.Groups[1].Value, "'([0-9A-Fa-f]+)'").Select(m => m.Groups[1].Value.ToUpperInvariant());
+        Assert.Equal(Authenticode.NextPublisherKeys.Select(k => k.ToUpperInvariant()).Order(), keys.Order());
     }
 
     private static UpdateInfo Info(byte[] content, string? sha = null, long? size = null, string url = "https://api.github.com/repositories/1409080301/releases/assets/2") =>
@@ -285,7 +314,7 @@ public class UpdateTelemetryTests
     public void Elevated_step_is_valid_PowerShell_with_its_values_quoted()
     {
         var command = UpdateService.InstallCommand(@"C:\Users\O'Brien\AppData\Local\Temp\RemoteHub\Updates\RemoteHub-0.9.1-x64.msi", "ab" + new string('0', 62),
-            "CN=O'Brien GmbH, O=O'Brien GmbH, C=DE", 4242, "0123456789abcdef0123456789abcdef");
+            new("CN=O'Brien GmbH, O=O'Brien GmbH, C=DE", "3082010A"), 4242, "0123456789abcdef0123456789abcdef");
         System.Management.Automation.Language.Parser.ParseInput(command, out _, out var errors);
         Assert.Empty(errors);
         // The step's own script, with its values as parameters
@@ -294,6 +323,7 @@ public class UpdateTelemetryTests
         Assert.Contains("-Sha256 'ab" + new string('0', 62) + "'", command);
         Assert.Contains("$sha = $Sha256.ToUpperInvariant()", command);
         Assert.Contains("-Publisher 'CN=O''Brien GmbH, O=O''Brien GmbH, C=DE'", command);
+        Assert.Contains("-PublisherKey '3082010A'", command);
         Assert.Contains("-WaitPid 4242 -Id '0123456789abcdef0123456789abcdef'", command);
         Assert.Contains("Wait-Process -Id $WaitPid", command);
         Assert.Contains("Join-Path $env:ProgramFiles 'RemoteHub Updates'", command);
@@ -338,7 +368,7 @@ public class UpdateTelemetryTests
             Assert.Null(UpdateService.Updater(Path.Combine(Path.GetTempPath(), "RemoteHub.exe"), installed, null));
             Assert.Null(UpdateService.Updater(null, installed, null));
             // a signed RemoteHub asks only through a program signed by its own publisher
-            Assert.Null(UpdateService.Updater(installed, installed, Authenticode.SignerSubject(SignedFile)));
+            Assert.Null(UpdateService.Updater(installed, installed, Authenticode.Signer(SignedFile)));
         }
         finally
         {
@@ -356,7 +386,7 @@ public class UpdateTelemetryTests
     }
 
     /// <summary>Runs the elevated step's script without elevation, in a temp folder instead of Program Files.</summary>
-    private static string RunInstallCommand(string source, string sha, string? publisher, string stage)
+    private static string RunInstallCommand(string source, string sha, Authenticode.Publisher? publisher, string stage)
     {
         var id = Guid.NewGuid().ToString("N");
         var command = UpdateService.InstallCommand(source, sha, publisher, 0, id, stage);
@@ -395,12 +425,14 @@ public class UpdateTelemetryTests
             Directory.CreateDirectory(dir);
             File.Copy(SignedFile, download);
             var sha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(download)));
-            var publisher = Authenticode.SignerSubject(SignedFile)!;
+            var publisher = Authenticode.Signer(SignedFile)!;
 
             // swapped after RemoteHub checked it: another file, another hash
             Assert.Equal("refused changed", RunInstallCommand(download, new string('0', 64), publisher, stage));
             // the right file, but RemoteHub's publisher is someone else
-            Assert.Equal("refused signature", RunInstallCommand(download, sha, "CN=RemoteHub Publisher", stage));
+            Assert.Equal("refused signature", RunInstallCommand(download, sha, publisher with { Subject = "CN=RemoteHub Publisher" }, stage));
+            // the publisher's name, but another certificate's key
+            Assert.Equal("refused signature", RunInstallCommand(download, sha, publisher with { Key = "00" + publisher.Key[2..] }, stage));
             // As RemoteHubUpdate.exe starts it: the publisher is whoever signed the program, here someone other than
             // the download's signer (an unsigned copy of it).
             var unsigned = Path.Combine(dir, "RemoteHub-9.9.8-x64.msi");

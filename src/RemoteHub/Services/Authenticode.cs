@@ -6,22 +6,33 @@ namespace RemoteHub.Services;
 /// <summary>
 /// Authenticode checks for the update installer: the signature must chain to a root this PC trusts (WinVerifyTrust, no
 /// revocation check – the PC may be offline) and the signer must be the publisher that signed the running RemoteHub.
-/// The publisher is compared by the certificate's subject, not its thumbprint, so a renewed certificate still matches.
+/// The publisher is its certificate's subject <b>and</b> public key: not the thumbprint, so a certificate renewed with
+/// the same key still matches; not the subject alone, which any CA the PC trusts could issue to someone else.
 /// </summary>
+/// <remarks>
+/// A renewal that brings a new key needs one release ahead of it that lists the new key in <see cref="NextPublisherKeys"/>
+/// (and <c>$NextKeys</c> in InstallUpdate.ps1); builds without it can only be updated by installing the new MSI by hand.
+/// </remarks>
 internal static class Authenticode
 {
-    /// <summary>The subject of the certificate that signed the running RemoteHub.exe; null for an unsigned build (settable for tests).</summary>
-    internal static string? RunningPublisher { get; set; } = Environment.ProcessPath is { } exe ? SignerSubject(exe) : null;
+    /// <summary>Who signed a file: the certificate's subject and its public key (hex, as <c>GetPublicKeyString</c>).</summary>
+    internal sealed record Publisher(string Subject, string Key);
 
-    /// <summary>The subject of the certificate that signed <paramref name="file"/> (embedded signature), or null if it isn't signed.</summary>
-    public static string? SignerSubject(string file)
+    /// <summary>Public keys (hex) of the publisher's next certificate, accepted besides the running build's own key.</summary>
+    internal static readonly string[] NextPublisherKeys = [];
+
+    /// <summary>The signer of the running RemoteHub.exe; null for an unsigned build (settable for tests).</summary>
+    internal static Publisher? RunningPublisher { get; set; } = Environment.ProcessPath is { } exe ? Signer(exe) : null;
+
+    /// <summary>The signer of <paramref name="file"/> (embedded signature), or null if it isn't signed.</summary>
+    public static Publisher? Signer(string file)
     {
         try
         {
 #pragma warning disable SYSLIB0057 // reads the signer of a signed file; X509CertificateLoader has no equivalent
             using var cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(file));
 #pragma warning restore SYSLIB0057
-            return cert.Subject;
+            return new Publisher(cert.Subject, cert.GetPublicKeyString());
         }
         catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or IOException or UnauthorizedAccessException) { return null; }
     }
@@ -58,12 +69,14 @@ internal static class Authenticode
     /// with a signature this PC trusts. A null <paramref name="publisher"/> (the running build isn't signed – a test
     /// release or a local build) can't name a publisher, so only the checksum protects the download then.
     /// </summary>
-    public static string? Refusal(string file, string? publisher)
+    public static string? Refusal(string file, Publisher? publisher)
     {
         if (publisher is null) return null;
-        if (SignerSubject(file) is not { } signer) return "isn't signed";
+        if (Signer(file) is not { } signer) return "isn't signed";
         if (!Trusted(file)) return "has a signature that doesn't match the file or that this PC doesn't trust";
-        if (!string.Equals(signer, publisher, StringComparison.Ordinal)) return $"is signed by \"{signer}\", not by RemoteHub's publisher";
+        if (!string.Equals(signer.Subject, publisher.Subject, StringComparison.Ordinal)) return $"is signed by \"{signer.Subject}\", not by RemoteHub's publisher";
+        if (!string.Equals(signer.Key, publisher.Key, StringComparison.OrdinalIgnoreCase) && !NextPublisherKeys.Contains(signer.Key, StringComparer.OrdinalIgnoreCase))
+            return "is signed with a certificate in RemoteHub's publisher's name but not with its key";
         return null;
     }
 
