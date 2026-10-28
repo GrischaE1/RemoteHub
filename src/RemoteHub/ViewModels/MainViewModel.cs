@@ -499,7 +499,7 @@ public sealed partial class MainViewModel : ObservableObject
         void NewIds(NodeBase n)
         {
             n.Id = Guid.NewGuid();
-            if (n is Connection k) { k.Agent = null; k.RdpCertificate = null; foreach (var s in k.Shares) s.Id = Guid.NewGuid(); }
+            if (n is Connection k) { k.Agent = null; k.RdpCertificate = null; k.WinRmCertificate = null; foreach (var s in k.Shares) s.Id = Guid.NewGuid(); }
             foreach (var c in n.Contents ?? []) NewIds(c);
         }
         NewIds(copy);

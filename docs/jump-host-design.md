@@ -378,7 +378,10 @@ in **TrustedHosts**. Options:
 - Plain HTTP: needs `127.0.0.1` in TrustedHosts – RemoteHub doesn't change that machine setting itself; the error
   says how. Over HTTP, WinRM's own message encryption still protects the content.
 
-Built: HTTPS with `SkipCNCheck` (§14); lab test J-02 opens a session that way. Whether `localhost` is treated
+Built: HTTPS with `SkipCNCheck` (§14); lab test J-02 opens a session that way. Since 2026-10-28 the pin is actually
+checked (until then only the chain was): before WinRM connects, RemoteHub reads the certificate through the jump host
+(`PsRemoting.CheckCertificate`) – one this PC trusts for the target's name is fine, otherwise only the one trusted for
+the connection (`WinRmCertificate`); a new or changed one is asked like RDP's. Whether `localhost` is treated
 differently from `127.0.0.1` over HTTP was not tested (the lab host's TrustedHosts is left alone).
 
 ### 9.3 Throughput
@@ -501,8 +504,8 @@ What was built, and where it differs from the sections above:
   connections; with NLA the sign-in itself (CredSSP) is bound to the server's key, so a different server in between
   can't complete it. Sign-in falls back from Kerberos to NTLM (D9).
 - **WinRM (§9.2):** WinRM goes to the forwarder's port with `SkipCNCheck` over HTTPS – the
-  certificate must still be trusted on this PC (the setup script and "Test again" fetch it through the jump host and
-  compare its thumbprint as for a direct connection), and NTLM over HTTPS is bound to it (channel binding). Over HTTP
+  certificate must be trusted on this PC for the target's name, or be the one the user trusted for the connection –
+  checked through the jump host before every sign-in, as for RDP (§9.2) – and NTLM over HTTPS is bound to it (channel binding). Over HTTP
   the WinRM client refuses NTLM to 127.0.0.1 unless it is in TrustedHosts; the error says so and points to HTTPS or the
   agent. The setup script's firewall scope is the jump host's address in that network.
 - **Which way below a jump host:** the Phase 1 lock to the agent is gone. "Connect through" applies as everywhere, except

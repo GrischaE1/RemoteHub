@@ -4,6 +4,9 @@ using System.Management.Automation.Remoting;
 using System.Management.Automation.Runspaces;
 using System.Net;
 using System.Security;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading;
 using RemoteHub.Models;
 
 namespace RemoteHub.Remoting;
@@ -11,9 +14,12 @@ namespace RemoteHub.Remoting;
 /// <summary>
 /// Where and as whom to open a PowerShell session: over WinRM, or through the RemoteHub Agent when <see cref="Agent"/> is
 /// set. Holds the password in memory only. <paramref name="Via"/>: WinRM goes through this jump host (the agent's own way
-/// through is <see cref="AgentEndpoint.Via"/>).
+/// through is <see cref="AgentEndpoint.Via"/>). <paramref name="TrustedCertificate"/>: WinRM over HTTPS through a jump
+/// host – the certificate the user trusted for this connection (<see cref="Connection.WinRmCertificate"/>);
+/// <paramref name="ConnectionId"/> names that connection for <see cref="PsRemoting.ConfirmCertificate"/>.
 /// </summary>
-public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials, AgentEndpoint? Agent = null, JumpRoute? Via = null)
+public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credentials, AgentEndpoint? Agent = null, JumpRoute? Via = null,
+    string? TrustedCertificate = null, Guid ConnectionId = default)
 {
     public int Port => Agent?.Port ?? (UseSsl ? 5986 : 5985);
     public string Display => (Agent is null ? $"{Host} ({(UseSsl ? "HTTPS" : "HTTP")} {Port})" : $"{Host} (RemoteHub Agent {Port})") +
@@ -22,9 +28,22 @@ public sealed record PsTarget(string Host, bool UseSsl, CredentialSet Credential
     public string Transport => Agent is null ? $"PowerShell remoting ({(UseSsl ? "HTTPS" : "HTTP")})" : "RemoteHub Agent";
 }
 
+/// <summary>
+/// The certificate a WinRM target presented through a jump host when it isn't one this PC trusts for the name.
+/// <c>Changed</c>: another one was trusted for the connection before.
+/// </summary>
+public sealed record PresentedCertificate(string Host, string IssuedTo, string IssuedBy, DateTime ValidUntil, string Thumbprint, string Pin, bool Changed);
+
 public static class PsRemoting
 {
     private const string ShellUri = "http://schemas.microsoft.com/powershell/Microsoft.PowerShell";
+
+    /// <summary>
+    /// Asked on the opening thread when <see cref="CheckCertificate"/> finds a certificate it can't accept by itself: true
+    /// when the user trusts it (the handler remembers <see cref="PresentedCertificate.Pin"/> for the connection). Null –
+    /// no window to ask in – refuses.
+    /// </summary>
+    public static Func<PsTarget, PresentedCertificate, bool>? ConfirmCertificate { get; set; }
 
     /// <summary>
     /// User name as WinRM expects it. A local account (".\user") becomes "COMPUTER\user", using the first label of
@@ -87,8 +106,8 @@ public static class PsRemoting
             OpenTimeout = 20_000,
             OperationTimeout = 0, // no limit: long-running commands and big uploads
             IdleTimeout = -1,
-            // Through a jump host the name is 127.0.0.1: the certificate must still be one this PC trusts (set up and
-            // compared like a direct one), and the sign-in is bound to it (channel binding) – only the name isn't checked.
+            // Through a jump host the name is 127.0.0.1, so WinRM can't check it: Open has looked at the certificate the
+            // target presents through the jump host first (CheckCertificate), and the sign-in is bound to the TLS channel.
             SkipCNCheck = forward is not null,
         };
     }
@@ -96,8 +115,10 @@ public static class PsRemoting
     /// <summary>Opens a remote runspace (blocking – call from a background thread).</summary>
     public static Runspace Open(PsTarget t, PSHost? host = null)
     {
+        var via = t is { Agent: null, Via: { } v } ? v : null;
+        if (via is not null && t.UseSsl) CheckCertificate(t, ct => OpenThrough(via, t, ct), ConfirmCertificate);
         // WinRM behind a jump host: to a local port that leads there, held while the runspace is open.
-        var forward = t is { Agent: null, Via: { } via } ? JumpForwarders.Open(via, t.Host, t.Port) : null;
+        var forward = via is null ? null : JumpForwarders.Open(via, t.Host, t.Port);
         Runspace? rs = null;
         try
         {
@@ -116,6 +137,45 @@ public static class PsRemoting
             if (forward?.TakeError() is { } why) throw new JumpHostException(why, inner: ex);
             throw;
         }
+    }
+
+    private static async Task<Stream> OpenThrough(JumpRoute via, PsTarget t, CancellationToken ct) =>
+        await JumpTunnels.OpenAsync(via, t.Host.Trim(), t.Port, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// WinRM over HTTPS through a jump host only sees 127.0.0.1 and skips the name check, so any certificate this PC trusts
+    /// would pass. As for RDP (MainWindow.RdpRouteAsync), the target's certificate is read through the jump host first: one
+    /// this PC trusts for the name is fine; otherwise only the one trusted for this connection, and a new or changed one is
+    /// asked through <paramref name="confirm"/> (<see cref="ConfirmCertificate"/>). Nothing is sent after the TLS handshake. The check uses its own
+    /// connection through the jump host, as RDP's does: it stops a jump host that answers with another certificate, not
+    /// one that answers the check and WinRM's own connection differently.
+    /// </summary>
+    /// <exception cref="AuthenticationException">The certificate wasn't trusted.</exception>
+    internal static void CheckCertificate(PsTarget t, Func<CancellationToken, Task<Stream>> open, Func<PsTarget, PresentedCertificate, bool>? confirm)
+    {
+        var host = t.Host.Trim();
+        (X509Certificate2 Certificate, bool Valid) presented;
+        try
+        {
+            presented = Task.Run(async () =>
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await using var stream = await open(timeout.Token).ConfigureAwait(false);
+                return await ServerCertificates.TlsAsync(stream, host, timeout.Token).ConfigureAwait(false);
+            }).GetAwaiter().GetResult();
+        }
+        catch (JumpHostException) { throw; }
+        catch (Exception ex)
+        {
+            throw new IOException($"{host} didn't complete a TLS handshake through the jump host on port {t.Port}: {ex.GetBaseException().Message}", ex);
+        }
+        using var cert = presented.Certificate;
+        var pin = ServerCertificates.Pin(cert);
+        if (presented.Valid || pin == t.TrustedCertificate) return;
+        var seen = new PresentedCertificate(host, cert.GetNameInfo(X509NameType.SimpleName, false), cert.GetNameInfo(X509NameType.SimpleName, true),
+            cert.NotAfter, cert.Thumbprint, pin, Changed: t.TrustedCertificate is not null);
+        if (confirm?.Invoke(t, seen) != true)
+            throw new AuthenticationException($"The WinRM certificate {host} presents through the jump host isn't trusted, so RemoteHub didn't sign in.");
     }
 
     /// <summary>Opens a session, reads version and computer name, closes it again.</summary>
