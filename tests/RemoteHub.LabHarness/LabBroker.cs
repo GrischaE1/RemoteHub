@@ -119,14 +119,14 @@ internal static class LabBroker
                 var name = string.Join('.', new[] { record["computerName"]?.GetValue<string>(), record["domain"]?.GetValue<string>() }.Where(s => !string.IsNullOrEmpty(s)));
                 reported = await client.DeviceAddressesAsync(deviceId, timeout.Token);
                 var tried = DateTime.UtcNow;
-                if (await DirectReach.FindAsync(route, name, AgentProtocol.DefaultPort, pin, timeout.Token) is { } found)
+                if (await DirectReach.FindAsync(route, name, AgentProtocol.DefaultPort, pin, timeout.Token) is { } reach)
                 {
                     using var direct = new SocketsHttpHandler { SslOptions = new SslClientAuthenticationOptions { RemoteCertificateValidationCallback = pinned } };
                     using var directHttp = new HttpClient(direct) { Timeout = TimeSpan.FromSeconds(seconds) };
-                    var host = found.Host.Contains(':') ? $"[{found.Host}]" : found.Host;
-                    var answer = JsonNode.Parse(await directHttp.GetStringAsync($"https://{host}:{found.Port}{AgentProtocol.HealthPath}"));
+                    var host = reach.Host.Contains(':') ? $"[{reach.Host}]" : reach.Host;
+                    var answer = JsonNode.Parse(await directHttp.GetStringAsync($"https://{host}:{reach.Port}{AgentProtocol.HealthPath}"));
                     return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health = answer, path = "Network",
-                                 directHost = found.Host, name, addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound,
+                                 directHost = reach.Host, name, addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound,
                                  seconds = Math.Round((DateTime.UtcNow - tried).TotalSeconds, 1) };
                 }
             }

@@ -297,6 +297,29 @@ function Reset-LabVm {
         Restore-LabVmNetwork -Name $vm.Name
         if ((Get-VM -Name $vm.Name).State -ne 'Running') { Start-VM -Name $vm.Name }
         Wait-LabVm -Name $vm.Name -TimeoutSec $TimeoutSec
+        try { Disable-LabIdleLock -Name $vm.Name }
+        catch { Write-Warning "$($vm.Name): the idle timeouts couldn't be turned off - $($_.Exception.Message)" }
+    }
+}
+
+# Long scenarios: the signed-in session must not go dark, sleep or lock on its own - the person at the device and the
+# UI tests need its desktop on screen. A checkpoint keeps its own power plan: the console VM's turns the display off
+# after 5 minutes and sleeps after 15, so C-POLUPD2's SEC-UPD setup (10 minutes without input) found only a black
+# screen and no RemoteHub window (run 20261028-062150). Applied after every revert; powercfg takes effect at once.
+# A test locks the session on purpose when it needs to (Lock-LabSession).
+function Disable-LabIdleLock {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    Invoke-LabGuest -Name $Name -ScriptBlock {
+        foreach ($setting in 'monitor-timeout-ac', 'monitor-timeout-dc', 'standby-timeout-ac', 'standby-timeout-dc') {
+            powercfg /change $setting 0 | Out-Null
+        }
+        $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+        Set-ItemProperty $sys -Name InactivityTimeoutSecs -Value 0 -Type DWord
+        $ss = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop'
+        $null = New-Item $ss -Force
+        Set-ItemProperty $ss -Name ScreenSaveActive -Value '0'
+        Set-ItemProperty $ss -Name ScreenSaverIsSecure -Value '0'
     }
 }
 
@@ -1429,17 +1452,8 @@ function Set-LabAutoLogon {
         Set-ItemProperty $k -Name DefaultPassword -Value $p
         Set-ItemProperty $k -Name DefaultDomainName -Value $env:COMPUTERNAME
         Remove-ItemProperty $k -Name AutoLogonCount -ErrorAction SilentlyContinue
-        # long scenarios: the signed-in session must not lock or go dark on its own (the person at the device needs its
-        # desktop on screen); a test locks it on purpose when it needs to (Lock-LabSession)
-        powercfg /change monitor-timeout-ac 0 | Out-Null
-        powercfg /change standby-timeout-ac 0 | Out-Null
-        $sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-        Set-ItemProperty $sys -Name InactivityTimeoutSecs -Value 0 -Type DWord
-        $ss = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop'
-        $null = New-Item $ss -Force
-        Set-ItemProperty $ss -Name ScreenSaveActive -Value '0'
-        Set-ItemProperty $ss -Name ScreenSaverIsSecure -Value '0'
     }
+    Disable-LabIdleLock -Name $Name
     Restart-LabVm -Name $Name -TimeoutSec $TimeoutSec
     Wait-LabDesktop -Name $Name -Account $user -TimeoutSec $TimeoutSec
 }

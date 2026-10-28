@@ -226,18 +226,23 @@ public class DecoderProcessTests
                     2 => [0, 0, 0, 1, .. RandomBytes(random, random.Next(1, 4096))],               // noise after a start code
                     _ => [.. unit, .. unit[..random.Next(1, unit.Length)]],                        // a unit with a broken copy behind it
                 };
+                // only the call is timed: a decoder that hangs is given up after FrameTimeout; starting the next one
+                // afterwards (a new sandboxed process, slow on a busy CI runner) isn't part of it
                 var watch = Stopwatch.StartNew();
+                TimeSpan took;
                 try
                 {
                     if (host.Video((uint)n, n % 8 == 0 ? 4096 : 320, n % 8 == 0 ? 2304 : 240, n % 4 != 2, input, (_, _, _) => frames++)) { } else bad++;
+                    took = watch.Elapsed;
                 }
                 catch (DecoderFailedException)
                 {
+                    took = watch.Elapsed;
                     failures++;
                     host.Dispose();
                     host = DecoderHost.Start();
                 }
-                Assert.True(watch.Elapsed < DecoderHost.FrameTimeout + TimeSpan.FromSeconds(2), $"input {n} took {watch.Elapsed}");
+                Assert.True(took < DecoderHost.FrameTimeout + TimeSpan.FromSeconds(2), $"input {n} took {took}");
             }
             using var fresh = DecoderHost.Start();
             Assert.Equal(10, DecoderCheck.Video(fresh, 320, 240, 10).Shown);
