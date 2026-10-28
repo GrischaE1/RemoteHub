@@ -263,6 +263,17 @@ public class PeerDirectTests
     }
 
     [Fact]
+    public void The_agents_proxy_for_the_broker_is_the_policy_BrokerHttpProxy()
+    {
+        // BrokerProxy is kept free for the jump-host relay of the broker design (F04).
+        var config = new A.AgentConfig();
+        A.AgentPolicy Apply(Dictionary<string, object> v) => A.AgentPolicy.From(config, new PolicyTemplateTests.Values(v));
+        Assert.Null(Apply([]).BrokerHttpProxy);
+        Assert.Equal("http://proxy.contoso.com:8080", Apply(new() { ["BrokerHttpProxy"] = "http://proxy.contoso.com:8080" }).BrokerHttpProxy);
+        Assert.Null(Apply(new() { ["BrokerProxy"] = "http://proxy.contoso.com:8080" }).BrokerHttpProxy);
+    }
+
+    [Fact]
     public void This_PCs_policy_BrokerDirect_0_keeps_every_session_relayed()
     {
         try

@@ -212,6 +212,15 @@ public sealed class DirectReachTests : IDisposable
     }
 
     [Fact]
+    public void An_agent_on_any_free_port_names_no_port_in_its_hello()
+    {
+        // The broker refuses a hello with port 0 and closes the connection, so the device looked online but wasn't.
+        var hello = A.BrokerLink.Hello(new A.AgentPolicy(), new A.AgentConfig { ListenPort = 0 });
+        Assert.False(hello.ContainsKey("port"));
+        Assert.NotNull(hello["addresses"]);
+    }
+
+    [Fact]
     public async Task A_try_answers_only_for_the_pinned_certificate()
     {
         using var cert = SelfSigned();

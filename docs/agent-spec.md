@@ -274,7 +274,7 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `BrokerEnabled` | DWORD | 0: no RemoteHub Broker (on) – since 0.22.0 |
 | `BrokerUrl` | SZ | the only broker the device may use (any) – since 0.22.0 |
 | `BrokerConsoles` | MULTI_SZ | the console ids that may start a session through the broker (all of the organisation's) – since 0.22.0 |
-| `BrokerProxy`, `BrokerKeepAliveSeconds` | SZ / DWORD | proxy for the broker connection (system); keep-alive 30–90 s (60) – since 0.22.0; a connection with no frame from the broker (its pong included) for two intervals and 15 s, a keep-alive that can't be sent, or no answer 10 s after a network change is given up and made again (`BrokerLiveness`) |
+| `BrokerHttpProxy`, `BrokerKeepAliveSeconds` | SZ / DWORD | proxy for the broker connection (system); keep-alive 30–90 s (60) – since 0.22.0; a connection with no frame from the broker (its pong included) for two intervals and 15 s, a keep-alive that can't be sent, or no answer 10 s after a network change is given up and made again (`BrokerLiveness`) |
 | `BrokerDirect` | DWORD | direct connections through the broker: 2 over public and local addresses, 1 public only, 0 relayed only (2) – since 0.22.0 |
 | `BrokerStun` | SZ | the STUN service for the direct path, `name:port` (the one the broker names) – since 0.22.0 |
 | `NoUserBehavior` | SZ | `SignInScreen` or `AutoSignIn` (agent.json, else AutoSignIn – on by default) |

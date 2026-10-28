@@ -81,7 +81,7 @@ public static class PolicyCommand
             // The broker itself comes from agent.json (broker join, MSI); never its keys.
             "BrokerUrl" => (config?.Broker?.Url is { } url ? url : "(none – not joined)", json),
             "BrokerConsoles" => ("every registered console", "default"),
-            "BrokerProxy" => ("the system's proxy", "default"),
+            "BrokerHttpProxy" => ("the system's proxy", "default"),
             "BrokerKeepAliveSeconds" => (Num(p.BrokerKeepAliveSeconds), "default"),
             _ => ("", "default"),
         };

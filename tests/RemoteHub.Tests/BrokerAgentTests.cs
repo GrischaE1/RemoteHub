@@ -21,7 +21,8 @@ namespace RemoteHub.Tests;
 /// The agent's side of the RemoteHub Broker against the real broker (the TypeScript Worker, run locally with
 /// <c>wrangler dev</c>): registration with the device secret, the permanent connection, a console's sealed offer and a
 /// relayed stream into the agent's own HTTPS endpoint. Skipped unless REMOTEHUB_BROKER_URL and REMOTEHUB_BROKER_TOKEN
-/// point at a broker (the private broker repository isn't on the CI runner).
+/// point at a broker (the private broker repository isn't on this repository's CI runner); the broker repository's CI
+/// runs them, and BrokerConsoleTests, against its own build on every change.
 /// </summary>
 [Collection("Broker")]
 public class BrokerAgentTests

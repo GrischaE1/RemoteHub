@@ -1391,12 +1391,12 @@ Registry: BrokerUrl (REG_SZ).</string>
 Not configured: every console registered with the organisation.
 
 Registry: BrokerConsoles (REG_MULTI_SZ).</string>
-      <string id="Agent_BrokerProxy">Proxy for the broker</string>
-      <string id="Agent_BrokerProxy_Help">The HTTP proxy the agent uses for its connections to the RemoteHub Broker, for example http://proxy.contoso.com:8080.
+      <string id="Agent_BrokerHttpProxy">HTTP proxy for the broker</string>
+      <string id="Agent_BrokerHttpProxy_Help">The HTTP proxy the agent uses for its connections to the RemoteHub Broker, for example http://proxy.contoso.com:8080.
 
 Not configured: the system's proxy setting.
 
-Registry: BrokerProxy (REG_SZ).</string>
+Registry: BrokerHttpProxy (REG_SZ).</string>
       <string id="Agent_BrokerKeepAliveSeconds">Keep-alive interval (seconds)</string>
       <string id="Agent_BrokerKeepAliveSeconds_Help">How often the agent sends a keep-alive on its connection to the RemoteHub Broker (30–90 seconds). Shorter keeps the connection through firewalls and proxies that close quiet connections early, and shows a device that lost power as offline sooner (after about 2.5 intervals); longer sends less (about 220 bytes each time).
 
@@ -1516,8 +1516,8 @@ Registry: MaxSessions (REG_DWORD).</string>
       <presentation id="Agent_BrokerConsoles">
         <multiTextBox refId="BrokerConsoles">Console IDs (one per line):</multiTextBox>
       </presentation>
-      <presentation id="Agent_BrokerProxy">
-        <textBox refId="BrokerProxy"><label>Proxy:</label></textBox>
+      <presentation id="Agent_BrokerHttpProxy">
+        <textBox refId="BrokerHttpProxy"><label>Proxy:</label></textBox>
       </presentation>
       <presentation id="Agent_BrokerKeepAliveSeconds">
         <decimalTextBox refId="BrokerKeepAliveSeconds" defaultValue="60" spinStep="10">Seconds:</decimalTextBox>

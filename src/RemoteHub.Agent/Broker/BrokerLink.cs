@@ -382,7 +382,15 @@ internal sealed class BrokerLink(
     /// addresses and port a console tries before it uses the broker – <c>inbound</c> false when the agent's firewall rule
     /// isn't there (MSI BROKER_ONLY=1), so a console doesn't wait for an answer that can't come.
     /// </summary>
-    internal static JsonObject Hello(AgentPolicy p, AgentConfig config) => new()
+    internal static JsonObject Hello(AgentPolicy p, AgentConfig config)
+    {
+        var hello = HelloFields(p, config);
+        // Port 0 (any free port: tests) isn't a port the broker can pass on, and it refuses a hello that names one.
+        if (config.ListenPort is >= 1 and <= 65535) hello["port"] = config.ListenPort;
+        return hello;
+    }
+
+    private static JsonObject HelloFields(AgentPolicy p, AgentConfig config) => new()
     {
         ["t"] = "hello",
         ["agentVersion"] = AgentHost.AgentVersion,
@@ -391,7 +399,6 @@ internal sealed class BrokerLink(
         ["macs"] = new JsonArray([.. Adapters().Take(16)]),
         // The addresses the direct path offers too – adapters with a gateway first, Hyper-V switches last.
         ["addresses"] = new JsonArray([.. PeerDirect.HostAddresses().Take(MaxAddresses).Select(a => JsonValue.Create(a.ToString()))]),
-        ["port"] = config.ListenPort,
         ["inbound"] = Enrollment.HasFirewallRule(),
     };
 
@@ -425,7 +432,7 @@ internal sealed class BrokerLink(
     {
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.Zero; // the application keep-alive (BrokerLiveness)
-        if (p.BrokerProxy is { } proxy) ws.Options.Proxy = new WebProxy(proxy);
+        if (p.BrokerHttpProxy is { } proxy) ws.Options.Proxy = new WebProxy(proxy);
         return ws;
     }
 
