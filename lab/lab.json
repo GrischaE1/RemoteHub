@@ -1,6 +1,9 @@
 {
     "LabRoot":  "D:\\RemoteHubLab",
     "HostAccount":  "labop",
+    "Broker":  {
+                   "Url":  "http://{host}:8787"
+               },
     "VmNamePattern":  "TestAutomation - * - * - *",
     "Accounts":  {
                      "AdminAccount":  "PSAdmin",
