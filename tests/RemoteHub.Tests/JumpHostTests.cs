@@ -325,6 +325,25 @@ public class JumpHostTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_tunnel_open_with_an_overlong_or_odd_host_is_refused_without_resolving()
+    {
+        var resolved = new List<string>();
+        var resolve = (string host, CancellationToken _) => { lock (resolved) resolved.Add(host); return Task.FromResult(new[] { IPAddress.Loopback }); };
+        await using var jump = await StartAgent(() => new A.AgentPolicy { Tunnel = Loopback }, resolve);
+        foreach (var name in new[] { new string('a', 254) + ".test", "a b.test", "a/b.test", "user@host.test" })
+        {
+            var ex = await Assert.ThrowsAsync<JumpHostException>(() => JumpTunnels.OpenAsync(Route(jump), name, 443, CancellationToken.None));
+            Assert.Equal(TunnelRefusal.Unreachable, ex.Reason);
+            Assert.Contains("is not a valid target", ex.Message);
+            Assert.DoesNotContain(new string('a', 100), ex.Message); // the refusal doesn't carry the whole name back
+        }
+        Assert.Empty(resolved);
+        Assert.True(A.TunnelEndpoint.IsTargetName("srv-01.contoso.local"));
+        Assert.True(A.TunnelEndpoint.IsTargetName("fe80::1%12"));
+        Assert.True(A.TunnelEndpoint.IsTargetName(new string('a', 253)));
+    }
+
+    [Fact]
     public async Task Ports_targets_and_the_switch_of_the_policy_are_checked_for_every_connection()
     {
         var policy = new A.AgentPolicy { Tunnel = A.TunnelRules.Parse(["127.0.0.0/8"], ["3389", "5985-5986"]) };
