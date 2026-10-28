@@ -115,7 +115,20 @@ internal sealed class BrokerLink(
         }
     }
 
-    private enum Outcome { Ended, Register, Stop }
+    internal enum Outcome { Ended, Register, Stop }
+
+    /// <summary>
+    /// The broker says the organisation was deleted. The message isn't sealed and the broker isn't trusted, so the keys stay
+    /// in agent.json: the link only stops and tries again in an hour (<see cref="Outcome.Stop"/>). If the organisation is
+    /// really gone, that try is refused again; if it was restored from an export, the device comes back without a new
+    /// join. Only <c>broker leave</c> or uninstalling removes the keys.
+    /// </summary>
+    internal Outcome OrgDeleted(BrokerSettings broker, Uri baseUri)
+    {
+        log.Audit(AuditEvent.BrokerError, $"The RemoteHub Broker {baseUri.Authority} says the organisation {broker.Org} was deleted – the device " +
+                                          "keeps its broker keys and tries again in an hour ('broker leave' removes them).");
+        return Outcome.Stop;
+    }
 
     private static Uri BrokerUri(BrokerSettings broker, AgentPolicy p) => BrokerProtocol.ParseBrokerUrl(p.BrokerUrl ?? broker.Url)!;
     private static string Host(Uri u) => u.Authority;
@@ -242,9 +255,7 @@ internal sealed class BrokerLink(
                     await Incoming(ws, m, config, broker, baseUri, stop);
                     break;
                 case "orgDeleted":
-                    log.Audit(AuditEvent.BrokerError, $"The RemoteHub Broker {baseUri.Authority} says the organisation {broker.Org} was deleted – the device leaves it.");
-                    try { BrokerSetup.Leave(log, config.SourcePath ?? ""); } catch (Exception ex) { log.Write("Leaving the broker failed: " + ex.Message); }
-                    return Outcome.Ended;
+                    return OrgDeleted(broker, baseUri);
                 case "error":
                     log.Write($"RemoteHub Broker: {Text(m, "message", 300, required: false)}");
                     break;
