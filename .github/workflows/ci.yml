@@ -32,6 +32,11 @@ jobs:
       - name: Build
         run: dotnet build RemoteHub.sln --configuration Release --no-restore
 
+      # Not in RemoteHub.sln (the lab builds it on the host), so built here on its own: a harness that doesn't compile
+      # stops every lab run (#85, fixed in #87).
+      - name: Lab harness
+        run: dotnet build tests/RemoteHub.LabHarness --configuration Release
+
       - name: Test
         run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
 

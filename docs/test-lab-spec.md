@@ -156,7 +156,10 @@ German image).
 `"Broker": { "Url": "http://{host}:8787" }` for a broker running on the host (`npx wrangler dev --ip 0.0.0.0 --port 8787`
 in the broker's repository, with the port open to the lab network) – `{host}` stands for the host's address towards
 the VM. Its admin token is `BrokerToken` in `lab.local.json` (§7). Without either the B-BRK cases are skipped and say
-why. Every run makes its own organisation there and deletes it again.
+why. Every run makes its own organisation there and deletes it again. `lab.json` names the broker on the host; before a
+run that includes B-BRK, start it in the broker's repository (`npx wrangler d1 migrations apply remotehub-broker
+--local`, then `npx wrangler dev --ip 0.0.0.0 --port 8787`, its `ADMIN_TOKEN` from `.dev.vars` being `BrokerToken`).
+The host's firewall must let the lab network reach TCP 8787.
 
 ## 6. Accounts and sign-ins
 
