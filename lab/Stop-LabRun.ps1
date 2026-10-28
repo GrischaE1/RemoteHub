@@ -10,7 +10,7 @@ param()
 $ErrorActionPreference = 'Stop'
 $cfg = Get-Content (Join-Path $PSScriptRoot 'lab.json') -Raw | ConvertFrom-Json
 $cancel = Join-Path $cfg.LabRoot 'queue\cancel'
-Set-Content $cancel -Value (Get-Date -Format s)
+Set-Content -Encoding ASCII $cancel -Value (Get-Date -Format s)
 for ($i = 0; $i -lt 30 -and (Test-Path $cancel); $i++) { Start-Sleep -Seconds 1 }
 if (Test-Path $cancel) {
     Remove-Item $cancel -ErrorAction SilentlyContinue

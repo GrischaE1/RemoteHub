@@ -276,10 +276,10 @@ public static class UpdateService
     /// copy's SHA-256 and – when the running build is signed – its signature and publisher again, installs that copy and
     /// writes the outcome to <see cref="ResultsFolder"/>.
     /// </summary>
-    internal static string InstallCommand(string msi, string sha256, string? publisher, int pid, string resultId, string? stage = null)
+    internal static string InstallCommand(string msi, string sha256, Authenticode.Publisher? publisher, int pid, string resultId, string? stage = null)
     {
         static string Q(string s) => "'" + s.Replace("'", "''") + "'";
-        return "& {\n" + StepScript + "\n} -Source " + Q(msi) + " -Sha256 " + Q(sha256) + " -Publisher " + Q(publisher ?? "") +
+        return "& {\n" + StepScript + "\n} -Source " + Q(msi) + " -Sha256 " + Q(sha256) + " -Publisher " + Q(publisher?.Subject ?? "") + " -PublisherKey " + Q(publisher?.Key ?? "") +
                $" -WaitPid {pid} -Id " + Q(resultId) + (stage is null ? "" : " -Stage " + Q(stage)); // another folder: tests only
     }
 
@@ -288,7 +288,7 @@ public static class UpdateService
     /// program is there with the step's script – signed by the same publisher when RemoteHub is signed. Otherwise null:
     /// a local build or a copy run from elsewhere asks through Windows PowerShell, as before.
     /// </summary>
-    internal static string? Updater(string? running, string installedExe, string? publisher)
+    internal static string? Updater(string? running, string installedExe, Authenticode.Publisher? publisher)
     {
         if (running is null || !string.Equals(Path.GetFullPath(running), Path.GetFullPath(installedExe), StringComparison.OrdinalIgnoreCase)) return null;
         var dir = Path.GetDirectoryName(installedExe)!;

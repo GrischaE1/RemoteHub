@@ -131,8 +131,8 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
         BeforeAll {
             $rot = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 $d = 'C:\ProgramData\RemoteHub\Agent\logs'
-                $old = Join-Path $d 'agent-20200101.log'; Set-Content $old 'old'; (Get-Item $old).LastWriteTime = (Get-Date).AddDays(-31)
-                $keep = Join-Path $d 'agent-20200102.log'; Set-Content $keep 'recent'; (Get-Item $keep).LastWriteTime = (Get-Date).AddDays(-2)
+                $old = Join-Path $d 'agent-20200101.log'; Set-Content -Encoding ASCII $old 'old'; (Get-Item $old).LastWriteTime = (Get-Date).AddDays(-31)
+                $keep = Join-Path $d 'agent-20200102.log'; Set-Content -Encoding ASCII $keep 'recent'; (Get-Item $keep).LastWriteTime = (Get-Date).AddDays(-2)
                 Restart-Service RemoteHubAgent -Force; Start-Sleep -Seconds 5
                 $r = [ordered]@{ OldGone = -not (Test-Path $old); RecentKept = Test-Path $keep }
                 # retention 1 day: the 2-day-old file goes at the next start

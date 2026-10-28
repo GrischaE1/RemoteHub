@@ -11,7 +11,8 @@ namespace RemoteHub.Agent;
 /// <remarks>
 /// The RDP client reads it when it connects: RDP windows opened before need to reconnect once. What was there before is
 /// kept in a small file next to agent.json until it is put back, so a helper that ended abruptly is made good by the next
-/// connection to that user's session.
+/// connection to that user's session, or when the service starts again (<see cref="RestoreLeftovers"/>) – whichever
+/// comes first.
 /// </remarks>
 internal sealed class KeepRdpDrawing : IDisposable
 {
@@ -63,20 +64,41 @@ internal sealed class KeepRdpDrawing : IDisposable
         {
             if (_sid is not { } sid) return;
             _sid = null;
-            try
-            {
-                var record = RecordFile(sid);
-                if (!File.Exists(record)) return;
-                var before = File.ReadAllText(record).Trim();
-                using (var key = Registry.Users.OpenSubKey($@"{sid}\{KeyPath}", writable: true))
-                {
-                    if (key is null) return; // the user signed out: put back by the next connection
-                    if (int.TryParse(before, out var v)) key.SetValue(ValueName, v, RegistryValueKind.DWord);
-                    else key.DeleteValue(ValueName, throwOnMissingValue: false);
-                }
-                File.Delete(record);
-            }
+            try { PutBack(sid, RecordFile(sid)); }
             catch { /* put back by the next connection to this user's session */ }
         }
+    }
+
+    /// <summary>
+    /// At service start, when no helper runs: puts back what helpers that ended without doing so left, for every user
+    /// whose profile is loaded (the others keep their record until a connection to them or the next start). Null when
+    /// there was nothing, else what was done – for the log.
+    /// </summary>
+    public string? RestoreLeftovers()
+    {
+        if (!Directory.Exists(_folder)) return null;
+        var back = 0;
+        foreach (var record in Directory.GetFiles(_folder, "rdp-minimized-S-*.txt"))
+        {
+            var sid = Path.GetFileNameWithoutExtension(record)["rdp-minimized-".Length..];
+            try { if (PutBack(sid, record)) back++; }
+            catch { /* tried again at the next connection to this user or the next start */ }
+        }
+        return back == 0 ? null : $"{ValueName} put back for {back} user(s) after a helper that ended without doing so";
+    }
+
+    /// <summary>True when the value is back as recorded and the record gone; false while the user's hive isn't loaded.</summary>
+    private static bool PutBack(string sid, string record)
+    {
+        if (!File.Exists(record)) return false;
+        var before = File.ReadAllText(record).Trim();
+        using (var key = Registry.Users.OpenSubKey($@"{sid}\{KeyPath}", writable: true))
+        {
+            if (key is null) return false; // the user signed out (or never signed in since the start): kept for later
+            if (int.TryParse(before, out var v)) key.SetValue(ValueName, v, RegistryValueKind.DWord);
+            else key.DeleteValue(ValueName, throwOnMissingValue: false);
+        }
+        File.Delete(record);
+        return true;
     }
 }

@@ -19,7 +19,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     function Secure($r) { @($r.layouts | ForEach-Object { $_.layout.secureDesktop }) }
     function Get-Sas([datetime]$Since) { @(Get-LabAgentLog -Name $VmName -Since $Since | Where-Object { $_ -match 'Ctrl\+Alt\+Del for' }) }
     function Lock-State { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 } }
@@ -80,12 +80,12 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $null = Allow $o @('go')
             Reached $o 'options2'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options2.png') -Text 'Task' ; if (-not $xy) { $xy = '0,0' }
-            Set-Content (Join-Path $o 'taskmgr-xy.txt') $xy
+            Set-Content -Encoding ASCII (Join-Path $o 'taskmgr-xy.txt') $xy
             Reached $o 'taskmgr'
             $taskmgr = Invoke-LabGuest -Name $VmName -ScriptBlock { $p = @(Get-Process Taskmgr -ErrorAction SilentlyContinue); $p | Stop-Process -Force -ErrorAction SilentlyContinue; $p.Count }
             Reached $o 'options3'
             $xy = Find-LabPictureText -Path (Join-Path $o 'options3.png') -Text 'Lock'; if (-not $xy) { $xy = '0,0' }
-            Set-Content (Join-Path $o 'lock-xy.txt') $xy
+            Set-Content -Encoding ASCII (Join-Path $o 'lock-xy.txt') $xy
             Reached $o 'locked'
             $lockedNow = Lock-State
             Release $o 'go'
@@ -372,9 +372,9 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asking'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }, @{ do = 'close' })
             $null = Allow $o @('type')
             Reached $o 'options'
-            $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content -Encoding ASCII (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'curtain'
-            Set-Content (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
+            Set-Content -Encoding ASCII (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
             # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
             # to the device's accounts, not as an exact word (an exact "Admin" clicked 0,0 in D-ROBUST)
             $tile = $null
@@ -385,7 +385,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
                     Copy-Item (Join-Path $o "tiles-$n.png") (Join-Path $o 'tiles.png') -Force
                 }
                 # where to click, before the last picture lets the harness go on to the click
-                if ($n -eq 4) { Set-Content (Join-Path $o 'admin-xy.txt') $(if ($tile.XY) { $tile.XY } else { '0,0' }) }
+                if ($n -eq 4) { Set-Content -Encoding ASCII (Join-Path $o 'admin-xy.txt') $(if ($tile.XY) { $tile.XY } else { '0,0' }) }
                 Release $o "tiles-$n-go"
             }
             Reached $o 'selected'

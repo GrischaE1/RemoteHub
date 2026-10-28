@@ -617,7 +617,7 @@ function New-RhLegacySettings([string]$Json, [string]$Dir = (Join-Path $env:APPD
             icacls 'C:\lab' /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
             # a folder to upload (C-AUD-01): its content must never reach the audit log
             $up = 'C:\Users\Public\UpFolder'; $null = New-Item -ItemType Directory -Path $up -Force
-            1..3 | ForEach-Object { Set-Content "$up\f$_.txt" "c-data audit file content marker $_" }
+            1..3 | ForEach-Object { Set-Content -Encoding ASCII "$up\f$_.txt" "c-data audit file content marker $_" }
         }
         # the device: RDP on, two SMB shares (the shared settings folder, an upload target), reachable by IP
         $deviceName = Invoke-LabGuest -Name $device.Name -ScriptBlock {

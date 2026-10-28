@@ -33,6 +33,13 @@ public static class BrokerProtocol
     public const int ClockSkewSeconds = 2 * 60;
     public const int KeepAliveDefault = 60, KeepAliveMin = 30, KeepAliveMax = 90;
 
+    /// <summary>
+    /// The relay address of a session is the broker's own path for it, nothing else: resolved against the broker's
+    /// address, a value like <c>//other.example/…</c> would take the relay connection and its MAC to another host.
+    /// </summary>
+    public static bool IsRelayPath(string relay, string org, string session) =>
+        string.Equals(relay, $"/v1/o/{org}/relay?session={session}", StringComparison.Ordinal);
+
     // ---- Encodings ------------------------------------------------------------------------------------------------
 
     public static string B64u(ReadOnlySpan<byte> bytes) => Base64Url.EncodeToString(bytes);

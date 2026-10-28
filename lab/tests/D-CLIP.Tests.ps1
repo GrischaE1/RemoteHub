@@ -19,7 +19,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     # a session normaluser allows: $Steps run once connected (the test acts between Mark / Park pairs). -Features: what
     # the client takes (left out: the harness' default, paste-on-demand; @(): copies go at once, as from an older RemoteHub)
     function Begin([string]$Name, [object[]]$Steps, [bool]$ViewOnly = $false, [object[]]$Features) {
@@ -173,7 +173,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             # the output (an error from Set-Clipboard) and the clipboard afterwards are kept: did the copy reach the clipboard?
             $f.deviceSet = Invoke-LabInSession -Name $VmName -ScriptBlock {
                 $d = 'C:\ProgramData\RemoteHubLab\copyme'; $null = New-Item -ItemType Directory -Path $d -Force
-                1..2 | ForEach-Object { Set-Content "$d\device$_.txt" "from the device $_" }
+                1..2 | ForEach-Object { Set-Content -Encoding ASCII "$d\device$_.txt" "from the device $_" }
                 Set-Clipboard -Path "$d\device1.txt", "$d\device2.txt"
                 'set'
             }
@@ -263,7 +263,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             # a file only Administrators may read, copied in normaluser's session
             Invoke-LabGuest -Name $VmName -ScriptBlock {
                 $d = 'C:\ProgramData\RemoteHubLab\secret'; $null = New-Item -ItemType Directory -Path $d -Force
-                Set-Content "$d\secret.txt" 'admins only'
+                Set-Content -Encoding ASCII "$d\secret.txt" 'admins only'
                 icacls "$d\secret.txt" /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
             }
             $u.secretSet = Invoke-LabInSession -Name $VmName -ScriptBlock { Set-Clipboard -Path 'C:\ProgramData\RemoteHubLab\secret\secret.txt'; 'set' }
@@ -272,7 +272,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             # a folder with a junction inside
             $u.junctionSet = Invoke-LabInSession -Name $VmName -ScriptBlock {
                 $d = "$env:USERPROFILE\Documents\withjunction"; $null = New-Item -ItemType Directory -Path "$d\real" -Force
-                Set-Content "$d\real\a.txt" 'real file'
+                Set-Content -Encoding ASCII "$d\real\a.txt" 'real file'
                 cmd.exe /c mklink /J "$d\junction" "$env:WINDIR\System32\drivers\etc" | Out-Null
                 Set-Clipboard -Path $d
                 'set'
@@ -352,7 +352,7 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
         BeforeAll {
             $n = [ordered]@{}
             # an old clipboard folder of normaluser's
-            $old = Invoke-LabGuest -Name $VmName -ArgumentList (Clip-Folder) -ScriptBlock { param($c) $d = Join-Path $c '20200101-000000'; $null = New-Item -ItemType Directory -Path $d -Force; Set-Content "$d\old.txt" 'old'; (Get-Item $d).CreationTime = (Get-Date).AddDays(-3); $d }
+            $old = Invoke-LabGuest -Name $VmName -ArgumentList (Clip-Folder) -ScriptBlock { param($c) $d = Join-Path $c '20200101-000000'; $null = New-Item -ItemType Directory -Path $d -Force; Set-Content -Encoding ASCII "$d\old.txt" 'old'; (Get-Item $d).CreationTime = (Get-Date).AddDays(-3); $d }
             $big50 = "$data\big50.bin"; $fs = [IO.File]::Create($big50); $rng = [Security.Cryptography.RandomNumberGenerator]::Create(); $buf = New-Object byte[] (1MB); for ($k = 0; $k -lt 50; $k++) { $rng.GetBytes($buf); $fs.Write($buf, 0, $buf.Length) }; $fs.Dispose()
             # D-CLIP-16 as the sheet has it: copied at the device without paste-on-demand (the data goes at once), a 90 MB
             # file, then a small one while the first is still on its way. The first copy to the device removes the old folder.

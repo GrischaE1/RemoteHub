@@ -16,7 +16,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     function Begin([string]$Name, [object[]]$Steps, [string]$Answer = 'Allow') {
         $job = Start-LabDesktop -Name $VmName -Pin $pin -Out (Out $Name) -Steps (@(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 120 }) + $Steps + @(@{ do = 'close' }))
@@ -175,7 +175,7 @@ $null = [RhLab.Win]::GetWindowRect($hw, [ref]$r)
                 $raw = Invoke-LabInSession -Name $VmName -TimeoutSec 120 -ScriptBlock ([scriptblock]::Create($frontCode))
                 if ("$raw" -match 'WIN=(\{.*\})') { $Matches[1] | ConvertFrom-Json } else { [pscustomobject]@{ found = $false; error = "$raw".Trim() } }
             }
-            $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content `$env:TEMP\rhlab-secret.txt '$text'; notepad.exe `$env:TEMP\rhlab-secret.txt"))
+            $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content -Encoding ASCII `$env:TEMP\rhlab-secret.txt '$text'; notepad.exe `$env:TEMP\rhlab-secret.txt"))
             # Precondition of D-HIDE-01: the app's window on screen and in front before the visible baseline. Still not in
             # front after the session's attempt: the person clicks into its text (console mouse), then it is asked again.
             $h.window = Front-App

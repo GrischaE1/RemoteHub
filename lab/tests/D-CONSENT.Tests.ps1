@@ -67,7 +67,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             Start-Sleep -Seconds 3
             $a.afterEnter = @(Invoke-LabPerson -Name $VmName -Do windows) | Where-Object { $_.Title -ne 'RemoteHub' }
             $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
-            Set-Content $back 'done'
+            Set-Content -Encoding ASCII $back 'done'
             $a.keys = Receive-LabDesktop $job
             # view-only wording
             $job = Ask 'view-only' -ViewOnly $true
@@ -128,7 +128,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             Start-Sleep -Seconds 2
             $seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $before | Where-Object e -in 'down', 'char', 'mdown', 'mup')
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny'
-            Set-Content $back 'done'
+            Set-Content -Encoding ASCII $back 'done'
             $r = Receive-LabDesktop $job
             Stop-LabInSession -Name $VmName -Task $marker.Task
             Save 'input' @{ Seen = $seen; R = $r }
@@ -148,7 +148,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
                 $job = Ask "pin-$case" -Consent Pin -Extra @(@{ do = 'pin'; fromFile = $file; timeout = 90 })
                 $p["$case-read"] = Invoke-LabPerson -Name $VmName -Do pin -TimeoutSec 60
                 $code = $p["$case-read"].pin
-                Set-Content $file $(if ($case -eq 'spaced' -and $code) { $code.Substring(0, 3) + ' ' + $code.Substring(3) } else { $code })
+                Set-Content -Encoding ASCII $file $(if ($case -eq 'spaced' -and $code) { $code.Substring(0, 3) + ' ' + $code.Substring(3) } else { $code })
                 $p[$case] = Receive-LabDesktop $job
             }
             $job = Ask 'pin-wrong' -Consent Pin -Extra @(@{ do = 'pin'; pin = '000000' }, @{ do = 'sleep'; seconds = 1 }, @{ do = 'pin'; pin = '000001' }, @{ do = 'sleep'; seconds = 1 }, @{ do = 'pin'; pin = '000002' })
@@ -235,7 +235,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             Wait-LabHostFile $ready
             Start-Sleep -Seconds 3
             $n.banner = @(Invoke-LabPerson -Name $VmName -Do windows)
-            Set-Content $back 'done'
+            Set-Content -Encoding ASCII $back 'done'
             $n.both = Receive-LabDesktop $job
             # REG_SZ list / invalid list
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ AllowedConsentModes = 'Pin;Ask' }

@@ -1,7 +1,10 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Net.NetworkInformation;
@@ -152,9 +155,10 @@ public static class AgentHost
                 ctx.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 return null;
             }
+            char[]? password = null;
             try
             {
-                if (!TryBasic(ctx.Request.Headers.Authorization, out var user, out var password))
+                if (!TryBasic(ctx.Request.Headers.Authorization, out var user, out password))
                 {
                     ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"RemoteHub Agent\"";
                     ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -169,7 +173,6 @@ public static class AgentHost
                 AuthResult auth;
                 try { auth = await Task.Run(() => o.Authenticator.Authenticate(user, password, groups)); }
                 finally { gate.EndTurn(); }
-                password = "";
                 if (auth.Outcome != AuthOutcome.Ok)
                 {
                     if (auth.Outcome != AuthOutcome.Error) gate.Failed(source);
@@ -180,7 +183,11 @@ public static class AgentHost
                 gate.Succeeded(source);
                 return auth.Identity!;
             }
-            finally { gate.End(source); }
+            finally
+            {
+                gate.End(source);
+                Wipe(password);
+            }
         }
 
         app.Map(AgentProtocol.PowerShellPath, (RequestDelegate)(async ctx =>
@@ -276,20 +283,36 @@ public static class AgentHost
         catch { return (computer, computer); }
     }
 
-    internal static bool TryBasic(string? header, out string user, out string password)
+    /// <summary>
+    /// The user name and password of a Basic header. The password is decoded straight into a pinned array (wiped with
+    /// <see cref="Wipe"/> once the sign-in is over) and the decoded bytes are wiped here, so the only copy left behind is
+    /// the encoded header itself, which belongs to Kestrel.
+    /// </summary>
+    internal static bool TryBasic(string? header, out string user, [NotNullWhen(true)] out char[]? password)
     {
-        user = password = "";
+        user = "";
+        password = null;
         if (header is null || !header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return false;
+        var encoded = header.AsSpan(6).Trim();
+        var bytes = GC.AllocateArray<byte>(encoded.Length / 4 * 3 + 3, pinned: true);
         try
         {
-            var text = Encoding.UTF8.GetString(Convert.FromBase64String(header[6..].Trim()));
-            var colon = text.IndexOf(':');
+            if (!Convert.TryFromBase64Chars(encoded, bytes, out var length)) return false;
+            var text = bytes.AsSpan(0, length);
+            var colon = text.IndexOf((byte)':');
             if (colon <= 0) return false;
-            user = text[..colon];
-            password = text[(colon + 1)..];
+            user = Encoding.UTF8.GetString(text[..colon]);
+            var secret = text[(colon + 1)..];
+            password = GC.AllocateArray<char>(Encoding.UTF8.GetCharCount(secret), pinned: true);
+            Encoding.UTF8.GetChars(secret, password);
             return true;
         }
-        catch (FormatException) { return false; }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
+    internal static void Wipe(char[]? secret)
+    {
+        if (secret is not null) CryptographicOperations.ZeroMemory(MemoryMarshal.AsBytes(secret.AsSpan()));
     }
 }
 

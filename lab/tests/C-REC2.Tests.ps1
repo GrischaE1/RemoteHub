@@ -285,7 +285,7 @@ foreach ($x in $p) { [void]$x.CloseMainWindow() }
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28502' -ErrorAction SilentlyContinue
             $everyone = (New-Object Security.Principal.SecurityIdentifier 'S-1-1-0').Translate([Security.Principal.NTAccount]).Value
             $null = New-Item -ItemType Directory -Path 'C:\rhrec' -Force
-            Set-Content 'C:\rhrec\readme.txt' 'a file on the share'
+            Set-Content -Encoding ASCII 'C:\rhrec\readme.txt' 'a file on the share'
             if (-not (Get-SmbShare -Name 'rhrec' -ErrorAction SilentlyContinue)) { $null = New-SmbShare -Name 'rhrec' -Path 'C:\rhrec' -FullAccess $everyone }
         }
         $deviceIp = Get-LabVmAddress -Name $device.Name

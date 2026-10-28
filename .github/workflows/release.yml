@@ -73,6 +73,8 @@ jobs:
       # provider), so only releases sign: CI and the lab never do, and test releases (a suffix: v0.19.1-test.1) are built
       # unsigned. Without the secrets the release is built unsigned, with a warning. The credential provider is never
       # built unsigned (credential-provider-design.md §8.4) - build-installer.ps1 refuses that on its own.
+      # Installed builds update only to MSIs signed with the same key (Authenticode.cs): before renewing the certificate
+      # with a new key, release once with the new key in Authenticode.NextPublisherKeys and InstallUpdate.ps1's $NextKeys.
       - name: Prepare signing
         id: signing
         shell: pwsh

@@ -28,6 +28,15 @@ public class AgentTests
     private sealed class FakeAuth : A.IShellAuthenticator
     {
         public int Calls;
+        public readonly List<(char[] Buffer, string During)> Passwords = [];
+
+        public A.AuthResult Authenticate(string userName, char[] password, IReadOnlyList<string> allowedGroups)
+        {
+            var during = new string(password);
+            lock (Passwords) Passwords.Add((password, during));
+            return Authenticate(userName, during);
+        }
+
         public A.AuthResult Authenticate(string userName, string password)
         {
             Interlocked.Increment(ref Calls);
@@ -137,6 +146,19 @@ public class AgentTests
     }
 
     [Fact]
+    public async Task The_sign_in_password_is_wiped_after_the_logon_call()
+    {
+        await using var a = await StartAgent();
+        (await Task.Run(() => PsRemoting.Open(Target(a)))).Dispose();
+        await Assert.ThrowsAnyAsync<Exception>(() => Task.Run(() => PsRemoting.Open(Target(a, password: "wrong"))));
+        (char[] Buffer, string During)[] seen;
+        lock (a.Auth.Passwords) seen = [.. a.Auth.Passwords];
+        Assert.Contains(seen, s => s.During == "secret");
+        Assert.Contains(seen, s => s.During == "wrong");
+        Assert.All(seen, s => Assert.All(s.Buffer, c => Assert.Equal('\0', c)));
+    }
+
+    [Fact]
     public async Task A_different_certificate_stops_before_credentials_are_sent()
     {
         await using var a = await StartAgent();
@@ -236,7 +258,10 @@ public class AgentTests
     public void Basic_header_and_fingerprints_parse()
     {
         Assert.True(A.AgentHost.TryBasic("Basic " + Convert.ToBase64String("DOM\\u:pa:ss"u8.ToArray()), out var u, out var p));
-        Assert.Equal(("DOM\\u", "pa:ss"), (u, p));
+        Assert.Equal(("DOM\\u", "pa:ss"), (u, new string(p)));
+        Assert.True(A.AgentHost.TryBasic("Basic " + Convert.ToBase64String("u:päss"u8.ToArray()), out _, out var umlaut));
+        Assert.Equal("päss", new string(umlaut));
+        Assert.False(A.AgentHost.TryBasic("Basic " + Convert.ToBase64String(":nouser"u8.ToArray()), out _, out _));
         Assert.False(A.AgentHost.TryBasic("Bearer x", out _, out _));
         Assert.False(A.AgentHost.TryBasic("Basic !!", out _, out _));
         var hex = new string('a', 64);

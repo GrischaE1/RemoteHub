@@ -195,7 +195,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
                 @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 60 }, @{ do = 'settings'; fitWidth = 1234; fitHeight = 777 }, @{ do = 'sleep'; seconds = 8 }, @{ do = 'close' })
             Wait-LabHostFile (Join-Path $o 'fitted.txt')
             $f.during = Get-LabResolution -Name $VmName
-            Set-Content (Join-Path $o 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
             $f.r = Receive-LabDesktop $job
             $f.after = Wait-LabResolution -Name $VmName -Is $f.before -TimeoutSec 15 -NoThrow
             # the helper killed while fitted: restored all the same
@@ -212,7 +212,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             # half a second, ~3 s after the kill - the poll may miss the moment in between, so it's only recorded)
             $f.reverted = Wait-LabResolution -Name $VmName -Not $f.killFitted -TimeoutSec 10 -NoThrow
             $f.afterKill = Wait-LabResolution -Name $VmName -Is $f.killFitted -TimeoutSec 30 -NoThrow
-            Set-Content (Join-Path $o 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
             $f.rKill = Receive-LabDesktop $job
             $f.afterKillClose = Wait-LabResolution -Name $VmName -Is $f.before -TimeoutSec 15 -NoThrow
             Save 'fit' $f
@@ -249,7 +249,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             Wait-LabHostFile (Join-Path $o 'all.txt') -TimeoutSec 180
             # the virtual monitor taken away while connected
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-PnpDevice | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } | Disable-PnpDevice -Confirm:$false }
-            Set-Content (Join-Path $o 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
             $m.r = Receive-LabDesktop $job
             $m.similar = Compare-LabImage -A (Join-Path $o 'mon0.png') -B (Join-Path $o 'mon1.png')
             Set-AgentJsonValue 'virtualDisplay' 'auto'
@@ -314,7 +314,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
                     problem = if ($dev) { (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_ProblemCode -ErrorAction SilentlyContinue).Data } else { $null }
                 }
             }
-            Set-Content (Join-Path (Out 'vd-a') 'resize.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path (Out 'vd-a') 'resize.txt') 'go'
             Wait-LabHostFile (Join-Path (Out 'vd-a') 'resized.txt')
             $b = & $two 'vd-b'
             Wait-LabHostFile (Join-Path (Out 'vd-b') 'on.txt')
@@ -336,7 +336,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
                 [pscustomobject]@{ Lines = $seen; Seconds = [int]$watch.Elapsed.TotalSeconds }
             }
             $endA = Get-LabGuestTime -Name $VmName
-            Set-Content (Join-Path (Out 'vd-a') 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path (Out 'vd-a') 'go.txt') 'go'
             $d.a = Receive-LabDesktop $a
             # the primary monitor as the agent's Layout had it when the harness marked "on" and "resized" (with the
             # virtual monitor on, the Hyper-V display isn't the primary one any more)
@@ -344,9 +344,9 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
             $d.resized = PrimaryAt $d.a 'resized.txt'
             $d.endFirst = & $vdEnd $endA
             $d.afterFirst = Get-Vdd
-            Set-Content (Join-Path (Out 'vd-b') 'resize.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path (Out 'vd-b') 'resize.txt') 'go'
             $endB = Get-LabGuestTime -Name $VmName
-            Set-Content (Join-Path (Out 'vd-b') 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path (Out 'vd-b') 'go.txt') 'go'
             $d.b = Receive-LabDesktop $b
             # only a switch-off result: the first connection's "stays on" line can fall inside the window (-Since allows 1 s)
             $d.endLast = & $vdEnd $endB 'Virtual display (off|not switched off|left on)'

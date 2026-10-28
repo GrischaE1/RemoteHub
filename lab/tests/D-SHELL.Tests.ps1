@@ -17,7 +17,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     Add-Type -AssemblyName System.Drawing
     function Luma($c) { 0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B }
     # share of bright pixels below the banner strip (top 12 %)

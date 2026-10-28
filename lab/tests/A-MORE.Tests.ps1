@@ -147,7 +147,7 @@ while (-not $p.HasExited) {
             $before = Helper
             $rebuilt = New-LabRebuiltMsi -Source (Get-LabAgentMsi) -Path (Join-Path (Out 'rebuilt') 'RemoteHub-Agent-rebuilt-x64.msi')
             $update = Update-LabAgent -Name $VmName -Pin $install.pin -Msi $rebuilt.FullName
-            Set-Content (Join-Path (Out 'upd') 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path (Out 'upd') 'go.txt') 'go'
             $upd = Receive-LabDesktop $job
             $afterUpdate = Helper
             $banner = @(Invoke-LabPerson -Name $VmName -Account Console -Do windows)

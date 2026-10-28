@@ -26,13 +26,13 @@ BeforeAll {
         if (-not $allow.clicked) {
             # not connected: the steps after the park are let run to their end, and the context fails here rather than
             # at a missing picture or a wrong state later on
-            Set-Content (Join-Path $o 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
             throw "${Name}: Allow on the agent's consent dialog wasn't clicked within 60 s (the dialog asks for 30 s); OCR read: $(@($allow.lines) -join ' | ')$(if ($allow.PSObject.Properties['seen']) { '; windows seen: ' + (@($allow.seen) -join ' || ') })"
         }
         Wait-LabHostFile (Join-Path $o 'ready.txt') -TimeoutSec 120
         $job
     }
-    function Go([string]$Name) { Set-Content (Join-Path (Out $Name) 'go.txt') 'go' }
+    function Go([string]$Name) { Set-Content -Encoding ASCII (Join-Path (Out $Name) 'go.txt') 'go' }
 
     $init = Initialize-LabVm -Name $VmName -Agent -AutoLogon User
     $install = $init.Install
@@ -242,7 +242,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $task = Start-LabInSession -Name $VmName -ScriptBlock { Start-Process cmd.exe -Verb RunAs }
             $until = (Get-Date).AddSeconds(60)
             while (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) -and (Get-Date) -lt $until) { Start-Sleep 2 }
-            Set-Content (Join-Path $o 'uac.txt') 'up'
+            Set-Content -Encoding ASCII (Join-Path $o 'uac.txt') 'up'
             $r = Receive-LabDesktop $job
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process consent -ErrorAction SilentlyContinue | Stop-Process -Force }
             Stop-LabInSession -Name $VmName -Task $task
@@ -278,7 +278,7 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $task = Start-LabInSession -Name $VmName -ScriptBlock { Start-Process cmd.exe -Verb RunAs }
             $until = (Get-Date).AddSeconds(60)
             while (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) -and (Get-Date) -lt $until) { Start-Sleep 2 }
-            Set-Content (Join-Path $o 'uac-up.txt') 'up'
+            Set-Content -Encoding ASCII (Join-Path $o 'uac-up.txt') 'up'
             $uac = Receive-LabDesktop $job
             $stillOpen = Invoke-LabGuest -Name $VmName -ScriptBlock { $c = @(Get-Process consent -ErrorAction SilentlyContinue); $c | Stop-Process -Force -ErrorAction SilentlyContinue; $c.Count -gt 0 }
             Stop-LabInSession -Name $VmName -Task $task

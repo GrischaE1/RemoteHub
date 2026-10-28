@@ -156,7 +156,7 @@ Describe 'SEC-VDD <VmName>' -Tag Security, 'SEC-VDD' {
             $since = Get-Date
             # connection B with another size: the device is on already, so the agent tells the driver to reload
             Fit 'reload' 1600 900
-            Set-Content (Join-Path $o 'go.txt') 'go'
+            Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
             $p.a = Receive-LabDesktop $job
             Invoke-LabGuest -Name $VmName -ScriptBlock { Set-Content 'C:\Users\Public\rh-sec-vdd-stop.txt' 'stop' -Encoding ASCII }
             $deadline = (Get-Date).AddSeconds(60)

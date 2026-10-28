@@ -105,13 +105,15 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
     private async Task OpenAsync(uint id, TunnelOpen open, AgentPolicy p)
     {
         var host = open.Host.Trim().Trim('[', ']');
-        var where = $"{host}:{open.Port}";
+        var named = IsTargetName(host);
+        // A name that isn't one goes neither to DNS nor whole into the audit (forwarded to the Application log).
+        var where = $"{(named ? host : host[..Math.Min(host.Length, 64)])}:{open.Port}";
         Socket? socket = null;
         StreamRelay? relay = null;
         try
         {
             if (host == TunnelOpen.Self) { await OpenSelf(id, open.Port, p); return; }
-            if (host.Length == 0 || open.Port is < 1 or > 65535) { await Refuse(id, TunnelRefusal.Unreachable, $"{where} is not a valid target.", null); return; }
+            if (!named || open.Port is < 1 or > 65535) { await Refuse(id, TunnelRefusal.Unreachable, $"{where} is not a valid target.", null); return; }
             if (!p.TunnelEnabled) { await Refused(id, where, "TunnelEnabled = 0", "Jump connections are turned off on this device by policy (TunnelEnabled)."); return; }
             if (!p.Tunnel.PortAllowed(open.Port))
             {
@@ -244,6 +246,13 @@ internal sealed class TunnelEndpoint(AgentLog log, string account, string source
         }
         catch { return 3389; }
     }
+
+    /// <summary>
+    /// A DNS name or an IP literal: at most 253 characters of letters, digits, '-', '_', '.', ':' and '%' (an IPv6 zone).
+    /// Anything else can't be a target and is refused before it is resolved or logged.
+    /// </summary>
+    internal static bool IsTargetName(string host) =>
+        host.Length is > 0 and <= 253 && host.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or ':' or '%' or '_');
 
     /// <summary>A send nobody waits for: a failure (the tunnel closing) is expected and ignored.</summary>
     private static void Unobserved(Task t) => t.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);

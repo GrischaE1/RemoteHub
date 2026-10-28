@@ -24,7 +24,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     # the harness' clock (ms since its start) when it wrote a markFile
     function MarkMs([string]$o, [string]$n) { [long](Get-Content (Join-Path $o "$n.txt") -Raw).Trim() }
     # a session normaluser allows (the person clicks Allow); $Steps run once connected

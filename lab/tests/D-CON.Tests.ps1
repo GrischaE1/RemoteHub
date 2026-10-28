@@ -88,7 +88,7 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
             $during = @(Get-Helpers)
             $shot = Get-LabScreenshot -Name $VmName -Path (Join-Path (Out 'session') 'console.png')
             $resolution = Get-LabResolution -Name $VmName
-            Set-Content $done 'done'
+            Set-Content -Encoding ASCII $done 'done'
             $r = Receive-LabDesktop $job
             # the helper ends with the session
             $gone = $null

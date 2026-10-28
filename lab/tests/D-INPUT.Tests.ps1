@@ -33,7 +33,7 @@ BeforeAll {
         Wait-LabHostFile (Join-Path $o 'connected.txt')
         Start-Sleep -Seconds 2
         $skip = @(Get-LabMarker -Name $VmName -Marker $marker).Count
-        Set-Content (Join-Path $o 'go.txt') 'go'
+        Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
         $r = Receive-LabDesktop $job
         Start-Sleep -Seconds 4
         $seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $skip)
