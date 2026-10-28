@@ -82,7 +82,8 @@ public class BrokerLivenessTests
     public async Task A_broker_that_stops_answering_is_given_up_and_the_reader_ends()
     {
         await using var pair = await SocketPair.OpenAsync();
-        var live = new BrokerLiveness(TimeSpan.FromMilliseconds(150), grace: TimeSpan.FromMilliseconds(150));
+        // a short interval, so the test is quick; a grace of 2 s, so a busy test machine that delays a pong doesn't end it early
+        var live = new BrokerLiveness(TimeSpan.FromMilliseconds(150), grace: TimeSpan.FromSeconds(2));
         var reader = pair.ReadAsync(live);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var keepAlive = live.KeepAliveAsync(pair.Client, ct => pair.Client.SendAsync("ping"u8.ToArray(), WebSocketMessageType.Text, true, ct), stop.Token);

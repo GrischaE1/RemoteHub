@@ -48,4 +48,17 @@ namespace rhup
 
     // name=value\0 … \0 sorted by name without regard to case, as CreateProcess expects with CREATE_UNICODE_ENVIRONMENT.
     std::wstring EnvironmentBlock(Variables variables);
+
+    // The final path of an existing file or folder as Windows resolves it – no 8.3 names, junctions or symbolic links,
+    // and without the \\?\ prefix. Empty when it can't be opened or isn't on a local drive.
+    std::wstring FinalPath(const std::wstring& path);
+
+    // The folder this program has to run from: Program Files\RemoteHub, where only administrators can add or change
+    // files, so the script next to it is the one the MSI installed. A copy anywhere else would run a script a user put
+    // next to it, elevated behind a prompt that names RemoteHub's publisher. Both are final paths; compared without
+    // regard to case.
+    bool IsInstalledFolder(const std::wstring& folder, const std::wstring& programFiles);
+
+    // FinalPath of Program Files (the native one this program is built for); empty when it can't be read.
+    std::wstring ProgramFilesFolder();
 }

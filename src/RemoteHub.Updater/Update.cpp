@@ -157,4 +157,35 @@ namespace rhup
         block += L'\0';
         return block;
     }
+
+    std::wstring FinalPath(const std::wstring& path)
+    {
+        if (path.empty()) return {};
+        // FILE_FLAG_BACKUP_SEMANTICS opens folders too; reading the name needs no access rights.
+        HANDLE handle = CreateFileW(path.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                    FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) return {};
+        const std::unique_ptr<void, decltype(&CloseHandle)> owned(handle, &CloseHandle);
+        std::wstring final(MAX_PATH, L'\0');
+        for (;;)
+        {
+            const DWORD length = GetFinalPathNameByHandleW(handle, final.data(), static_cast<DWORD>(final.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            if (length == 0) return {};
+            if (length < final.size()) { final.resize(length); break; }
+            if (length > 32768) return {};
+            final.resize(length + 1);
+        }
+        // \\?\C:\… only: \\?\UNC\… is a network share, never Program Files.
+        if (final.size() < 7 || final.compare(0, 4, L"\\\\?\\") != 0 || final[5] != L':' || final[6] != L'\\') return {};
+        return final.substr(4);
+    }
+
+    bool IsInstalledFolder(const std::wstring& folder, const std::wstring& programFiles)
+    {
+        if (folder.empty() || programFiles.empty()) return false;
+        const std::wstring expected = programFiles + L"\\RemoteHub";
+        return CompareStringOrdinal(folder.c_str(), static_cast<int>(folder.size()), expected.c_str(), static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
+    }
+
+    std::wstring ProgramFilesFolder() { return FinalPath(KnownFolder(FOLDERID_ProgramFiles)); }
 }

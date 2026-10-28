@@ -5026,7 +5026,7 @@ P2 · How: U PS · Needs: – · Status: ✅ Automated – `C-DATA.Tests.ps1`
 
 **Expected:**
 - RemoteHub opens without asking.
-- `lock.json` is gone; `db.key` starts with `RHDK` + 0x01.
+- `lock.json` and `lock.json.bak` are gone; `db.key` starts with `RHDK` + 0x01.
 - Older backups, `.bak` and `settings.dat.migrated` are removed (only a new backup with the new key may exist).
 - The copied old key opens nothing.
 
@@ -7647,7 +7647,7 @@ All cases need the lab's broker (lab.json `Broker`, lab.local.json `BrokerToken`
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
 **Expected:**
-- `msiexec /i … BROKER_URL=<broker> BROKER_SECRET=<device secret> BROKER_ONLY=1 /qn` on a device without an enrollment file ends with 0 or 3010 and leaves no inbound firewall rule
+- `msiexec /i … BROKER_URL=<broker> BROKER_SECRET_FILE=<file with the device secret> BROKER_ONLY=1 /qn` on a device without an enrollment file ends with 0 or 3010 and leaves no inbound firewall rule
 - the device enrolls itself, registers with the device secret's id and shows online at the broker with its computer name and a fingerprint; agent.json names the organisation
 - the Application log has 1303 (registered) and 1300 (connected)
 
@@ -7745,7 +7745,8 @@ P2 · How: PS · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 
 **Expected:**
-- not in the installer log (`BROKER_SECRET` is hidden), not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
+- on no process's command line while the MSI runs (msiexec's and the agent's enrollment included – `BROKER_SECRET_FILE` passes only the path), and the file is gone once the device has registered
+- not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
 
 ### 10.1 Installer
 
@@ -8663,10 +8664,12 @@ P1 · How: PS M · Needs: the lab signing certificate · Status: ◐ Test writte
 **Steps:**
 1. Run `RemoteHubUpdate.exe` with values it doesn't take: the checksum one character short; an extra `--publisher CN=Someone`; `--msi C:\LabClient\swap\a:b.msi` (a stream); a UNC path (`\\localhost\C$\…`); a path with a `..` segment. Count the outcome files before and after.
 2. Run it with well-formed values for the rebuilt MSI (`C:\LabClient\swap\RemoteHub-99.0.0-x64.msi`, its real SHA-256, a process id that has ended, a new id) and wait for the step.
+3. Copy `RemoteHubUpdate.exe` to `C:\Users\Public\rhup-copy\RemoteHub`, put an `InstallUpdate.ps1` next to it that writes a marker file, and run the copy with the well-formed values of step 2.
 
 **Expected:**
 - each call in step 1 ends with exit code 0 and no new outcome file (nothing started)
 - step 2: the exit code is the step's process id; its outcome is `refused signature` (the rebuild's signature doesn't match it); no `.msi` left in the staging folder
+- step 3: the copy ends with exit code 0 and the marker file doesn't exist – a launcher outside `C:\Program Files\RemoteHub` starts nothing, so a script planted next to a copy never runs elevated
 
 #### SEC-VDD-01 · Rogue display-driver pipe
 P1 · How: H S PS E · Needs: normaluser signed in at the console · Status: ✅ Automated – `SEC-VDD.Tests.ps1`

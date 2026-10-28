@@ -126,6 +126,34 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// <see cref="PsRemoting.ConfirmCertificate"/>: WinRM over HTTPS through a jump host presents a certificate this PC can't
+    /// accept by name – asked like RDP's, and remembered for the connection. Called from the opening thread; on the UI
+    /// thread itself it refuses, since waiting there for the dialog would block it.
+    /// </summary>
+    private bool ConfirmWinRmCertificate(PsTarget target, PresentedCertificate seen)
+    {
+        if (Dispatcher.CheckAccess()) return false;
+        return Dispatcher.Invoke(async () =>
+        {
+            if (_vm.AllNodes().OfType<Connection>().FirstOrDefault(n => n.Id == target.ConnectionId) is not { } c) return false;
+            var jump = target.Via?.Name ?? "its jump host";
+            var what = $"Issued to: {seen.IssuedTo}\nIssued by: {seen.IssuedBy}\nValid until: {seen.ValidUntil:d}\nThumbprint: {RemotingSetup.Grouped(seen.Thumbprint)}";
+            var check = $"To compare, run this on {c.Name}: winrm enumerate winrm/config/listener (CertificateThumbprint of the HTTPS listener)";
+            if (!await Dialogs.Confirm(this, seen.Changed ? "WinRM certificate changed" : "Trust this WinRM certificate?",
+                    seen.Changed
+                        ? $"{c.Name} presents a different WinRM certificate than the one you trusted before:\n\n{what}\n\n" +
+                          $"Continue only if its certificate was renewed or replaced – otherwise someone may be answering in its place. {check}"
+                        : $"{c.Name} is reached through {jump}, so PowerShell remoting can't check its certificate by name. It presents:\n\n{what}\n\n" +
+                          $"RemoteHub remembers it and signs in without asking while it stays the same. {check}",
+                    seen.Changed ? "Trust the new one" : "Trust and connect"))
+                return false;
+            c.WinRmCertificate = seen.Pin;
+            _vm.RequestSave();
+            return true;
+        }).GetAwaiter().GetResult();
+    }
+
+    /// <summary>
     /// For the agent's firewall scope: the address a device behind a jump host sees connections from – the jump host's own
     /// address in that network, which its agent reports for a connection attempt (nothing needs to listen there).
     /// </summary>

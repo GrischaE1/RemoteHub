@@ -77,7 +77,9 @@ public partial class MainWindow : FluentWindow
         };
         Loaded += (_, _) => StartAutoLock();
         Loaded += (_, _) => StartBrokers();
+        Loaded += (_, _) => PsRemoting.ConfirmCertificate = ConfirmWinRmCertificate;
         Closed += (_, _) => _ = StopBrokersAsync();
+        Closed += (_, _) => PsRemoting.ConfirmCertificate = null;
         Closing += Window_Closing;
     }
 
@@ -1195,7 +1197,10 @@ public partial class MainWindow : FluentWindow
     {
         var agent = viaAgent ?? UsesAgent(c);
         var opt = Inheritance.ResolveOptions(c, _vm.Data);
-        if (!agent) return TryRoute(c, quiet: true, out var via) ? new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred, Via: via) : null;
+        if (!agent)
+            return TryRoute(c, quiet: true, out var via)
+                ? new PsTarget(c.Host.Trim(), opt.PsUseSsl == true, cred, Via: via, TrustedCertificate: c.WinRmCertificate, ConnectionId: c.Id)
+                : null;
         return AgentEndpointFor(c, quiet: true) is { } ep ? new PsTarget(c.Host.Trim(), false, cred, ep) : null;
     }
 

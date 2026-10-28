@@ -136,6 +136,48 @@ namespace
                                       L"windir=C:\\Windows" + L'\0' + L'\0';
         CHECK(block == expected);
     }
+
+    void RunsOnlyFromTheInstalledFolder()
+    {
+        g_test = "RunsOnlyFromTheInstalledFolder";
+        const std::wstring pf = L"C:\\Program Files";
+        CHECK(IsInstalledFolder(L"C:\\Program Files\\RemoteHub", pf));
+        CHECK(IsInstalledFolder(L"c:\\program files\\remotehub", pf));
+        CHECK(!IsInstalledFolder(L"C:\\Program Files\\RemoteHubX", pf));
+        CHECK(!IsInstalledFolder(L"C:\\Program Files\\RemoteHub\\Updates", pf));
+        CHECK(!IsInstalledFolder(L"C:\\Program Files", pf));
+        CHECK(!IsInstalledFolder(L"C:\\Users\\Public\\RemoteHub", pf));
+        CHECK(!IsInstalledFolder(L"C:\\Program Files\\RemoteHub", L""));
+        CHECK(!IsInstalledFolder(L"", pf));
+        // Program Files as Windows resolves it, never the 32-bit one
+        const std::wstring programFiles = ProgramFilesFolder();
+        CHECK(!programFiles.empty() && programFiles.find(L"(x86)") == std::wstring::npos);
+    }
+
+    void ACopyOutsideProgramFilesStartsNothing()
+    {
+        g_test = "ACopyOutsideProgramFilesStartsNothing";
+        // A copied launcher's folder with a planted script, somewhere a user can write: not the installed folder.
+        wchar_t temp[MAX_PATH + 1] = {};
+        CHECK(GetTempPathW(MAX_PATH + 1, temp) > 0);
+        const std::wstring folder = std::wstring(temp) + L"rhup-" + std::to_wstring(GetCurrentProcessId()) + L"\\RemoteHub";
+        const std::wstring parent = folder.substr(0, folder.find_last_of(L'\\'));
+        CHECK(CreateDirectoryW(parent.c_str(), nullptr) != 0);
+        CHECK(CreateDirectoryW(folder.c_str(), nullptr) != 0);
+        const std::wstring script = folder + L"\\InstallUpdate.ps1";
+        const HANDLE file = CreateFileW(script.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        CHECK(file != INVALID_HANDLE_VALUE);
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+        const std::wstring final = FinalPath(folder);
+        CHECK(!final.empty() && final.rfind(L"\\\\?\\", 0) != 0 && final[1] == L':');
+        CHECK(!IsInstalledFolder(final, ProgramFilesFolder()));
+        // the script's final path is the folder's plus its name (no link), and a missing file gives nothing
+        CHECK(FinalPath(script) == final + L"\\InstallUpdate.ps1");
+        CHECK(FinalPath(folder + L"\\missing.ps1").empty());
+        DeleteFileW(script.c_str());
+        RemoveDirectoryW(folder.c_str());
+        RemoveDirectoryW(parent.c_str());
+    }
 }
 
 int main()
@@ -145,6 +187,8 @@ int main()
     PassesTheValuesToItsScriptOnly();
     LeavesOutWhatAUserCanSet();
     BuildsASortedBlock();
+    RunsOnlyFromTheInstalledFolder();
+    ACopyOutsideProgramFilesStartsNothing();
     std::printf(g_failures == 0 ? "All updater tests passed.\n" : "%d check(s) failed.\n", g_failures);
     return g_failures;
 }

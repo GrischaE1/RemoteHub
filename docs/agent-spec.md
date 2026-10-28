@@ -208,8 +208,8 @@ Out of scope for v1. The design keeps it possible:
 `enrollmentKeyId`, `enrollmentSecret`: from the `.rhagent` file, for the claim (§5.5); missing on devices enrolled with a format-1 file.
 
 `broker` (since 0.22.0, only on a device that joined a RemoteHub Broker): the broker, the organisation and keys derived
-from the device secret – the secret itself is never kept. Written by the MSI (`BROKER_URL`, `BROKER_SECRET`,
-`BROKER_ONLY`) through `enroll`, or by `RemoteHubAgent.exe broker join <url>` with the secret on standard input;
+from the device secret – the secret itself is never kept. Written by the MSI (`BROKER_URL`, `BROKER_SECRET` or
+`BROKER_SECRET_FILE`, `BROKER_ONLY`) through `enroll`, or by `RemoteHubAgent.exe broker join <url>` with the secret on standard input;
 `broker leave` removes it. A device without an enrollment file enrolls itself there (its own key, default port,
 Administrators; no firewall rule with `BROKER_ONLY=1`). The service keeps one outbound connection to the broker; a
 session through it goes into the agent's own HTTPS endpoint, so sign-in, rights and policy apply as for a direct

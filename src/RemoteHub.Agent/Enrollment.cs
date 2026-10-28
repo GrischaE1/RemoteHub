@@ -4,6 +4,7 @@ using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
+using System.Text;
 
 namespace RemoteHub.Agent;
 
@@ -30,11 +31,10 @@ public static class Enrollment
         {
             return args[0].ToLowerInvariant() switch
             {
-                "enroll" => Enroll(args.Length > 1 ? args[1] : "", Option(args, "virtual-display"), log, Option(args, "auto-sign-in"),
-                    Broker(args)),
+                "enroll" => EnrollFromInstaller(args, log),
                 "cleanup" => Cleanup(log),
                 "auto-sign-in" => AutoSignIn(args.Length > 1 ? args[1] : "", log),
-                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> [broker-url=… broker-secret=… broker-only=1] | cleanup | auto-sign-in on|off"),
+                _ => throw new ArgumentException($"Unknown command '{args[0]}'. Use: enroll <file|folder> [broker-url=… broker-secret=…|broker-secret-file=… broker-only=1] | cleanup | auto-sign-in on|off"),
             };
         }
         catch (Exception ex)
@@ -86,9 +86,57 @@ public static class Enrollment
         };
     }
 
-    /// <summary>The MSI's BROKER_URL, BROKER_SECRET and BROKER_ONLY; null without a broker address.</summary>
-    private static (string Url, string Secret, bool Listen)? Broker(string[] args) =>
-        Option(args, "broker-url") is { Length: > 0 } url ? (url, Option(args, "broker-secret") ?? "", Option(args, "broker-only") != "1") : null;
+    private static int EnrollFromInstaller(string[] args, AgentLog log)
+    {
+        var result = Enroll(args.Length > 1 ? args[1] : "", Option(args, "virtual-display"), log, Option(args, "auto-sign-in"), Broker(args));
+        // The agent keeps only the keys derived from the secret, so the file has served its purpose (SEC-BRK-01). It
+        // stays after a failed install, so the same command can be run again.
+        if (result == 0 && Option(args, "broker-secret-file") is { Length: > 0 } file)
+        {
+            try { File.Delete(file); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { log.Write($"The device secret's file couldn't be deleted: {ex.Message}"); }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// The MSI's BROKER_URL, BROKER_SECRET or BROKER_SECRET_FILE, and BROKER_ONLY; null without a broker address.
+    /// The file keeps the secret off every command line – msiexec's own included – where process-creation events
+    /// (Sysmon, EDR) would record it.
+    /// </summary>
+    internal static (string Url, string Secret, bool Listen)? Broker(string[] args)
+    {
+        if (Option(args, "broker-url") is not { Length: > 0 } url) return null;
+        var secret = Option(args, "broker-secret-file") is { Length: > 0 } file ? ReadSecretFile(file) : Option(args, "broker-secret") ?? "";
+        return (url, secret, Option(args, "broker-only") != "1");
+    }
+
+    /// <summary>The largest secret file read: a device secret is under 100 characters.</summary>
+    internal const int MaxSecretFileBytes = 4096;
+
+    /// <summary>
+    /// The device secret from BROKER_SECRET_FILE: the first line of a plain file on a local drive (not a share, folder,
+    /// link or device), at most <see cref="MaxSecretFileBytes"/>. The bytes read are wiped once the text is taken.
+    /// </summary>
+    internal static string ReadSecretFile(string path)
+    {
+        path = path.Trim().Trim('"');
+        if (!Path.IsPathFullyQualified(path) || path.Length < 4 || !char.IsAsciiLetter(path[0]) || path[1] != ':')
+            throw new ArgumentException("BROKER_SECRET_FILE has to be the full path of a file on a local drive.");
+        var info = new FileInfo(path);
+        if (!info.Exists) throw new ArgumentException("The file BROKER_SECRET_FILE names doesn't exist.");
+        if ((info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+            throw new ArgumentException("BROKER_SECRET_FILE has to name a plain file, not a link.");
+        if (info.Length > MaxSecretFileBytes) throw new ArgumentException("The file BROKER_SECRET_FILE names is too large for a device secret.");
+        var bytes = File.ReadAllBytes(path);
+        try
+        {
+            var text = new UTF8Encoding(false).GetString(bytes).TrimStart((char)0xFEFF);
+            var end = text.IndexOfAny(['\r', '\n']);
+            return (end < 0 ? text : text[..end]).Trim();
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
 
     /// <param name="virtualDisplay">From the MSI (VIRTUALDISPLAY): "1" install the virtual monitor, "0" not, "" not chosen.</param>
     /// <param name="autoSignIn">From the MSI (AUTOSIGNIN): "1" allow automatic sign-in, "0" stop it, "" leave it.</param>

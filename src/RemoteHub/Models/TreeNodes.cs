@@ -188,6 +188,12 @@ public sealed partial class Connection : NodeBase
     /// </summary>
     [ObservableProperty] private string? _rdpCertificate;
 
+    /// <summary>
+    /// Behind a jump host: the WinRM (HTTPS) certificate the user trusted for this connection (SHA-256 of it), when it isn't
+    /// one this PC trusts for the name anyway – PowerShell remoting signs in without asking while the server presents it.
+    /// </summary>
+    [ObservableProperty] private string? _winRmCertificate;
+
     /// <summary>When a tab of this connection last connected (any kind: RDP, agent desktop, PowerShell, tools).</summary>
     [ObservableProperty] private DateTime? _lastConnectedUtc;
 

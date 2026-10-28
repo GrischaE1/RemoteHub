@@ -569,7 +569,19 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 $id = NewId
                 $step = Run '--msi', $msi, '--sha256', $sha, '--pid', $gone, '--id', $id
                 if ($step -gt 0) { Wait-Process -Id $step -Timeout 120 -ErrorAction SilentlyContinue }
+                # a copy of the signed launcher in a folder users can write to, with a planted script next to it: the
+                # copy starts nothing, so the planted script never runs elevated
+                $copy = Join-Path $env:PUBLIC 'rhup-copy\RemoteHub'
+                $null = New-Item -ItemType Directory -Path $copy -Force
+                Copy-Item $exe (Join-Path $copy 'RemoteHubUpdate.exe') -Force
+                $marker = Join-Path $env:PUBLIC 'rhup-copy\planted-ran.txt'
+                Set-Content (Join-Path $copy 'InstallUpdate.ps1') "Set-Content '$marker' 'ran' -Encoding ASCII" -Encoding ASCII
+                $copied = (Start-Process (Join-Path $copy 'RemoteHubUpdate.exe') -ArgumentList '--msi', $msi, '--sha256', $sha, '--pid', $gone, '--id', (NewId) -PassThru -Wait).ExitCode
+                $plantedRan = Test-Path $marker
+                Remove-Item (Join-Path $env:PUBLIC 'rhup-copy') -Recurse -Force -ErrorAction SilentlyContinue
                 [pscustomobject]@{
+                    copied           = $copied
+                    plantedRan       = $plantedRan
                     refused          = $refused
                     refusedResults   = $afterRefused - $before
                     step             = $step
@@ -631,6 +643,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             $u.direct.step | Should -BeGreaterThan 0 -Because 'well-formed values start the step (its process id is the exit code)'
             $u.direct.result | Should -Be 'refused signature' -Because 'the rebuilt package''s signature doesn''t match it'
             $u.direct.msiLeft | Should -Be 0
+            $u.direct.copied | Should -Be 0 -Because 'a copy outside Program Files\RemoteHub starts nothing'
+            $u.direct.plantedRan | Should -BeFalse -Because 'the script planted next to the copy never runs'
         }
     }
 
