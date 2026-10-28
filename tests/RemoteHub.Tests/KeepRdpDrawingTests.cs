@@ -72,4 +72,20 @@ public class KeepRdpDrawingTests : IDisposable
         using (var next = new A.KeepRdpDrawing(_folder)) next.Apply(_sid);
         Assert.Null(Value()); // what was there before the first one
     }
+
+    [Fact]
+    public void A_record_left_by_a_crashed_helper_is_restored_at_service_start()
+    {
+        using (var key = Registry.CurrentUser.CreateSubKey(KeyPath)) key.SetValue(Name, 1, RegistryValueKind.DWord);
+        new A.KeepRdpDrawing(_folder).Apply(_sid); // never disposed
+        Assert.Equal(2, Value());
+        // Another user's record whose profile isn't loaded stays for later.
+        var absent = Path.Combine(_folder, "rdp-minimized-S-1-5-21-1-2-3-999999.txt");
+        File.WriteAllText(absent, "absent");
+
+        Assert.NotNull(new A.KeepRdpDrawing(_folder).RestoreLeftovers());
+        Assert.Equal(1, Value());
+        Assert.Equal([absent], Directory.GetFiles(_folder));
+        Assert.Null(new A.KeepRdpDrawing(_folder).RestoreLeftovers()); // nothing left that can be put back
+    }
 }
