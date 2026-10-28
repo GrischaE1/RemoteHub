@@ -285,7 +285,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
                 }
             }
             # files: a folder of the admin's PC uploaded through the file transfer tab
-            $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $d = 'C:\Users\Public\UpFolder'; $null = New-Item -ItemType Directory -Path $d -Force; 1..5 | ForEach-Object { Set-Content "$d\f$_.txt" "ui file $_" } }
+            $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $d = 'C:\Users\Public\UpFolder'; $null = New-Item -ItemType Directory -Path $d -Force; 1..5 | ForEach-Object { Set-Content -Encoding ASCII "$d\f$_.txt" "ui file $_" } }
             $local = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Public\UpFolder' -File | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
             Step files {
             Tool 'File transfer'

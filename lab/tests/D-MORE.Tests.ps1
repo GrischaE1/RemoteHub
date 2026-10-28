@@ -22,7 +22,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     # a session normaluser allows (the person clicks Allow); $Steps run once connected
     function Begin([string]$Name, [object[]]$Steps, [string]$Account = 'Admin', [bool]$ViewOnly = $false) {
         $first = @(@{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto'; viewOnly = $ViewOnly }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 90 })
@@ -187,7 +187,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
 
             # "Allow and hide apps...": a notepad with a secret text, 60 s to answer (time for the person's steps)
             $secret = 'RHLABHIDEFROMSTART'
-            $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content `$env:TEMP\rhlab-hide.txt '$secret'; notepad.exe `$env:TEMP\rhlab-hide.txt"))
+            $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content -Encoding ASCII `$env:TEMP\rhlab-hide.txt '$secret'; notepad.exe `$env:TEMP\rhlab-hide.txt"))
             Start-Sleep -Seconds 5
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ ConsentTimeoutSeconds = 60 }
             $o = Out 'ask-hide'
@@ -315,7 +315,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             $b.banner = Banner
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             $b.x = $b.banner.X + [int]($b.banner.Width / 2); $b.y = $b.banner.Y + [int]($b.banner.Height / 2)
-            Set-Content (Join-Path $o 'xy.txt') "$($b.x),$($b.y)"
+            Set-Content -Encoding ASCII (Join-Path $o 'xy.txt') "$($b.x),$($b.y)"
             Reached $o 'clicked'
             Start-Sleep -Seconds 1
             $b.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)

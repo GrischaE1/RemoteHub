@@ -35,15 +35,28 @@ function Invoke-Child {
         if ($reason) {
             & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
             Remove-Item $cancel -ErrorAction SilentlyContinue
-            Add-Content $Log "`r`nLab queue: request $reason - stopped." -ErrorAction SilentlyContinue
+            Add-Content -Encoding ASCII $Log "`r`nLab queue: request $reason - stopped." -ErrorAction SilentlyContinue
             return $code
         }
     }
     $p.ExitCode
 }
 
+# Request values end up in file names and, for tests, in a PowerShell command line: names only, no quotes or paths.
+# (Anyone who can write the queue folder can still have a script run as labop - see test-lab-spec.md section 3, "Who may write".)
+function Test-LabRequest {
+    param($Req)
+    if ("$($Req.Id)" -notmatch '^[A-Za-z0-9._-]{1,64}$' -or "$($Req.Id)" -match '^\.+$') { return 'refused: not a request id' }
+    foreach ($v in @($Req.Vm) + @($Req.Tag)) {
+        if ($v -and "$v" -notmatch '^[A-Za-z0-9 ._*-]{1,128}$') { return "refused: '$v' is not a VM name or tag" }
+    }
+    $null
+}
+
 function Invoke-Request {
     param($Req)
+    $why = Test-LabRequest $Req
+    if ($why) { throw $why }
     switch ($Req.Type) {
         'tests' {
             # Invoke-LabTests.ps1 in its own process; console.log + done.json land in results\<run>\.
@@ -60,7 +73,7 @@ function Invoke-Request {
             # Invoke-AsLabop.ps1: the script file is next to the request; output and exit code go back the same way.
             $base = Join-Path $queue $Req.Id
             $code = Invoke-Child -Script "$base.ps1" -Arguments '' -Log "$base.out.txt" -TimeoutHours 2
-            Set-Content "$base.done" -Value $code
+            Set-Content -Encoding ASCII "$base.done" -Value $code
         }
         default { throw "unknown request type '$($Req.Type)'" }
     }
@@ -78,15 +91,16 @@ do {
             # never let one bad request stop the watcher; tell the waiting caller instead
             $msg = "Lab queue: $($_.Exception.Message)"
             Remove-Item $file.FullName -ErrorAction SilentlyContinue
-            if ($req -and $req.Type -eq 'tests') {
+            $named = $req -and "$($req.Id)" -match '^[A-Za-z0-9._-]{1,64}$' -and "$($req.Id)" -notmatch '^\.+$' # else no file is named after it
+            if ($named -and $req.Type -eq 'tests') {
                 $runDir = Join-Path $labRoot "results\$($req.Id)"
                 $null = New-Item -ItemType Directory -Path $runDir -Force
-                Set-Content (Join-Path $runDir 'console.log') $msg
+                Set-Content -Encoding UTF8 (Join-Path $runDir 'console.log') $msg
                 @{ ExitCode = -1 } | ConvertTo-Json | Set-Content (Join-Path $runDir 'done.json') -Encoding UTF8
             }
-            elseif ($req) {
-                Set-Content (Join-Path $queue "$($req.Id).out.txt") $msg
-                Set-Content (Join-Path $queue "$($req.Id).done") -Value -1
+            elseif ($named) {
+                Set-Content -Encoding UTF8 (Join-Path $queue "$($req.Id).out.txt") $msg
+                Set-Content -Encoding ASCII (Join-Path $queue "$($req.Id).done") -Value -1
             }
         }
     }

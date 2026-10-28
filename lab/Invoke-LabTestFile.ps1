@@ -45,7 +45,7 @@ $r = Invoke-Pester -Configuration $pc
 } | ConvertTo-Json -Compress | Set-Content "$OutputPath.summary.json" -Encoding UTF8
 
 # control characters (other than tab and line breaks) and unpaired surrogates out of the messages the report carries
-$notXml = '[\x00-\x08\x0B\x0C\x0E-\x1F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]'
+$notXml = '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]'
 foreach ($item in @(@($r.Tests) + @($r.FailedBlocks) + @($r.FailedContainers))) {
     if (-not $item -or -not $item.PSObject.Properties['ErrorRecord']) { continue }
     foreach ($e in @($item.ErrorRecord)) {

@@ -154,8 +154,8 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
             $make = {
                 param($logs)
                 $null = New-Item -ItemType Directory -Path "$logs\sub" -Force
-                Set-Content "$logs\x.log" 'made by a user before the install'
-                Set-Content "$logs\sub\y.log" 'made by a user before the install'
+                Set-Content -Encoding ASCII "$logs\x.log" 'made by a user before the install'
+                Set-Content -Encoding ASCII "$logs\sub\y.log" 'made by a user before the install'
                 (Get-Acl "$logs\x.log").Owner
             }
             $made = [ordered]@{ How = 'normaluser over PowerShell Direct' }
@@ -167,8 +167,8 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
                 $made.Owner = Invoke-LabGuest -Name $VmName -ArgumentList $logs, $vm.UserAccount -ScriptBlock {
                     param($logs, $user)
                     $null = New-Item -ItemType Directory -Path "$logs\sub" -Force
-                    Set-Content "$logs\x.log" 'made by a user before the install'
-                    Set-Content "$logs\sub\y.log" 'made by a user before the install'
+                    Set-Content -Encoding ASCII "$logs\x.log" 'made by a user before the install'
+                    Set-Content -Encoding ASCII "$logs\sub\y.log" 'made by a user before the install'
                     $who = New-Object Security.Principal.NTAccount $user
                     foreach ($p in 'C:\ProgramData\RemoteHub', 'C:\ProgramData\RemoteHub\Agent', $logs, "$logs\sub", "$logs\x.log", "$logs\sub\y.log") {
                         $acl = Get-Acl $p
@@ -198,8 +198,8 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
                 $r = [ordered]@{}
                 $r.read = try { $null = Get-Content "$logs\x.log" -ErrorAction Stop; 'read' } catch { 'refused' }
                 $r.readSub = try { $null = Get-Content "$logs\sub\y.log" -ErrorAction Stop; 'read' } catch { 'refused' }
-                $r.write = try { Add-Content "$logs\x.log" 'user' -ErrorAction Stop; 'written' } catch { 'refused' }
-                $r.create = try { Set-Content "$logs\new.log" 'user' -ErrorAction Stop; 'written' } catch { 'refused' }
+                $r.write = try { Add-Content -Encoding ASCII "$logs\x.log" 'user' -ErrorAction Stop; 'written' } catch { 'refused' }
+                $r.create = try { Set-Content -Encoding ASCII "$logs\new.log" 'user' -ErrorAction Stop; 'written' } catch { 'refused' }
                 [pscustomobject]$r
             }
             $access = try { Invoke-LabGuest -Name $VmName -Account User -ArgumentList $logs -ScriptBlock $try } catch { [pscustomobject]@{ error = "$_" } }

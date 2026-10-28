@@ -107,7 +107,7 @@ Describe 'T <VmName>' -Tag Tools, 'T' {
             $skip.result.done | Should -Be 0
             $victim = Invoke-LabGuest -Name $VmName -ArgumentList $remote -ScriptBlock {
                 param($r) $f = Get-ChildItem -LiteralPath $r -Recurse -File -Filter 'file001.txt' | Select-Object -First 1
-                Set-Content -LiteralPath $f.FullName -Value 'changed on the device'; $f.FullName
+                Set-Content -Encoding ASCII -LiteralPath $f.FullName -Value 'changed on the device'; $f.FullName
             }
             $over = T fs-upload @{ files = $small; remote = $remote; overwrite = 1 }
             $over.result.done | Should -Be 300

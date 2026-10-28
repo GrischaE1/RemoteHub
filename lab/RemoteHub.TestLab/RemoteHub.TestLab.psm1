@@ -469,7 +469,7 @@ function Initialize-LabVm {
         $policies = Invoke-LabGuest -Name $Name -ArgumentList $token -ScriptBlock {
             param($t)
             $null = New-Item -ItemType Directory -Path 'C:\ProgramData\RemoteHubLab' -Force
-            Set-Content 'C:\ProgramData\RemoteHubLab\state-token.txt' $t
+            Set-Content -Encoding ASCII 'C:\ProgramData\RemoteHubLab\state-token.txt' $t
             (Get-ChildItem 'HKLM:\SOFTWARE\Policies\RemoteHub' -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $k = $_; $k.Name + '=' + (($k.Property | Sort-Object | ForEach-Object { "$_=$($k.GetValue($_))" }) -join ';') }) -join '|'
         }
         $state = [ordered]@{ Vm = $vm.Name }
@@ -1604,7 +1604,7 @@ function Start-LabInSession {
         $dir = 'C:\ProgramData\RemoteHubLab\session'
         $null = New-Item -ItemType Directory -Path $dir -Force
         icacls $dir /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
-        $code = "Set-Content '$dir\$task.pid' `$PID`r`n" + $code
+        $code = "Set-Content -Encoding ASCII '$dir\$task.pid' `$PID`r`n" + $code
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
         # (conhost --headless: no visible console window - see Invoke-LabInSession)
         $action = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $enc"
@@ -2236,7 +2236,7 @@ function Invoke-LabPersonServer {
         if (-not (Test-Path $f) -or [IO.File]::ReadAllText($f) -ne $text) {
             $old = ServerPid
             if ($old) {
-                Set-Content (Join-Path $q 'stop.txt') 'new version'
+                Set-Content -Encoding ASCII (Join-Path $q 'stop.txt') 'new version'
                 $until = (Get-Date).AddSeconds(15)
                 while ((Get-Process -Id $old -ErrorAction SilentlyContinue) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }
                 Stop-Process -Id $old -Force -ErrorAction SilentlyContinue
@@ -3862,7 +3862,7 @@ function Start-LabMockServer {
         [IO.File]::WriteAllText("$root\RhMockServer.ps1", $script)
         # a second name, dl.untrusted.test: reachable with a valid certificate but not an allowed download host (the
         # redirect target of C-UPD-08)
-        Add-Content "$env:WINDIR\System32\drivers\etc\hosts" "`r`n127.0.0.1 update.remotehub.dev`r`n127.0.0.1 dl.untrusted.test"
+        Add-Content -Encoding ASCII "$env:WINDIR\System32\drivers\etc\hosts" "`r`n127.0.0.1 update.remotehub.dev`r`n127.0.0.1 dl.untrusted.test"
         $cert = New-SelfSignedCertificate -DnsName 'update.remotehub.dev', 'dl.untrusted.test' -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddDays(30)
         $root2 = [Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine'); $root2.Open('ReadWrite'); $root2.Add($cert); $root2.Close()
         $null = netsh.exe http add sslcert ipport=0.0.0.0:443 certhash=$($cert.Thumbprint) appid='{4dc3e181-e14b-4a21-b022-59fc669b0914}'

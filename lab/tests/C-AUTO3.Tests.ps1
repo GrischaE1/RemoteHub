@@ -42,7 +42,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 300) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     function Shot([string]$name) { $p = Join-Path $EvidenceDir "c-auto3-$name.png"; $null = Get-LabScreenshot -Name $VmName -Path $p }
     # a harness "desktop" record: "State: message" per status, then errors
     function Text($r) { (@($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) + @($r.errors)) -join "`n" }
@@ -271,7 +271,7 @@ Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {
             # a process (here as SYSTEM) creates the pipe while the service is stopped, then the service starts
             $squat = @"
 `$p = New-Object System.IO.Pipes.NamedPipeServerStream('RemoteHubAgent.AutoSignIn', [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Message)
-Set-Content '$labDir\squat.txt' 'up'
+Set-Content -Encoding ASCII '$labDir\squat.txt' 'up'
 Start-Sleep -Seconds 1800
 "@
             Invoke-LabGuest -Name $VmName -ScriptBlock { Stop-Service RemoteHubAgent -Force }
@@ -309,7 +309,7 @@ Start-Sleep -Seconds 1800
 try { `$c.Connect(10000); `$r = 'connected' } catch { `$r = 'connect failed: ' + `$_.Exception.Message }
 if (`$c.IsConnected) { try { `$b = New-Object byte[] 64; `$n = `$c.Read(`$b, 0, 64); `$r += "; read `$n" } catch { `$r += '; read failed: ' + `$_.Exception.Message } }
 `$c.Dispose()
-Set-Content '$labDir\pipe-$Tag.txt' ("pid `$PID session " + (Get-Process -Id `$PID).SessionId + ': ' + `$r)
+Set-Content -Encoding UTF8 '$labDir\pipe-$Tag.txt' ("pid `$PID session " + (Get-Process -Id `$PID).SessionId + ': ' + `$r)
 "@
             }
             $since = Get-LabGuestTime -Name $VmName
@@ -351,7 +351,7 @@ public static class RhLabLaunch {
     }
 }
 '@
-Set-Content '$labDir\launch-console.txt' ([RhLabLaunch]::Start('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $client'))
+Set-Content -Encoding UTF8 '$labDir\launch-console.txt' ([RhLabLaunch]::Start('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $client'))
 "@
             Start-SystemTask 'RHLab-PipeLaunch' $launch
             $f.Launch = Wait-GuestFile "$labDir\launch-console.txt" 90

@@ -95,12 +95,12 @@ Describe 'T2 <VmName>' -Tag Tools, 'T' {
             $orig = Invoke-LabGuest -Name $VmName -ArgumentList $target -ScriptBlock {
                 param($t)
                 $null = New-Item -ItemType Directory -Path $t -Force
-                Set-Content "$t\f001.txt" 'held open on the device'
+                Set-Content -Encoding ASCII "$t\f001.txt" 'held open on the device'
                 $hash = (Get-FileHash "$t\f001.txt" -Algorithm SHA256).Hash
                 # held by a process outside this PowerShell Direct session (it would close with it); it says when it holds it
                 $ready = "$t.ready"
                 Remove-Item $ready -ErrorAction SilentlyContinue
-                $cmd = "powershell.exe -NoProfile -Command `"`$f = [IO.File]::Open('$t\f001.txt', 'Open', 'ReadWrite', 'None'); Set-Content '$ready' 1; Start-Sleep 600`""
+                $cmd = "powershell.exe -NoProfile -Command `"`$f = [IO.File]::Open('$t\f001.txt', 'Open', 'ReadWrite', 'None'); Set-Content -Encoding ASCII '$ready' 1; Start-Sleep 600`""
                 $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
                 $until = (Get-Date).AddSeconds(60)
                 while (-not (Test-Path $ready) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 200 }

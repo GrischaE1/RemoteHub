@@ -126,7 +126,7 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
                 Wait-LabHostFile (Join-Path $o 'on.txt') -TimeoutSec 180
                 $png = Join-Path $o 'console.png'
                 $null = Get-LabScreenshot -Name $VmName -Path $png
-                Set-Content (Join-Path $o 'shot.txt') 'go'
+                Set-Content -Encoding ASCII (Join-Path $o 'shot.txt') 'go'
                 $null = Receive-LabDesktop $job
                 [string](Get-LabOcr -Path $png).text
             }

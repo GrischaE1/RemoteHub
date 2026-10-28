@@ -99,7 +99,7 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $r.ps = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$env:COMPUTERNAME; whoami' }
             $small = Join-Path $EvidenceDir 'j-small'
             $null = New-Item -ItemType Directory -Path $small -Force
-            1..20 | ForEach-Object { Set-Content (Join-Path $small "f$_.txt") "jump file $_ $([guid]::NewGuid())" }
+            1..20 | ForEach-Object { Set-Content -Encoding ASCII (Join-Path $small "f$_.txt") "jump file $_ $([guid]::NewGuid())" }
             $r.upload = Invoke-LabTool -Name $VmName -Op fs-upload -Pin $pin -Params @{ files = $small; remote = 'C:\LabJump' }
             $r.download = Invoke-LabTool -Name $VmName -Op fs-download -Pin $pin -Params @{ remote = 'C:\LabJump\j-small'; local = (Join-Path $EvidenceDir 'j-down') }
             $r.reg = Invoke-LabTool -Name $VmName -Op reg-set -Pin $pin -Params @{ key = 'HKLM\SOFTWARE'; name = 'RemoteHubLabJump'; kind = 'String'; data = 'through the jump host' }

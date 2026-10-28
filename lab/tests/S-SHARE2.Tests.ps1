@@ -81,7 +81,7 @@ while ($true) {
             $path = $req[1]
             $auth = ''
             if ($h.ContainsKey('authorization')) { $auth = ($h['authorization'] -split ' ')[0] }
-            Add-Content -Path $Log -Value (ConvertTo-Json -Compress -InputObject @{ m = $req[0]; p = $path; auth = $auth })
+            Add-Content -Encoding UTF8 -Path $Log -Value (ConvertTo-Json -Compress -InputObject @{ m = $req[0]; p = $path; auth = $auth })
             $code = 500; $extra = ''
             if ($path -match '^/s/(\d{3})') { $code = [int]$Matches[1] }
             elseif ($path -like '/auth*') { $code = 401; $extra = "WWW-Authenticate: Negotiate`r`nWWW-Authenticate: NTLM`r`n" }
@@ -362,7 +362,7 @@ $out
         $deviceIp = Get-LabVmAddress -Name $device.Name
         $devAdmin = $device.AdminAccount
         # a file that must survive "Remove" (nothing on the share itself is deleted)
-        $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { Set-Content C:\rhshare\keep.txt 'kept by S-SHR-06' }
+        $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { Set-Content -Encoding ASCII C:\rhshare\keep.txt 'kept by S-SHR-06' }
         $init = Initialize-LabVm -Name $VmName -Client
         $script:task = Start-LabClient -Name $VmName
         # credentials for this item, "Local account on the target computer (.\user)" ticked: .\PSAdmin

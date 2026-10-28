@@ -72,6 +72,7 @@ Host HV01 (Server 2025, Hyper-V)                                  Provided VMs (
 | PowerShell | Windows PowerShell 5.1 (built in). The module also runs on PowerShell 7, but doesn't need it. Lab scripts stay ASCII-only: 5.1 reads BOM-less UTF-8 as ANSI, and an en dash then ends a string. |
 | Modules | `Hyper-V` (built in), `Pester` 5.7.1 in `D:\RemoteHubLab\modules\Pester\5.7.1` (the built-in Pester 3.4 is not used) |
 | .NET | .NET 10 SDK (builds RemoteHub and the lab harness) |
+| Who may write | `Install-LabTask.ps1` gives `labop` **and Authenticated Users** Modify on `LabRoot`, so any account on the host can start runs without elevation. The other side of that: any account on the host can drop a request into `queue\` or change `LabRoot\lab\*.ps1` and have it run as `labop`, which controls every lab VM (review S-07). Acceptable on a host only lab operators sign in to; on a shared host, grant Modify to the operators' accounts instead of `*S-1-5-11`. The watcher accepts only request ids, VM names and tags made of letters, digits, spaces and `._*-`, so a request can't reach outside its own files or the command line. |
 | Elevated once | Only `Install-LabTask.ps1`: batch logon right, `LabRoot` ACL, register + start the task. Run it again after changing the `labop` password. |
 
 ## 4. Network

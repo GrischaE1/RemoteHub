@@ -490,7 +490,7 @@ Add-Type -AssemblyName System.Windows.Forms
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -ErrorAction SilentlyContinue
             # an SMB share for the share tab through the jump host
             $null = New-Item C:\rhjump -ItemType Directory -Force
-            Set-Content C:\rhjump\hello.txt 'reached through the jump host'
+            Set-Content -Encoding ASCII C:\rhjump\hello.txt 'reached through the jump host'
             if (-not (Get-SmbShare -Name rhjump -ErrorAction SilentlyContinue)) { $null = New-SmbShare -Name rhjump -Path C:\rhjump -FullAccess $admin }
             $null = icacls C:\rhjump /grant "${admin}:(OI)(CI)M"
             Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28502' -ErrorAction SilentlyContinue   # File and Printer Sharing

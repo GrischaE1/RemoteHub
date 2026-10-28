@@ -20,7 +20,7 @@ BeforeAll {
     function Mark([string]$o, [string]$n) { @{ do = 'markFile'; path = (Join-Path $o "$n.txt") } }
     function Park([string]$o, [string]$n, [int]$t = 300) { @{ do = 'waitFile'; path = (Join-Path $o "$n.txt"); timeout = $t } }
     function Reached([string]$o, [string]$n, [int]$t = 180) { Wait-LabHostFile (Join-Path $o "$n.txt") -TimeoutSec $t }
-    function Release([string]$o, [string]$n) { Set-Content (Join-Path $o "$n.txt") 'go' }
+    function Release([string]$o, [string]$n) { Set-Content -Encoding ASCII (Join-Path $o "$n.txt") 'go' }
     $connect = @(@{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 90 })
     function Begin([string]$Name, [object[]]$Steps, [string]$Account = 'Admin', [switch]$NoAllow) {
         if (-not $pin) { throw "no agent PIN for '$Name' - the context's Initialize-LabVm didn't give one" }
@@ -201,14 +201,14 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
                 (Mark $o 'selected'), (Park $o 'type' 120), @{ do = 'keys'; text = "$password`n" }
                 @{ do = 'wait'; state = 'WaitingForUser'; timeout = 120 }, (Mark $o 'asked'), @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Ended'); timeout = 60 }, @{ do = 'close' })
             Reached $o 'options'
-            $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            $xy = Find-LabPictureText -Path (Join-Path $o 'options.png') -Text 'Switch'; Set-Content -Encoding ASCII (Join-Path $o 'switch-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'curtain'
-            Set-Content (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
+            Set-Content -Encoding ASCII (Join-Path $o 'cad.txt') (Get-LabCadAnswer -Picture (Join-Path $o 'curtain.png'))
             Reached $o 'tiles'
             # the tile names are small on the wallpaper and OCR reads them in parts ("min" for Admin): matched by distance
             # to the device's accounts, not as an exact word
             $xy = (Find-LabSignInTile -Name $VmName -Picture (Join-Path $o 'tiles.png') -Account $vm.ConsoleAccount).XY
-            Set-Content (Join-Path $o 'admin-xy.txt') $(if ($xy) { $xy } else { '0,0' })
+            Set-Content -Encoding ASCII (Join-Path $o 'admin-xy.txt') $(if ($xy) { $xy } else { '0,0' })
             Reached $o 'selected'
             # the chosen tile's name stands large in the middle; when it isn't Admin the password signs normaluser in again
             # and the case fails on $adminSelected (with the pictures as evidence), not on a session that isn't there

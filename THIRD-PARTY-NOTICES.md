@@ -76,3 +76,44 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSE
 WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Source: https://github.com/xoofx/markdig
+
+## WPF UI (RemoteHub, the Fluent design of every window)
+
+WPF UI 4.3.0 (`WPF-UI`) – Copyright (C) 2021-2026 Leszek Pomianowski and WPF UI Contributors. MIT License (text as above).
+Source: https://github.com/lepoco/wpfui
+
+## CommunityToolkit.Mvvm (RemoteHub, view models)
+
+CommunityToolkit.Mvvm 8.4.2 – (c) .NET Foundation and Contributors. All rights reserved. MIT License (text as above).
+Source: https://github.com/CommunityToolkit/dotnet
+
+## Microsoft.Data.Sqlite (RemoteHub, the local database)
+
+Microsoft.Data.Sqlite.Core 10.0.12 – © Microsoft Corporation. All rights reserved. MIT License (text as above).
+Source: https://github.com/dotnet/efcore
+
+## SQLite3 Multiple Ciphers and SQLite (RemoteHub, the encrypted local database)
+
+SQLite3MC.PCLRaw.bundle, SQLite3MC.PCLRaw.provider and SQLite3MC.PCLRaw.lib 2.4.0 – Copyright (c) 2023-2026 Ulrich
+Telle, et al. MIT License (text as above). They contain SQLite, which is in the public domain
+(https://www.sqlite.org/copyright.html).
+Source: https://github.com/utelle/SQLite3MultipleCiphers-NuGet
+
+## SQLitePCLRaw (RemoteHub, the local database)
+
+SQLitePCLRaw.core 3.0.2 – Copyright 2014-2025 SourceGear, LLC. Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0).
+Source: https://github.com/ericsink/SQLitePCL.raw
+
+## PowerShell SDK (RemoteHub, PowerShell remoting and the console)
+
+Microsoft.PowerShell.SDK 7.6.6 – © Microsoft Corporation. All rights reserved. MIT License (text as above). The
+libraries it brings with it are listed in PowerShell's own notices:
+https://github.com/PowerShell/PowerShell/blob/master/ThirdPartyNotices.txt
+Source: https://github.com/PowerShell/PowerShell
+
+## Microsoft.Extensions.Hosting.WindowsServices (RemoteHub Agent, running as a Windows service)
+
+Microsoft.Extensions.Hosting.WindowsServices 10.0.13 – © Microsoft Corporation. All rights reserved. MIT License (text
+as above).
+Source: https://github.com/dotnet/runtime

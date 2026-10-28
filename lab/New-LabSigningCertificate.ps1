@@ -5,7 +5,7 @@
     exports its public part to lab\lab-signing.cer.
 .DESCRIPTION
     Builds for the lab are signed with it (build\build-installer.ps1 -LabSigning), so the agent's signature checks run
-    unchanged in the lab (credential-provider-design.md §8.4). Install-LabAgent makes each VM trust it (LocalMachine
+    unchanged in the lab (credential-provider-design.md section 8.4). Install-LabAgent makes each VM trust it (LocalMachine
     Root + TrustedPublisher) before installing; nothing else trusts it. An existing certificate is reused.
 .EXAMPLE
     .\lab\New-LabSigningCertificate.ps1
