@@ -8663,10 +8663,12 @@ P1 · How: PS M · Needs: the lab signing certificate · Status: ◐ Test writte
 **Steps:**
 1. Run `RemoteHubUpdate.exe` with values it doesn't take: the checksum one character short; an extra `--publisher CN=Someone`; `--msi C:\LabClient\swap\a:b.msi` (a stream); a UNC path (`\\localhost\C$\…`); a path with a `..` segment. Count the outcome files before and after.
 2. Run it with well-formed values for the rebuilt MSI (`C:\LabClient\swap\RemoteHub-99.0.0-x64.msi`, its real SHA-256, a process id that has ended, a new id) and wait for the step.
+3. Copy `RemoteHubUpdate.exe` to `C:\Users\Public\rhup-copy\RemoteHub`, put an `InstallUpdate.ps1` next to it that writes a marker file, and run the copy with the well-formed values of step 2.
 
 **Expected:**
 - each call in step 1 ends with exit code 0 and no new outcome file (nothing started)
 - step 2: the exit code is the step's process id; its outcome is `refused signature` (the rebuild's signature doesn't match it); no `.msi` left in the staging folder
+- step 3: the copy ends with exit code 0 and the marker file doesn't exist – a launcher outside `C:\Program Files\RemoteHub` starts nothing, so a script planted next to a copy never runs elevated
 
 #### SEC-VDD-01 · Rogue display-driver pipe
 P1 · How: H S PS E · Needs: normaluser signed in at the console · Status: ✅ Automated – `SEC-VDD.Tests.ps1`

@@ -39,11 +39,14 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
     const auto request = rhup::Parse(argc - 1, argv.get() + 1);
     if (!request) return 0;
 
-    const std::wstring self = ModulePath();
+    // Only the installed copy starts anything: a copy elsewhere would run whatever script sits next to it (Update.h).
+    const std::wstring self = rhup::FinalPath(ModulePath());
     const size_t slash = self.find_last_of(L'\\');
     if (slash == std::wstring::npos) return 0;
-    const std::wstring script = self.substr(0, slash + 1) + L"InstallUpdate.ps1";
-    if (!IsPlainFile(script)) return 0;
+    const std::wstring folder = self.substr(0, slash);
+    if (!rhup::IsInstalledFolder(folder, rhup::ProgramFilesFolder())) return 0;
+    const std::wstring script = folder + L"\\InstallUpdate.ps1";
+    if (!IsPlainFile(script) || rhup::FinalPath(script) != script) return 0;
 
     wchar_t system[MAX_PATH + 1] = {};
     const UINT systemLength = GetSystemDirectoryW(system, MAX_PATH + 1);
