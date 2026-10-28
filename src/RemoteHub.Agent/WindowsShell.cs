@@ -19,11 +19,29 @@ public sealed class WindowsAuthenticator(IReadOnlyList<string> allowedGroups) : 
 
     public AuthResult Authenticate(string userName, string password, IReadOnlyList<string> groups)
     {
+        var chars = password.ToCharArray();
+        try { return Authenticate(userName, chars, groups); }
+        finally { AgentHost.Wipe(chars); }
+    }
+
+    public AuthResult Authenticate(string userName, char[] password, IReadOnlyList<string> groups)
+    {
         var (domain, user) = SplitUser(userName);
         if (user.Length == 0) return AuthResult.Fail(AuthOutcome.BadCredentials, "no user name");
 
-        if (!Native.LogonUser(user, domain, password, Native.LOGON32_LOGON_NETWORK, Native.LOGON32_PROVIDER_DEFAULT, out var logon))
-            return SignInRefusal.FromWin32(Marshal.GetLastWin32Error());
+        // LogonUser wants it null-terminated: a pinned copy with the terminator, wiped straight after the call.
+        var terminated = GC.AllocateArray<char>(password.Length + 1, pinned: true);
+        bool signedIn;
+        int error;
+        IntPtr logon;
+        try
+        {
+            password.CopyTo(terminated, 0);
+            signedIn = Native.LogonUser(user, domain, terminated, Native.LOGON32_LOGON_NETWORK, Native.LOGON32_PROVIDER_DEFAULT, out logon);
+            error = Marshal.GetLastWin32Error();
+        }
+        finally { AgentHost.Wipe(terminated); }
+        if (!signedIn) return SignInRefusal.FromWin32(error);
 
         IntPtr full = IntPtr.Zero;
         try
@@ -301,7 +319,7 @@ internal static class Native
     }
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool LogonUser(string user, string? domain, string password, int logonType, int provider, out IntPtr token);
+    public static extern bool LogonUser(string user, string? domain, char[] password, int logonType, int provider, out IntPtr token);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     public static extern bool DuplicateTokenEx(IntPtr token, uint access, IntPtr attributes, int level, int type, out IntPtr newToken);

@@ -38,6 +38,12 @@ public interface IShellAuthenticator
 
     /// <summary>Same, but the account must be in one of <paramref name="allowedGroups"/> (a right from the policy).</summary>
     AuthResult Authenticate(string userName, string password, IReadOnlyList<string> allowedGroups) => Authenticate(userName, password);
+
+    /// <summary>
+    /// Same, with the password in a buffer the caller wipes after the call – the agent's sign-in uses this one, so an
+    /// implementation that hands the password to Windows never needs to make a string of it.
+    /// </summary>
+    AuthResult Authenticate(string userName, char[] password, IReadOnlyList<string> allowedGroups) => Authenticate(userName, new string(password), allowedGroups);
 }
 
 /// <summary>A running <c>powershell.exe -s</c>: its standard input and output carry the remoting protocol.</summary>
