@@ -567,12 +567,14 @@ public sealed class BrokerClient : IAsyncDisposable
     internal async Task<ClientWebSocket> OpenRelayAsync(JsonObject accepted, CancellationToken ct)
     {
         var session = Text(accepted, "session", 22);
+        var relay = Text(accepted, "relay", 200);
+        if (!IsRelayPath(relay, _info.Org, session)) throw new BrokerException("The broker named a relay that isn't its own.");
         var sessionKey = FromB64u(Text(accepted, "key", 64)) ?? throw new BrokerException("The broker's answer is damaged.");
         var ws = new ClientWebSocket();
         ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
         ws.Options.SetRequestHeader("Authorization", "RemoteHub-Relay " + Mac(sessionKey, _info.Org, "relay", session, "console"));
         CryptographicOperations.ZeroMemory(sessionKey);
-        var path = Text(accepted, "relay", 200) + "&side=console";
+        var path = relay + "&side=console";
         try { await ws.ConnectAsync(new Uri(WsBase(new Uri(_info.Url)), path), ct).ConfigureAwait(false); }
         catch (Exception ex)
         {

@@ -278,6 +278,7 @@ internal sealed class BrokerLink(
         if (m["cands"] is JsonArray { Count: > BrokerProtocol.MaxCandidates }) throw new InvalidDataException("candidates");
 
         var why = CheckOffer(offer, seal, config, broker);
+        if (why is null && !BrokerProtocol.IsRelayPath(relay, broker.Org, session)) why = ("offer", "The broker named a relay that isn't its own.");
         var p = policy();
         var consoleId = offer["consoleId"]?.GetValue<string>() ?? "";
         if (why is null && (!p.BrokerEnabled || p.LoadError is not null)) why = ("policy", "The device's policy turns the RemoteHub Broker off (BrokerEnabled).");
