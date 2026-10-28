@@ -152,14 +152,15 @@ Adding a VM: provide it as in §5.1, then `Start-LabRun.ps1 -Vm <Id> -Tag Smoke`
 `Vms` is optional: an entry with a VM's full `Name` overrides any value for that VM (e.g. other account names on a
 German image).
 
-`Broker` is optional too: the RemoteHub Broker the B-BRK cases use (test-lab-cases.md §9.14), for example
-`"Broker": { "Url": "http://{host}:8787" }` for a broker running on the host (`npx wrangler dev --ip 0.0.0.0 --port 8787`
-in the broker's repository, with the port open to the lab network) – `{host}` stands for the host's address towards
-the VM. Its admin token is `BrokerToken` in `lab.local.json` (§7). Without either the B-BRK cases are skipped and say
-why. Every run makes its own organisation there and deletes it again. `lab.json` names the broker on the host; before a
-run that includes B-BRK, start it in the broker's repository (`npx wrangler d1 migrations apply remotehub-broker
---local`, then `npx wrangler dev --ip 0.0.0.0 --port 8787`, its `ADMIN_TOKEN` from `.dev.vars` being `BrokerToken`).
-The host's firewall must let the lab network reach TCP 8787.
+`Broker` is optional too: the RemoteHub Broker the B-BRK cases use (test-lab-cases.md §9.14), with its admin token
+`BrokerToken` – both in `lab.local.json` (§7), so a real broker's address stays out of the repository (`lab.json` may
+name one too; `lab.local.json`'s wins). Either a deployed broker – `"Broker": { "Url": "https://<broker>" }` with that
+broker's admin token; the lab VMs need HTTPS to it – or one on the host: `"Url": "http://{host}:8787"` with
+`npx wrangler dev --ip 0.0.0.0 --port 8787` in the broker's repository (after `npx wrangler d1 migrations apply
+remotehub-broker --local`; `BrokerToken` is `ADMIN_TOKEN` from its `.dev.vars`), where `{host}` stands for the host's
+address towards the VM and the network must let the VMs reach that port. Without either the B-BRK cases are skipped and
+say why. Every run makes its own organisation there and deletes it again; a run that stops before the end can leave
+one behind (`rhbroker org delete`).
 
 ## 6. Accounts and sign-ins
 
