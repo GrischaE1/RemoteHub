@@ -6,7 +6,7 @@
 # BrokerDirect = 0 or with UDP blocked), the addresses the agent reports and RemoteHub trying them before the broker
 # path (B-BRK-09 to 11), a broker connection that silently stops carrying anything given up and made again (B-BRK-08),
 # and that the device secret is kept nowhere on the device (SEC-BRK).
-# Needs the lab's broker: lab.json "Broker" and lab.local.json "BrokerToken" (docs/test-lab-spec.md); without them
+# Needs the lab's broker: "Broker" and "BrokerToken" in lab.local.json (docs/test-lab-spec.md); without them
 # every case is skipped with that reason. Each run makes its own organisation and deletes it again.
 # See docs/test-lab-cases.md section 9.14.
 # LabRole: device
@@ -19,7 +19,7 @@ BeforeAll {
     Import-Module (Join-Path $PSScriptRoot '..\RemoteHub.TestLab') -Force
     function Save($name, $data) { $data | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $EvidenceDir "b-brk-$name.json") -Encoding UTF8 }
     $broker = Get-LabBroker -Name $VmName
-    $noBroker = 'the lab has no RemoteHub Broker (lab.json Broker, lab.local.json BrokerToken)'
+    $noBroker = 'the lab has no RemoteHub Broker (lab.local.json Broker and BrokerToken)'
     $org = $null
     if ($broker) {
         Reset-LabVm -Name $VmName

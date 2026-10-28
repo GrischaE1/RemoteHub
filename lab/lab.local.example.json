@@ -1,4 +1,5 @@
 {
   "Password": "the-one-lab-password",
-  "BrokerToken": "the-lab-broker-admin-token (optional, for B-BRK)"
+  "Broker": { "Url": "https://broker.example.com (optional, for B-BRK; or http://{host}:8787 for wrangler dev on the host)" },
+  "BrokerToken": "that broker's admin token (optional, for B-BRK)"
 }

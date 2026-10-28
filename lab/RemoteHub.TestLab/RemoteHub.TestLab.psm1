@@ -26,9 +26,11 @@ function Get-LabConfig {
     }
     $local = Get-Content $localPath -Raw | ConvertFrom-Json
     $cfg | Add-Member -NotePropertyName Password -NotePropertyValue $local.Password -Force
-    # the RemoteHub Broker's admin token for B-BRK (optional, like lab.json "Broker")
+    # the RemoteHub Broker for B-BRK (optional): its admin token, and its address - here rather than in lab.json when
+    # it is a real broker, whose address stays out of the repository; lab.local.json's wins
     $token = if ($local.PSObject.Properties['BrokerToken']) { $local.BrokerToken } else { '' }
     $cfg | Add-Member -NotePropertyName BrokerToken -NotePropertyValue $token -Force
+    if ($local.PSObject.Properties['Broker'] -and $local.Broker) { $cfg | Add-Member -NotePropertyName Broker -NotePropertyValue $local.Broker -Force }
     $script:Config = $cfg
     $cfg
 }
@@ -3178,7 +3180,7 @@ function Get-LabAgentPolicy {
     }
 }
 
-# The RemoteHub Broker the lab uses (docs/test-lab-spec.md, "RemoteHub Broker"): lab.json "Broker": { "Url": ... } -
+# The RemoteHub Broker the lab uses (docs/test-lab-spec.md, "RemoteHub Broker"): "Broker": { "Url": ... } in lab.local.json (or lab.json) -
 # "{host}" in it stands for the host's address towards the VM - and the admin token from lab.local.json "BrokerToken".
 # $null when either is missing: B-BRK then skips with the reason. The token is never logged or written to evidence.
 function Get-LabBroker {
