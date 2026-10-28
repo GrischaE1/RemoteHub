@@ -239,6 +239,8 @@ public class UpdateTelemetryTests
         var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"),
             "-NoProfile -NonInteractive -EncodedCommand " + Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command)))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        // the PowerShell 7 SDK in this process changes PSModulePath; Windows PowerShell needs its own
+        start.Environment.Remove("PSModulePath");
         using var p = System.Diagnostics.Process.Start(start)!;
         var output = await p.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(60));
         Assert.Equal(Authenticode.Signer(SignedFile)!.Key, output.Trim());
