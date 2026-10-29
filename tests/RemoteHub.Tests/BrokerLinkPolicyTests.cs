@@ -14,9 +14,10 @@ using A = agent::RemoteHub.Agent;
 namespace RemoteHub.Tests;
 
 /// <summary>
-/// The device policy BrokerEnabled against a connection that is already open (lab case B-BRK-03): a Group Policy or
-/// Intune change doesn't restart the agent, so the link reads the policy again while connected and closes the
-/// connection when the broker is turned off. A minimal local broker answers the challenge and welcomes the device.
+/// The device policy BrokerEnabled and <c>broker leave</c> against a connection that is already open (lab cases B-BRK-03
+/// and B-BRK-04): neither restarts the agent, so the link reads the policy and agent.json again while connected and
+/// closes the connection when the broker is turned off or gone. A minimal local broker answers the challenge and
+/// welcomes the device.
 /// </summary>
 [Collection("Broker")]
 public class BrokerLinkPolicyTests
@@ -24,8 +25,10 @@ public class BrokerLinkPolicyTests
     private volatile bool _brokerEnabled = true;
     private volatile string? _closedBy;
 
-    [Fact]
-    public async Task BrokerEnabled_turned_off_closes_a_broker_connection_that_is_already_open()
+    [Theory]
+    [InlineData("policy", "turned off by policy")]
+    [InlineData("leave", "left the broker")]
+    public async Task Turning_the_broker_off_or_leaving_it_closes_a_connection_that_is_already_open(string how, string reason)
     {
         var connected = new SemaphoreSlim(0);
         var ended = new SemaphoreSlim(0);
@@ -69,8 +72,8 @@ public class BrokerLinkPolicyTests
         var link = new A.BrokerLink(() => config, cert, () => A.AgentPolicy.Defaults(config) with { BrokerEnabled = _brokerEnabled },
             new A.AgentLog("", 1), new A.PeerTransport());
 
-        var check = A.BrokerLink.PolicyCheck;
-        A.BrokerLink.PolicyCheck = TimeSpan.FromMilliseconds(100);
+        var check = A.BrokerLink.SettingsCheck;
+        A.BrokerLink.SettingsCheck = TimeSpan.FromMilliseconds(100);
         using var stop = new CancellationTokenSource();
         var run = Task.Run(() => link.RunAsync(stop.Token));
         try
@@ -78,17 +81,18 @@ public class BrokerLinkPolicyTests
             Assert.True(await connected.WaitAsync(TimeSpan.FromSeconds(20)), "The link didn't connect to the local broker.");
             Assert.True(SpinWait.SpinUntil(() => link.State == "connected", TimeSpan.FromSeconds(10)), $"The link is {link.State}, not connected.");
 
-            _brokerEnabled = false;
-            Assert.True(await ended.WaitAsync(TimeSpan.FromSeconds(10)), "The open connection wasn't closed when the policy turned the broker off.");
+            if (how == "policy") _brokerEnabled = false;
+            else config = new A.AgentConfig { DeviceId = config.DeviceId }; // what 'broker leave' leaves in agent.json
+            Assert.True(await ended.WaitAsync(TimeSpan.FromSeconds(10)), $"The open connection wasn't closed ({how}).");
             // a close the broker sees at once, not a dropped socket it notices only when its keep-alive gives up
-            Assert.Equal("turned off by policy", _closedBy);
+            Assert.Equal(reason, _closedBy);
             Assert.True(SpinWait.SpinUntil(() => link.State == "idle", TimeSpan.FromSeconds(10)), $"The link is {link.State}, not idle.");
-            // nothing may connect again while the policy keeps the broker off
-            Assert.False(await connected.WaitAsync(TimeSpan.FromSeconds(1)), "The link connected again although the policy turns the broker off.");
+            // nothing may connect again while the broker is off or gone
+            Assert.False(await connected.WaitAsync(TimeSpan.FromSeconds(1)), $"The link connected again ({how}).");
         }
         finally
         {
-            A.BrokerLink.PolicyCheck = check;
+            A.BrokerLink.SettingsCheck = check;
             stop.Cancel();
             try { await run; } catch (OperationCanceledException) { }
             await broker.StopAsync();
