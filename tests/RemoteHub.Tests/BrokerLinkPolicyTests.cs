@@ -22,6 +22,7 @@ namespace RemoteHub.Tests;
 public class BrokerLinkPolicyTests
 {
     private volatile bool _brokerEnabled = true;
+    private volatile string? _closedBy;
 
     [Fact]
     public async Task BrokerEnabled_turned_off_closes_a_broker_connection_that_is_already_open()
@@ -39,7 +40,12 @@ public class BrokerLinkPolicyTests
             await ReceiveAsync(ws); // the proof: not checked here
             await SendAsync(ws, new JsonObject { ["t"] = "welcome", ["orgName"] = "Test" });
             connected.Release();
-            try { while (await ReceiveAsync(ws)) { } }
+            try
+            {
+                while (await ReceiveAsync(ws)) { }
+                _closedBy = ws.CloseStatusDescription;
+                await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
+            }
             catch (WebSocketException) { /* the agent dropped the connection */ }
             ended.Release();
         });
@@ -74,6 +80,8 @@ public class BrokerLinkPolicyTests
 
             _brokerEnabled = false;
             Assert.True(await ended.WaitAsync(TimeSpan.FromSeconds(10)), "The open connection wasn't closed when the policy turned the broker off.");
+            // a close the broker sees at once, not a dropped socket it notices only when its keep-alive gives up
+            Assert.Equal("turned off by policy", _closedBy);
             Assert.True(SpinWait.SpinUntil(() => link.State == "idle", TimeSpan.FromSeconds(10)), $"The link is {link.State}, not idle.");
             // nothing may connect again while the policy keeps the broker off
             Assert.False(await connected.WaitAsync(TimeSpan.FromSeconds(1)), "The link connected again although the policy turns the broker off.");

@@ -55,6 +55,8 @@ internal sealed class BrokerLink(
     /// BrokerEnabled turned off has to end a connection that is already open, not only the next one.
     /// </summary>
     internal static TimeSpan PolicyCheck { get; set; } = IdleRetry;
+    /// <summary>How long the broker has to answer the close a policy change sends.</summary>
+    private static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(5);
     /// <summary>How many addresses the hello carries at most (the broker refuses more).</summary>
     internal const int MaxAddresses = 16;
 
@@ -197,7 +199,7 @@ internal sealed class BrokerLink(
         // "ping" is answered at the broker's edge without waking anything.
         var keepAlive = live.KeepAliveAsync(ws, c => SendLocked(ws, "ping"u8.ToArray(), c), alive.Token);
         using var receiving = CancellationTokenSource.CreateLinkedTokenSource(stop);
-        var turnedOff = WatchPolicyAsync(receiving, alive.Token);
+        var turnedOff = WatchPolicyAsync(ws, receiving, alive.Token);
         try { return await ReceiveLoop(ws, live, config, broker, baseUri, receiving.Token); }
         // The loop then finds the policy off, goes idle and says so in the log.
         catch (Exception) when (receiving.IsCancellationRequested && !stop.IsCancellationRequested) { return Outcome.Ended; }
@@ -215,17 +217,27 @@ internal sealed class BrokerLink(
 
     private static bool BrokerOff(AgentPolicy p) => !p.BrokerEnabled || p.LoadError is not null;
 
-    /// <summary>Ends the connection's reader (and with it the socket) once the device's policy turns the broker off.</summary>
-    private async Task WatchPolicyAsync(CancellationTokenSource receiving, CancellationToken ct)
+    /// <summary>
+    /// Closes the connection once the device's policy turns the broker off. The close is sent, so the broker shows the
+    /// device offline at once – a dropped socket shows only when the broker's keep-alive gives up, minutes later. The
+    /// reader ends with the broker's answer; without one within <see cref="CloseWait"/> it is cancelled.
+    /// </summary>
+    private async Task WatchPolicyAsync(ClientWebSocket ws, CancellationTokenSource receiving, CancellationToken ct)
     {
         while (true)
         {
             await Task.Delay(PolicyCheck, ct);
-            if (BrokerOff(policy()))
+            if (!BrokerOff(policy())) continue;
+            try
             {
-                receiving.Cancel();
-                return;
+                await _sendLock.WaitAsync(ct);
+                try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "turned off by policy", ct).WaitAsync(CloseWait, ct); }
+                finally { _sendLock.Release(); }
+                await Task.Delay(CloseWait, ct);
             }
+            catch (Exception) when (!ct.IsCancellationRequested) { /* not sent or no answer: the reader is cancelled below */ }
+            receiving.Cancel();
+            return;
         }
     }
 

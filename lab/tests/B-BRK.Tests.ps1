@@ -268,8 +268,9 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
     It 'B-BRK-03 the device policy BrokerEnabled = 0 takes it off the broker, and back when cleared' -Tag 'B-BRK-03' {
         if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
         Set-LabAgentPolicy -Name $VmName -Values @{ BrokerEnabled = 0 }
-        $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer -Offline
-        Set-LabAgentPolicy -Name $VmName -Clear
+        # cleared also when the device doesn't go offline: the cases after this one need the broker
+        try { $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer -Offline }
+        finally { Set-LabAgentPolicy -Name $VmName -Clear }
         $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
     }
 
