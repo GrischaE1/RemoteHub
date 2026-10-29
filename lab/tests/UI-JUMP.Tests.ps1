@@ -521,6 +521,9 @@ AfterAll {
     if ($isClient) {
         Shot 'end'
         Save 'results' $R
+        # RemoteHub's diagnostic log (no names, no secrets): where its UI thread was when it stopped answering (run
+        # 20261028-161817 - RdpSession writes "releasing the RDP control" before the release and "released" after it)
+        try { Get-LabFile -Name $VmName -Path "C:\Users\$($vm.ConsoleAccount)\AppData\Roaming\RemoteHub\logs\remotehub.log" -Destination (Join-Path $EvidenceDir 'ui-jump-remotehub-log') } catch { }
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
         # undone for the next file on this VM; anything that fails: the next file starts from the checkpoint
         try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }

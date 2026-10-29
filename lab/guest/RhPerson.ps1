@@ -235,6 +235,15 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
 # of view answers an empty rectangle (infinite X, minus infinite width): its middle was NaN and the step ended with
 # 'Cannot convert value "NaN" to type "System.Int32"' (run 20261026-144106, UI-AG-07 / UI-AG-08). It is scrolled into
 # view first; one that still has no place on the screen fails with a message that says so.
+function Test-RhHung($p) {
+    # Not answering window messages - but a Store app that Windows suspended in the background (Settings) doesn't answer
+    # either and isn't in the way: it counts as not hung (run 20261028-161817 named "SystemSettings" in every failure on
+    # the console VMs while only RemoteHub had hung).
+    if ($p.Responding) { return $false }
+    try { $t = @($p.Threads); return -not ($t.Count -gt 0 -and -not @($t | Where-Object { $_.ThreadState -ne 'Wait' -or $_.WaitReason -ne 'Suspended' }).Count) }
+    catch { return $true }
+}
+
 function Get-RhMid($el) {
     $r = $el.Current.BoundingRectangle
     if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
@@ -414,7 +423,7 @@ switch ($Do) {
                 $checkUntil = (Get-Date).AddSeconds(15)
                 $hung = @(foreach ($p in $wins) {
                         if ((Get-Date) -ge $checkUntil) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle) - not checked"; continue }
-                        if (-not $p.Responding) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle)" }
+                        if (Test-RhHung $p) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle)" }
                     })
                 $why = "the action didn't finish within $limit s (a call that doesn't return$(if ($hung) { ' - not responding: ' + ($hung -join ', ') }))"
                 $late = if ($a.Do -eq 'uia') {
@@ -635,7 +644,7 @@ switch ($Do) {
         # a hung program's window has no name for UI Automation and drops out of the list: named here as not responding
         # (UI-JUMP, run 20261026-032740: RemoteHub's UI thread hung, the list showed only "Program Manager")
         if (-not $found) {
-            $hung = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and -not $_.Responding } | ForEach-Object { "$($_.ProcessName) ($($_.Id))" })
+            $hung = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and (Test-RhHung $_) } | ForEach-Object { "$($_.ProcessName) ($($_.Id))" })
             Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; notResponding = $hung; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }
             break
         }
@@ -729,6 +738,23 @@ switch ($Do) {
                         $result.rightClickAgain = $true
                         $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
                         [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero)
+                        $retryAt = (Get-Date).AddSeconds(2)
+                        do {
+                            Start-Sleep -Milliseconds 300
+                            $menuSeen = [bool]($A::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants, $isItem))
+                        } while (-not $menuSeen -and (Get-Date) -lt $retryAt)
+                    }
+                    # Still no menu: the element selected and focused through UI Automation, then Shift+F10 - the keyboard's
+                    # way to the same menu, which no pointer position can miss (POL-15, UI-AG-10/16, R-RDP-12: two
+                    # right-clicks on a tree item, no menu at all)
+                    if (-not $menuSeen) {
+                        $result.menuByKeyboard = $true
+                        $result.foreground = [RhNative]::ForegroundName()
+                        $sp = & $pat ([Windows.Automation.SelectionItemPattern]::Pattern)
+                        try { if ($sp) { $sp.Select() }; $found.SetFocus() } catch { $result.focusError = "$($_.Exception.Message)" }
+                        Start-Sleep -Milliseconds 200
+                        [RhNative]::keybd_event(0x10, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x79, 0, 0, [IntPtr]::Zero)
+                        [RhNative]::keybd_event(0x79, 0, 2, [IntPtr]::Zero); [RhNative]::keybd_event(0x10, 0, 2, [IntPtr]::Zero)
                     }
                 }
                 $path = @($action.Substring(5) -split '>')
