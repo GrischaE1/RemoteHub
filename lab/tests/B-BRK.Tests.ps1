@@ -242,11 +242,19 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         # a second address on the device's adapter, in a private range the lab doesn't use: a network change as a new
         # DHCP lease or a VPN would bring (the agent tells the broker once the addresses have settled for 2 s)
         $extra = "10.250.$(Get-Random -Minimum 1 -Maximum 254).$(Get-Random -Minimum 1 -Maximum 254)"
-        Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock {
+        # A static address on a DHCP adapter turns DHCP off for it, and the DNS servers DHCP gave go with it: the device
+        # then couldn't resolve the broker for the rest of the file. So the DNS servers are set as they are first, and
+        # DHCP and DNS are put back afterwards.
+        $net = Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock {
             param($ip)
             $if = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).InterfaceIndex
+            $dhcp = [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp
+            $dns = @((Get-DnsClientServerAddress -InterfaceIndex $if -AddressFamily IPv4).ServerAddresses)
+            if ($dns.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex $if -ServerAddresses $dns }
             $null = New-NetIPAddress -InterfaceIndex $if -IPAddress $ip -PrefixLength 24 -SkipAsSource $true
+            [pscustomobject]@{ Interface = $if; Dhcp = $dhcp; DnsServers = $dns.Count; DhcpAfterAdd = [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp }
         }
+        Save 'net' ($net | Select-Object Dhcp, DnsServers, DhcpAfterAdd)
         function Reported {
             (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses
         }
@@ -258,7 +266,16 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
             $added | Should -BeLessThan 45 -Because 'reported once the network settled, not with the next reconnect'
         }
         finally {
-            Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock { param($ip) Remove-NetIPAddress -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue }
+            Invoke-LabGuest -Name $VmName -ArgumentList $extra, $net.Interface, $net.Dhcp -ScriptBlock {
+                param($ip, $if, $dhcp)
+                Remove-NetIPAddress -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue
+                if ($dhcp -eq 'Enabled') {
+                    Set-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4 -Dhcp Enabled
+                    Set-DnsClientServerAddress -InterfaceIndex $if -ResetServerAddresses
+                }
+            }
+            # the cases after this one need the device at the broker again
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         do { $now = @(Reported); if ($now -notcontains $extra) { break }; Start-Sleep -Seconds 3 } while ($sw.Elapsed.TotalSeconds -lt 60)
