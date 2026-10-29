@@ -7748,6 +7748,163 @@ P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 - on no process's command line while the MSI runs (msiexec's and the agent's enrollment included – `BROKER_SECRET_FILE` passes only the path), and the file is gone once the device has registered
 - not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
 
+### 9.15 App tabs (D-APP, D-APPSPIKE)
+
+Design: [app-tabs-design.md](app-tabs-design.md). The test app is `RhLabApp.exe` (`lab/guest/RhLabApp.cs`, built in the guest by `Install-LabTestApp`): one colour, a text box, a log of start (pid, elevated), typing and closing. D-APPSPIKE runs only when asked for (`-Tag AppSpike`); every D-APP case is skipped while the agent has no `apps` feature.
+
+#### D-APPSPIKE-01 · Monitors one at a time
+P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Preconditions:** agent with `virtualDisplay` = always; the console account signed in on the console; a desktop connection holds the virtual display on.
+**Steps:** 1. The driver's settings with count 2, then 3, 2, 1, each followed by `RELOAD_DRIVER` on its control pipe; a device restart (`pnputil /restart-device`) only when the session doesn't show the count within 40 s.
+**Expected:**
+- after each step the console account's session shows that many monitors
+- the evidence says for each step whether the reload was enough
+
+#### D-APPSPIKE-02 · Windows stay when another monitor goes
+P2 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Steps:** 1. Three test app windows, one on each virtual monitor. 2. Count 3 → 2.
+**Expected:**
+- every window that was on a monitor that stayed is on the same monitor at the same position
+
+#### D-APPSPIKE-03 · A mode per monitor
+P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Steps:** 1. Count 3; one virtual monitor set to 1600×900, another to 1024×768 (`ChangeDisplaySettingsEx`, `CDS_FULLSCREEN`). 2. 1500×800 (not listed) set; added to the list, reloaded, set again.
+**Expected:**
+- the two monitors run at their own sizes at the same time
+- 1500×800 is in effect after the reload
+
+#### D-APPSPIKE-04 · Eight monitors
+P2 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Expected:**
+- with count 8 the session shows eight virtual monitors (MaxAppTabs' default)
+
+#### D-APPSPIKE-05 · Taskbar on other monitors
+P1 · How: S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Steps:** 1. `MMTaskbarEnabled` = 1, 0, 1 in the account's `HKCU`, each followed by `WM_SETTINGCHANGE` "TraySettings". 2. The account's own value put back.
+**Expected:**
+- 1: a `Shell_SecondaryTrayWnd` on the other monitors; 0: none; 1: back – each within 20 s, Explorer not restarted
+
+#### D-APPSPIKE-06 · Foreground between two apps
+P1 · How: S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Steps:** 1. Test apps A and B on two virtual monitors. 2. A process in the session clicks into A (SendInput), calls `SetForegroundWindow(B)` and types "spike". 3. Control (recorded only): a new process that sent no input asks for A.
+**Expected:**
+- after the click A is in front; `SetForegroundWindow(B)` succeeds and B is in front
+- B's log has "spike", A's log no text
+**Note:** the stand-in runs as the session's user; the real helper is LocalSystem with UIAccess – D-APP-04 checks that.
+
+#### D-APPSPIKE-07 · Two connections to one session
+P1 · How: H · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+
+**Expected:**
+- a second connection to the console account's own session reaches Connected and gets a picture while the first is up
+- the first gets a picture while the second is up, and ends only when the harness closes it
+- the second still gets a picture after the first ended
+
+#### D-APP-01 · Start menu list
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Preconditions:** agent with automatic sign-in; nobody on the console; `Install-LabTestApp -StartMenu` (test app shortcuts: plain, duplicate, *Run as administrator*, in a folder "RH Lab", a document, a missing target, a `.url`, one behind a junction).
+**Steps:** 1. Connect, `appList`, close.
+**Expected:**
+- Event Viewer listed as `mmc.exe` with `eventvwr.msc`
+- "RH Lab App" listed once (not its copy), "RH Lab Tool" in group "RH Lab", "RH Lab Admin" elevated
+- the document, the missing target, the `.url` and the shortcut behind the junction not listed
+- still nobody signed in on the console
+
+#### D-APP-02 · List and policy
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- `DesktopAppsAllowed` = the test app's path → only the test app's entries; with `DesktopAppsElevated` = 0 none elevated
+- `DesktopApps` = 0 → no list, status Failed
+
+#### D-APP-03 · Three apps, three tabs
+P1 · How: H PS S E · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. Red (with automatic sign-in), green and blue test apps opened in three tabs within seconds of each other, each at 1280×720. 2. The magenta marker window on the primary monitor. 3. A picture of each tab.
+**Expected:**
+- all three Connected; one 1106 (automatic sign-in) – the others waited for it
+- each picture > 90 % its own colour, < 0.1 % of each other app's colour and of magenta
+- the three apps on three different monitors
+
+#### D-APP-04 · Keyboard follows the tab
+P1 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. A click in red's tab. 2. "green" typed in green's tab (no click there; the marker window had the keyboard before).
+**Expected:**
+- green's log has "green"; red's log and the marker no text
+
+#### D-APP-05 · Tab size
+P2 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- blue's tab at 1600×900: its picture, its monitor and its maximised window are 1600×900
+
+#### D-APP-06 · Shell keys dropped
+P2 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- Win+R in blue's tab opens no Run dialog in the session
+
+#### D-APP-07 · Closing with unsaved changes
+P2 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. `appClose` on red (it asks "Save changes?"). 2. `appClose` with force.
+**Expected:**
+- status AppClosing; the question (`#32770`) on red's monitor and in red's picture
+- the tab ends; red's app still runs
+
+#### D-APP-08 · Last tab signs out
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- after the last of the three tabs ended, nobody is signed in on the console within 2 minutes
+
+#### D-APP-09 · Audit
+P1 · How: E · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- three 1109 (`DesktopAppStarted`) with the test app's path
+- no audit entry contains the arguments (`/colour:`, `/title:RH-`, the log path)
+
+#### D-APP-10 · Run as administrator
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- an elevated entry starts with an elevated token (the app's log); no `consent.exe` started (where process creation is audited)
+- with `DesktopAppsElevated` = 0: Failed, nothing started
+
+#### D-APP-11 · Someone else signed in
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- normaluser on the console: the console account's app tab ends Failed with a message naming normaluser; nothing started
+
+#### D-APP-12 · Resume
+P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- dropped, reconnected with the resume token: Connected again and a picture; the app was started once
+
+#### D-APP-13 · Taskbar setting after a crash
+P1 · How: PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- while the tab is open, the account's `MMTaskbarEnabled` is 0
+- the service killed and started again: the account's value is back, no record file left
+
+#### D-APP-14 · MaxAppTabs
+P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- `MaxAppTabs` = 1 with one tab open: a second tab ends Failed and nothing is started
+
 ### 10.1 Installer
 
 #### C-MSI-09 · Same-version reinstall
