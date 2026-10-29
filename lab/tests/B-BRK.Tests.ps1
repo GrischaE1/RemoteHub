@@ -145,7 +145,7 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         $fw = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-NetFirewallProfile | Where-Object Enabled).Count }
         $fw | Should -BeGreaterThan 0 -Because 'the case is about the device firewall letting the direct path in'
         $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
-        Save 'direct' ($r | Select-Object path, seconds, pin, health)
+        Save 'direct' ($r | Select-Object path, seconds, pin, health, sessionLog)
         $r.health.deviceId | Should -Be $script:device.id
         $r.path | Should -Be 'DirectLocal' -Because 'host candidates on the lab network answer and the agent opens the punched port for the console'
         (Get-StartedSession).Message | Should -Match 'direct local'
