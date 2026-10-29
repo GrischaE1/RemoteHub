@@ -43,14 +43,14 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             $a.click = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
             $a.read = [pscustomobject]@{ found = [bool]$a.click.clicked; text = (@($a.click.lines) -join ' ') }
             $a.allow = Receive-LabDesktop $job
-            Start-Sleep -Seconds 3
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 1100 was not written after Allow' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100).Count -gt 0 }
             $a.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100, 2100)
             # denied
             $since = Get-LabGuestTime -Name $VmName
             $job = Ask 'deny'
             $a.denyClick = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 60
             $a.deny = Receive-LabDesktop $job
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 2100 was not written after Deny' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100).Count -gt 0 }
             $a.denyEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
             # no answer: the dialog counts down from 30 s
             $job = Ask 'timeout' -Wait 260
@@ -64,6 +64,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             Wait-LabHostFile $ready
             $null = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 30   # the dialog is up
             $null = Invoke-LabPerson -Name $VmName -Do key -Value '0D'
+            # Enter must not answer the dialog: it has to be still open after this time
             Start-Sleep -Seconds 3
             $a.afterEnter = @(Invoke-LabPerson -Name $VmName -Do windows) | Where-Object { $_.Title -ne 'RemoteHub' }
             $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
@@ -125,6 +126,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
                 @{ do = 'mouse'; action = 'Up'; button = 'Left'; x = 300; y = 300 }, @{ do = 'markFile'; path = $ready }
                 @{ do = 'waitFile'; path = $back; timeout = 120 }, @{ do = 'wait'; anyOf = @('Denied', 'Connected'); timeout = 30 }, @{ do = 'close' })
             Wait-LabHostFile $ready
+            # nothing the harness sent may reach the session in this time (the marker would record it)
             Start-Sleep -Seconds 2
             $seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $before | Where-Object e -in 'down', 'char', 'mdown', 'mup')
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny'
@@ -233,7 +235,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'None' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
                 @{ do = 'markFile'; path = $ready }, @{ do = 'waitFile'; path = $back; timeout = 120 }, @{ do = 'close' })
             Wait-LabHostFile $ready
-            Start-Sleep -Seconds 3
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the banner did not show' -Until { @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object Title -eq 'RemoteHub').Count -gt 0 }
             $n.banner = @(Invoke-LabPerson -Name $VmName -Do windows)
             Set-Content -Encoding ASCII $back 'done'
             $n.both = Receive-LabDesktop $job
@@ -288,7 +290,7 @@ Describe 'D-CONSENT <VmName>' -Tag Desktop, 'D-ASK', 'D-PIN', 'D-NONE', 'D-MODES
             $r = Invoke-LabDesktop -Name $VmName -Pin $own.pin -Account Console -Out (Out 'own') -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'None' }
                 @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, @{ do = 'close' })
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 1100 was not written' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100).Count -gt 0 }
             $events = @(Get-LabAgentEvent -Name $VmName -Since $since)
             Save 'own' @{ R = $r; Events = $events }
         }

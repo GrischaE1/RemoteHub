@@ -122,7 +122,11 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
             $signedIn = [pscustomobject]@{ statuses = @($signedIn.statuses | ForEach-Object { "$($_.state): $($_.message)" }); error = $null }
             # the console account's session disconnected: the console shows the sign-in screen, the account still has a session
             $null = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { tsdiscon.exe }
-            Start-Sleep -Seconds 10
+            $user = [regex]::Escape(($vm.ConsoleAccount -split '\\')[-1])
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -Because "the console account's session was not disconnected with the sign-in screen at the console" -Until {
+                $s = @(Get-LabSessions -Name $VmName)
+                @($s | Where-Object { $_.State -eq 'Disconnected' -and $_.User -match "\\$user$" }).Count -gt 0 -and @($s | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0
+            }
             $existing = Run
             Save 'session' @{ SignedIn = $signedIn; Existing = $existing }
         }

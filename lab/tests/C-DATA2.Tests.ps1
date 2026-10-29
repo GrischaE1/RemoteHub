@@ -116,7 +116,8 @@ BeforeAll {
         Invoke-LabGuest -Name $VmName -ArgumentList $localDir, $roamDir -ScriptBlock {
             param($l, $r)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force
-            Start-Sleep -Seconds 1
+            # the files stay open until the process has gone
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
             Remove-Item $l, $r -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -124,13 +125,16 @@ BeforeAll {
     # name box (focused when the dialog opens) and Enter pressed.
     function FileDialog([string]$Path, [string]$Title = 'Save As', [string]$Account = 'Console') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20 -Account $Account
+        # the dialog is there before its file name box is ready for a click and keys (no UIA pattern shows when)
         Start-Sleep -Seconds 2
         $null = Ui 'File name:' -Title $Title -Value realclick -Optional -TimeoutSec 5 -Account $Account
         Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x41
         Send-LabText -Name $VmName -Text $Path
+        # pacing: the typed path reaches the box before Enter does
         Start-Sleep -Milliseconds 500
         Send-LabKey -Name $VmName -Key Enter
-        Start-Sleep -Seconds 2
+        # the dialog gone, so the next step doesn't find it still open
+        $null = Wait-LabCondition -Until { -not (Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 1 -Account $Account).found } -Because "the $Title dialog did not close after Enter" -TimeoutSec 15 -NoThrow
     }
     # code in the account's session with the database helpers loaded ($A = -Data); answers its output (JSON round trip)
     function InSession([string]$Code, [hashtable]$Data = @{}, [string]$Account = 'Console', [int]$TimeoutSec = 300) {
@@ -677,11 +681,14 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             # then the move dated 31 days back: the next start deletes both
             Step $d 'db12' {
                 $null = Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) if ((Test-Path "$r\settings.dat.migrated") -and -not (Test-Path "$r\settings.dat.bak")) { Copy-Item "$r\settings.dat.migrated" "$r\settings.dat.bak" } }
+                # a start inside the 30 days must not delete them: the time a cleanup would take
                 Start-Client; Start-Sleep -Seconds 5; $null = Close-Rh
                 $d.keep30 = RoamFiles
                 $iso = [DateTime]::UtcNow.AddDays(-31).ToString('o')
                 $d.meta = @(Sql @("UPDATE meta SET value = '$iso' WHERE key = 'legacy_moved_utc'", "SELECT key, value FROM meta WHERE key = 'legacy_moved_utc'"))
-                Start-Client; Start-Sleep -Seconds 5; $null = Close-Rh
+                Start-Client
+                $null = Wait-LabCondition -Until { $f = RoamFiles; ($f -notcontains 'settings.dat.migrated') -and ($f -notcontains 'settings.dat.bak') } -Because 'the start after 31 days did not delete settings.dat.migrated and settings.dat.bak' -TimeoutSec 30 -IntervalMs 1000 -NoThrow
+                $null = Close-Rh
                 $d.after30 = RoamFiles
             }
             # C-DB-11: settings.dat appears again (an older version ran in between) next to a database with data
@@ -719,7 +726,15 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 Clear-RhData
                 Start-Client
                 New-LabClientConnection -Name $VmName -Display 'DbErr' -TargetHost 'dberr.lab.test'
-                Start-Sleep -Seconds 10
+                # the automatic backup runs in the background after the start: its file there and its size settled before
+                # RemoteHub is closed, so the exit doesn't cut it short
+                $bk = @{ last = $null }
+                $null = Wait-LabCondition -Until {
+                    $now = "$(Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock { param($l) @(Get-ChildItem "$l\backup" -Filter 'remotehub-*.db' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)|$($_.Length)" }) -join ';' })"
+                    $settled = $now -and $now -notmatch '\|0(;|$)' -and $now -eq $bk.last
+                    $bk.last = $now
+                    $settled
+                } -Because 'the automatic backup was not written, or its size did not settle' -TimeoutSec 60 -IntervalMs 2000 -NoThrow
                 $null = Close-Rh
                 $d.base = Snapshot
             }
@@ -765,6 +780,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Sql @('PRAGMA writable_schema = ON', "UPDATE sqlite_master SET rootpage = $root WHERE name = 'lab_ix'", 'PRAGMA writable_schema = OFF')
                 $d.quick = @(Sql 'PRAGMA quick_check' | ForEach-Object quick_check)
                 Start-Client
+                # no backup may be made of the damaged database: the time a due backup would take
                 Start-Sleep -Seconds 30
                 $null = Close-Rh
                 $d.bkAfter10 = Backups
@@ -777,7 +793,15 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 Clear-RhData
                 Start-Client
                 New-LabClientConnection -Name $VmName -Display 'DbErr' -TargetHost 'dberr.lab.test'
-                Start-Sleep -Seconds 10
+                # the automatic backup runs in the background after the start: its file there and its size settled before
+                # RemoteHub is closed, so the exit doesn't cut it short
+                $bk = @{ last = $null }
+                $null = Wait-LabCondition -Until {
+                    $now = "$(Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock { param($l) @(Get-ChildItem "$l\backup" -Filter 'remotehub-*.db' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)|$($_.Length)" }) -join ';' })"
+                    $settled = $now -and $now -notmatch '\|0(;|$)' -and $now -eq $bk.last
+                    $bk.last = $now
+                    $settled
+                } -Because 'the automatic backup was not written, or its size did not settle' -TimeoutSec 60 -IntervalMs 2000 -NoThrow
                 $null = Close-Rh
                 $d.db07setup = Invoke-LabGuest -Name $VmName -ArgumentList $localDir -ScriptBlock {
                     param($l)
@@ -793,6 +817,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $d.db07times = @(InSession '@(Get-ChildItem (Join-Path $env:LOCALAPPDATA "RemoteHub\backup") -Filter "remotehub-*.db" | Sort-Object LastWriteTimeUtc -Descending | ForEach-Object { $_.LastWriteTimeUtc.ToLocalTime().ToString("yyyy-MM-ddTHH:mm") })')
                 Start-Rh
                 $d.db07msg1 = Box -Titles 'RemoteHub' -Button 'Yes' -TimeoutSec 90
+                # both boxes have the same title and nothing tells them apart before the click: the first one gets the
+                # time to close, so the next Box doesn't answer it again
                 Start-Sleep -Seconds 3
                 $d.db07msg2 = Box -Titles 'RemoteHub' -Button 'Yes' -TimeoutSec 60
                 $d.db07main = Wait-Main
@@ -956,7 +982,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $a.bulkStarted = $true
                 $null = Ui 'BulkFolder' -Value 'menu:Delete'
                 $null = Ui 'Delete' -Title '?*' -TimeoutSec 15
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -Until { -not (Ui 'BulkFolder' -Value exists -Optional -TimeoutSec 1).found } -Because 'BulkFolder was still listed after Delete' -TimeoutSec 30 -NoThrow
                 $a.bulkGone = Ui 'BulkFolder' -Value exists -Optional -TimeoutSec 3
             }
             if (-not $a.bulkStarted) {
@@ -979,7 +1005,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 }
                 Shot 'aud05'
                 $null = Ui 'Save' -Title 'Settings'
-                Start-Sleep -Seconds 3
+                # the settings window gone, so the next step opens a new one
+                $null = Wait-LabCondition -Until { -not (Ui '*' -Title 'Settings' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Settings window did not close after Save' -TimeoutSec 15 -NoThrow
             }
             # C-BAK-04: a file that isn't a backup (a JSON envelope of another format)
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Set-Content 'C:\lab\notabackup.rhbackup' '{"Format":"rdpmanager-settings","Version":1}' -Encoding ASCII }
@@ -1088,17 +1115,20 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $l.legacyBox = Ui 'Delete the old, unprotected copy of the RDP Manager settings*' -Title 'Startup protection' -Value exists -Optional -TimeoutSec 10
                 # C-LOCK-06: the rules for a new password
                 Protect-On 'short1'
-                Start-Sleep -Seconds 2
-                $l.ruleShort = WinText 'Startup protection'
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'Startup protection'; $txt.v -match 'Use at least 8 characters\.' } -Because 'the short password was not refused' -TimeoutSec 15 -NoThrow
+                $l.ruleShort = $txt.v
                 Protect-On 'Lab-Rule-Pw-1' 'Lab-Rule-Pw-2'
-                Start-Sleep -Seconds 2
-                $l.ruleMismatch = WinText 'Startup protection'
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'Startup protection'; $txt.v -match 'The passwords do not match\.' } -Because 'the mismatched passwords were not refused' -TimeoutSec 15 -NoThrow
+                $l.ruleMismatch = $txt.v
                 $l.lockAfterRules = Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Test-Path "$r\lock.json" }
                 $l.legacyTick = Ui 'Delete the old, unprotected copy*' -Title 'Startup protection' -Value check
                 Protect-On $lockPw
                 $l.on = Wait-LockFile $true
-                Start-Sleep -Seconds 5
-                $l.onText = WinText 'Startup protection'
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'Startup protection'; $txt.v -match 'On . startup password' } -Because 'the Startup protection dialog did not show it turned on' -TimeoutSec 15 -NoThrow
+                $l.onText = $txt.v
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }
@@ -1110,8 +1140,10 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 # the window builds itself again once it knows whether Windows Hello is there: fields filled before are lost
                 Start-Sleep -Seconds 3
                 Protect-Change 'Wrong-Current-Pw-1' $lockPw2
-                Start-Sleep -Seconds 6
-                $l.ruleCurrent = WinText 'Startup protection'
+                # the key derivation takes a few seconds before the answer shows
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'Startup protection'; $txt.v -match 'The current password is wrong\.' } -Because 'the wrong current password was not refused' -TimeoutSec 30 -NoThrow
+                $l.ruleCurrent = $txt.v
                 $l.copies = Invoke-LabGuest -Name $VmName -ArgumentList $localDir, $roamDir -ScriptBlock {
                     param($lo, $r) Copy-Item "$r\lock.json" 'C:\lab\lock.json.before' -Force; Copy-Item "$lo\db.key" 'C:\lab\db.key.before' -Force; @(Get-ChildItem 'C:\lab' -Filter '*.before' | ForEach-Object Name)
                 }
@@ -1137,12 +1169,15 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             Start-Rh
             Step $l 'unlock' {
                 $null = Ui 'Unlock' -Title 'RemoteHub*locked' -TimeoutSec 90
-                Start-Sleep -Seconds 2
-                $l.ruleEmpty = WinText 'RemoteHub*locked'
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'RemoteHub*locked'; $txt.v -match 'Enter the startup password\.' } -Because 'Unlock with nothing entered did not ask for the password' -TimeoutSec 15 -NoThrow
+                $l.ruleEmpty = $txt.v
                 $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw"
                 $null = Ui 'Unlock' -Title 'RemoteHub*locked'
-                Start-Sleep -Seconds 8
-                $l.oldPwText = WinText 'RemoteHub*locked'
+                # the key derivation takes a few seconds before the answer shows
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'RemoteHub*locked'; $txt.v -match 'Wrong password\.' } -Because 'the old password was not refused' -TimeoutSec 30 -NoThrow
+                $l.oldPwText = $txt.v
                 $l.mainOld = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 3
                 $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw2"
                 $null = Ui 'Unlock' -Title 'RemoteHub*locked'
@@ -1156,7 +1191,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                     $l.lockedAtStart = $true
                     $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw2"
                     $null = Ui 'Unlock' -Title 'RemoteHub*locked'
-                    Start-Sleep -Seconds 5
+                    # unlocked (the window goes) or refused (it says so)
+                    $null = Wait-LabCondition -Until { $w = Ui '*' -Title 'RemoteHub*locked' -Value list -Optional -TimeoutSec 1; (-not $w.found) -or ((@($w.items) -join "`n") -match 'Wrong password\.') } -Because 'the lock window neither closed nor refused the password' -TimeoutSec 30 -NoThrow
                     # the password from before the change step, if that step didn't get through
                     if ((Ui '*' -Title 'RemoteHub*locked' -Value exists -Optional -TimeoutSec 3).found) {
                         $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw"
@@ -1291,6 +1327,8 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
             New-LabClientConnection -Name $VmName -Display 'FailConn' -TargetHost 'nohost-c-data2.invalid'
             Step $s 'fail' {
                 $null = Ui 'FailConn' -Value doubleclick
+                # the attempt at a name that doesn't resolve runs into the RDP client's own timeout; its end shows only in
+                # the tab, as nothing UI Automation reads reliably
                 Start-Sleep -Seconds 45
                 Shot 'aud07-fail'
                 $null = Ui 'Close this tab' -Optional -TimeoutSec 10
@@ -1316,13 +1354,12 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $s.bMenu = Ui 'SharedB1' -Value 'menu:Edit?' -On $device.Name
                 $s.bName = Ui 'Display name' -Title 'Edit connection' -Value 'setnext:SharedB1-renamed' -On $device.Name
                 $s.bSave = Ui 'Save' -Title 'Edit connection' -On $device.Name
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (Ui '*' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1 -On $device.Name).found } -Because 'the Edit connection dialog on the device did not close after Save' -TimeoutSec 15 -NoThrow
                 $s.bLocation = Ui 'Settings: *' -Value read -Optional -TimeoutSec 5 -On $device.Name
                 $null = Get-LabScreenshot -Name $device.Name -Path (Join-Path $EvidenceDir 'c-data2-share04-device.png')
                 $s.updated = Box -Titles 'The settings file was updated on another device*', 'Settings updated' -Button 'Reload' -TimeoutSec 60
                 Shot 'share04'
-                Start-Sleep -Seconds 3
-                $s.renamedShown = Ui 'SharedB1-renamed' -Value exists -Optional -TimeoutSec 15
+                $s.renamedShown = Ui 'SharedB1-renamed' -Value exists -Optional -TimeoutSec 20
                 $s.h1 = Get-SharedHash
             }
             # C-LOCK-10: the startup protection turned on with a remembered shared-file password (then off again)
@@ -1334,12 +1371,14 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 Start-Sleep -Seconds 3
                 Protect-On $lockPw
                 $s.on = Wait-LockFile $true
-                Start-Sleep -Seconds 5
-                $s.keysOn = Head "$roamDir\keys.dat"
+                # keys.dat is rewritten after lock.json: "RHK2" once it is under the startup lock
+                $kd = @{}
+                $null = Wait-LabCondition -Until { $kd.v = Head "$roamDir\keys.dat"; $kd.v -eq '82,72,75,50' } -Because 'keys.dat was not rewritten under the startup lock' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+                $s.keysOn = $kd.v
                 $s.offConfirm = Protect-Off $lockPw
                 $s.off = Wait-LockFile $false
-                Start-Sleep -Seconds 5
-                $s.keysOff = Head "$roamDir\keys.dat"
+                $null = Wait-LabCondition -Until { $kd.v = Head "$roamDir\keys.dat"; $kd.v -and $kd.v -ne '82,72,75,50' } -Because 'keys.dat was not rewritten without the startup lock' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+                $s.keysOff = $kd.v
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }
@@ -1348,8 +1387,9 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 Settings-Page 'Security & storage'
                 $null = Ui 'Change location?' -Title 'Settings'
                 $null = Ui 'Forget remembered passwords on this PC' -Title 'Settings location'
-                Start-Sleep -Seconds 2
-                $s.forgetText = WinText 'Settings location'
+                $txt = @{}
+                $null = Wait-LabCondition -Until { $txt.v = WinText 'Settings location'; $txt.v -match 'Done . the password will be asked again' } -Because 'Forget remembered passwords did not confirm' -TimeoutSec 15 -NoThrow
+                $s.forgetText = $txt.v
                 $null = Ui 'Cancel' -Title 'Settings location' -Optional
                 $s.keysAfterForget = Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Test-Path "$r\keys.dat" }
             }
@@ -1368,6 +1408,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'This PC only' -Title 'Settings location' -Value check
                 $null = Ui 'Apply' -Title 'Settings location'
                 $s.localConfirm = Box -Titles 'The current settings are copied to this PC*', 'Use this PC only' -Button 'Switch' -TimeoutSec 30
+                # SharedB1 shows before the switch as well: this lets the list be loaded again from this PC's copy first
                 Start-Sleep -Seconds 3
                 # SharedB1, renamed by C-SHARE-04 if that step got through (this case doesn't depend on it)
                 $s.localShown = Ui 'SharedB1*' -Value exists -Optional -TimeoutSec 10
@@ -1389,7 +1430,7 @@ Describe 'C-DATA2 <VmName>' -Tag Client, 'C-DB', 'C-LOCK', 'C-AUD', 'C-BAK', 'C-
                 $null = Ui 'Open audit log?' -Title 'Settings'
                 $null = Ui 'Export CSV?' -Title 'Audit log' -TimeoutSec 30
                 FileDialog 'C:\lab\aud07.csv'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { ((Ui '*' -Title 'Audit log' -Value list).items -join "`n") -match 'entries exported to' } -Because 'the audit log did not report the CSV export' -TimeoutSec 20 -NoThrow
                 $null = Ui 'Close' -Title 'Audit log' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }

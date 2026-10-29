@@ -157,9 +157,12 @@ public static class RhLabWts {
         $markerState.Shown = $marker.Shown
         $markerState.Why = $marker.Why
         try {
+            # lets the marker's own start-up events (focus, activation) land before the count the keys are measured from
             Start-Sleep -Seconds 2
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             Send-LabText -Name $VmName -Text 'local'
+            # a fixed time on purpose: where the keyboard is blocked none of the keys may arrive in it, where it isn't
+            # they have arrived by then
             Start-Sleep -Seconds 3
             , @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -eq 'char')
         }
@@ -360,7 +363,8 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
                 @{ do = 'sleep'; seconds = 10 }, @{ do = 'frame'; out = 'byhand.png' }, (Mark $o 'pictured'), (Park $o 'close'), @{ do = 'close' })
             Reached $o 'failed' 180
             # Windows' message about the wrong password: OK; then the console account signs in by hand (the password
-            # box has the focus again)
+            # box has the focus again); the pauses let the message come up and the sign-in screen come back before the key
+            # and the screenshot (no element to wait for on LogonUI from here)
             Start-Sleep -Seconds 3
             Send-LabKey -Name $VmName -Key Enter
             Start-Sleep -Seconds 3
@@ -381,11 +385,14 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             if ($f.PasswordAt) {
                 $px, $py = [int[]]("$($f.PasswordAt)" -split ',')
                 Send-LabMouse -Name $VmName -X $px -Y $py
+                # the box takes the focus before the typing
                 Start-Sleep -Seconds 1
             }
             elseif ($f.OptionsAt) {
                 $ox, $oy = [int[]]("$($f.OptionsAt)" -split ',')
                 Send-LabMouse -Name $VmName -X $ox -Y $oy
+                # the options row opens (an animation) before the screenshot it is found in; the same pauses after the
+                # icon and Ctrl+Alt+Del below let the password box come up before the typing
                 Start-Sleep -Seconds 2
                 $s2 = Join-Path $EvidenceDir 'c-end2-byhand-2-options.png'
                 $null = Get-LabScreenshot -Name $VmName -Path $s2
@@ -399,11 +406,14 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             Send-LabText -Name $VmName -Text $cfg.Password
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-end2-byhand-3-typed.png')
             Send-LabKey -Name $VmName -Key Enter
+            # evidence only: the screen a few seconds into the sign-in (Wait-LabDesktop below is the condition)
             Start-Sleep -Seconds 5
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-end2-byhand-4-entered.png')
             $f.ByHandError = $null
             try { Wait-LabDesktop -Name $VmName -Account Console -TimeoutSec 120 } catch { $f.ByHandError = "$_" }
-            Start-Sleep -Seconds 10   # the connection follows the console into the new session
+            # the connection follows the console into the new session; also the time a wrong cover would need to show up,
+            # which the console text below must not have
+            Start-Sleep -Seconds 10
             $f.Signed = Mine
             $f.ConsoleText = Shot 'failed-cover-console'
             $f.LocalKeys = LocalKeys
@@ -448,7 +458,8 @@ Describe 'C-END2 <VmName>' -Tag Agent, 'C-END' {
             }
             finally { Connect-LabNetwork -Name $VmName -Switches $cut }
             $d.During = Mine
-            Start-Sleep -Seconds 5
+            # the harness reconnects only once the agent answers over the network again
+            $null = Wait-LabAgent -Name $VmName -Pin $pin -TimeoutSec 60
             Release $o 'back'
             Reached $o 'resumed' 240
             $d.After = Mine

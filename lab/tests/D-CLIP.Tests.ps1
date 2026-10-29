@@ -409,10 +409,13 @@ Describe 'D-CLIP <VmName>' -Tag Desktop, 'D-CLIP' {
             # the connection cut while a copy to the device is being pasted
             $o = Out 'abort'
             $job = Begin 'abort' @(@{ do = 'files'; paths = @($big50); offer = $true; waitRequest = 120 }, @{ do = 'sleep'; seconds = 1 }, @{ do = 'drop' })
+            # the offer reaches normaluser's clipboard: the files step waits for the request, so there is no mark to wait
+            # for, and listing the clipboard here could already ask for the contents
             Start-Sleep -Seconds 12
             # pasted with messages pumped for the whole 20 s (the shell fetches while the connection is cut)
             $n.abortPaste = Invoke-LabPaste -Name $VmName -Account User -Folder 'Desktop\Aborted' -TimeoutSec 20 -Hold
             $n.abort = Receive-LabDesktop $job
+            # no partial file may appear (or stay) in this time after the cut
             Start-Sleep -Seconds 10
             $n.partial = Invoke-LabGuest -Name $VmName -ArgumentList (Clip-Folder), $vm.UserAccount -ScriptBlock {
                 param($c, $u) @(Get-ChildItem $c, "C:\Users\$u\Desktop\Aborted" -Recurse -File -ErrorAction SilentlyContinue | Where-Object Length -lt 50MB | Where-Object Name -like 'big50*' | ForEach-Object FullName)

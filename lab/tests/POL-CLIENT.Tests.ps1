@@ -58,6 +58,7 @@ BeforeAll {
     $password = $cfg.Password
     $script:setup = $null
     # a key at the console keyboard (hex virtual-key code: 1B Esc)
+    # (the pause lets the key take effect - a menu close - before the next step looks at the window)
     function Key([string]$Hex) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value $Hex; Start-Sleep -Milliseconds 400 }
     # the condition's first answer that counts as true, asked every -Every seconds; $null after -TimeoutSec
     function WaitFor([int]$TimeoutSec, [scriptblock]$Condition, [int]$Every = 3) {
@@ -440,8 +441,9 @@ Describe 'POL-CLIENT <VmName>' -Tag Client, UI, 'POL' -Skip:(-not $isClient) {
             # changed while the page is open: shown after Refresh
             Policy @{ UpdateChannel = 'beta' }
             $null = Ui 'Refresh' -Title 'Settings'
-            Start-Sleep -Seconds 2
-            $s.refreshed = Settings-Text
+            $s.refreshed = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the Policies page did not show the update channel after Refresh' -Until {
+                $t = Settings-Text; if ($t -match 'Update channel') { $t } }
+            if (-not $s.refreshed) { $s.refreshed = Settings-Text }
             Shot 'policies-page'
             $null = Ui 'Cancel' -Title 'Settings'
             # Settings overview: the section and its button

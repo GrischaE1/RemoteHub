@@ -111,11 +111,27 @@ public static class RhLabWts {
         } while ((Get-Date) -lt $until)
         $null
     }
+    # after the end action: none of the account's sessions is active or at the console any more (locked = disconnected,
+    # signed out = gone); the caller records and asserts the sessions, so a timeout doesn't throw
+    function Wait-Settled([int]$TimeoutSec = 20) {
+        Wait-LabCondition -NoThrow -TimeoutSec $TimeoutSec -Because "a session of $account was still active or at the console after the end action" -Until {
+            $m = Mine
+            @($m | Where-Object { $_.State -eq 'Active' -or $_.Console }).Count -eq 0
+        }
+    }
     # the service killed (no clean stop: what is left in autosignin.json is dealt with at the next start), then started
     function Kill-Agent {
-        Invoke-LabGuest -Name $VmName -ScriptBlock { Stop-Process -Id (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId -Force }
-        Invoke-LabGuest -Name $VmName -ScriptBlock {
-            Start-Sleep -Seconds 5
+        $killed = Invoke-LabGuest -Name $VmName -ScriptBlock { $p = [int](Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId; Stop-Process -Id $p -Force; $p }
+        Invoke-LabGuest -Name $VmName -ArgumentList $killed -ScriptBlock {
+            param($old)
+            # until the service control manager has seen the killed process go (stopped, or restarted by its recovery
+            # with a new process); only then does starting it by hand mean anything
+            $until = (Get-Date).AddSeconds(20)
+            do {
+                $s = Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'"
+                if ($s.State -eq 'Stopped' -or ($s.State -eq 'Running' -and [int]$s.ProcessId -ne $old)) { break }
+                Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $until)
             if ((Get-Service RemoteHubAgent).Status -ne 'Running') { try { Start-Service RemoteHubAgent -ErrorAction Stop } catch { } }
         }
         $null = Wait-LabAgent -Name $VmName -Pin $pin
@@ -156,7 +172,7 @@ public static class RhLabWts {
         Release $o 'close'
         $x.R = Receive-LabDesktop $job
         $x.Ended = @(Wait-Ended $since)
-        Start-Sleep -Seconds 5
+        $null = Wait-Settled
         $x.After = Mine
         $x.SignedInEvent = @(Get-LabAgentEvent -Name $VmName -Since $since.AddMinutes(-5) -Id 1106 | Select-Object -Last 1)
         $x
@@ -193,9 +209,11 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $marker = Start-LabMarker -Name $VmName -Account Console
             $c.MarkerShown = $marker.Shown
             $c.MarkerWhy = $marker.Why
+            # lets the marker's own start-up events (focus, activation) land before the count the keys are measured from
             Start-Sleep -Seconds 2
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             Send-LabText -Name $VmName -Text 'local'
+            # the device's keys are blocked: none of them may arrive in this time
             Start-Sleep -Seconds 3
             $c.LocalKeys = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -eq 'char')
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
@@ -209,7 +227,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             Release $o 'close'
             $c.R = Receive-LabDesktop $job
             $c.Ended = @(Wait-Ended $since)
-            Start-Sleep -Seconds 5
+            $null = Wait-Settled
             $c.After = Mine
             $c.SignedInEvent = @(Get-LabAgentEvent -Name $VmName -Since $since.AddMinutes(-5) -Id 1106 | Select-Object -Last 1)
             $null = Shot 'closed-console'
@@ -292,13 +310,15 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $since = Get-LabGuestTime -Name $VmName
             $cut = Disconnect-LabNetwork -Name $VmName
             try {
+                # the cut lasts 30 s (what C-END-05 covers); the picture and the sessions are taken in the middle of it
                 Start-Sleep -Seconds 20
                 $d.CutText = Shot 'resume-cut'
                 $d.During = Mine
                 Start-Sleep -Seconds 10
             }
             finally { Connect-LabNetwork -Name $VmName -Switches $cut }
-            Start-Sleep -Seconds 5
+            # the harness reconnects only once the agent answers over the network again
+            $null = Wait-LabAgent -Name $VmName -Pin $pin -TimeoutSec 60
             Release $o 'back'
             Reached $o 'resumed' 240
             $d.After = Mine
@@ -342,6 +362,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             $cut = Disconnect-LabNetwork -Name $VmName
             try {
                 # 3 minutes and more: until the session is signed out (the agent may notice the cut late), at most 6 minutes
+                # a minute into the 2-minute hold: the cover must still be there (C-END-06)
                 Start-Sleep -Seconds 60
                 $n.CutText = Shot 'noresume-cut'
                 # always an array: one entry would come back as a single object, whose .Count is $null in 5.1
@@ -391,7 +412,7 @@ Describe 'C-END <VmName>' -Tag Agent, 'C-END' {
             Kill-Agent
             $k.ConnectedEnded = @(Wait-Ended $since)
             $k.ConnectedR = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
+            $null = Wait-Settled
             $k.ConnectedAfter = Mine
             # dropped, then killed during the 2 minutes: signed out at the next start
             Prepare

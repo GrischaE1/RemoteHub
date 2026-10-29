@@ -25,7 +25,14 @@ BeforeAll {
             Stop-Service RemoteHubAgent -Force -ErrorAction SilentlyContinue
             [IO.File]::WriteAllText($f, $text)
             try { Start-Service RemoteHubAgent -ErrorAction Stop } catch { }
-            Start-Sleep -Seconds 8
+            # until it listens on 58732 or has stopped again (a config it refuses), for up to 30 s
+            $until = (Get-Date).AddSeconds(30)
+            do {
+                $svc = Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'"
+                if ($svc.State -eq 'Stopped') { break }
+                if ($svc.State -eq 'Running' -and @(Get-NetTCPConnection -State Listen -LocalPort 58732 -ErrorAction SilentlyContinue).Count) { break }
+                Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $until)
             $svc = Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'"
             $listen = @(if ($svc.ProcessId) { Get-NetTCPConnection -State Listen -OwningProcess $svc.ProcessId -ErrorAction SilentlyContinue | ForEach-Object LocalPort | Sort-Object -Unique })
             $lines = @(Get-ChildItem 'C:\ProgramData\RemoteHub\Agent\logs' -Filter 'agent-*.log' | Get-Content |
@@ -61,7 +68,14 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
                 param($ip, $pin, $user, $pw, $marker, $exe)
                 & $exe run --host $ip --port 58732 --pin $pin --user $user --password $pw --script "Write-Output '$marker'; Start-Sleep -Seconds 20; `$PID"
             }
-            Start-Sleep -Seconds 6
+            # the session is up: the agent has a connection that isn't its listener
+            $null = Wait-LabCondition -TimeoutSec 30 -IntervalMs 1000 -NoThrow -Because 'the harness session did not connect to the agent' -Until {
+                Invoke-LabGuest -Name $VmName -ScriptBlock {
+                    $agent = (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId
+                    [bool](Get-NetTCPConnection -OwningProcess $agent -State Established -ErrorAction SilentlyContinue)
+                }
+            }
+            # five samples about 2 s apart while the session runs (its script waits 20 s)
             $connections = @(1..5 | ForEach-Object {
                     Invoke-LabGuest -Name $VmName -ScriptBlock {
                         $agent = (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId
@@ -71,7 +85,8 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
                     Start-Sleep -Seconds 2
                 })
             $run = (Receive-Job $job -Wait -AutoRemoveJob) -join "`n" | ConvertFrom-Json
-            Start-Sleep -Seconds 3
+            # the session's end is logged
+            $null = Wait-LabCondition -TimeoutSec 20 -NoThrow -Because 'the agent logged no "Session ended"' -Until { @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Session ended: ' }).Count -gt 0 }
             $log = @(Get-LabAgentLog -Name $VmName -Since $since)
             $allLog = (Get-LabAgentLog -Name $VmName) -join "`n"
             # the standard user tries to read the log folder in their own session
@@ -113,7 +128,8 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
             Set-LabAgentPolicy -Name $VmName -Values @{ AuditToEventLog = 0 }
             $since = Get-LabGuestTime -Name $VmName
             $refused = Ws $vm.AdminAccount ('off-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
-            Start-Sleep -Seconds 3
+            # the refusal is in the file (an event log entry would be written with it)
+            $null = Wait-LabCondition -TimeoutSec 20 -NoThrow -Because 'the agent logged no refusal' -Until { @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Refused ' }).Count -gt 0 }
             $events = @(Get-LabAgentEvent -Name $VmName -Since $since)
             $log = @(Get-LabAgentLog -Name $VmName -Since $since)
             Set-LabAgentPolicy -Name $VmName -Clear
@@ -133,14 +149,19 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
                 $d = 'C:\ProgramData\RemoteHub\Agent\logs'
                 $old = Join-Path $d 'agent-20200101.log'; Set-Content -Encoding ASCII $old 'old'; (Get-Item $old).LastWriteTime = (Get-Date).AddDays(-31)
                 $keep = Join-Path $d 'agent-20200102.log'; Set-Content -Encoding ASCII $keep 'recent'; (Get-Item $keep).LastWriteTime = (Get-Date).AddDays(-2)
-                Restart-Service RemoteHubAgent -Force; Start-Sleep -Seconds 5
+                Restart-Service RemoteHubAgent -Force
+                # the old file goes at the first write after the start, for up to 30 s
+                $until = (Get-Date).AddSeconds(30)
+                do { if (-not (Test-Path $old)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
                 $r = [ordered]@{ OldGone = -not (Test-Path $old); RecentKept = Test-Path $keep }
                 # retention 1 day: the 2-day-old file goes at the next start
                 $f = 'C:\ProgramData\RemoteHub\Agent\agent.json'
                 $c = Get-Content $f -Raw | ConvertFrom-Json
                 $c | Add-Member -NotePropertyName logRetentionDays -NotePropertyValue 1 -Force
                 [IO.File]::WriteAllText($f, ($c | ConvertTo-Json -Depth 5))
-                Restart-Service RemoteHubAgent -Force; Start-Sleep -Seconds 5
+                Restart-Service RemoteHubAgent -Force
+                $until = (Get-Date).AddSeconds(30)
+                do { if (-not (Test-Path $keep)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
                 $r.RecentGoneWithOneDay = -not (Test-Path $keep)
                 $r.TodayKept = [bool](Get-ChildItem $d -Filter "agent-$(Get-Date -Format yyyyMMdd).log")
                 [pscustomobject]$r
@@ -206,7 +227,14 @@ Describe 'A-CFG <VmName>' -Tag Agent, 'A-CFG' {
                 Stop-Service RemoteHubAgent -Force
                 Remove-Item "Cert:\LocalMachine\My\$($c.certificateThumbprint)" -DeleteKey
                 try { Start-Service RemoteHubAgent -ErrorAction Stop } catch { }
-                Start-Sleep -Seconds 8
+                # until the service has stopped again and logged why, for up to 30 s
+                $until = (Get-Date).AddSeconds(30)
+                do {
+                    $lines = @(Get-ChildItem 'C:\ProgramData\RemoteHub\Agent\logs' -Filter 'agent-*.log' | Get-Content |
+                            Where-Object { $_ -match '^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})' -and [datetime]$Matches[1] -ge $since.AddSeconds(-1) })
+                    if ((Get-Service RemoteHubAgent).Status -eq 'Stopped' -and ($lines -join "`n") -match 'could not start') { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
                 [pscustomobject]@{
                     State = (Get-Service RemoteHubAgent).Status.ToString()
                     Any58732 = @(Get-NetTCPConnection -State Listen -LocalPort 58732 -ErrorAction SilentlyContinue).Count

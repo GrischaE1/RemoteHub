@@ -36,7 +36,9 @@ BeforeAll {
             $pages += (@($items | Where-Object { $_ -match '^Text\|' } | ForEach-Object { ($_ -split '\|')[1] }) -join ' ')
             if (Shown $tour 'Get started' 2) { $null = Ui 'Get started' -Title $tour; return , $pages }
             $null = Ui 'Next' -Title $tour
-            Start-Sleep -Milliseconds 500
+            # the next page in place before its texts are read (no throw: a page that stays shows in the pages)
+            $before = @($items) -join "`n"
+            $null = Wait-LabCondition -Until { (@(Texts $tour 2) -join "`n") -ne $before } -Because "the tour stayed on page $($i + 1) after Next" -TimeoutSec 10 -NoThrow
         }
         throw "Walk-Tour: no 'Get started' after 8 pages ($($pages -join ' / '))"
     }
@@ -76,8 +78,7 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
             $n.firstPage = Texts $tour
             $n.backOnFirst = (Ui 'Back' -Title $tour -Value exists -Optional -TimeoutSec 2).found
             $n.pages = Walk-Tour
-            Start-Sleep -Seconds 1
-            $n.closed = -not (Shown $tour 'Skip' 3)
+            $n.closed = [bool](Wait-LabCondition -Until { -not (Shown $tour 'Skip' 1) } -Because 'the tour stayed open after Get started' -TimeoutSec 10 -NoThrow)
             # started again: the version is remembered, nothing opens
             Stop-LabClient -Name $VmName -Task $script:task
             $script:task = Start-LabClient -Name $VmName -KeepFirstStart
@@ -172,6 +173,8 @@ Describe 'C-FIRST <VmName>' -Tag Client, UI, 'C-FIRST' -Skip:(-not $isClient) {
             }
             $t = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' 'C:\lab\lab-device.rdp' }
             $u.previousWindow = (Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'RemoteHub*' -Text '*lab-device*' -Value exists -TimeoutSec 90).found
+            # the previous release saves the connection and its version before it is stopped; nothing it writes is read
+            # here (its storage is that release's)
             Start-Sleep -Seconds 5
             Stop-LabClient -Name $VmName -Task $t
             $u.upgradeExit = Install-Client (Get-LabClientMsi)

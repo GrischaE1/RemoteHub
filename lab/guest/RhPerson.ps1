@@ -248,6 +248,7 @@ function Get-RhMid($el) {
     $r = $el.Current.BoundingRectangle
     if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
         $sp = $null
+        # (the pause: the list lays itself out again after the scroll before the new place is read)
         if ($el.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch { } }
         $r = $el.Current.BoundingRectangle
     }
@@ -551,14 +552,28 @@ switch ($Do) {
     'close-window' {
         $w = @(Get-AgentWindows)
         foreach ($x in $w) { [void][RhNative]::PostMessageW([IntPtr]$x.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }   # WM_CLOSE
-        Start-Sleep -Seconds 2
+        # until the windows sent WM_CLOSE are gone, at most 5 s (one that refuses to close stays and is counted)
+        $handles = @($w | ForEach-Object { "$($_.Handle)" })
+        $until = (Get-Date).AddSeconds(5)
+        do {
+            if (-not @(Get-AgentWindows | Where-Object { $handles -contains "$($_.Handle)" }).Count) { break }
+            Start-Sleep -Milliseconds 250
+        } while ($handles.Count -and (Get-Date) -lt $until)
         Out-Json @{ closed = $w.Count; left = @(Get-AgentWindows).Count }
     }
     'hover' {
         $w = Get-AgentWindows | Select-Object -First 1
         $before = $w
         if ($w) { [void][RhNative]::SetCursorPos($w.X + [int]($w.Width / 2), $w.Y + [int]($w.Height / 2)) }
-        Start-Sleep -Seconds 2
+        # until the window has changed its size (the pill opens to the banner), at most 3 s - an open banner stays as it
+        # is; then a moment for it to draw its buttons
+        $after = $null
+        $until = (Get-Date).AddSeconds(3)
+        do {
+            Start-Sleep -Milliseconds 200
+            $after = Get-AgentWindows | Select-Object -First 1
+        } while ($w -and $after -and $after.Width -eq $w.Width -and $after.Height -eq $w.Height -and (Get-Date) -lt $until)
+        Start-Sleep -Milliseconds 300
         Out-Json @{ before = $before; after = (Get-AgentWindows | Select-Object -First 1) }
     }
     'ocr-file' {
@@ -625,6 +640,7 @@ switch ($Do) {
                         if ($e.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); $moved = $true } catch { }; break }
                         $e = $walker.GetParent($e)
                     }
+                    # scrolled: the list lays itself out again before the next search pass
                     if ($moved) { Start-Sleep -Milliseconds 400; break }
                 }
                 # "type:Edit#2": the second one in tree order (the file transfer tab's remote address box)
@@ -667,6 +683,7 @@ switch ($Do) {
                     $wr0 = $win.Current.BoundingRectangle
                     if ($tp.Current.CanResize) { $tp.Resize([math]::Min($wr0.Width, $wa.Width - 40), [math]::Min($wr0.Height, $wa.Height - 60)) }
                     if ($tp.Current.CanMove) { $tp.Move($wa.X, $wa.Y) }
+                    # the window takes its new place and lays out before the element's centre is read again
                     Start-Sleep -Milliseconds 300
                     $result.movedOnScreen = "$wr0"
                     $pt = Get-RhMid $found
@@ -699,6 +716,7 @@ switch ($Do) {
             catch {
                 $result.selectError = "$($_.Exception.Message)"
                 $m = Get-RhMid $el; [RhNative]::Click($m[0], $m[1])
+                # input pacing: the click is handled before the caller's next step
                 Start-Sleep -Milliseconds 300
             }
             $true
@@ -718,6 +736,8 @@ switch ($Do) {
                 }
                 $result.value = "$($win.Current.BoundingRectangle)"
             }
+            # input pacing in the real clicks here and below: 150 ms after the pointer moved (the window sees it there
+            # before the button), 60 ms between button down and up
             'rightclick' { $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150; [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero) }
             { $_ -like 'menu:*' -or $_ -like 'pick:*' } {
                 # menu: right-click, pick: left-click (a drop-down button) - then the menu's entry in the same process (a new
@@ -752,6 +772,7 @@ switch ($Do) {
                         $result.foreground = [RhNative]::ForegroundName()
                         $sp = & $pat ([Windows.Automation.SelectionItemPattern]::Pattern)
                         try { if ($sp) { $sp.Select() }; $found.SetFocus() } catch { $result.focusError = "$($_.Exception.Message)" }
+                        # the focus moves before the keys
                         Start-Sleep -Milliseconds 200
                         [RhNative]::keybd_event(0x10, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x79, 0, 0, [IntPtr]::Zero)
                         [RhNative]::keybd_event(0x79, 0, 2, [IntPtr]::Zero); [RhNative]::keybd_event(0x10, 0, 2, [IntPtr]::Zero)
@@ -800,6 +821,7 @@ switch ($Do) {
                     $wr = $win.Current.BoundingRectangle
                     $er = $found.Current.BoundingRectangle
                     $tp.Move($wr.Left, $wr.Top + ($wa.Bottom - 150) - ($er.Top + $er.Height / 2))
+                    # the window takes its new place before the element's centre is read
                     Start-Sleep -Milliseconds 500
                 }
                 $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
@@ -818,6 +840,7 @@ switch ($Do) {
                     $o.Expand()
                 }
                 if (-not $result.error) {
+                    # the last submenu slides open (an animation): its entries' places are read once it stands still
                     Start-Sleep -Milliseconds 700
                     $box = { param($r) [ordered]@{ left = [int]$r.Left; top = [int]$r.Top; right = [int]$r.Right; bottom = [int]$r.Bottom } }
                     $result.item = & $box $item.Current.BoundingRectangle
@@ -834,6 +857,7 @@ switch ($Do) {
                     }
                     $result.workArea = & $box ([Windows.Forms.Screen]::PrimaryScreen.WorkingArea)
                 }
+                # Esc by Esc, each closing one menu level (input pacing)
                 foreach ($i in 1..4) { [RhNative]::keybd_event(0x1B, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x1B, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 100 }
             }
             'row:*' {
@@ -862,6 +886,7 @@ switch ($Do) {
                 if ($btn.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$ip)) { $ip.Invoke() }
                 else { $m = Get-RhMid $btn; [RhNative]::Click($m[0], $m[1]) }
             }
+            # (the two clicks well within the double-click time; the pause before keys lets the focus move)
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }
             'realclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]) }
             'keys:*' { $found.SetFocus(); Start-Sleep -Milliseconds 200; [Windows.Forms.SendKeys]::SendWait($action.Substring(5)) }
@@ -901,6 +926,7 @@ switch ($Do) {
                 }
                 else {
                     $item = $action.Substring(7)
+                    # (the pause: the drop-down opens and fills its items before they are searched)
                     $ec = $null; if ($field.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$ec)) { $ec.Expand(); Start-Sleep -Milliseconds 400 }
                     $li = @($field.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1
                     if (-not $li) { $li = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::ListItem))) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1 }
@@ -980,7 +1006,8 @@ switch ($Do) {
         Out-Json $result
     }
     'key' {
-        # a key pressed at the device's own keyboard (virtual-key code in -Value, e.g. 0x1B Esc, 0x0D Enter)
+        # a key pressed at the device's own keyboard (virtual-key code in -Value, e.g. 0x1B Esc, 0x0D Enter); held
+        # 50 ms like a real key press
         $vk = [byte][Convert]::ToInt32($Value, 16)
         [RhNative]::keybd_event($vk, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 50; [RhNative]::keybd_event($vk, 0, 2, [IntPtr]::Zero)
         Out-Json @{ key = $Value }

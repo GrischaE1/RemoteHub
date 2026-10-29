@@ -176,7 +176,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $marker = Start-LabMarker -Name $VmName   # the user's desktop is magenta: it must not show before they allow it
             # connected to the locked session; normaluser unlocks at the console and is asked
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -TimeoutSec 30 -Because 'the console session did not show the lock screen' -Until { @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0 }
             $o = Out 'lock'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }
@@ -207,7 +207,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $l.relockedMagenta = Get-LabColorShare -Path (Join-Path $o 'relocked.png')
             # the same, and the user refuses
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -TimeoutSec 30 -Because 'the console session did not show the lock screen' -Until { @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0 }
             $o = Out 'lock-deny'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }
@@ -218,8 +218,10 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 60
             $l.deny = Receive-LabDesktop $job
             Stop-LabInSession -Name $VmName -Task $marker.Task
-            Start-Sleep -Seconds 2
-            $l.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1102, 2101)
+            # the audit events are written as the connections end: wait until both kinds are in the log
+            $l.events = @(Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the agent did not log events 1102 and 2101' -Until {
+                    $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1102, 2101)
+                    if (@($e | Where-Object Id -eq 1102).Count -gt 0 -and @($e | Where-Object Id -eq 2101).Count -gt 0) { , $e } } | Where-Object { $_ })
             Save 'lock' $l
         }
 
@@ -260,7 +262,7 @@ Describe 'D-SECURE <VmName>' -Tag Desktop, 'D-LOCK', 'D-SIGNIN', 'D-UAC', 'D-FUS
     Context 'Ctrl+Alt+Del on the lock screen' {
         BeforeAll {
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -TimeoutSec 30 -Because 'the console session did not show the lock screen' -Until { @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0 }
             $o = Out 'sas-lock'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Connected', 'Failed'); timeout = 60 }

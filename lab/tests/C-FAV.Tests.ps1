@@ -27,6 +27,7 @@ BeforeAll {
     function MenuEntries([string]$Node) {
         $m = Ui $Node -Value 'menu:zz-no-such-entry' -Optional
         $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B
+        # the menu has no title of its own to wait on: this gives it time to close before the next step looks for an item
         Start-Sleep -Milliseconds 500
         @($m.entries)
     }
@@ -60,9 +61,8 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-NAV', 'C-RAIL' -Skip:(-no
             New-LabClientConnection -Name $VmName -Display 'Alpha' -TargetHost 'alpha.lab.invalid'
             $f.before = Count 'Alpha'
             Menu 'Alpha' 'Add to favourites'
-            Start-Sleep -Seconds 1
-            Shot 'pinned'
             $f.group = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 10).found
+            Shot 'pinned'
             $f.after = Count 'Alpha'
             # the link by its own name "Alpha (favourite)" (both rows show a label "Alpha"): its menu, and Edit opens the
             # connection itself; the element list kept for the record
@@ -82,16 +82,17 @@ Describe 'C-FAV <VmName>' -Tag Client, UI, 'C-FAV', 'C-NAV', 'C-RAIL' -Skip:(-no
             # Del on the link unpins; the connection stays in its folder
             $null = Ui 'Alpha (favourite)' -Value realclick
             $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 2E
-            Start-Sleep -Seconds 1
+            # the group goes once the link is unpinned; the check below records whether it did
+            $null = Wait-LabCondition -Until { -not (Ui 'Favourites' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Favourites group did not go after Del on the link' -TimeoutSec 15 -NoThrow
             $f.groupAfterDel = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 3).found
             $f.countAfterDel = Count 'Alpha'
             $f.deleteAsked = (Ui 'Delete' -Title '?*' -Value exists -Optional -TimeoutSec 2).found
             # pinned again, then the folder deleted: the link goes with it
             Menu 'Alpha' 'Add to favourites'
-            Start-Sleep -Seconds 1
+            $null = Wait-LabCondition -Until { (Ui 'Favourites' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Favourites group did not come back after pinning Alpha again' -TimeoutSec 15 -NoThrow
             Menu 'Lab' 'Delete'
             $null = Ui 'Delete' -Title '?*' -TimeoutSec 15
-            Start-Sleep -Seconds 1
+            $null = Wait-LabCondition -Until { -not (Ui 'Favourites' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Favourites group did not go with the deleted folder' -TimeoutSec 15 -NoThrow
             $f.groupAfterFolderDelete = (Ui 'Favourites' -Value exists -Optional -TimeoutSec 3).found
             $f.countAfterFolderDelete = Count 'Alpha'
             Shot 'deleted'

@@ -250,13 +250,18 @@ Describe 'T <VmName>' -Tag Tools, 'T' {
         It 'T-PROC-02 [<Via>] ends a process tree completely' -Tag 'T-PROC-02' {
             $tree = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 $p = Start-Process cmd.exe -ArgumentList '/c ping -n 600 127.0.0.1 > nul' -PassThru -WindowStyle Hidden
-                Start-Sleep -Seconds 2
-                $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | Where-Object Name -eq 'PING.EXE' | Select-Object -First 1
+                $until = (Get-Date).AddSeconds(15)
+                do {
+                    $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($p.Id)" | Where-Object Name -eq 'PING.EXE' | Select-Object -First 1
+                    if ($child) { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
                 [pscustomobject]@{ Parent = $p.Id; Child = [int]$child.ProcessId }
             }
             $tree.Child | Should -BeGreaterThan 0
             (T proc-stop @{ ids = $tree.Parent; names = 'cmd.exe'; tree = 1 }).refused | Should -BeNullOrEmpty
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the ended process tree is still running' -Until {
+                (Invoke-LabGuest -Name $VmName -ArgumentList $tree.Parent, $tree.Child -ScriptBlock { param($a, $b) @(Get-Process -Id $a, $b -ErrorAction SilentlyContinue).Count }) -eq 0 }
             Invoke-LabGuest -Name $VmName -ArgumentList $tree.Parent, $tree.Child -ScriptBlock { param($a, $b) @(Get-Process -Id $a, $b -ErrorAction SilentlyContinue).Count } | Should -Be 0
         }
 

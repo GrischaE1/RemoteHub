@@ -170,6 +170,7 @@ Describe 'D-VID <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-MON', 'D-VD' {
     Context 'dark display' {
         BeforeAll {
             Invoke-LabGuest -Name $VmName -ScriptBlock { powercfg.exe /change monitor-timeout-ac 1; powercfg.exe /change monitor-timeout-dc 1 }
+            # the power plan's one minute (and some) for the display to go off; the guest has no state to read for that
             Start-Sleep -Seconds 90
             $dark = Session 'dark' @(@{ do = 'frame'; out = 'woken.png'; timeout = 8 })
             Invoke-LabGuest -Name $VmName -ScriptBlock { powercfg.exe /change monitor-timeout-ac 0 }

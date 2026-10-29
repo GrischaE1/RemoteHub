@@ -37,7 +37,7 @@ Describe 'P-SES <VmName>' -Tag Agent, 'P-SES' {
         BeforeAll {
             $s = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PSVersionTable.PSVersion.ToString(); whoami; $PID; $env:USERPROFILE; New-Item HKCU:\Software\RemoteHubLab -Force | Out-Null; Set-ItemProperty HKCU:\Software\RemoteHubLab -Name Probe -Value 7; (Get-ItemProperty HKCU:\Software\RemoteHubLab).Probe' }
             $out = @($s.result.output)
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { @(Get-AgentEvents 1000 $guestNow) -match "PowerShell PID $($out[2])\)" } -Because "no event 1000 for PowerShell PID $($out[2])" -TimeoutSec 20 -IntervalMs 1000 -NoThrow
             $started = Get-AgentEvents 1000 $guestNow
             Save 'one-session' @{ Session = $s; Started = $started }
         }
@@ -89,9 +89,10 @@ Describe 'P-SES <VmName>' -Tag Agent, 'P-SES' {
             $hold = Invoke-LabProbe -Name $VmName -Kind hold -Params @{ pin = $pin; user = $vm.AdminAccount; password = (Get-LabConfig).Password; count = 21; seconds = 5 }
             $open = @($hold.results | Where-Object open)
             $refusedOne = @($hold.results | Where-Object { -not $_.open })
-            # all closed again: a normal session must work
-            Start-Sleep -Seconds 3
-            $after = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PID' }
+            # all closed again: a normal session must work once the agent has counted them closed
+            $w = @{}
+            $null = Wait-LabCondition -Until { $w.after = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PID' }; -not $w.after.refused } -Because 'a normal session was still refused after the 21 were closed' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+            $after = $w.after
             Save 'limit' @{ Hold = $hold; After = $after }
         }
 

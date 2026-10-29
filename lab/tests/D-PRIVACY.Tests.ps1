@@ -65,11 +65,13 @@ Describe 'D-PRIV <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
             $p.consoleLuma = Console-Luma (Join-Path $o 'console.png')
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             Send-LabText -Name $VmName -Text 'blocked'
+            # blocked: none of the keys may reach the marker in this time
             Start-Sleep -Seconds 2
             $p.blockedKeys = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -eq 'char')
             Release $o 'typed'
             $p.on = Receive-LabDesktop $job
-            Start-Sleep -Seconds 3
+            # the connection's overlay and banner gone before the next connection's question is answered
+            $null = Wait-LabCondition -Until { @(Invoke-LabPerson -Name $VmName -Do windows).Count -eq 0 } -Because 'the agent''s windows stayed after the connection ended' -TimeoutSec 20 -NoThrow
             # level 1: blocking refused, the device's keyboard still works
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ PrivacyScreen = 1 }
             $o = Out 'level1'
@@ -77,7 +79,7 @@ Describe 'D-PRIV <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
             Reached $o 'on'
             $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
             Send-LabText -Name $VmName -Text 'free'
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { (-join @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -eq 'char' | ForEach-Object c)) -eq 'free' } -Because 'the device''s keys did not all reach the marker at level 1' -TimeoutSec 15 -NoThrow
             $p.freeKeys = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object e -eq 'char')
             Release $o 'typed'
             $p.level1 = Receive-LabDesktop $job
@@ -86,7 +88,8 @@ Describe 'D-PRIV <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
             $p.off = Receive-LabDesktop (Begin 'off' @(@{ do = 'privacy'; style = 'Black' }, @{ do = 'sleep'; seconds = 3 }))
             Set-LabAgentPolicy -Name $VmName -Clear
             Stop-LabInSession -Name $VmName -Task $marker.Task
-            Start-Sleep -Seconds 2
+            # both events written (asserted below; on 1809 no 1104 comes, so the wait runs out)
+            $null = Wait-LabCondition -Until { $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1104, 2103); @($e | Where-Object Id -eq 1104).Count -gt 0 -and @($e | Where-Object Id -eq 2103).Count -gt 0 } -Because 'events 1104 and 2103 were not both written' -TimeoutSec 20 -NoThrow
             $p.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1104, 2103)
             Save 'screen' $p
         }
@@ -181,7 +184,6 @@ $null = [RhLab.Win]::GetWindowRect($hw, [ref]$r)
             $h.window = Front-App
             if ($h.window.found -and -not $h.window.foreground) {
                 Send-LabMouse -Name $VmName -X ($h.window.x + [int]($h.window.width / 2)) -Y ($h.window.y + [int]($h.window.height / 2))
-                Start-Sleep -Seconds 1
                 $h.window = Front-App
                 $h.window | Add-Member -NotePropertyName clicked -NotePropertyValue $true -Force
             }
@@ -223,7 +225,7 @@ $null = [RhLab.Win]::GetWindowRect($hw, [ref]$r)
             finally {
                 Release $o 'hidden'
                 $h.user = Receive-LabDesktop $job
-                Start-Sleep -Seconds 2
+                $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105).Count -gt 0 } -Because 'no event 1105 for the hidden screen' -TimeoutSec 10 -NoThrow
                 $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
                 Stop-LabInSession -Name $VmName -Task $task
                 Save 'apps' $h

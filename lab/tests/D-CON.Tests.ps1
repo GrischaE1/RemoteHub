@@ -94,8 +94,10 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
             $gone = $null
             $sw = [Diagnostics.Stopwatch]::StartNew()
             while ($sw.Elapsed.TotalSeconds -lt 20) { if (@(Get-Helpers).Count -eq 0) { $gone = [math]::Round($sw.Elapsed.TotalSeconds, 1); break }; Start-Sleep -Milliseconds 500 }
-            Start-Sleep -Seconds 2
-            $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100, 1101)
+            # the end event (1101) is written as the connection closes: wait until both are in the log
+            $events = @(Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the agent did not log events 1100 and 1101' -Until {
+                    $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100, 1101)
+                    if (@($e | Where-Object Id -eq 1100).Count -gt 0 -and @($e | Where-Object Id -eq 1101).Count -gt 0) { , $e } } | Where-Object { $_ })
             $similar = if (@($r.images).Count -gt 0) { Compare-LabImage -A @($r.images)[0].path -B (Join-Path (Out 'session') 'console.png') } else { 0 }
             Save 'session' @{ R = $r; Helpers = $during; Console = $console; Gone = $gone; Events = $events; Similar = $similar; Resolution = $resolution; Shot = $shot }
         }
@@ -176,7 +178,8 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
             Set-LabAutoLogon -Name $VmName -Account User
             $null = Wait-LabAgent -Name $VmName -Pin $pin
             $null = Invoke-LabInSession -Name $VmName -Account User -ScriptBlock { tsdiscon.exe }
-            Start-Sleep -Seconds 10
+            $null = Wait-LabCondition -TimeoutSec 60 -Because "$($vm.UserAccount)'s session did not become Disconnected after tsdiscon" -Until {
+                @(Get-LabSessions -Name $VmName | Where-Object { $_.State -eq 'Disconnected' -and $_.User -match "\\?$([regex]::Escape($vm.UserAccount))$" }).Count -gt 0 }
             $since = Get-LabGuestTime -Name $VmName
             $list = Invoke-LabDesktop -Name $VmName -Pin $pin -Out (Out 'sessions') -Steps @(@{ do = 'connect' }, @{ do = 'close' })
             $disc = @($list.hello.sessions | Where-Object { $_.user -match "\\?$([regex]::Escape($vm.UserAccount))$" -and $_.state -eq 'Disconnected' } | Select-Object -First 1)
@@ -184,8 +187,9 @@ Describe 'D-CON <VmName>' -Tag Desktop, 'D-CON' {
                 Invoke-LabDesktop -Name $VmName -Pin $pin -Out (Out 'disconnected') -Steps @(
                     @{ do = 'connect' }, @{ do = 'start'; session = [int]$disc[0].id; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Failed', 'Connected', 'WaitingForUser', 'Paused'); timeout = 30 })
             }
-            Start-Sleep -Seconds 2
-            $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
+            $events = @(Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the agent did not log event 2100' -Until {
+                    $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
+                    if ($e.Count -gt 0) { , $e } } | Where-Object { $_ })
             Clear-LabAutoLogon -Name $VmName
             Save 'sessions' @{ List = $list; Start = $start; Events = $events }
         }

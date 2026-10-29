@@ -70,7 +70,7 @@ BeforeAll {
         Step 'page' {
             $null = Ui 'Add page'
             $null = Ui 'Page title' -Value "set:$title"
-            Start-Sleep -Seconds 2   # autosave runs a second after the last change
+            # autosave runs a second after the last change; the list check waits for the page to show
             @{ listed = (Ui $title -Value exists -TimeoutSec 15).found; section = (Ui 'Quick Notes' -Value exists).found }
         }
 
@@ -112,18 +112,23 @@ BeforeAll {
         # ---- 6. Copy page as Markdown: title, script block and the new heading as plain Markdown text
         Step 'copy' {
             $null = Ui 'Copy page as Markdown'
-            Start-Sleep -Seconds 1
-            $c = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
+            # the clipboard still has the pasted script until the copy lands
+            $clip = @{}
+            $null = Wait-LabCondition -Until { $clip.c = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get; "$($clip.c.start)" -like "# $title*" } -Because 'Copy page as Markdown did not put the page on the clipboard' -TimeoutSec 15 -NoThrow
+            $c = $clip.c
             @{ length = $c.length; start = $c.start; formats = @($c.formats) }
         }
 
         # ---- 7. Restarted: Notes shown again (the last view), the page kept, search finds it by the script
         Step 'restart' {
+            # autosave runs a second after the last change (the heading in step 5): closing sooner could lose it, and
+            # nothing outside the app shows that the save is done
             Start-Sleep -Seconds 2
             Stop-LabClient -Name $VmName -Task $script:task
             $script:task = Start-LabClient -Name $VmName
             $listed = (Ui $title -Value exists -TimeoutSec 30).found
             $null = Ui 'Search notes' -Value 'set:Spooler'
+            # the page shows before the search as well: this lets the search run, so the check below sees its result
             Start-Sleep -Seconds 2
             $found = (Ui $title -Value exists -TimeoutSec 15).found
             $null = Ui 'Search notes' -Value 'set:'
