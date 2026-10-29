@@ -222,5 +222,6 @@ Defaults: the groups in `agent.json` (`AllowedGroups`, Administrators) get `Powe
 - **Client–server model:** who runs the broker or relay, and how devices register and stay reachable (an outbound connection from the agent).
 - **RBAC server:** how rights are managed, the token format, and how several admins and tenants are separated.
 - Audio; dragging files out of the tab onto this PC (dropping onto the tab is built, §4.7).
+- Apps in their own tabs (like RemoteApp): apps listed on a connection, started on demand in the admin's own session, each on a virtual monitor of its own – [app-tabs-design.md](app-tabs-design.md).
 
 Done since this list was written: the ADMX/ADML templates (one for RemoteHub and the agent, [admx-design.md](admx-design.md)); turning the agent desktop off in RemoteHub (`AllowAgentDesktop` = 0); the frame rate adapts to a slow network (§4.4); the resume issue of §4.6 (fixed in #34).
