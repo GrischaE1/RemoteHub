@@ -81,9 +81,10 @@ BeforeAll {
                     Select-Object TimeCreated, Message
             }
         }
-        # the agent's own command on the device (as PSAdmin): output and exit code; -Secret goes to standard input
+        # the agent's own command on the device (as PSAdmin): output and exit code; -Secret goes to standard input.
+        # $Arguments is already one element of the list: wrapped once more, the agent got "broker leave" as one argument.
         function Invoke-AgentExe([string[]]$Arguments, [string]$Secret) {
-            Invoke-LabGuest -Name $VmName -ArgumentList (, $Arguments), $Secret -ScriptBlock {
+            Invoke-LabGuest -Name $VmName -ArgumentList $Arguments, $Secret -ScriptBlock {
                 param($argv, $secret)
                 $psi = New-Object Diagnostics.ProcessStartInfo (Join-Path $env:ProgramFiles 'RemoteHub Agent\RemoteHubAgent.exe')
                 $psi.Arguments = ($argv | ForEach-Object { "`"$_`"" }) -join ' '

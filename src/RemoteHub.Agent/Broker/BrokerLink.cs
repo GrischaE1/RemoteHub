@@ -50,6 +50,11 @@ internal sealed class BrokerLink(
     private volatile TaskCompletionSource _networkChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     /// <summary>How long the addresses must stay the same after a change before they are sent (Windows reports one change in bursts).</summary>
     internal static TimeSpan AddressSettle { get; set; } = TimeSpan.FromSeconds(2);
+    /// <summary>
+    /// How often a connected link reads the policy again. A Group Policy or Intune change doesn't restart the service, so
+    /// BrokerEnabled turned off has to end a connection that is already open, not only the next one.
+    /// </summary>
+    internal static TimeSpan PolicyCheck { get; set; } = IdleRetry;
     /// <summary>How many addresses the hello carries at most (the broker refuses more).</summary>
     internal const int MaxAddresses = 16;
 
@@ -82,7 +87,7 @@ internal sealed class BrokerLink(
             try { config = currentConfig(); }
             catch (Exception ex) { Problem($"agent.json can't be read: {ex.Message}"); await Delay(IdleRetry, stop); continue; }
             var p = policy();
-            if (config.Broker is not { } broker || broker.Problem() is not null || !p.BrokerEnabled || p.LoadError is not null)
+            if (config.Broker is not { } broker || broker.Problem() is not null || BrokerOff(p))
             {
                 State = "idle";
                 if (config.Broker?.Problem() is { } bad) Problem("broker: " + bad);
@@ -191,7 +196,11 @@ internal sealed class BrokerLink(
         _live = live;
         // "ping" is answered at the broker's edge without waking anything.
         var keepAlive = live.KeepAliveAsync(ws, c => SendLocked(ws, "ping"u8.ToArray(), c), alive.Token);
-        try { return await ReceiveLoop(ws, live, config, broker, baseUri, stop); }
+        using var receiving = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        var turnedOff = WatchPolicyAsync(receiving, alive.Token);
+        try { return await ReceiveLoop(ws, live, config, broker, baseUri, receiving.Token); }
+        // The loop then finds the policy off, goes idle and says so in the log.
+        catch (Exception) when (receiving.IsCancellationRequested && !stop.IsCancellationRequested) { return Outcome.Ended; }
         finally
         {
             alive.Cancel();
@@ -200,6 +209,23 @@ internal sealed class BrokerLink(
             try { gaveUp = await keepAlive; } catch { /* ended with the connection */ }
             if (gaveUp is not null) log.Write($"RemoteHub Broker {host}: the connection was given up – {gaveUp}");
             try { await addresses; } catch { /* ended with the connection */ }
+            try { await turnedOff; } catch { /* ended with the connection */ }
+        }
+    }
+
+    private static bool BrokerOff(AgentPolicy p) => !p.BrokerEnabled || p.LoadError is not null;
+
+    /// <summary>Ends the connection's reader (and with it the socket) once the device's policy turns the broker off.</summary>
+    private async Task WatchPolicyAsync(CancellationTokenSource receiving, CancellationToken ct)
+    {
+        while (true)
+        {
+            await Task.Delay(PolicyCheck, ct);
+            if (BrokerOff(policy()))
+            {
+                receiving.Cancel();
+                return;
+            }
         }
     }
 
@@ -281,7 +307,7 @@ internal sealed class BrokerLink(
         if (why is null && !BrokerProtocol.IsRelayPath(relay, broker.Org, session)) why = ("offer", "The broker named a relay that isn't its own.");
         var p = policy();
         var consoleId = offer["consoleId"]?.GetValue<string>() ?? "";
-        if (why is null && (!p.BrokerEnabled || p.LoadError is not null)) why = ("policy", "The device's policy turns the RemoteHub Broker off (BrokerEnabled).");
+        if (why is null && BrokerOff(p)) why = ("policy", "The device's policy turns the RemoteHub Broker off (BrokerEnabled).");
         if (why is null && p.BrokerConsoles.Count > 0 && !p.BrokerConsoles.Contains(consoleId))
             why = ("policy", "The device's policy doesn't allow this PC through the RemoteHub Broker (BrokerConsoles).");
         if (why is null && _sessions.Count >= p.MaxSessions) why = ("limit", $"Too many sessions on the device (MaxSessions = {p.MaxSessions}).");

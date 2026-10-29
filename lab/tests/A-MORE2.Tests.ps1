@@ -76,7 +76,7 @@ BeforeAll {
     }
     # msiexec in the guest as PSAdmin (elevated): exit code
     function Invoke-GuestMsi([string[]]$Arguments, [string]$Log) {
-        Invoke-LabGuest -Name $VmName -ArgumentList (, $Arguments), $Log -ScriptBlock {
+        Invoke-LabGuest -Name $VmName -ArgumentList $Arguments, $Log -ScriptBlock {
             param($a, $log)
             $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList ((@($a | ForEach-Object { [string]$_ }) + @('/qn', '/norestart', '/l*v', "`"$log`"")) -join ' ') -Wait -PassThru -WindowStyle Hidden
             $p.ExitCode
