@@ -164,6 +164,9 @@ internal sealed class PeerSession
 
         // Relay and punching at the same time: a relayed session loses no time.
         var direct = round is not null && remote.Count > 0 ? peer.SafeDirectAsync(round, remote) : Task.FromResult(false);
+        if (round is null || remote.Count == 0)
+            DiagLog.Write("Broker session: no direct try (" + (!allowed ? $"not allowed here: policy {AppPolicy.BrokerDirect}, QUIC {PeerDirect.Supported}, pin {route.Fingerprint.Length > 0}"
+                : round is null ? "no candidates of this PC's own" : $"none of the device's {Strings(accepted["cands"]).Count()} candidates usable") + ")");
         if (round is not null && remote.Count == 0) round.Dispose();
         var relay = OpenRelay(route, accepted, timeout.Token);
         // Direct when it is up within DirectWait; otherwise as soon as the relay is (direct may still follow).
