@@ -14,7 +14,6 @@ using RemoteHub.Agent;
 using RemoteHub.Broker;
 using RemoteHub.Data;
 using RemoteHub.Remoting;
-using RemoteHub.Services;
 using static RemoteHub.Agent.BrokerProtocol;
 
 /// <summary>
@@ -87,7 +86,7 @@ internal static class LabBroker
     /// temporary folder and goes with it, so the answer carries these lines.
     /// </summary>
     private static string[] SessionLog() =>
-        File.Exists(DiagLog.FilePath) ? [.. File.ReadAllLines(DiagLog.FilePath).Where(l => l.Contains("Broker session", StringComparison.Ordinal))] : [];
+        File.Exists(RemoteHub.Services.DiagLog.FilePath) ? [.. File.ReadAllLines(RemoteHub.Services.DiagLog.FilePath).Where(l => l.Contains("Broker session", StringComparison.Ordinal))] : [];
 
     private static async Task<object> Health(Dictionary<string, string> o)
     {
