@@ -78,6 +78,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         string[] features = PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off ? [.. Features, DesktopFeatures.PrivacyScreen] : Features;
         var autoSignInWhyNot = AutoSignInRefusal(policy, control);
         var autoSignInRight = autoSignInWhyNot is null;
+        // App tabs only where automatic sign-in is available to this account (app-tabs-design §4.1, §9). The feature
+        // itself is announced once the endpoint starts apps; until then RemoteHub doesn't offer them.
+        var appsRight = AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is null;
         if (autoSignInRight) features = [.. features, DesktopFeatures.AutoSignIn];
         // The device allows it by policy, yet it isn't offered: say why, so the log answers "where is the option?"
         else if (policy.NoUserBehavior == NoUserBehaviors.AutoSignIn && sessions.Any(s => s.Console && s.State == DesktopSessionState.SignIn))
@@ -86,7 +89,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         try
         {
             await SendWs(DesktopWire.Json(DesktopMessage.Hello, new DesktopHello(DesktopProtocol.Version, o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName,
-                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight, autoSignInRight), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
+                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight, autoSignInRight,
+                    Apps: appsRight, AppsElevated: appsRight && policy.DesktopAppsElevated), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
                 policy.ConsentTimeoutSeconds, features, _clipboard, AgentHost.AgentVersion), DesktopJson.Default.DesktopHello), ct);
 
             // ---- Start

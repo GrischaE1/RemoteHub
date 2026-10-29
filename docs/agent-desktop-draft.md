@@ -203,6 +203,7 @@ Defaults: the groups in `agent.json` (`AllowedGroups`, Administrators) get `Powe
 | 1106 | `AutoSignInSucceeded` | Automatic sign-in signed the account in on the console |
 | 1107 | `AutoSignInEnded` | A session automatic sign-in created was locked or signed out |
 | 1108 | `DesktopFilesSaved` | Files the admin dropped on the tab were saved on the signed-in user's Desktop (count, size and folder – no file names) |
+| 1109 | `DesktopAppStarted` | A program was started for an app tab ([app-tabs-design.md](app-tabs-design.md)): account, source, the program's path – never its arguments –, elevated or not, the session |
 | 2100 | `DesktopRefused` | Refused before anything was shown (policy, right, session) or denied by the user |
 | 2101 | `DesktopUserRefused` | Someone who signed in or unlocked during the connection denied it; it ended |
 | 2102 | `DesktopIdleEnded` | Ended by `DesktopIdleTimeoutMinutes` |

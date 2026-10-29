@@ -57,7 +57,7 @@ The agent looks at the console session:
 |---|---|
 | The admin's own session (same account by SID), unlocked | Used, no question (the existing rule for one's own session, agent-desktop-draft §4.2 step 4) |
 | The admin's own session, locked | Refused for now: "Your session on FS01 is locked – unlock it in a desktop tab first". Unlocking through the credential provider is planned (credential-provider-design §12); then it unlocks the way automatic sign-in signs in. |
-| Nobody signed in | **Automatic sign-in** with the connection's credentials (needs the `AutoSignIn` right and the credential provider, as today). Without them: refused, "Nobody is signed in on FS01 and automatic sign-in isn't available". |
+| Nobody signed in | **Automatic sign-in** with the connection's credentials (the `AutoSignIn` right, the device's policy and the credential provider, as today). Without them the device offers no app tabs at all (§8.1), whoever is signed in. |
 | Someone else | Refused: "CONTOSO\jane is signed in on FS01 – app tabs need your own session". RemoteHub offers the desktop tab (with consent) or RDP instead. |
 
 The second and further app tabs find the session the first one made and connect to it like the first case. While the automatic sign-in of the first tab is still under way, the others wait for it: the service queues them behind the sign-in rather than starting a second one.
@@ -202,7 +202,7 @@ public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated);
 
 **Listing:** RemoteHub opens a connection as for a tab, reads `Hello`, sends `AppList` instead of `Start`, gets the list and closes. Nothing starts and no session is needed; the service checks the `Desktop` right and the policy `DesktopApps` as for a start, and answers at most one `AppList` per connection.
 
-- `DesktopRights` gets `Apps` (may open app tabs: `Desktop` right, policy, driver present) and `AppsElevated`.
+- `DesktopRights` gets `Apps` (may open app tabs: `Desktop` right, policy `DesktopApps`, the virtual display installed, **and automatic sign-in available to the account** – the `AutoSignIn` right, policy `NoUserBehavior`, the credential provider) and `AppsElevated`.
 - `Layout` for an app tab lists only its monitor, so the viewer has nothing to switch to.
 - `HelperInit` gets the tab's monitor (device name) and what it needs to find the job's processes; the service keeps the job and the monitor lease, so they outlive a helper restart.
 - The arguments travel inside the pinned TLS channel like every other message. They may hold paths or server names, so no log line on either side contains them.
@@ -210,6 +210,8 @@ public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated);
 ## 8. RemoteHub
 
 ### 8.1 On a connection
+
+**Only where automatic sign-in works.** App tabs are offered on connections that reach the device through its agent and have *Sign in automatically when nobody is signed in* turned on, to devices that allow automatic sign-in (`DesktopRights.Apps`, §9). Without it, a server nobody is signed in on – the usual case – couldn't give the admin a session, and the tabs would mostly fail. Where the connection's setting is off, the Apps section and *Open app ▸* say "App tabs need automatic sign-in" with a button that turns the setting on for this connection; where the device doesn't allow it, they say why (the reason from the device) and point to *Install credential provider*. Both settings can be turned on for every connection with an installed agent: the connection's setting is offered on all of them, the device's through right-click → *Install credential provider*.
 
 - **Settings → Apps** (agent connections, inherited from the folder like the other agent options; a connection's own list replaces its folder's): a list with **Name**, **Program**, **Arguments**, **Start in** and **Run as administrator**, plus *Remove* and up/down to order them. Stored in the local database with the connection, with the icon when it came from the device.
 - **Adding:** *Add from the device…* (the usual way, §8.2), and *Add another app* for what isn't in the Start menu – an empty entry, or one of the presets (§8.3).
@@ -255,7 +257,7 @@ Built into RemoteHub, editable after adding – for devices whose Start menu doe
 | Item | Kind | Default | Meaning |
 |---|---|---|---|
 | `Rights\Desktop` | right | as today | Needed for app tabs. `DesktopViewOnly` alone isn't enough. |
-| `Rights\AutoSignIn` | right | as today | Needed only when nobody is signed in (§4.1). |
+| `Rights\AutoSignIn` | right | as today | Needed for app tabs, together with `NoUserBehavior` = AutoSignIn and the credential provider: without automatic sign-in the device offers no app tabs (§8.1). |
 | `DesktopApps` | DWORD | 1 | 0: no app tabs on this device, and no Start menu list. |
 | `DesktopAppsElevated` | DWORD | 1 | 0: *Run as administrator* is refused. |
 | `DesktopAppsAllowed` | REG_MULTI_SZ | – | When set: only these programs (full paths, `AppIds` matching) may be started in app tabs. |
