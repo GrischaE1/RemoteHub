@@ -1459,7 +1459,7 @@ function Set-LabAutoLogon {
     }
     Disable-LabIdleLock -Name $Name
     Restart-LabVm -Name $Name -TimeoutSec $TimeoutSec
-    Wait-LabDesktop -Name $Name -Account $user -TimeoutSec $TimeoutSec
+    Wait-LabDesktop -Name $Name -Account $Account -TimeoutSec $TimeoutSec
 }
 
 function Clear-LabAutoLogon {
@@ -2216,7 +2216,8 @@ function Install-LabTestApp {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [switch]$StartMenu)
     $src = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\guest\RhLabApp.cs'))
-    Invoke-LabGuest -Name $Name -ArgumentList $src, $StartMenu.IsPresent -ScriptBlock {
+    # a plain string: the remoting result carries PSComputerName, which ConvertTo-Json would turn into an object
+    [string](Invoke-LabGuest -Name $Name -ArgumentList $src, $StartMenu.IsPresent -ScriptBlock {
         param($text, $menu)
         $d = 'C:\ProgramData\RemoteHubLab'
         $null = New-Item -ItemType Directory -Path "$d\session" -Force
@@ -2252,7 +2253,7 @@ function Install-LabTestApp {
             if (-not (Test-Path "$programs\RH Lab Junction")) { cmd /c mklink /J "$programs\RH Lab Junction" "$d\junction-target" | Out-Null }
         }
         $exe
-    }
+    })
 }
 
 # The test app's log (RhLabApp /log:<file>): one object per line - e (started, activated, text, closing, asked, closed),

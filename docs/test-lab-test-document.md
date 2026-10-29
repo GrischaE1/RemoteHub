@@ -7753,7 +7753,7 @@ P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 Design: [app-tabs-design.md](app-tabs-design.md). The test app is `RhLabApp.exe` (`lab/guest/RhLabApp.cs`, built in the guest by `Install-LabTestApp`): one colour, a text box, a log of start (pid, elevated), typing and closing. D-APPSPIKE runs only when asked for (`-Tag AppSpike`); every D-APP case is skipped while the agent has no `apps` feature.
 
 #### D-APPSPIKE-01 · Monitors one at a time
-P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P1 · How: PS S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Preconditions:** agent with `virtualDisplay` = always; the console account signed in on the console; a desktop connection holds the virtual display on.
 **Steps:** 1. The driver's settings with count 2, then 3, 2, 1, each followed by `RELOAD_DRIVER` on its control pipe; a device restart (`pnputil /restart-device`) only when the session doesn't show the count within 40 s.
@@ -7762,14 +7762,14 @@ P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
 - the evidence says for each step whether the reload was enough
 
 #### D-APPSPIKE-02 · Windows stay when another monitor goes
-P2 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P2 · How: PS S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Steps:** 1. Three test app windows, one on each virtual monitor. 2. Count 3 → 2.
 **Expected:**
 - every window that was on a monitor that stayed is on the same monitor at the same position
 
 #### D-APPSPIKE-03 · A mode per monitor
-P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P1 · How: PS S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Steps:** 1. Count 3; one virtual monitor set to 1600×900, another to 1024×768 (`ChangeDisplaySettingsEx`, `CDS_FULLSCREEN`). 2. 1500×800 (not listed) set; added to the list, reloaded, set again.
 **Expected:**
@@ -7777,20 +7777,20 @@ P1 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
 - 1500×800 is in effect after the reload
 
 #### D-APPSPIKE-04 · Eight monitors
-P2 · How: PS S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P2 · How: PS S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Expected:**
 - with count 8 the session shows eight virtual monitors (MaxAppTabs' default)
 
 #### D-APPSPIKE-05 · Taskbar on other monitors
-P1 · How: S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Steps:** 1. `MMTaskbarEnabled` = 1, 0, 1 in the account's `HKCU`, each followed by `WM_SETTINGCHANGE` "TraySettings". 2. The account's own value put back.
 **Expected:**
 - 1: a `Shell_SecondaryTrayWnd` on the other monitors; 0: none; 1: back – each within 20 s, Explorer not restarted
 
 #### D-APPSPIKE-06 · Foreground between two apps
-P1 · How: S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Steps:** 1. Test apps A and B on two virtual monitors. 2. A process in the session clicks into A (SendInput), calls `SetForegroundWindow(B)` and types "spike". 3. Control (recorded only): a new process that sent no input asks for A.
 **Expected:**
@@ -7799,7 +7799,7 @@ P1 · How: S · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
 **Note:** the stand-in runs as the session's user; the real helper is LocalSystem with UIAccess – D-APP-04 checks that.
 
 #### D-APPSPIKE-07 · Two connections to one session
-P1 · How: H · Needs: – · Status: ◐ Written – `D-APPSPIKE.Tests.ps1`
+P1 · How: H · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
 
 **Expected:**
 - a second connection to the console account's own session reaches Connected and gets a picture while the first is up

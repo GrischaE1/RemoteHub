@@ -30,7 +30,7 @@ BeforeAll {
     # The driver's settings as the agent writes them (VirtualDisplay.Settings), with a monitor count and a size list,
     # then its reload command through the control pipe (VirtualDisplay.Reload: "RELOAD_DRIVER", UTF-16).
     function Set-Vdd([int]$Count, [string[]]$Sizes) {
-        Invoke-LabGuest -Name $VmName -ArgumentList $Count, (@($Sizes) -join ';') -ScriptBlock {
+        [string](Invoke-LabGuest -Name $VmName -ArgumentList $Count, (@($Sizes) -join ';') -ScriptBlock {
             param($count, $sizes)
             $res = ($sizes -split ';' | ForEach-Object { $w, $h = $_ -split 'x'; "<resolution><width>$w</width><height>$h</height><refresh_rate>60</refresh_rate></resolution>" }) -join ''
             $xml = "<?xml version=`"1.0`" encoding=`"utf-8`"?><vdd_settings><monitors><count>$count</count></monitors><gpu><friendlyname>default</friendlyname></gpu>" +
@@ -49,14 +49,42 @@ BeforeAll {
             }
             catch { "reload failed: $($_.Exception.Message)" }
             finally { $pipe.Dispose() }
-        }
+        })
     }
+    # Restarts the driver's device, also one that failed (problem 43): restart first, disable + enable when that leaves
+    # it failed. Answers what each step said and the state after it.
     function Restart-Vdd {
-        Invoke-LabGuest -Name $VmName -ScriptBlock {
-            $d = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' -and $_.Status -eq 'OK' })
-            foreach ($x in $d) { & pnputil.exe /restart-device $x.InstanceId | Out-Null }
-            "restarted $($d.Count)"
-        }
+        [string](Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $said = @()
+            foreach ($x in @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' })) {
+                $out = & pnputil.exe /restart-device $x.InstanceId 2>&1
+                $said += "restart $($x.InstanceId): exit $LASTEXITCODE"
+                Start-Sleep -Seconds 3
+                if ((Get-PnpDevice -InstanceId $x.InstanceId).Status -ne 'OK') {
+                    $null = & pnputil.exe /disable-device $x.InstanceId 2>&1; $e1 = $LASTEXITCODE
+                    $null = & pnputil.exe /enable-device $x.InstanceId 2>&1; $e2 = $LASTEXITCODE
+                    Start-Sleep -Seconds 3
+                    $said += "disable exit $e1, enable exit $e2"
+                }
+                $now = Get-PnpDevice -InstanceId $x.InstanceId
+                $said += "now $($now.Status) problem $([int]$now.Problem)"
+            }
+            $said -join ', '
+        })
+    }
+    # Before a context: a device that failed in the one before is restarted, so one failure doesn't fail every case
+    # after it. Answers 'ok' or what the restart did (kept in the context's evidence).
+    function Repair-Vdd {
+        $s = Get-VddState
+        if ($s -match ' OK problem 0$') { return 'ok' }
+        "was $s; $(Restart-Vdd)"
+    }
+    # The driver's device as Plug and Play sees it: status and problem code (43 = the driver reported a failure)
+    function Get-VddState {
+        [string](Invoke-LabGuest -Name $VmName -ScriptBlock {
+            @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { @($_.HardwareID) -contains 'Root\MttVDD' } |
+                    ForEach-Object { "$($_.InstanceId) $($_.Status) problem $([int]$_.Problem)" }) -join '; '
+        })
     }
     # Waits until the session shows $Total monitors (or the time is up); answers the last layout.
     function Wait-Monitors([int]$Total, [int]$TimeoutSec = 40) {
@@ -81,7 +109,7 @@ BeforeAll {
             $l = Wait-Monitors $want 60
             $how = $(if (@($l.monitors).Count -eq $want) { 'restart' } else { 'none' })
         }
-        [pscustomobject]@{ virtual = $Virtual; want = $want; got = @($l.monitors).Count; how = $how; said = $said; seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); layout = $l }
+        [pscustomobject]@{ virtual = $Virtual; want = $want; got = @($l.monitors).Count; how = $how; said = $said; seconds = [math]::Round($t.Elapsed.TotalSeconds, 1); device = (Get-VddState); layout = $l }
     }
     # RhLabApp windows in the console account's session; answers their pids (in the order of -Colours)
     function Start-Apps([string[]]$Colours, [string]$Tag) {
@@ -112,8 +140,11 @@ $screens = [Windows.Forms.Screen]::AllScreens
 $done = @()
 for ($i = 0; $i -lt @($A.pids).Count; $i++) {
     $h = (Get-Process -Id $A.pids[$i]).MainWindowHandle
+    # a monitor that isn't there (the driver failed) puts the window on the primary one, apart from the others
     $s = $screens | Where-Object DeviceName -eq $A.devices[$i] | Select-Object -First 1
-    $ok = [RhSpikeMove]::SetWindowPos($h, [IntPtr]::Zero, $s.Bounds.X + 20, $s.Bounds.Y + 20, 640, 480, 0x0044)
+    $dx = 0
+    if (-not $s) { $s = [Windows.Forms.Screen]::PrimaryScreen; $dx = 330 * $i }
+    $ok = [RhSpikeMove]::SetWindowPos($h, [IntPtr]::Zero, $s.Bounds.X + 20 + $dx, $s.Bounds.Y + 20, 300, 300, 0x0044)
     $done += [pscustomobject]@{ pid = $A.pids[$i]; device = $A.devices[$i]; ok = $ok }
 }
 $done
@@ -182,13 +213,20 @@ Describe 'D-APPSPIKE <VmName>' -Tag AppSpike {
             }
         }
 
+        # by place, not by name: the driver's reload names every monitor anew (DISPLAY8 comes back as DISPLAY11)
         It 'D-APPSPIKE-02 windows on the monitors that stay keep their place when another monitor goes' -Tag 'D-APPSPIKE-02' {
-            $stayed = @($m.after.monitors | ForEach-Object device)
-            foreach ($w in @($m.before.windows | Where-Object { $_.monitor -in $stayed })) {
+            function Place($mon) { "$($mon.left),$($mon.top),$($mon.right),$($mon.bottom)" }
+            $stayed = @($m.after.monitors | ForEach-Object { Place $_ })
+            $checked = 0
+            foreach ($w in @($m.before.windows)) {
+                $was = @($m.before.monitors | Where-Object device -eq $w.monitor)[0]
+                if (-not $was -or (Place $was) -notin $stayed) { continue }
                 $a = @($m.after.windows | Where-Object pid -eq $w.pid) | Select-Object -First 1
                 $a | Should -Not -BeNullOrEmpty
-                "$($a.monitor) $($a.left),$($a.top)" | Should -Be "$($w.monitor) $($w.left),$($w.top)" -Because "pid $($w.pid) was on $($w.monitor), which stayed"
+                "$($a.left),$($a.top)" | Should -Be "$($w.left),$($w.top)" -Because "pid $($w.pid) was on the monitor at $(Place $was), which stayed"
+                $checked++
             }
+            $checked | Should -BeGreaterThan 0 -Because 'at least one window was on a monitor that stayed'
         }
     }
 
@@ -211,11 +249,16 @@ public static class RhSpikeMode {
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettings(string device, int mode, ref DEVMODE dm);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettingsEx(string device, ref DEVMODE dm, IntPtr hwnd, uint flags, IntPtr param);
-    public static int Set(string device, int w, int h) {
+    // CDS_UPDATEREGISTRY: a CDS_FULLSCREEN mode is undone when the process that set it ends (seen in the first run);
+    // the agent's helper lives on, but this stand-in doesn't. Answers the result and the size read back.
+    public static string Set(string device, int w, int h) {
         var dm = new DEVMODE(); dm.Size = (short)Marshal.SizeOf(typeof(DEVMODE));
-        if (!EnumDisplaySettings(device, -1, ref dm)) return -100;
+        if (!EnumDisplaySettings(device, -1, ref dm)) return "no mode";
         dm.PelsWidth = w; dm.PelsHeight = h; dm.Fields = 0x80000 | 0x100000;
-        return ChangeDisplaySettingsEx(device, ref dm, IntPtr.Zero, 0x4 /* CDS_FULLSCREEN */, IntPtr.Zero);
+        var r = ChangeDisplaySettingsEx(device, ref dm, IntPtr.Zero, 0x1, IntPtr.Zero);
+        var now = new DEVMODE(); now.Size = dm.Size;
+        EnumDisplaySettings(device, -1, ref now);
+        return r + " " + now.PelsWidth + "x" + now.PelsHeight;
     }
 }
 "@
@@ -228,11 +271,18 @@ public static class RhSpikeMode {
             # a size that isn't in the list yet: refused before the reload, taken after it
             $d.unlisted = Invoke-LabInSessionJson -Name $VmName -Code $setMode -Data @{ sets = @(@{ device = $virtual[0]; w = 1500; h = 800 }) }
             $d.reload = Set-Vdd 3 @('1280x720', '1600x900', '1024x768', '1366x768', '1500x800')
-            Start-Sleep -Seconds 5
-            $d.listed = Invoke-LabInSessionJson -Name $VmName -Code $setMode -Data @{ sets = @(@{ device = $virtual[0]; w = 1500; h = 800 }) }
+            $d.afterReload = Wait-Monitors $d.three.want 40
+            # in the third run the device failed (problem 43) on this reload, with the two monitors in their own modes
+            $d.deviceAfterReload = Get-VddState
+            $d.repair = Repair-Vdd
+            if ($d.repair -ne 'ok') { $d.afterReload = Wait-Monitors $d.three.want 60 }
+            # the reload names the monitors anew: the same place in the row, under its new name
+            $d.virtualAfterReload = @($d.afterReload.monitors | Where-Object { -not $_.primary } | Select-Object -Last 2 | ForEach-Object device)
+            $d.listed = Invoke-LabInSessionJson -Name $VmName -Code $setMode -Data @{ sets = @(@{ device = $d.virtualAfterReload[0]; w = 1500; h = 800 }) }
             Start-Sleep -Seconds 3
             $d.afterListed = Get-LabScreenLayout -Name $VmName
             $d.virtual = $virtual
+            $d.device = Get-VddState
             Save 'modes' $d
         }
 
@@ -241,19 +291,23 @@ public static class RhSpikeMode {
             function Size($layout, $dev) { $x = @($layout.monitors | Where-Object device -eq $dev)[0]; if ($x) { "$($x.right - $x.left)x$($x.bottom - $x.top)" } }
             Size $d.afterSet $d.virtual[0] | Should -Be '1600x900' -Because "ChangeDisplaySettingsEx answered $(@($d.set)[0].result)"
             Size $d.afterSet $d.virtual[1] | Should -Be '1024x768' -Because "ChangeDisplaySettingsEx answered $(@($d.set)[1].result)"
-            Size $d.afterListed $d.virtual[0] | Should -Be '1500x800' -Because "before the reload: $(@($d.unlisted)[0].result), after: $(@($d.listed)[0].result) ($($d.reload))"
+            $d.deviceAfterReload | Should -Match ' OK problem 0$' -Because "a reload while the monitors run their own modes keeps the driver up (restart: $($d.repair))"
+            Size $d.afterListed $d.virtualAfterReload[0] | Should -Be '1500x800' -Because "before the reload: $(@($d.unlisted)[0].result), after: $(@($d.listed)[0].result) ($($d.reload); device $($d.device))"
         }
     }
 
     Context 'the most monitors' {
         BeforeAll {
+            $repair = Repair-Vdd
             $n = Set-Count 8 @('1280x720', '1024x768')
-            Save 'eight' $n
-            $null = Set-Count 3
+            # back down in one step: in the second run the device was at problem 43 by the next context
+            $back = Set-Count 3
+            Save 'eight' ([ordered]@{ repair = $repair; up = $n; back = $back })
         }
 
         It 'D-APPSPIKE-04 the driver takes 8 monitors' -Tag 'D-APPSPIKE-04' {
             $n.got | Should -Be $n.want -Because "$($n.got - $script:physical) virtual monitors came up (way: $($n.how); $($n.said))"
+            $back.got | Should -Be $back.want -Because "from 8 back to 3: $($back.got - $script:physical) virtual monitors (way: $($back.how); $($back.said); device $($back.device))"
         }
     }
 
@@ -278,7 +332,10 @@ public static class RhSpikeTray {
                 do { $l = Get-LabScreenLayout -Name $VmName; if (& $Until $l.trays) { return $l.trays }; Start-Sleep -Seconds 2 } while ((Get-Date) -lt $end)
                 $l.trays
             }
-            $t = [ordered]@{ original = $script:taskbar; monitors = @((Get-LabScreenLayout -Name $VmName).monitors).Count }
+            # other monitors to put a taskbar on, whatever the cases before left
+            $t = [ordered]@{ original = $script:taskbar; repair = (Repair-Vdd) }
+            $t.count = Set-Count 2
+            $t.monitors = $t.count.got
             $null = Invoke-LabInSessionJson -Name $VmName -Code $setTaskbar -Data @{ v = 1 }
             $t.on = Wait-Trays { param($n) $n -gt 0 }
             $null = Invoke-LabInSessionJson -Name $VmName -Code $setTaskbar -Data @{ v = 0 }
@@ -298,7 +355,8 @@ public static class RhSpikeTray {
 
     Context 'the keyboard between two apps' {
         BeforeAll {
-            $f = [ordered]@{}
+            $f = [ordered]@{ repair = (Repair-Vdd) }
+            $f.count = (Set-Count 2).got
             $pids = Start-Apps @('255,0,0', '0,255,0') 'fg'
             $layout = Get-LabScreenLayout -Name $VmName -Pids $pids
             $virtual = @($layout.monitors | Where-Object { -not $_.primary } | Select-Object -Last 2 | ForEach-Object device)
