@@ -44,7 +44,9 @@ BeforeAll {
     }
     # the first steps of an app tab: connect, start the app (signing in when nobody is), the tab's size
     function Tab($App, [switch]$SignIn, [int]$Width = 1280, [int]$Height = 720) {
-        @(@{ do = 'connect' }, @{ do = 'start'; app = $App; autoSignIn = $SignIn.IsPresent }, @{ do = 'wait'; state = 'Connected'; anyOf = @('Failed', 'Denied', 'Ended'); timeout = 300 }
+        # the app's own start, then its outcome - a "Connected" before it is the sign-in screen's
+        @(@{ do = 'connect' }, @{ do = 'start'; app = $App; autoSignIn = $SignIn.IsPresent }, @{ do = 'wait'; state = 'StartingApp'; anyOf = @('Failed', 'Denied', 'Ended'); timeout = 300 }
+            @{ do = 'wait'; state = 'Connected'; anyOf = @('Failed', 'Ended'); timeout = 60 }
             @{ do = 'settings'; fitWidth = $Width; fitHeight = $Height }, @{ do = 'sleep'; seconds = 5 })
     }
     function States($r) { @($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) -join ' / ' }
