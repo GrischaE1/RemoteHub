@@ -77,6 +77,11 @@ public sealed class RdpOptions
     public bool? AgentAutoSignIn { get; set; }
     /// <summary>What the device does with a session RemoteHub signed in automatically when the connection ends: "Lock" or "SignOut" (the device's policy may decide).</summary>
     public string? AgentAutoSignInEndAction { get; set; }
+    /// <summary>
+    /// Apps opened in tabs of their own through the agent (docs/app-tabs-design.md §8.1). Null: the folder's; a connection's
+    /// own list – also an empty one – replaces its folder's. Replaced as a whole, never changed in place.
+    /// </summary>
+    public ConnectionApp[]? Apps { get; set; }
 
     public static RdpOptions BuiltInDefaults() => new()
     {
