@@ -56,6 +56,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private AppProcess? _appProcess;
     private HelperApp? _helperApp;
     private int? _appSession; // the session the app runs in, once started
+    private volatile bool _appClosed;  // the app ended by itself: the tab offers to start it again
+    private volatile bool _appClosing; // the admin closed the tab: the app's end ends the connection
 
     /// <summary>
     /// App tabs whose app runs, per session. Several tabs share the session the first one's automatic sign-in made: its
@@ -111,6 +113,19 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             using var startTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             startTimeout.CancelAfter(TimeSpan.FromMinutes(5));
             var first = await ReceiveWs(startTimeout.Token);
+            if (first is not null && DesktopWire.TypeOf(first) == DesktopMessage.AppList)
+            {
+                // The Start menu list (app-tabs-design §6.5): instead of a start, once; no session needed, nothing runs.
+                if (AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is { } listWhyNot)
+                {
+                    await Status(DesktopStatusState.Failed, listWhyNot, ct);
+                    return;
+                }
+                var list = await Task.Run(() => AppStartMenu.List(policy, identity.UserSid), ct);
+                o.Log.Write($"Desktop: the Start menu list for {identity.Account} from {source}: {list.Apps.Length} app(s){(list.Truncated ? ", more left out" : "")}");
+                await SendWs(DesktopWire.Json(DesktopMessage.AppList, list, DesktopJson.Default.DesktopAppList), ct);
+                return;
+            }
             if (first is null || DesktopWire.TypeOf(first) != DesktopMessage.Start) return;
             var start = DesktopWire.ReadJson(first, DesktopJson.Default.DesktopStart);
 
@@ -842,6 +857,15 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         _appSession = sessionId;
         AppTabsOpen.AddOrUpdate(sessionId, 1, (_, n) => n + 1);
         await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.App, _helperApp, HelperJson.Default.HelperApp), ct);
+        // §4.2: the device's own screens are covered and its mouse and keyboard blocked while the admin's apps run there –
+        // also in a session that existed before. Put up by the service, so it comes back after a drop whatever the right.
+        if (PrivacyScreenSupported && _screen is null)
+        {
+            _screen = new DesktopPrivacyScreen(DesktopPrivacyStyle.Message, BlockLocalInput: true);
+            _screenByService = true;
+            if (_resume is { } r) (r.Screen, r.ScreenByService) = (_screen, true);
+            await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, _screen, DesktopJson.Default.DesktopPrivacyScreen), ct);
+        }
         await Status(DesktopStatusState.Connected, $"{app.Name} started.", ct, resume: _resume?.Token);
         return true;
     }
@@ -912,6 +936,33 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     break;
                 case DesktopMessage.Ping:
                     await SendWs(DesktopWire.Ping(DesktopWire.ReadPing(m), DesktopMessage.Pong), ct);
+                    break;
+                case DesktopMessage.AppClose when _live && _app is { } closing && _helperApp is { Job.Length: > 0 }:
+                    // §4.3: the app is asked to close; whatever it asks first ("Save changes?") shows in the tab. Force: it is
+                    // left running (moved to the primary monitor) and the tab ends.
+                    var close = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopAppClose);
+                    _appClosing = true;
+                    _endReason = close.Force ? $"the tab was closed, {closing.Name} left running" : "the tab was closed";
+                    await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.AppClose, close, DesktopJson.Default.DesktopAppClose), ct);
+                    if (close.Force || _appClosed)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(close.Force ? 1 : 0), ct); // the helper moves the windows first
+                        await Status(DesktopStatusState.Ended, close.Force ? $"{closing.Name} keeps running on the device." : $"{closing.Name} was closed.", ct);
+                        _endRequested.TrySetResult();
+                    }
+                    else _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                        if (!_endRequested.Task.IsCompleted)
+                            await Status(DesktopStatusState.AppClosing, $"{closing.Name} asks something before it closes.", ct);
+                    }, ct);
+                    break;
+                case DesktopMessage.AppRestart when _live && _app is not null && _appClosed && !_appClosing && _appSession is { } restartIn:
+                    _appClosed = false;
+                    _appProcess?.Dispose();
+                    _appProcess = null;
+                    AppTabsOpen.AddOrUpdate(restartIn, 0, (_, n) => Math.Max(0, n - 1));
+                    if (!await StartApp(restartIn, ct)) _endRequested.TrySetResult();
                     break;
                 case DesktopMessage.Settings when _live:
                     var s = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings);
@@ -1224,7 +1275,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         break;
                     case (byte)HelperMessage.AppClosed when helper == _helper && _app is { } closedApp:
                         o.Log.Write($"Desktop: app tab: {closedApp.Name} was closed in session {_helperSession}");
-                        await Status(DesktopStatusState.AppClosed, $"{closedApp.Name} was closed.", ct);
+                        _appClosed = true;
+                        if (_appClosing)
+                        {
+                            // The admin closed the tab and the app has gone: the tab ends.
+                            await Status(DesktopStatusState.Ended, $"{closedApp.Name} was closed.", ct);
+                            _endRequested.TrySetResult();
+                        }
+                        else await Status(DesktopStatusState.AppClosed, $"{closedApp.Name} was closed.", ct);
                         break;
                     case (byte)HelperMessage.Log when helper == _helper:
                         var note = DesktopWire.ReadText(m);

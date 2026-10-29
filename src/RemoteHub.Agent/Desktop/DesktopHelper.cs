@@ -49,6 +49,8 @@ internal enum HelperMessage : byte
     App = 111,
     /// <summary>Helper → service, in an app tab: the app's last window closed and its job has no process left (no payload).</summary>
     AppClosed = 112,
+    /// <summary>Service → helper, in an app tab: the tab was closed (<see cref="DesktopAppClose"/>) – ask the app to close, or move it to the primary monitor.</summary>
+    AppClose = 113,
 }
 
 /// <param name="HoldUserDesktop">
@@ -177,9 +179,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private IntPtr _appMain;
     private volatile IntPtr _appFront;
     private long _appGoneSince = -1;
-    private bool _appClosedSent, _appJobFailed;
+    private bool _appClosedSent, _appJobFailed, _appLeft;
     private readonly Stopwatch _appPlaced = Stopwatch.StartNew();
     private readonly ShellKeyFilter _shellKeys = new();
+    private volatile DesktopAppClose? _appClose; // the tab was closed: done by the capture thread, which knows the app's windows
+    private readonly AppTaskbar _taskbar = new();  // no taskbar on the tabs' monitors while the app runs (§5)
+    private bool _taskbarFailed;
 
     // Clipboard images and files: one transfer each way at a time (a newer copy replaces an unfinished one).
     private TransferReceiver? _receiving;
@@ -248,6 +253,9 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)HelperMessage.App when _init?.App is not null:
                         _app = DesktopWire.ReadJson(m, HelperJson.Default.HelperApp);
                         break;
+                    case (byte)HelperMessage.AppClose when _init?.App is not null:
+                        _appClose = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopAppClose);
+                        break;
                     case (byte)DesktopMessage.Ack when _begun:
                         DesktopWire.ReadAck(m);
                         if (Interlocked.Decrement(ref _inFlight) < 0) Interlocked.Exchange(ref _inFlight, 0);
@@ -309,6 +317,9 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             _stop.Cancel();
             _sending?.Cancel();
             DropReceiving();
+            if (_taskbar.Off)
+                try { if (_taskbar.PutBack()) AppTaskbar.Announce(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) { /* the next helper or the service puts it back */ }
             _input.CompleteAdding();
             if (capture.IsAlive) capture.Join(TimeSpan.FromSeconds(3));
             if (inject.IsAlive) inject.Join(TimeSpan.FromSeconds(3));
@@ -788,10 +799,27 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             }
         }
         if (_appWindows is not { } job) return [area];
+        if (!_taskbar.Off && !_taskbarFailed && !_appLeft) TaskbarOff();
         var windows = apps.Visible();
         bool Owned(AppWindow w) => job.Owns(w.Handle);
         if (_appMain == IntPtr.Zero || !AppTabWindows.Exists(_appMain))
             _appMain = windows.FirstOrDefault(w => Owned(w) && AppTabWindows.MainCandidate(w.Handle))?.Handle ?? IntPtr.Zero;
+
+        if (_appClose is { } close)
+        {
+            // The tab was closed (§4.3): the app's top-level windows are asked to close, as their close button would –
+            // once; or, to leave it running, moved to the primary monitor, where it stays usable without the tab.
+            _appClose = null;
+            var primaryArea = _monitors.FirstOrDefault(m => m.Primary) is { } pm ? new ScreenRect(pm.X, pm.Y, pm.X + pm.Width, pm.Y + pm.Height) : area;
+            foreach (var w in windows.Where(Owned))
+            {
+                if (close.Force) AppTabWindows.Apply(new AppTabView.Move(w.Handle, AppTabView.CentredIn(w.Bounds, primaryArea, primaryArea), false));
+                else if (AppTabWindows.MainCandidate(w.Handle)) AppTabWindows.Close(w.Handle);
+            }
+            if (close.Force) _appLeft = true; // no longer the tab's: nothing is placed or watched any more
+            else _appPlaced.Restart();
+        }
+        if (_appLeft) return [area];
 
         if (_appPlaced.ElapsedMilliseconds >= 250)
         {
@@ -814,6 +842,22 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             SendSync(DesktopWire.Empty((DesktopMessage)HelperMessage.AppClosed));
         }
         return [.. AppTabView.Mask(area, windows, Owned)];
+    }
+
+    /// <summary>The app runs in this session: its user's taskbar on other monitors goes (put back when the helper ends).</summary>
+    private void TaskbarOff()
+    {
+        try
+        {
+            if (SessionUser.Sid() is not { } sid) return;
+            _taskbar.Reconcile(sid); // a helper that ended abruptly may have left it off – the record is the original
+            if (_taskbar.TurnOff(sid)) AppTaskbar.Announce();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException or System.Security.SecurityException)
+        {
+            _taskbarFailed = true; // the tabs' monitors keep their taskbar; it is filled like anything that isn't the app
+            SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "app tab: the taskbar on other monitors stays: " + ex.Message));
+        }
     }
 
     private DesktopRect[]? _regionsSent;

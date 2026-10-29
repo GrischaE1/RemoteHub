@@ -67,6 +67,8 @@ try
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
     try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
     catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
+    try { if (new AppTaskbar().RestoreLeftovers() is { } taskbar) log.Write(taskbar); } // the taskbar app tabs turned off
+    catch (Exception ex) { log.Write("App tabs: the taskbar setting an earlier helper changed could not be put back: " + ex.Message); }
     try { if (new KeepRdpDrawing().RestoreLeftovers() is { } rdp) log.Write(rdp); } // the same for RDP windows' drawing
     catch (Exception ex) { log.Write("RDP minimize setting an earlier helper changed could not be put back: " + ex.Message); }
     // The virtual monitor is off until a connection needs it (a crash may have left it on) – in the background: the

@@ -23,7 +23,7 @@ internal static class AppTabView
     /// desktop background, another program's window, and the part of an app window that another window covers.
     /// <paramref name="topmostFirst"/> is the z-order. Another program's window counts as covering even when it is
     /// see-through, so nothing of it shows; the app's own see-through windows (menus, shadows) don't cover what is under
-    /// them.
+    /// them. Windows kept out of captures aren't in the picture and count for nothing.
     /// </summary>
     public static List<ScreenRect> Mask(ScreenRect monitor, IReadOnlyList<AppWindow> topmostFirst, Func<AppWindow, bool> owned)
     {
@@ -31,6 +31,7 @@ internal static class AppTabView
         var shown = new List<ScreenRect>();
         foreach (var w in topmostFirst)
         {
+            if (w.OutOfPicture) continue; // the privacy screen's overlays: in no picture, so they hide nothing in it
             var r = w.Bounds.Intersect(monitor);
             if (r.IsEmpty) continue;
             if (owned(w))

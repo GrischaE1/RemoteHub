@@ -56,6 +56,13 @@ public class AppTabViewTests
     }
 
     [Fact]
+    public void The_privacy_screen_kept_out_of_the_picture_neither_covers_nor_is_filled()
+    {
+        var overlay = new A.AppWindow(7, "", Tab, Opaque: false, OutOfPicture: true);
+        Assert.Empty(A.AppTabView.Mask(Tab, [overlay, W(1, Tab)], w => w.Handle == 1));
+    }
+
+    [Fact]
     public void Windows_off_the_monitor_don_t_count()
     {
         var mask = A.AppTabView.Mask(Tab, [W(2, Primary), W(1, Tab)], w => w.Handle == 1);
