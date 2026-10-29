@@ -255,8 +255,9 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
             [pscustomobject]@{ Interface = $if; Dhcp = $dhcp; DnsServers = $dns.Count; DhcpAfterAdd = [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp }
         }
         Save 'net' ($net | Select-Object Dhcp, DnsServers, DhcpAfterAdd)
+        # Nothing while the device can't be reached: the adapter's change cuts the broker connection for a few seconds.
         function Reported {
-            (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses
+            try { (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses } catch { @() }
         }
         try {
             $sw = [Diagnostics.Stopwatch]::StartNew()
