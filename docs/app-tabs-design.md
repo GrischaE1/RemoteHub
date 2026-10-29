@@ -213,9 +213,9 @@ public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated);
 
 **Only where automatic sign-in works.** App tabs are offered on connections that reach the device through its agent and have *Sign in automatically when nobody is signed in* turned on, to devices that allow automatic sign-in (`DesktopRights.Apps`, §9). Without it, a server nobody is signed in on – the usual case – couldn't give the admin a session, and the tabs would mostly fail. Where the connection's setting is off, the Apps section and *Open app ▸* say "App tabs need automatic sign-in" with a button that turns the setting on for this connection; where the device doesn't allow it, they say why (the reason from the device) and point to *Install credential provider*. Both settings can be turned on for every connection with an installed agent: the connection's setting is offered on all of them, the device's through right-click → *Install credential provider*.
 
-- **Settings → Apps** (agent connections, inherited from the folder like the other agent options; a connection's own list replaces its folder's): a list with **Name**, **Program**, **Arguments**, **Start in** and **Run as administrator**, plus *Remove* and up/down to order them. Stored in the local database with the connection, with the icon when it came from the device.
+- **Settings → Apps** (connections and folders, and under *Connection defaults* like the other connection pages; inherited from the folder like the other agent options; a connection's own list replaces its folder's): a list with **Name**, **Program**, **Arguments**, **Start in** and **Run as administrator**, plus *Remove* and up/down to order them. Stored in the local database with the connection, with the icon when it came from the device.
 - **Adding:** *Add from the device…* (the usual way, §8.2), and *Add another app* for what isn't in the Start menu – an empty entry, or one of the presets (§8.3).
-- **Opening one:** the connection's context menu gets *Open app ▸* with the apps by name and, at the bottom, *More apps on FS01…*; where *Connect* is, a split button offers the same. Each opens a tab titled "FS01 – Event Viewer".
+- **Opening one:** the connection's context menu – and the tab's and the "+" menus – get *Open app ▸* with the apps by name and, at the bottom, *More apps on FS01…*. Each opens a tab titled "FS01 – Event Viewer". (A split button beside *Connect* was dropped: RemoteHub has no *Connect* button outside its menus.)
 - **Several at once:** each choice opens its own tab; choosing an app that already has a tab switches to it (a second copy is *Open again* in the tab's menu).
 - **No dialog before connecting:** there is no session, consent or monitor to choose. Quality comes from the connection's setting.
 
@@ -250,7 +250,7 @@ Built into RemoteHub, editable after adding – for devices whose Start menu doe
 - The picture fills the tab 1:1 – the monitor has the tab's size, so there is no scaling and no black bars. Resizing the tab resizes the app (§5).
 - The toolbar keeps quality, connection info and the keys toggle; the rest is hidden (§6.3).
 - Detaching the tab (as today) gives a window of its own that resizes the app with it.
-- The states of §7 use the existing waiting and paused panels: "Signing in on FS01…", "Starting Event Viewer on FS01…", "Event Viewer was closed" [Start again] [Close tab], "Closing Event Viewer…" [Leave it running].
+- The states of §7: "Signing in on FS01…" and "Starting Event Viewer on FS01…" in the existing waiting panel; "Event Viewer was closed" [Start again] [Close tab] in a panel like the end panel; "Closing Event Viewer…" [Leave it running] as a card at the bottom, like the transfer panel, so the app's own question above it stays visible and can be answered in the tab.
 
 ## 9. Rights, policy and audit
 

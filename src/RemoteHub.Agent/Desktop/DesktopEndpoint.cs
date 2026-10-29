@@ -166,21 +166,27 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     return;
                 }
                 var console = sessions.FirstOrDefault(s => s.Console);
-                // Nobody signed in: one of the account's app tabs signs in, the others wait for that and use its session.
-                while (console is { State: DesktopSessionState.SignIn } && identity.UserSid is { } signer)
+                // One of the account's app tabs signs in, the others wait for it and then use its session – also while the
+                // new session still shows as locked (Windows 11 shows its lock screen for a few seconds after a sign-in).
+                var waitedTooLong = false;
+                while (identity.UserSid is { } signer)
                 {
-                    var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                    if (AppSignIns.TryAdd(signer, mine))
+                    if (!waitedTooLong && AppSignIns.TryGetValue(signer, out var other))
                     {
-                        _appSignIn = (signer, mine);
-                        break;
+                        await Status(DesktopStatusState.StartingApp, $"Waiting for the sign-in of your other app tab on {DeviceName}…", ct);
+                        try { await other.Task.WaitAsync(AppSignInWait, ct); }
+                        catch (TimeoutException) { waitedTooLong = true; } // that tab is stuck: this one looks for itself
+                        sessions = desktop.Sessions.List();
+                        console = sessions.FirstOrDefault(s => s.Console);
+                        continue;
                     }
-                    if (!AppSignIns.TryGetValue(signer, out var other)) continue;
-                    await Status(DesktopStatusState.StartingApp, $"Waiting for the sign-in of your other app tab on {DeviceName}…", ct);
-                    try { await other.Task.WaitAsync(AppSignInWait, ct); }
-                    catch (TimeoutException) { /* that tab is stuck: this one looks again for itself */ }
-                    sessions = desktop.Sessions.List();
-                    console = sessions.FirstOrDefault(s => s.Console);
+                    if (console is { State: DesktopSessionState.SignIn })
+                    {
+                        var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        if (AppSignIns.TryAdd(signer, mine)) _appSignIn = (signer, mine);
+                        else if (!waitedTooLong) continue; // another tab began signing in just now: wait for it
+                    }
+                    break;
                 }
                 if (AppSessionRefusal(console) is { } notThere)
                 {
@@ -666,7 +672,24 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private async Task RefuseAutoSignIn(string code, string message, CancellationToken ct)
     {
         o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {message} ({code})");
-        await Status(DesktopStatusState.SignInFailed, message, ct);
+        await SignInFailed(message, ct);
+    }
+
+    /// <summary>
+    /// The automatic sign-in didn't happen. A desktop tab stays on the sign-in screen; an app tab has no session to start
+    /// its app in, so it ends, saying why – and the account's other app tabs waiting for this sign-in go on.
+    /// </summary>
+    private async Task SignInFailed(string message, CancellationToken ct)
+    {
+        if (_app is null)
+        {
+            await Status(DesktopStatusState.SignInFailed, message, ct);
+            return;
+        }
+        AppSignInDone();
+        _endReason = "the automatic sign-in failed";
+        await Status(DesktopStatusState.Failed, message, ct);
+        _endRequested.TrySetResult();
     }
 
     /// <summary>
@@ -740,7 +763,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         $": {result.Message}");
                 else o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {result.Message} ({result.Code})");
                 if (_screenByService) { _screen = null; _screenByService = false; _resume?.Screen = null; _resume?.ScreenByService = false; }
-                await Status(DesktopStatusState.SignInFailed, result.Message, ct);
+                await SignInFailed(result.Message, ct);
                 return;
             }
 
@@ -782,7 +805,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         catch (Exception ex)
         {
             o.Log.Audit(AuditEvent.DesktopError, $"Automatic sign-in: unexpected error ({identity.Account} from {source}): {ex}");
-            try { await Status(DesktopStatusState.SignInFailed, "The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
+            try { await SignInFailed("The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
         }
         finally { _autoSignInPending = false; } // confirmed (_autoSigned from now on), failed or undone
     }

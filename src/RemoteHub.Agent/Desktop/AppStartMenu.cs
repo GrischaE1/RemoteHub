@@ -67,7 +67,8 @@ internal static unsafe partial class AppStartMenu
             FileSystemInfo[] items;
             try { items = new DirectoryInfo(folder).GetFileSystemInfos(); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-            foreach (var item in items.OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase))
+            // By name without ".lnk": of two shortcuts to the same app, "Tool" comes before "Tool Copy" and is the one kept.
+            foreach (var item in items.OrderBy(i => Path.GetFileNameWithoutExtension(i.Name), StringComparer.OrdinalIgnoreCase))
             {
                 if (item.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
                 if (item is DirectoryInfo d) { if (depth + 1 < MaxDepth) folders.Enqueue((d.FullName, depth + 1)); }

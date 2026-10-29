@@ -823,6 +823,8 @@ public partial class MainWindow : FluentWindow
         CmDesktopOther.Visibility = V(n is Connection oc && (agentDefault ? rdpOn : agentDesktopOn && oc.Agent is { Status: AgentStatus.Installed }));
         CmDesktopOther.Header = agentDefault ? "Remote desktop via RDP" : "Remote desktop via RemoteHub Agent";
         CmDesktopOther.Icon = new SymbolIcon(agentDefault ? SymbolRegular.Desktop24 : SymbolRegular.DesktopCursor24);
+        FillOpenApps(CmOpenApp, n as Connection);
+        CmOpenApp.Visibility = V(GroupHasItems(CmOpenApp));
         CmAddShare.ToolTip = AddShareTip(n as Connection);
         // A read-only tree (policy AllowConnectionEditing = 0, §5.4): nothing that creates, changes, moves or deletes an item.
         var editable = Features.IsAllowed(Feature.ConnectionEditing);
@@ -905,7 +907,7 @@ public partial class MainWindow : FluentWindow
         CmManage.Visibility = V(GroupHasItems(CmManage));
         CmMore.Visibility = V(GroupHasItems(CmMore));
         // Separators only between groups that show: with RDP and the agent desktop blocked the menu may start with Tools or Edit.
-        var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
+        var connectShown = new[] { CmConnect, CmConnectNew, CmDesktopOther, CmOpenApp, CmConnectAll }.Any(i => i.Visibility == Visibility.Visible);
         var toolsShown = new[] { CmTools, CmDevice, CmManage }.Any(g => g.Visibility == Visibility.Visible);
         CmPsSep.Visibility = V(connectShown && toolsShown);
         // …and only with something after it: Edit and the rest (a read-only tree hides them), or More.
@@ -975,6 +977,9 @@ public partial class MainWindow : FluentWindow
                 cm.Items.Add(MenuEntry(agentDesktop is null ? "Remote desktop via RemoteHub Agent" : "Show agent desktop", SymbolRegular.DesktopCursor24, () => OpenAgentDesktop(c),
                     tip: "The device's screen through the RemoteHub Agent – for devices where RDP is off"));
         }
+        var openApp = Submenu("Open app", SymbolRegular.Apps24);
+        FillOpenApps(openApp, c);
+        if (openApp.Items.Count > 0) cm.Items.Add(openApp);
         var st = PsState(c);
         var toolsViaAgent = UsesAgent(c);
         var name = toolsViaAgent ? "RemoteHub Agent" : "PowerShell remoting";
@@ -1797,8 +1802,15 @@ public partial class MainWindow : FluentWindow
         if (Refused(Feature.AgentDesktop)) return;
         if (AgentDesktopTarget(c, null) is not { } t) return;
         var s = _vm.OpenAgentDesktop(c);
+        AddAgentDesktopView(c, s);
+        s.Connect(t.Target, t.Source, AccentFor(c));
+    }
+
+    /// <summary>The tab's view for an agent desktop or app tab of <paramref name="c"/>, with this PC's remembered choices.</summary>
+    private void AddAgentDesktopView(Connection c, AgentDesktopSession s)
+    {
         var ui = _vm.Data.Ui;
-        var view = new AgentDesktopView(s, () => ConnectAgentDesktop(s), s.Close, () => { s.Close(); OpenRdp(c); },
+        var view = new AgentDesktopView(s, () => { if (s.App is null) ConnectAgentDesktop(s); else ConnectAgentApp(s); }, s.Close, () => { s.Close(); OpenRdp(c); },
             // What this PC's policy fixes (docs/admx-design.md §6.8) is used, and not remembered as the user's choice.
             () => DesktopQualityPreset.Find(AppPolicy.AgentDesktopQuality ?? ui.AgentDesktopQuality),
             (quality, consent) =>
@@ -1828,7 +1840,6 @@ public partial class MainWindow : FluentWindow
         _views[s] = view;
         SessionPanel.Children.Add(view);
         UpdateSessionVisibility();
-        s.Connect(t.Target, t.Source, AccentFor(c));
     }
 
     private void ConnectAgentDesktop(AgentDesktopSession s)
@@ -2238,7 +2249,7 @@ public partial class MainWindow : FluentWindow
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var parent = _vm.TargetFolderForNew();
         var c = new Connection { Parent = parent };
-        if (new EditorWindow(c, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
+        if (new EditorWindow(c, _vm.Data, isNew: true) { Owner = this, PickAppsFromDevice = PickAppsFromDevice }.ShowDialog() == true)
         {
             _vm.AddNow(c, parent);
             RevealInTree(c);
@@ -2253,7 +2264,7 @@ public partial class MainWindow : FluentWindow
         var f = new Folder { Parent = parent };
         if (parent?.BrokerRoot is { Broker: { } root })
             f.Broker = new BrokerRef { Connection = root.Connection, Kind = BrokerItemKind.Folder, Item = Guid.NewGuid().ToString() };
-        if (new EditorWindow(f, _vm.Data, isNew: true) { Owner = this }.ShowDialog() == true)
+        if (new EditorWindow(f, _vm.Data, isNew: true) { Owner = this, PickAppsFromDevice = PickAppsFromDevice }.ShowDialog() == true)
         {
             _vm.AddNow(f, parent);
             RevealInTree(f);
@@ -2261,13 +2272,14 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void EditNode(NodeBase n)
+    /// <param name="page">The settings page to open on (e.g. "PageApps"); null: the first.</param>
+    private void EditNode(NodeBase n, string? page = null)
     {
         if (Refused(Feature.ConnectionEditing)) return; // read-only tree by policy (docs/admx-design.md §5.4)
         var name = n.Name;
-        if (new EditorWindow(n, _vm.Data, isNew: false) { Owner = this }.ShowDialog() == true)
+        if (new EditorWindow(n, _vm.Data, isNew: false, page: page) { Owner = this, PickAppsFromDevice = PickAppsFromDevice }.ShowDialog() == true)
         {
-            foreach (var s in _vm.Sessions.Where(s => s.Connection == n)) s.Title = n.Name;
+            foreach (var s in _vm.Sessions.Where(s => s.Connection == n)) s.Title = s is AgentDesktopSession { App: { } app } ? $"{n.Name} – {app.Name}" : n.Name;
             _vm.RequestSave();
             if (n.Name != name) _ = PublishLayout(n); // a folder's name or a device's label is shared
         }
@@ -2388,7 +2400,7 @@ public partial class MainWindow : FluentWindow
             ConnectBroker: ConnectBrokerAsync,
             DisconnectBroker: DisconnectBrokerAsync,
             WatchBrokers: WatchBrokers);
-        if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this }.ShowDialog() == true) _vm.RequestSave();
+        if (new EditorWindow(null, _vm.Data, isNew: false, host, page) { Owner = this, PickAppsFromDevice = PickAppsFromDevice }.ShowDialog() == true) _vm.RequestSave();
         UpdateRailVersion();
     }
 

@@ -63,6 +63,14 @@ public class AppStartMenuTests : IDisposable
     }
 
     [Fact]
+    public void Of_two_shortcuts_to_one_app_the_plain_name_comes_first_and_is_kept()
+    {
+        Touch("Tool Copy.lnk");
+        Touch("Tool.lnk"); // "Tool Copy.lnk" sorts before "Tool.lnk" by file name (space before dot)
+        Assert.Equal(["Tool.lnk", "Tool Copy.lnk"], A.AppStartMenu.Files(_root).Select(f => Path.GetFileName(f.File)));
+    }
+
+    [Fact]
     public void The_walk_stops_at_its_depth()
     {
         Touch(string.Join('\\', Enumerable.Range(1, A.AppStartMenu.MaxDepth)) + @"\Too deep.lnk");

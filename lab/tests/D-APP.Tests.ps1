@@ -245,6 +245,8 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
     Context 'run as administrator' {
         BeforeAll {
             if ($script:noApps) { return }
+            # Each context signs in again: a fresh agent process starts its automatic sign-in limit (a few per 15 minutes) anew.
+            Restart-LabAgent -Name $VmName -Pin $pin | Out-Null
             $e = [ordered]@{}
             $e.on = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'elevated') -TimeoutSec 900 -Steps ((Tab (App 'elevated' '0,255,0' -Elevated) -SignIn) + @(
                 @{ do = 'sleep'; seconds = 3 }, @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('Ended', 'AppClosed'); timeout = 60 }))
@@ -270,6 +272,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
     Context 'drops, the service and limits' {
         BeforeAll {
             if ($script:noApps) { return }
+            Restart-LabAgent -Name $VmName -Pin $pin | Out-Null
             $d = [ordered]@{}
             $o = Out 'drop'
             $d.job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'resume') -TimeoutSec 1200 -Steps ((Tab (App 'resume' '255,0,0') -SignIn) + @(
@@ -329,6 +332,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
         BeforeAll {
             if ($script:noApps) { return }
             Set-LabAutoLogon -Name $VmName -Account User
+            Wait-LabAgent -Name $VmName -Pin $pin | Out-Null # the VM restarted for the other account's sign-in
             $s = [ordered]@{}
             $s.r = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'other') -TimeoutSec 600 -Steps (Tab (App 'other' '255,0,0') -SignIn)
             $s.started = @(Started 'other')

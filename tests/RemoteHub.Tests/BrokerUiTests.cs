@@ -285,7 +285,7 @@ public class BrokerUiTests
     /// The settings window takes its styles from App.xaml: an Application with RemoteHub's resources while the test runs,
     /// removed again afterwards so other tests see none, as before.
     /// </summary>
-    private static void WithAppResources(Action test)
+    internal static void WithAppResources(Action test)
     {
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/RemoteHub;component/Themes/Styles.xaml") });
