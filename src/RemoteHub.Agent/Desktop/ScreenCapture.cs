@@ -420,6 +420,22 @@ internal static unsafe class DisplayModes
     }
 
     /// <summary>
+    /// The displays (\\.\DISPLAYn) of all the driver's monitors in the order Windows lists them – the order the driver
+    /// made them in, which app tabs use as their places (app-tabs-design §5).
+    /// </summary>
+    public static IReadOnlyList<string> VirtualMonitors()
+    {
+        var found = new List<string>();
+        var dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) };
+        for (uint i = 0; EnumDisplayDevicesW(null, i, ref dd, 0); i++, dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) })
+        {
+            if ((dd.StateFlags & 0x1 /* DISPLAY_DEVICE_ATTACHED_TO_DESKTOP */) == 0) continue;
+            if (new string(dd.DeviceString).Contains("Virtual Display Driver", StringComparison.OrdinalIgnoreCase)) found.Add(new string(dd.DeviceName));
+        }
+        return found;
+    }
+
+    /// <summary>
     /// Makes <paramref name="device"/> the primary monitor (taskbar, new windows) – for the virtual monitor, so nothing
     /// opens on an invisible 640×480 output. The whole layout is moved so that it sits at 0,0 (the monitor at 0,0 is the
     /// primary one); Windows picks another primary again when the virtual monitor goes away.

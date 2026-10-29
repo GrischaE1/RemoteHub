@@ -56,12 +56,15 @@ internal sealed class AppProcess : IDisposable
             : text;
     }
 
+    /// <summary>A new, unguessable name for a tab's job, which the helper opens to tell the app's windows (query access only).</summary>
+    public static string NewJobName() => @"Global\RemoteHub-AppTab-" + Guid.NewGuid().ToString("N");
+
     /// <summary>
     /// Starts <paramref name="launch"/> as the user of <paramref name="token"/> – with their full administrator token when
     /// it is to run elevated (no UAC prompt: the service holds SeTcbPrivilege; §6.1). Throws when it can't, also when an
     /// elevated start is asked for an account that isn't an administrator here.
     /// </summary>
-    public static AppProcess Start(SafeAccessTokenHandle token, AppTabs.Launch launch)
+    public static AppProcess Start(SafeAccessTokenHandle token, AppTabs.Launch launch, string jobName)
     {
         var user = token.DangerousGetHandle();
         var linked = IntPtr.Zero;
@@ -91,7 +94,13 @@ internal sealed class AppProcess : IDisposable
             var job = IntPtr.Zero;
             try
             {
-                job = Native.CreateJobObject(IntPtr.Zero, null);
+                // Named, so the helper can open it; a random name, so nobody can create it first and hand the service theirs.
+                job = Native.CreateJobObject(IntPtr.Zero, jobName);
+                if (job != IntPtr.Zero && Marshal.GetLastWin32Error() == 183 /* ERROR_ALREADY_EXISTS */)
+                {
+                    Native.CloseHandle(job);
+                    job = IntPtr.Zero;
+                }
                 if (job == IntPtr.Zero || !Native.AssignProcessToJobObject(job, pi.hProcess)) throw new Win32Exception();
                 if (Native.ResumeThread(pi.hThread) == -1) throw new Win32Exception();
                 return new AppProcess(pi.hProcess, job, pi.dwProcessId);
