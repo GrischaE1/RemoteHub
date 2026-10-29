@@ -7726,11 +7726,11 @@ P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 **Steps:**
 1. The device policy `BrokerKeepAliveSeconds` = 30; the agent restarted and online at the broker.
 2. The agent's established connection to the broker and the next hop to it (`Find-NetRoute`); that hop's neighbour entry replaced by a permanent one with a MAC nobody has – the device's frames go nowhere, with no close and no network change (PowerShell Direct runs over VMBus).
-3. Read the agent log until it gives the connection up, at most 150 s.
+3. Read the agent log until the connection ends, at most 150 s.
 4. Remove the entry; wait until the device is online at the broker again and the log says it connected again; a request through the broker.
 
 **Expected:**
-- within 110 s (two 30 s intervals and 15 s): "RemoteHub Broker …: the connection was given up – nothing from the broker for … s"
+- within 110 s (two 30 s intervals and 15 s) the log says the connection ended: "RemoteHub Broker …: the connection was given up – nothing from the broker for … s" from the agent's keep-alive, or Windows' reset when it comes first (about 35 s: the keep-alive's retransmissions find no way out)
 - afterwards "RemoteHub Broker …: connected again", the device online, and the request through the broker answers with its device id
 
 #### B-BRK-04 · Leave and join

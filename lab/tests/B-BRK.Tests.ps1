@@ -333,12 +333,13 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
                 [pscustomobject]@{ hop = "$hop"; ifIndex = $route.InterfaceIndex; log = $log; lines = $lines; remote = "$($conn.RemoteAddress):$($conn.RemotePort)" }
             }
             $cut.PSObject.Properties['error'] | Should -BeNullOrEmpty -Because "$(if ($cut.PSObject.Properties['error']) { $cut.error })"
-            # the agent's log: the line saying it gave the connection up (an en dash in it: matched with '.')
+            # the agent's log: the line saying the connection ended - its own keep-alive giving up ("nothing from the broker
+            # for ..."), or Windows resetting it first when the retransmissions of a keep-alive find no way out (about 35 s)
             $gaveUp = Invoke-LabGuest -Name $VmName -ArgumentList $cut.log, $cut.lines -ScriptBlock {
                 param($log, $skip)
                 $sw = [Diagnostics.Stopwatch]::StartNew()
                 do {
-                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'the connection was given up . nothing from the broker for' })[0]
+                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'RemoteHub Broker \S+: ' -and $_ -notmatch ': connected again' })[0]
                     if ($line) { break }
                     Start-Sleep -Seconds 2
                 } while ($sw.Elapsed.TotalSeconds -lt 150)
@@ -363,7 +364,7 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
             }
             $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
             Save 'silent-link' ([pscustomobject]@{ cut = $cut; gaveUp = $gaveUp; again = $again; health = $r.health })
-            $gaveUp.line | Should -Not -BeNullOrEmpty -Because "the agent gives a connection up that carries nothing (waited $($gaveUp.seconds) s)"
+            $gaveUp.line | Should -Not -BeNullOrEmpty -Because "a connection that carries nothing ends (waited $($gaveUp.seconds) s)"
             $gaveUp.seconds | Should -BeLessThan 110 -Because 'two 30 s intervals and 15 s, read every 2 s'
             $again | Should -Not -BeNullOrEmpty -Because 'the agent logs that it is connected again'
             $r.health.deviceId | Should -Be $script:device.id
