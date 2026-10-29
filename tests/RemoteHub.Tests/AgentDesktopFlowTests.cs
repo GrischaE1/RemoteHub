@@ -996,13 +996,14 @@ public partial class AgentDesktopFlowTests
     }
 
     [Fact]
-    public async Task App_tabs_arent_offered_yet_and_a_start_without_the_virtual_display_is_refused_before_anything_runs()
+    public async Task An_app_tab_without_the_virtual_display_or_automatic_sign_in_is_refused_before_anything_runs()
     {
         await using var d = await StartDevice();
         d.Sessions.Current = [ActiveUser with { User = @"TESTdmin" }];
         using var v = await Connect(d);
-        // Not announced until the endpoint and the helper serve app tabs end to end; this test device has no automatic sign-in.
-        Assert.DoesNotContain(DesktopFeatures.Apps, v.Client.Hello.Features!);
+        // Offered where the virtual display is installed (as on some test machines); never to this account here, which has no
+        // automatic sign-in on the test device.
+        Assert.Equal(A.VirtualDisplay.Installed, v.Client.Hello.Features!.Contains(DesktopFeatures.Apps));
         Assert.False(v.Client.Hello.Rights.Apps);
         v.Start(ActiveUser.Id, DesktopConsent.None, app: new DesktopAppStart(@"C:\Windows\System32
 otepad.exe", "--secret-argument", "", false, "Notepad"));
