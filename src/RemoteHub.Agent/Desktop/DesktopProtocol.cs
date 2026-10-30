@@ -80,6 +80,11 @@ public static class DesktopFeatures
     public const string AutoSignIn = "autoSignIn";
     /// <summary>Files dropped on the tab are saved on the device's Desktop (<see cref="DesktopTransferKind.Drop"/>).</summary>
     public const string DropFiles = "dropFiles";
+    /// <summary>
+    /// App tabs (app-tabs-design §7): <see cref="DesktopStart.App"/> starts a program in the account's own session, on a
+    /// virtual monitor of its own; <see cref="DesktopMessage.AppList"/> lists the device's Start menu.
+    /// </summary>
+    public const string Apps = "apps";
 }
 
 /// <summary>What may go through the clipboard (policy <c>DesktopClipboard</c>).</summary>
@@ -116,6 +121,15 @@ public enum DesktopMessage : byte
     PrivacyScreen = 13,
     /// <summary>Agent → RemoteHub: what is hidden now (<see cref="DesktopPrivacy"/>) – sent on every change.</summary>
     Privacy = 14,
+    /// <summary>RemoteHub → agent, in an app tab: close the tab's app (<see cref="DesktopAppClose"/>).</summary>
+    AppClose = 15,
+    /// <summary>RemoteHub → agent, in an app tab after <see cref="DesktopStatusState.AppClosed"/>: start the app again (no payload).</summary>
+    AppRestart = 16,
+    /// <summary>
+    /// RemoteHub → agent, after Hello and instead of Start: list the Start menu's apps (no payload). Agent → RemoteHub:
+    /// the list (<see cref="DesktopAppList"/>), then the connection ends. Nothing is started and no session is needed.
+    /// </summary>
+    AppList = 17,
 
     // binary
     Video = 20,
@@ -225,14 +239,24 @@ public static class DesktopStatusState
     public const string SignedIn = "SignedIn";
     /// <summary>No automatic sign-in; the message says why. The connection stays on the sign-in screen.</summary>
     public const string SignInFailed = "SignInFailed";
+
+    // App tabs (DesktopStart.App). Older RemoteHub versions never start one.
+    /// <summary>The program is being started (Message: "Starting Event Viewer…").</summary>
+    public const string StartingApp = "StartingApp";
+    /// <summary>The app's last window and processes are gone; RemoteHub offers to start it again or close the tab.</summary>
+    public const string AppClosed = "AppClosed";
+    /// <summary>The tab was closed and the app shows something before it closes ("Save changes?").</summary>
+    public const string AppClosing = "AppClosing";
 }
 
 /// <summary>What the signed-in admin may do on this device (view is implied by a successful sign-in).</summary>
 /// <param name="PrivacyScreen">May black out the device's screen (right PrivacyScreen, policy, Windows 10 2004 or later).</param>
 /// <param name="PrivacyInputBlock">May also block the mouse and keyboard at the device while it is blacked out (policy PrivacyScreen = 2).</param>
 /// <param name="AutoSignIn">May sign in automatically on the console when nobody is signed in (right, policy, credential provider installed and signed).</param>
+/// <param name="Apps">May open app tabs (right Desktop, policy DesktopApps, the virtual display installed).</param>
+/// <param name="AppsElevated">May start apps in app tabs as administrator (policy DesktopAppsElevated).</param>
 public sealed record DesktopRights(bool Control, bool SecureDesktop, bool ConsentBypass, bool PrivacyScreen = false, bool PrivacyInputBlock = false,
-    bool AutoSignIn = false);
+    bool AutoSignIn = false, bool Apps = false, bool AppsElevated = false);
 
 /// <param name="Client">For a remote (RDP) session: the name of the PC it is connected from ("" otherwise).</param>
 public sealed record DesktopSessionInfo(int Id, string User, string State, bool Console, string Station, string Client = "");
@@ -250,8 +274,31 @@ public sealed record DesktopHello(int Protocol, string Device, string Account, D
 /// <param name="Features">What this RemoteHub supports (<see cref="DesktopFeatures"/>; null from older versions).</param>
 /// <param name="AutoSignIn">Sign in automatically with the account that signed in to the agent – only for the console in the SignIn state, not view-only.</param>
 /// <param name="AutoSignInEndAction">Lock or SignOut when the connection ends (the device's policy wins); null: Lock.</param>
+/// <param name="App">
+/// Start this app on a virtual monitor of its own in the account's own console session (feature <see cref="DesktopFeatures.Apps"/>).
+/// SessionId and Consent are ignored: the agent finds the session, or signs in with AutoSignIn.
+/// </param>
 public sealed record DesktopStart(int SessionId, string Consent, bool ViewOnly, int FramesPerSecond, int Quality, int Monitor, string? Resume = null,
-    string[]? Features = null, bool AutoSignIn = false, string? AutoSignInEndAction = null);
+    string[]? Features = null, bool AutoSignIn = false, string? AutoSignInEndAction = null, DesktopAppStart? App = null);
+
+/// <summary>An app for an app tab, as RemoteHub has it on the connection or took it from the Start menu list.</summary>
+/// <param name="Program">Full path on the device; environment variables are expanded in the account's environment.</param>
+/// <param name="Arguments">Command line arguments – never logged on either side.</param>
+/// <param name="WorkingFolder">Start in this folder ("" = the program's folder).</param>
+/// <param name="Elevated">Start with the account's full administrator token (<see cref="DesktopRights.AppsElevated"/>).</param>
+/// <param name="Name">Shown in the device's messages and the tab ("Event Viewer").</param>
+public sealed record DesktopAppStart(string Program, string Arguments, string WorkingFolder, bool Elevated, string Name);
+
+/// <param name="Force">Leave the app running and end the tab, instead of asking the app to close.</param>
+public sealed record DesktopAppClose(bool Force);
+
+/// <summary>An app in the device's Start menu (<see cref="DesktopMessage.AppList"/>).</summary>
+/// <param name="Group">The Start menu folder it is in, "" for the top ("Administrative Tools").</param>
+/// <param name="Icon">32×32 PNG, null when there is none or it was too large.</param>
+public sealed record DesktopListedApp(string Name, string Group, string Program, string Arguments, string WorkingFolder, bool Elevated, byte[]? Icon);
+
+/// <param name="Truncated">More than the limits allow were found; the rest is left out.</param>
+public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated);
 
 /// <param name="Resume">With Connected: a single-use token to continue after a dropped connection (see <see cref="DesktopStart.Resume"/>).</param>
 /// <param name="EndAction">With SignedIn: what happens to the session when the connection ends on purpose (Lock or SignOut).</param>
@@ -593,5 +640,7 @@ public static class DesktopWire
 [JsonSerializable(typeof(DesktopTransferEnd))]
 [JsonSerializable(typeof(DesktopPrivacyScreen))]
 [JsonSerializable(typeof(DesktopPrivacy))]
+[JsonSerializable(typeof(DesktopAppClose))]
+[JsonSerializable(typeof(DesktopAppList))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class DesktopJson : JsonSerializerContext;

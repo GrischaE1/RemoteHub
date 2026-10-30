@@ -49,6 +49,41 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         [DesktopFeatures.AllMonitors, DesktopFeatures.Stats, DesktopFeatures.Ping, DesktopFeatures.Resume, DesktopFeatures.Transfer, DesktopFeatures.TransferReceipt, DesktopFeatures.TransferOnPaste,
          DesktopFeatures.UserPrivacy, DesktopFeatures.HideApps, DesktopFeatures.DropFiles];
 
+    // App tab (docs/app-tabs-design.md): the app to start, its monitor, its process and what the helper is told – kept
+    // here, so they outlive a helper restart (an automatic sign-in moves the console to a new session).
+    private DesktopAppStart? _app;
+    private VirtualDisplay.AppLease? _appLease;
+    private AppProcess? _appProcess;
+    private HelperApp? _helperApp;
+    private int? _appSession; // the session the app runs in, once started
+    private volatile bool _appClosed;  // the app ended by itself: the tab offers to start it again
+    private volatile bool _appClosing; // the admin closed the tab: the app's end ends the connection
+
+    /// <summary>
+    /// App tabs whose app runs, per session. Several tabs share the session the first one's automatic sign-in made: its
+    /// end action (sign out, by default) waits for the last of them (§4.3), whichever connection signed in.
+    /// </summary>
+    internal static readonly ConcurrentDictionary<int, int> AppTabsOpen = new();
+
+    /// <summary>
+    /// App tabs of an account (by SID) whose automatic sign-in is under way: the account's further app tabs wait for it
+    /// and then use the session it made, rather than starting a second sign-in (§4.1).
+    /// </summary>
+    internal static readonly ConcurrentDictionary<string, TaskCompletionSource> AppSignIns = new(StringComparer.OrdinalIgnoreCase);
+    private (string Sid, TaskCompletionSource Done)? _appSignIn;
+
+    /// <summary>How long an app tab waits for another tab's sign-in.</summary>
+    internal static TimeSpan AppSignInWait = TimeSpan.FromMinutes(2);
+
+    /// <summary>This tab's sign-in is over (signed in and the app started, failed, or the connection ended): the waiting tabs go on.</summary>
+    private void AppSignInDone()
+    {
+        if (_appSignIn is not { } mine) return;
+        _appSignIn = null;
+        AppSignIns.TryRemove(new KeyValuePair<string, TaskCompletionSource>(mine.Sid, mine.Done));
+        mine.Done.TrySetResult();
+    }
+
     // Privacy: what the admin may do, and what is hidden now (as the helper last reported it).
     private bool _privacyRight, _privacyInputRight;
     private volatile DesktopPrivacy _privacy = DesktopPrivacy.Nothing;
@@ -78,6 +113,10 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         string[] features = PrivacyScreenSupported && policy.PrivacyScreen != PrivacyScreenLevel.Off ? [.. Features, DesktopFeatures.PrivacyScreen] : Features;
         var autoSignInWhyNot = AutoSignInRefusal(policy, control);
         var autoSignInRight = autoSignInWhyNot is null;
+        // App tabs where the virtual display is installed and the policy allows them; for this account only where automatic
+        // sign-in is available to it too (app-tabs-design §4.1, §9).
+        var appsRight = AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is null;
+        if (VirtualDisplay.Installed && policy.DesktopApps) features = [.. features, DesktopFeatures.Apps];
         if (autoSignInRight) features = [.. features, DesktopFeatures.AutoSignIn];
         // The device allows it by policy, yet it isn't offered: say why, so the log answers "where is the option?"
         else if (policy.NoUserBehavior == NoUserBehaviors.AutoSignIn && sessions.Any(s => s.Console && s.State == DesktopSessionState.SignIn))
@@ -86,13 +125,27 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         try
         {
             await SendWs(DesktopWire.Json(DesktopMessage.Hello, new DesktopHello(DesktopProtocol.Version, o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName,
-                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight, autoSignInRight), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
+                identity.Account, new DesktopRights(control, _secureRight, bypass, _privacyRight, _privacyInputRight, autoSignInRight,
+                    Apps: appsRight, AppsElevated: appsRight && policy.DesktopAppsElevated), modes, [.. sessions], policy.MaxFramesPerSecond, policy.MaxQuality,
                 policy.ConsentTimeoutSeconds, features, _clipboard, AgentHost.AgentVersion), DesktopJson.Default.DesktopHello), ct);
 
             // ---- Start
             using var startTimeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             startTimeout.CancelAfter(TimeSpan.FromMinutes(5));
             var first = await ReceiveWs(startTimeout.Token);
+            if (first is not null && DesktopWire.TypeOf(first) == DesktopMessage.AppList)
+            {
+                // The Start menu list (app-tabs-design §6.5): instead of a start, once; no session needed, nothing runs.
+                if (AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is { } listWhyNot)
+                {
+                    await Status(DesktopStatusState.Failed, listWhyNot, ct);
+                    return;
+                }
+                var list = await Task.Run(() => AppStartMenu.List(policy, identity.UserSid), ct);
+                o.Log.Write($"Desktop: the Start menu list for {identity.Account} from {source}: {list.Apps.Length} app(s){(list.Truncated ? ", more left out" : "")}");
+                await SendWs(DesktopWire.Json(DesktopMessage.AppList, list, DesktopJson.Default.DesktopAppList), ct);
+                return;
+            }
             if (first is null || DesktopWire.TypeOf(first) != DesktopMessage.Start) return;
             var start = DesktopWire.ReadJson(first, DesktopJson.Default.DesktopStart);
 
@@ -101,6 +154,53 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             {
                 o.Log.Audit(AuditEvent.DesktopRefused, $"Desktop refused: {identity.Account} from {source} – session {start.SessionId}: {reason}");
                 await Status(DesktopStatusState.Failed, reason, ct);
+            }
+
+            // App tab: the account's own console session, or automatic sign-in when nobody is signed in (§4.1) – never
+            // someone else's. Its monitor is taken before anything starts, so a full device refuses at once.
+            if (start.App is { } app)
+            {
+                if (AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is { } notHere)
+                {
+                    await Refuse(notHere);
+                    return;
+                }
+                var console = sessions.FirstOrDefault(s => s.Console);
+                // One of the account's app tabs signs in, the others wait for it and then use its session – also while the
+                // new session still shows as locked (Windows 11 shows its lock screen for a few seconds after a sign-in).
+                var waitedTooLong = false;
+                while (identity.UserSid is { } signer)
+                {
+                    if (!waitedTooLong && AppSignIns.TryGetValue(signer, out var other))
+                    {
+                        await Status(DesktopStatusState.StartingApp, $"Waiting for the sign-in of your other app tab on {DeviceName}…", ct);
+                        try { await other.Task.WaitAsync(AppSignInWait, ct); }
+                        catch (TimeoutException) { waitedTooLong = true; } // that tab is stuck: this one looks for itself
+                        sessions = desktop.Sessions.List();
+                        console = sessions.FirstOrDefault(s => s.Console);
+                        continue;
+                    }
+                    if (console is { State: DesktopSessionState.SignIn })
+                    {
+                        var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                        if (AppSignIns.TryAdd(signer, mine)) _appSignIn = (signer, mine);
+                        else if (!waitedTooLong) continue; // another tab began signing in just now: wait for it
+                    }
+                    break;
+                }
+                if (AppSessionRefusal(console) is { } notThere)
+                {
+                    await Refuse(notThere);
+                    return;
+                }
+                _app = app;
+                start = start with
+                {
+                    SessionId = console!.Id, Consent = DesktopConsent.None, ViewOnly = false, Monitor = 0,
+                    AutoSignIn = console.State == DesktopSessionState.SignIn,
+                    // The apps were started for these tabs: signed out at the end unless the policy or RemoteHub says otherwise (§12, Q1).
+                    AutoSignInEndAction = start.AutoSignInEndAction ?? AutoSignInEndActions.SignOut,
+                };
             }
 
             var session = sessions.FirstOrDefault(s => s.Id == start.SessionId);
@@ -114,6 +214,24 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
 
             // Continuing after a dropped connection: who allowed it carries over (single-use token, same account, a minute).
             var resumed = start.Resume is { Length: > 0 } token ? await DesktopResume.TakeAsync(token, identity.Account) : null;
+            if (_app is { } tabApp)
+            {
+                // Continued after a drop: the same monitor and the same running app – never a second copy of either.
+                if (resumed?.App is { } carried && carried.TryClaim())
+                    (_appLease, _appProcess, _helperApp, _appSession) = (carried.Lease, carried.Process, carried.Helper, carried.Session);
+                else
+                {
+                    var lease = _appLease = VirtualDisplay.NewAppLease();
+                    var (why, tabMonitor, note) = await Task.Run(() => (VirtualDisplay.Open(lease, 1280, 720, policy.MaxAppTabs, out var m, out var n), m, n), ct);
+                    if (note is not null) o.Log.Write($"Desktop: app tab: {note}");
+                    if (why is not null || tabMonitor is null)
+                    {
+                        await Refuse($"{tabApp.Name} can't get a monitor of its own: {why}");
+                        return;
+                    }
+                    _helperApp = new HelperApp(tabMonitor.Place, "", tabApp.Name);
+                }
+            }
             if (resumed is not null)
             {
                 _allowedBy = resumed.AllowedBy;
@@ -156,7 +274,13 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             // Automatic sign-in: decided now (§6.2 checks 1–5); the sign-in itself runs once the sign-in screen is shown.
             var autoSignInRefused = start.AutoSignIn && resumed is null ? AutoSignInStartRefusal(policy, control, session) : null;
             var autoSignIn = start.AutoSignIn && resumed is null && autoSignInRefused is null;
-            what =$"{(_viewOnly ? "view-only" : "control")}, session {session.Id} ({(session.User.Length > 0 ? session.User : "sign-in screen")}), " +
+            if (_app is not null && autoSignInRefused is { } noSignIn)
+            {
+                AppSignInDone();
+                await Refuse(noSignIn.Message);
+                return;
+            }
+            what = $"{(_app is { } whatApp ? $"app tab {whatApp.Name}, " : "")}{(_viewOnly ? "view-only" : "control")}, session {session.Id} ({(session.User.Length > 0 ? session.User : "sign-in screen")}), " +
                 (resumed is not null ? $"continued after a dropped connection (allowed by {(_allowedBy.Length > 0 ? _allowedBy : "nobody yet")})"
                 : active ? $"consent {consent}" : $"consent {consent} (on unlock or sign-in: {followUp})");
 
@@ -180,7 +304,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 UserHidden: resumed is not null && consent == DesktopConsent.None ? resumed.UserHidden : DesktopScreenHide.None,
                 HiddenApps: resumed is not null && consent == DesktopConsent.None ? resumed.HiddenApps : null, AlwaysHidden: [.. policy.HiddenApps],
                 SignedInRemotely: _autoSigned?.Session == session.Id, // continued in the session automatic sign-in created
-                PrivacyHeading: policy.PrivacyScreenMessage);
+                PrivacyHeading: policy.PrivacyScreenMessage, App: _helperApp);
             _hiddenApps = init.HiddenApps;
             _privacy = _privacy with { User = init.UserHidden };
             _settings = new DesktopSettings(init.Monitor, init.FramesPerSecond, init.Quality);
@@ -218,6 +342,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 var endAction = policy.AutoSignInEndAction ?? AutoSignInEndActions.Valid(start.AutoSignInEndAction) ?? AutoSignInEndActions.Lock;
                 _ = Task.Run(() => AutoSignInAsync(session.Id, endAction, ct), ct);
             }
+            // App tab in the admin's own session: the app starts now (after an automatic sign-in: once it is there, below).
+            if (_app is not null && active && !await StartApp(session.Id, ct)) return;
 
             // The helper can end without anyone wanting it: signing in switches desktops and often moves the console to a
             // new session. Then a new helper is started (in the console's current session). The connection was allowed –
@@ -335,7 +461,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     Monitor = _settings.Monitor, FramesPerSecond = _settings.FramesPerSecond, Quality = _settings.Quality, HoldUserDesktop = hold, Gdi = _gdi,
                     UserHidden = ask ? DesktopScreenHide.None : _privacy.User, HiddenApps = ask ? null : _hiddenApps,
                     // The session automatic sign-in created (or is creating) for this admin: no banner for anyone at the device.
-                    SignedInRemotely = signedIn && !ask && (_autoSignInPending || _autoSigned?.Session == target) && IsSelfSession(now!) },
+                    SignedInRemotely = signedIn && !ask && (_autoSignInPending || _autoSigned?.Session == target) && IsSelfSession(now!), App = _helperApp },
                     HelperJson.Default.HelperInit), ct);
                 if (ask)
                 {
@@ -360,6 +486,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 if (ask) await Status(DesktopStatusState.Connected, mode == DesktopConsent.None ? $"{now!.User} signed in – connected." : $"{now!.User} allowed access.", ct);
                 if (_settings.FitWidth > 0 || _settings.Monitor != init.Monitor)
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
+                // App tab: the automatic sign-in made the admin's session – the app starts in it now; the account's other
+                // app tabs, waiting for this sign-in, go on into the same session.
+                if (_app is not null && signedIn && IsSelfSession(now!))
+                {
+                    var appStarted = await StartApp(target, ct);
+                    AppSignInDone();
+                    if (!appStarted) break;
+                }
             }
         }
         // Already ended on purpose (the token is revoked) when the connection broke, e.g. while the end was being reported:
@@ -404,7 +538,18 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             // by this helper for a while (a continued connection takes over), then it is signed out.
             // A sign-in still under way confirms its session after this point and applies the end action itself.
             lock (_autoSignedLock) _autoSignClosed = true;
-            if (_autoSigned is { } mine && _resume?.TakenOver != true)
+            AppSignInDone(); // ended before its app ran: the waiting app tabs don't wait for it any longer
+            // App tabs: other app tabs still running in this session keep it as it is; the last one applies the end action.
+            // A dropped one is parked for its resume (it still counts) – its app and monitor wait for the connection to continue.
+            var parkApp = _lost && _resume is { Revoked: false } && _appLease is not null && _appProcess is not null && _helperApp is not null && _appSession is not null;
+            var appTabsLeft = _appSession is not { } appSession ? 0
+                : parkApp ? AppTabsOpen.GetValueOrDefault(appSession)
+                : AppTabsOpen.AddOrUpdate(appSession, 0, (_, n) => Math.Max(0, n - 1));
+            if (_autoSigned is { } shared && appTabsLeft > 0 && shared.Session == _appSession)
+                o.Log.Write($"Desktop: app tab: session {shared.Session} stays for {appTabsLeft} other app tab(s); the last one ends it ({shared.EndAction})");
+            else if (_autoSigned is null && _app is not null && appTabsLeft == 0 && _appSession is { } lastIn && o.Desktop!.AutoSigned.Owned(lastIn) is not null)
+                o.Desktop.AutoSigned.EndOnPurpose(lastIn, o.Log, "the last app tab ended");
+            if (_autoSigned is { } mine && _resume?.TakenOver != true && !(appTabsLeft > 0 && mine.Session == _appSession))
             {
                 if (_lost && _helper is { } cover && _helperSession == mine.Session)
                 {
@@ -416,6 +561,33 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             }
             _parkedHelper?.Dispose();
             _helper?.Dispose();
+            if (parkApp && _resume is { } parking)
+            {
+                var carried = parking.App = new DesktopResume.ParkedApp(_appLease!, _appProcess!, _helperApp!, _appSession!.Value);
+                var log = o.Log;
+                var autoSigned = o.Desktop!.AutoSigned;
+                _ = Task.Run(async () =>
+                {
+                    // Not continued in time: the monitor becomes a spare, and as the last app tab it ends the session.
+                    await Task.Delay(AutoSignInSessions.HoldAfterDrop + TimeSpan.FromSeconds(5));
+                    if (!carried.TryClaim()) return;
+                    carried.Process.Dispose();
+                    try { if (VirtualDisplay.Close(carried.Lease) is { } closed) log.Write($"Desktop: app tab (not continued): {closed}"); }
+                    catch (Exception ex) { log.Write($"Desktop: app tab: its monitor wasn't given back: {ex.Message}"); }
+                    if (AppTabsOpen.AddOrUpdate(carried.Session, 0, (_, n) => Math.Max(0, n - 1)) == 0 && autoSigned.Owned(carried.Session) is not null)
+                        autoSigned.EndOnPurpose(carried.Session, log, "the last app tab wasn't continued", AutoSignInEndActions.SignOut);
+                });
+            }
+            else if (_appLease is { } appLease)
+            {
+                _appProcess?.Dispose(); // the app keeps running: closing it is the tab's business (§4.3)
+                var log = o.Log;
+                _ = Task.Run(() =>
+                {
+                    try { if (VirtualDisplay.Close(appLease, line => log.Write($"Desktop: app tab: {line}")) is { } closed) log.Write($"Desktop: app tab: {closed}"); }
+                    catch (Exception ex) { log.Write($"Desktop: app tab: its monitor wasn't given back: {ex.Message}"); }
+                });
+            }
             {
                 // Switched off with the last connection that had it on – in the background, since it may be tried again for
                 // a few seconds while the ended helper still holds the display. Always released: a switch-on still under
@@ -500,7 +672,24 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private async Task RefuseAutoSignIn(string code, string message, CancellationToken ct)
     {
         o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {message} ({code})");
-        await Status(DesktopStatusState.SignInFailed, message, ct);
+        await SignInFailed(message, ct);
+    }
+
+    /// <summary>
+    /// The automatic sign-in didn't happen. A desktop tab stays on the sign-in screen; an app tab has no session to start
+    /// its app in, so it ends, saying why – and the account's other app tabs waiting for this sign-in go on.
+    /// </summary>
+    private async Task SignInFailed(string message, CancellationToken ct)
+    {
+        if (_app is null)
+        {
+            await Status(DesktopStatusState.SignInFailed, message, ct);
+            return;
+        }
+        AppSignInDone();
+        _endReason = "the automatic sign-in failed";
+        await Status(DesktopStatusState.Failed, message, ct);
+        _endRequested.TrySetResult();
     }
 
     /// <summary>
@@ -574,7 +763,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         $": {result.Message}");
                 else o.Log.Audit(AuditEvent.AutoSignInRefused, $"Automatic sign-in refused: {identity.Account} from {source} – {result.Message} ({result.Code})");
                 if (_screenByService) { _screen = null; _screenByService = false; _resume?.Screen = null; _resume?.ScreenByService = false; }
-                await Status(DesktopStatusState.SignInFailed, result.Message, ct);
+                await SignInFailed(result.Message, ct);
                 return;
             }
 
@@ -616,7 +805,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         catch (Exception ex)
         {
             o.Log.Audit(AuditEvent.DesktopError, $"Automatic sign-in: unexpected error ({identity.Account} from {source}): {ex}");
-            try { await Status(DesktopStatusState.SignInFailed, "The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
+            try { await SignInFailed("The automatic sign-in failed on the device. Details are in the agent's log.", ct); } catch { /* gone */ }
         }
         finally { _autoSignInPending = false; } // confirmed (_autoSigned from now on), failed or undone
     }
@@ -684,6 +873,70 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     }
 
     /// <summary>The session's user is this account – by SID where Windows tells it (§6.3), else by name.</summary>
+    private string DeviceName => o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName;
+
+    /// <summary>
+    /// App tab (§4.1): why the console session can't take it, or null – the account's own unlocked session, or nobody
+    /// signed in (then automatic sign-in makes the session). Someone else's session is never used.
+    /// </summary>
+    private string? AppSessionRefusal(DesktopSessionInfo? console) => console switch
+    {
+        null => "This device has no console session at the moment.",
+        { State: DesktopSessionState.SignIn } => null,
+        { State: DesktopSessionState.Active } when IsSelfSession(console) => null,
+        { State: DesktopSessionState.Locked } when IsSelfSession(console) => $"Your session on {DeviceName} is locked – unlock it in a desktop tab first.",
+        _ when IsSelfSession(console) => $"Your session on {DeviceName} has no screen at the moment – connect to it in a desktop tab first.",
+        _ => $"{console.User} is signed in on {DeviceName} – app tabs need your own session.",
+    };
+
+    /// <summary>
+    /// App tab: starts the app in the account's own session (§6.1) – checked again here, as the account and with its
+    /// environment – and tells the helper its job. Audited with the program's path, never its arguments. False when it
+    /// couldn't be started (RemoteHub was told why).
+    /// </summary>
+    private async Task<bool> StartApp(int sessionId, CancellationToken ct)
+    {
+        if (_app is not { } app || _appProcess is not null || _helperApp is not { } tab) return true;
+        await Status(DesktopStatusState.StartingApp, $"Starting {app.Name}…", ct);
+        string? why;
+        AppTabs.Launch? launch = null;
+        var job = AppProcess.NewJobName();
+        using (var token = identity.UserSid is { } sid ? AppProcess.Token(sessionId, sid) : null)
+        {
+            if (token is null) why = $"Your session on {DeviceName} isn't there any more.";
+            else
+            {
+                (launch, why) = AppTabs.Check(app, policy, text => AppProcess.Expand(token, text), File.Exists);
+                if (launch is not null)
+                    try { _appProcess = AppProcess.Start(token, launch, job); }
+                    catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { why = $"{app.Name} couldn't be started: {ex.Message}"; }
+            }
+        }
+        if (_appProcess is null || launch is null)
+        {
+            o.Log.Audit(AuditEvent.DesktopRefused, $"Desktop refused: {identity.Account} from {source} – app tab in session {sessionId}: {why}");
+            await Status(DesktopStatusState.Failed, why ?? $"{app.Name} couldn't be started.", ct);
+            return false;
+        }
+        o.Log.Audit(AuditEvent.DesktopAppStarted,
+            $"Desktop: {identity.Account} from {source} started {launch.Program}{(launch.Elevated ? " (elevated)" : "")} in session {sessionId} for an app tab");
+        _helperApp = tab with { Job = job };
+        _appSession = sessionId;
+        AppTabsOpen.AddOrUpdate(sessionId, 1, (_, n) => n + 1);
+        await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.App, _helperApp, HelperJson.Default.HelperApp), ct);
+        // §4.2: the device's own screens are covered and its mouse and keyboard blocked while the admin's apps run there –
+        // also in a session that existed before. Put up by the service, so it comes back after a drop whatever the right.
+        if (PrivacyScreenSupported && _screen is null)
+        {
+            _screen = new DesktopPrivacyScreen(DesktopPrivacyStyle.Message, BlockLocalInput: true);
+            _screenByService = true;
+            if (_resume is { } r) (r.Screen, r.ScreenByService) = (_screen, true);
+            await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.PrivacyScreen, _screen, DesktopJson.Default.DesktopPrivacyScreen), ct);
+        }
+        await Status(DesktopStatusState.Connected, $"{app.Name} started.", ct, resume: _resume?.Token);
+        return true;
+    }
+
     private bool IsSelfSession(DesktopSessionInfo s) =>
         identity.UserSid is { } mine && o.Desktop?.Sessions.UserSid(s.Id) is { } theirs
             ? string.Equals(mine, theirs, StringComparison.OrdinalIgnoreCase)
@@ -751,11 +1004,45 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 case DesktopMessage.Ping:
                     await SendWs(DesktopWire.Ping(DesktopWire.ReadPing(m), DesktopMessage.Pong), ct);
                     break;
+                case DesktopMessage.AppClose when _live && _app is { } closing && _helperApp is { Job.Length: > 0 }:
+                    // §4.3: the app is asked to close; whatever it asks first ("Save changes?") shows in the tab. Force: it is
+                    // left running (moved to the primary monitor) and the tab ends.
+                    var close = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopAppClose);
+                    _appClosing = true;
+                    _endReason = close.Force ? $"the tab was closed, {closing.Name} left running" : "the tab was closed";
+                    await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.AppClose, close, DesktopJson.Default.DesktopAppClose), ct);
+                    if (close.Force || _appClosed)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(close.Force ? 1 : 0), ct); // the helper moves the windows first
+                        await Status(DesktopStatusState.Ended, close.Force ? $"{closing.Name} keeps running on the device." : $"{closing.Name} was closed.", ct);
+                        _endRequested.TrySetResult();
+                    }
+                    else _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                        if (!_endRequested.Task.IsCompleted)
+                            await Status(DesktopStatusState.AppClosing, $"{closing.Name} asks something before it closes.", ct);
+                    }, ct);
+                    break;
+                case DesktopMessage.AppRestart when _live && _app is not null && _appClosed && !_appClosing && _appSession is { } restartIn:
+                    _appClosed = false;
+                    _appProcess?.Dispose();
+                    _appProcess = null;
+                    AppTabsOpen.AddOrUpdate(restartIn, 0, (_, n) => Math.Max(0, n - 1));
+                    if (!await StartApp(restartIn, ct)) _endRequested.TrySetResult();
+                    break;
                 case DesktopMessage.Settings when _live:
                     var s = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings);
                     var all = s.Monitor == DesktopProtocol.AllMonitors;
                     // Changing the device's resolution is control: not for view-only, and not for the picture of all monitors.
                     var (fitWidth, fitHeight) = _viewOnly || all ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight);
+                    if (_appLease is { } tabLease && fitWidth > 0 && fitHeight > 0)
+                    {
+                        // App tab: its monitor at the largest size the driver lists that fits the tab (no reload, §5).
+                        var (w, h) = (fitWidth, fitHeight);
+                        var refit = await Task.Run(() => VirtualDisplay.Open(tabLease, w, h, policy.MaxAppTabs, out var m, out _) is null ? m : null, ct);
+                        if (refit is not null) (fitWidth, fitHeight) = (refit.Width, refit.Height);
+                    }
                     _settings = new DesktopSettings(all ? DesktopProtocol.AllMonitors : ClampMonitor(s.Monitor, _monitorCount), Math.Clamp(s.FramesPerSecond, 1, policy.MaxFramesPerSecond),
                         Math.Clamp(s.Quality, 1, policy.MaxQuality), fitWidth, fitHeight);
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
@@ -1053,6 +1340,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                             o.Log.Write($"Desktop: session {_helperSession}: virtual monitor {(shown is null ? $"on at {VirtualDisplay.Normalize(vw, vh).W}×{VirtualDisplay.Normalize(vw, vh).H}" : "not switched on: " + shown)}");
                         }
                         break;
+                    case (byte)HelperMessage.AppClosed when helper == _helper && _app is { } closedApp:
+                        o.Log.Write($"Desktop: app tab: {closedApp.Name} was closed in session {_helperSession}");
+                        _appClosed = true;
+                        if (_appClosing)
+                        {
+                            // The admin closed the tab and the app has gone: the tab ends.
+                            await Status(DesktopStatusState.Ended, $"{closedApp.Name} was closed.", ct);
+                            _endRequested.TrySetResult();
+                        }
+                        else await Status(DesktopStatusState.AppClosed, $"{closedApp.Name} was closed.", ct);
+                        break;
                     case (byte)HelperMessage.Log when helper == _helper:
                         var note = DesktopWire.ReadText(m);
                         if (note.Contains("stood still")) _gdi = true; // the next helpers (after a sign-in) start with GDI
@@ -1230,6 +1528,9 @@ internal static class DesktopResume
         /// <summary>The apps the user hid: still hidden in the continued connection.</summary>
         public string[]? HiddenApps { get; set; }
 
+        /// <summary>An app tab's monitor and running app, parked while the connection may be continued.</summary>
+        public ParkedApp? App { get; set; }
+
         /// <summary>The connection broke: usable for <see cref="Window"/> (or longer: a session automatic sign-in created).</summary>
         public void Release(TimeSpan? window = null)
         {
@@ -1259,6 +1560,20 @@ internal static class DesktopResume
                 return true;
             }
         }
+    }
+
+    /// <summary>
+    /// A dropped app tab's monitor lease, process and helper settings, waiting for the connection to be continued. Taken
+    /// exactly once: by the continued connection, or by the clean-up when nobody continued it.
+    /// </summary>
+    internal sealed class ParkedApp(VirtualDisplay.AppLease lease, AppProcess process, HelperApp helper, int session)
+    {
+        private int _claimed;
+        public VirtualDisplay.AppLease Lease => lease;
+        public AppProcess Process => process;
+        public HelperApp Helper => helper;
+        public int Session => session;
+        public bool TryClaim() => Interlocked.Exchange(ref _claimed, 1) == 0;
     }
 
     public static Entry Issue(string account, string allowedBy, CancellationTokenSource owner)

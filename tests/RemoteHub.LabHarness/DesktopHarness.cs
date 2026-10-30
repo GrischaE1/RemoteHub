@@ -87,7 +87,7 @@ internal static class DesktopHarness
         private readonly List<StatusRecord> _statuses = [];
         private int _statusMark; // a wait looks at statuses from here on (set by start and by a wait that found one)
         private string? _lastResume;
-        private readonly List<object> _layouts = [], _stats = [], _clipboard = [], _transfers = [], _privacy = [], _closes = [], _images = [];
+        private readonly List<object> _layouts = [], _stats = [], _clipboard = [], _transfers = [], _privacy = [], _closes = [], _images = [], _appLists = [];
         private readonly List<(long Ms, string Hex)> _pongs = [];
         private readonly List<string> _errors = [];
         private readonly Dictionary<string, int> _other = [];
@@ -167,6 +167,7 @@ internal static class DesktopHarness
                     clipboard = _clipboard.ToList(),
                     transfers = _transfers.ToList(),
                     privacy = _privacy.ToList(),
+                    appLists = _appLists.ToList(),
                     pongs = _pongs.Select(p => new { ms = p.Ms, bytes = p.Hex }).ToList(),
                     cursor = new { shapes = _cursorShapes, positions = _cursorPositions },
                     frames = new
@@ -212,7 +213,8 @@ internal static class DesktopHarness
                 case "start":
                 {
                     // {session: "console" | id | "user:<name>", consent, viewOnly, fps, quality, monitor, resume: null | "last" | "<token>",
-                    //  features: [..] (missing: what RemoteHub sends; null: none, like older versions), autoSignIn, endAction (Lock / SignOut), sendSignIn, signInPassword}
+                    //  features: [..] (missing: what RemoteHub sends; null: none, like older versions), autoSignIn, endAction (Lock / SignOut), sendSignIn, signInPassword,
+                    //  app: {program, arguments, workingFolder, elevated, name} – an app tab (app-tabs-design §7)}
                     var c = Need();
                     var sessions = c.Client.Hello.Sessions;
                     DesktopSessionInfo? info;
@@ -248,8 +250,11 @@ internal static class DesktopHarness
                     var consent = Str(s, "consent") ?? "auto";
                     if (consent == "auto")
                         consent = info is not null && info.User.Equals(c.Client.Hello.Account, StringComparison.OrdinalIgnoreCase) ? DesktopConsent.None : DesktopConsent.Ask;
+                    DesktopAppStart? app = s.TryGetProperty("app", out var a) && a.ValueKind == JsonValueKind.Object
+                        ? new DesktopAppStart(Str(a, "program") ?? "", Str(a, "arguments") ?? "", Str(a, "workingFolder") ?? "", Bool(a, "elevated", false), Str(a, "name") ?? "App")
+                        : null;
                     var start = new DesktopStart(id, consent, Bool(s, "viewOnly", false), Int(s, "fps", DesktopProtocol.DefaultFramesPerSecond),
-                        Int(s, "quality", DesktopProtocol.DefaultQuality), Int(s, "monitor", 0), resume, features, autoSignIn, Str(s, "endAction"));
+                        Int(s, "quality", DesktopProtocol.DefaultQuality), Int(s, "monitor", 0), resume, features, autoSignIn, Str(s, "endAction"), app);
                     c.AutoSignIn = autoSignIn;
                     c.SendSignIn = Bool(s, "sendSignIn", true);
                     c.SignInPassword = Str(s, "signInPassword");
@@ -261,6 +266,7 @@ internal static class DesktopHarness
                         ["connection"] = c.N, ["session"] = info, ["sessionId"] = id, ["consent"] = start.Consent, ["viewOnly"] = start.ViewOnly,
                         ["fps"] = start.FramesPerSecond, ["quality"] = start.Quality, ["monitor"] = start.Monitor, ["features"] = features,
                         ["autoSignIn"] = autoSignIn, ["resume"] = resumeArg is null ? null : resume is null ? resumeArg + " (no token)" : resumeArg == "last" ? "last" : "given",
+                        ["app"] = app is null ? null : new { app.Program, app.Name, app.Elevated, arguments = app.Arguments.Length > 0 }, // never the arguments themselves
                     });
                 }
 
@@ -461,6 +467,45 @@ internal static class DesktopHarness
                         Int(s, "fitWidth", 0), Int(s, "fitHeight", 0));
                     Need().Client.Send(Msg(DesktopMessage.Settings, settings));
                     return (true, new D { ["settings"] = settings });
+                }
+
+                case "appList":
+                {
+                    // {timeout (60)}: asks for the device's Start menu instead of a start; the list goes to appLists
+                    var c = Need();
+                    int before;
+                    lock (_gate) (before, _statusMark) = (_appLists.Count, _statuses.Count);
+                    c.Client.Send([(byte)DesktopMessage.AppList]);
+                    var refused = "";
+                    var got = await Until(() =>
+                    {
+                        lock (_gate)
+                        {
+                            if (_appLists.Count > before) return true;
+                            for (var k = _statusMark; k < _statuses.Count; k++)
+                                if (_statuses[k].State == DesktopStatusState.Failed) { refused = _statuses[k].Message; return true; }
+                            return false;
+                        }
+                    }, Dbl(s, "timeout", 60), ct);
+                    int count;
+                    lock (_gate) count = _appLists.Count - before;
+                    return (count > 0, new D { ["lists"] = count, ["refused"] = refused.Length > 0 ? refused : null, ["timedOut"] = !got });
+                }
+
+                case "appClose":
+                {
+                    // {force (false)}: the tab is closed – the app is asked to close, or (force) left running
+                    var close = new DesktopAppClose(Bool(s, "force", false));
+                    lock (_gate) _statusMark = _statuses.Count;
+                    Need().Client.Send(Msg(DesktopMessage.AppClose, close));
+                    return (true, new D { ["force"] = close.Force });
+                }
+
+                case "appRestart":
+                {
+                    lock (_gate) _statusMark = _statuses.Count;
+                    Need().Client.Send([(byte)DesktopMessage.AppRestart]);
+                    return (true, new D());
                 }
 
                 case "privacy":
@@ -712,6 +757,14 @@ internal static class DesktopHarness
                     case DesktopMessage.Privacy:
                         var privacy = Read<DesktopPrivacy>(m);
                         lock (_gate) _privacy.Add(new { ms = Ms, connection = c.N, privacy });
+                        break;
+                    case DesktopMessage.AppList:
+                        var list = Read<DesktopAppList>(m);
+                        lock (_gate) _appLists.Add(new
+                        {
+                            ms = Ms, connection = c.N, truncated = list.Truncated,
+                            apps = list.Apps.Select(x => new { x.Name, x.Group, x.Program, x.Arguments, x.WorkingFolder, x.Elevated, icon = x.Icon?.Length }).ToList(),
+                        });
                         break;
                     case DesktopMessage.CursorShape:
                         Interlocked.Increment(ref _cursorShapes);

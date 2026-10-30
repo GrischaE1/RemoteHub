@@ -100,7 +100,8 @@ public sealed record DesktopResolution(DesktopResolutionKind Kind, int Width = 0
 
 /// <summary>Where the tab is in the connect flow (what the view shows).</summary>
 /// <summary>Where the tab is in the connect flow (what the view shows). Reconnecting: the connection dropped, the picture stays.</summary>
-public enum DesktopPhase { Idle, Connecting, Choose, Waiting, Pin, Live, Reconnecting, Ended }
+/// <summary>Where an agent desktop tab is. An app tab (<see cref="AgentDesktopSession.App"/>) also has <see cref="AppClosed"/>: its app ended by itself.</summary>
+public enum DesktopPhase { Idle, Connecting, Choose, Waiting, Pin, Live, Reconnecting, Ended, AppClosed }
 
 /// <summary>
 /// The screen of a device through the RemoteHub Agent – for devices where RDP is off. Same trust as the agent's
@@ -115,11 +116,28 @@ public sealed partial class AgentDesktopSession : SessionBase
     private bool _closed;
     private string _lastClipboardSent = "";
 
-    public AgentDesktopSession(Connection connection) : base(connection)
+    public AgentDesktopSession(Connection connection, ConnectionApp? app = null) : base(connection)
     {
-        Title = connection.Name;
+        App = app;
+        Title = app is null ? connection.Name : $"{connection.Name} – {app.Name}";
         Broker.PeerSessions.PathChanged += OnPathChanged;
     }
+
+    /// <summary>
+    /// An app tab (docs/app-tabs-design.md §8.4): this app in the account's own session on the device, on a monitor of its
+    /// own – no session to choose, nothing else to see. Null: the device's screen.
+    /// </summary>
+    public ConnectionApp? App { get; }
+
+    /// <summary>
+    /// App tab: the tab was closed and the app asks something before it closes ("Save changes?"). The tab stays live, so
+    /// that question can be answered in it.
+    /// </summary>
+    [ObservableProperty] private bool _closingApp;
+
+    /// <summary>App tab: the connection's "Sign in automatically when nobody is signed in", and what then happens at the end.</summary>
+    public bool AppAutoSignIn { get; set; }
+    public string? AppEndAction { get; set; }
 
     public override string KindSymbol => "DesktopCursor24";
     public override string KindLabel => "Desktop (agent)";
@@ -187,6 +205,11 @@ public sealed partial class AgentDesktopSession : SessionBase
                 return;
             }
             Attach(t.Result, gen);
+            if (App is not null)
+            {
+                StartApp();
+                return;
+            }
             Phase = DesktopPhase.Choose;
             StatusText = $"Signed in as {Hello!.Account}. Choose what to show.";
         }, TaskScheduler.FromCurrentSynchronizationContext());
@@ -258,7 +281,7 @@ public sealed partial class AgentDesktopSession : SessionBase
                 _chosen = session;
                 StatusText = "Reconnected – continuing on the device…";
                 client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session.Id, _chosenConsent, ViewOnly, Quality.FramesPerSecond, Quality.Quality,
-                    Layout?.Monitor ?? 0, _resumeToken, ViewerFeatures), DesktopJson.Default.DesktopStart));
+                    Layout?.Monitor ?? 0, _resumeToken, ViewerFeatures, App: App?.ToStart()), DesktopJson.Default.DesktopStart));
                 _resumeToken = null; // single-use; the next Connected brings a new one
                 return;
             }
@@ -316,7 +339,7 @@ public sealed partial class AgentDesktopSession : SessionBase
         StatusText = "Moving to the direct path…";
         Attach(client, gen);
         client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(chosen.Id, _chosenConsent, ViewOnly, Quality.FramesPerSecond, Quality.Quality,
-            Layout?.Monitor ?? 0, token, ViewerFeatures), DesktopJson.Default.DesktopStart));
+            Layout?.Monitor ?? 0, token, ViewerFeatures, App: App?.ToStart()), DesktopJson.Default.DesktopStart));
         _resumeToken = null; // single-use; the next Connected brings a new one
         Services.DiagLog.Write("Agent desktop: moved to the direct path");
     }
@@ -357,6 +380,67 @@ public sealed partial class AgentDesktopSession : SessionBase
     }
 
     /// <summary>
+    /// App tab: starts the app – in the account's own session, signing in first when nobody is (the agent decides which,
+    /// §4.1). Refused here already when the device doesn't offer app tabs to this account.
+    /// </summary>
+    private void StartApp()
+    {
+        if (_client is null || App is not { } app || Target is not { } target) return;
+        if (AppTabsRefusal(Hello!, target.Host) is { } why)
+        {
+            Fail(why);
+            return;
+        }
+        ViewOnly = false;
+        _chosen = Hello!.Sessions.FirstOrDefault(s => s.Console);
+        _chosenConsent = DesktopConsent.None;
+        // Asked for whenever the connection allows it: the device signs in only when nobody is signed in on its console.
+        _autoSignInAsked = AppAutoSignIn && !Services.AppPolicy.AgentAutoSignInDisabled && Supports(DesktopFeatures.AutoSignIn) && Hello.Rights.AutoSignIn;
+        _signInSent = false;
+        _endAction = null;
+        Phase = DesktopPhase.Waiting;
+        StatusText = $"Starting {app.Name} on {target.Host}…";
+        _client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(_chosen?.Id ?? 0, DesktopConsent.None, false, Quality.FramesPerSecond, Quality.Quality, 0, null,
+            ViewerFeatures, _autoSignInAsked, _autoSignInAsked ? AutoSignInEndActions.Valid(AppEndAction) : null, app.ToStart()), DesktopJson.Default.DesktopStart));
+    }
+
+    /// <summary>App tab after <see cref="DesktopPhase.AppClosed"/>: starts the app again on the same monitor.</summary>
+    public void RestartApp()
+    {
+        if (App is null || Phase != DesktopPhase.AppClosed || _client is null) return;
+        Phase = DesktopPhase.Waiting;
+        StatusText = $"Starting {App.Name} again…";
+        _client.Send(DesktopWire.Empty(DesktopMessage.AppRestart));
+    }
+
+    /// <summary>
+    /// App tab: asks the app to close (as its close button would) – the tab ends once it has; whatever it asks first stays
+    /// in the tab (<see cref="ClosingApp"/>). <paramref name="leaveRunning"/>: the app keeps running on the device and the
+    /// tab ends now.
+    /// </summary>
+    public void CloseApp(bool leaveRunning)
+    {
+        if (App is null || _client is null || Phase is not (DesktopPhase.Live or DesktopPhase.AppClosed)) return;
+        _appCloseAsked = true;
+        _client.Send(DesktopWire.Json(DesktopMessage.AppClose, new DesktopAppClose(leaveRunning), DesktopJson.Default.DesktopAppClose));
+        StatusText = leaveRunning ? $"Leaving {App.Name} running…" : $"Closing {App.Name}…";
+    }
+
+    private bool _appCloseAsked; // the tab was closed: the device's end closes it here too
+
+    /// <summary>
+    /// App tab: the app's question was answered "Cancel" – the tab stays. (On the device the app goes on; when it is closed
+    /// there later, the tab ends with it.)
+    /// </summary>
+    public void KeepTab()
+    {
+        if (App is null) return;
+        _appCloseAsked = false;
+        ClosingApp = false;
+        StatusText = "";
+    }
+
+    /// <summary>
     /// The device offers automatic sign-in for this account, the session is its console showing the sign-in screen, and
     /// this PC's policy doesn't forbid it.
     /// </summary>
@@ -390,7 +474,16 @@ public sealed partial class AgentDesktopSession : SessionBase
     /// </summary>
     [ObservableProperty] private DesktopResolution _resolution = DesktopResolution.Fit;
 
-    partial void OnResolutionChanged(DesktopResolution value) => SendSettings();
+    partial void OnResolutionChanged(DesktopResolution value)
+    {
+        // An app tab's monitor is always the tab's size (app-tabs-design §5): no other resolution to choose.
+        if (App is not null && value.Kind != DesktopResolutionKind.Fit)
+        {
+            Resolution = DesktopResolution.Fit;
+            return;
+        }
+        SendSettings();
+    }
 
     /// <summary>Size of the picture area in device pixels (the view reports it, debounced).</summary>
     public void WindowSizeChanged(int width, int height)
@@ -1119,7 +1212,16 @@ public sealed partial class AgentDesktopSession : SessionBase
                 break;
             case DesktopStatusState.Starting:
             case DesktopStatusState.WaitingForUser:
+            case DesktopStatusState.StartingApp when Phase != DesktopPhase.Live:
                 Phase = DesktopPhase.Waiting;
+                StatusText = s.Message;
+                break;
+            case DesktopStatusState.AppClosed when App is not null:
+                Phase = DesktopPhase.AppClosed;
+                StatusText = s.Message;
+                break;
+            case DesktopStatusState.AppClosing when App is not null:
+                ClosingApp = true;
                 StatusText = s.Message;
                 break;
             case DesktopStatusState.EnterPin:
@@ -1163,6 +1265,10 @@ public sealed partial class AgentDesktopSession : SessionBase
             case DesktopStatusState.SignInFailed:
                 ShowNotice("Automatic sign-in didn't work: " + s.Message);
                 if (_signInSent) Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Failed – " + s.Message);
+                break;
+            case DesktopStatusState.Ended when _appCloseAsked:
+                End(SessionState.Disconnected, s.Message);
+                Close(); // the tab was closed: it goes now that the app has
                 break;
             case DesktopStatusState.Denied:
             case DesktopStatusState.Failed:
@@ -1284,6 +1390,12 @@ public sealed partial class AgentDesktopSession : SessionBase
     public override void Close()
     {
         if (_closed) return;
+        // App tab: the app is asked to close first (§4.3); the tab goes when it has, or stays with what the app asks.
+        if (App is not null && !_appCloseAsked && Phase == DesktopPhase.Live && _client is not null)
+        {
+            CloseApp(leaveRunning: false);
+            return;
+        }
         Dispose();
         RaiseClosed();
     }

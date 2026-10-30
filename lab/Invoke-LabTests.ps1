@@ -16,6 +16,8 @@
       # LabNeeds: jumphost              it uses the jump host (one at a time in the lab). Found by itself too.
       # TimeLimitMin: 150               more time than -FileTimeoutMin.
       # LabQuick: every kind            -Quick still runs it on every device kind (it has parts for Server only).
+      # LabRuns: on request             only when -Tag is given and names it (a spike); a run without -Tag leaves it
+                                        out.
     The longest files start first, by what they took in the last runs; a file's time limit is twice the longest it took
     before (at least 20 min, never above its own limit). -Quick and -FailFast (or results\<run>\options.json, written by
     Start-LabRun.ps1) make a shorter run - see the parameters.
@@ -170,6 +172,7 @@ foreach ($file in $testFiles) {
         if (-not @($Tag | Where-Object { $text -match "(?im)-Tag\b[^\r\n]*?[\s,']$([regex]::Escape($_))(?=['\s,]|$)" }).Count) { continue }
     }
     $needs = Get-LabFileNeeds -File $file -DefaultLimitMin $FileTimeoutMin
+    if ($needs.OnRequest -and -not $Tag) { continue }   # a spike: only when asked for by its tags
     $name = [IO.Path]::GetFileNameWithoutExtension([IO.Path]::GetFileNameWithoutExtension($file))
     foreach ($k in $kinds) {
         if (Test-KindRuns $needs $k) { $queue.Add([pscustomobject]@{ File = $file; Name = $name; Kind = $k; Needs = $needs; Attempt = 1; FirstXml = $null; FirstTimedOut = $false }) }

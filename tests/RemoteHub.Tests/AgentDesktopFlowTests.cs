@@ -351,8 +351,8 @@ public partial class AgentDesktopFlowTests
             }
         }
 
-        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
-            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
+        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false, DesktopAppStart? app = null) =>
+            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn, App: app), DesktopJson.Default.DesktopStart));
 
         /// <summary>Closes like RemoteHub ending the session on purpose, and waits until the agent has read the close: disposing
         /// right away can reset the connection first, which the agent rightly takes for a drop.</summary>
@@ -993,6 +993,26 @@ public partial class AgentDesktopFlowTests
         Assert.Null(d.Helpers.Uis[1].Pin);
         Assert.Equal(0, d.Helpers.Uis[1].Asked);
         Assert.DoesNotContain(v.Statuses, s => s.State is DesktopStatusState.EnterPin or DesktopStatusState.WaitingForUser);
+    }
+
+    [Fact]
+    public async Task An_app_tab_without_the_virtual_display_or_automatic_sign_in_is_refused_before_anything_runs()
+    {
+        await using var d = await StartDevice();
+        d.Sessions.Current = [ActiveUser with { User = @"TESTdmin" }];
+        using var v = await Connect(d);
+        // Offered where the virtual display is installed (as on some test machines); never to this account here, which has no
+        // automatic sign-in on the test device.
+        Assert.Equal(A.VirtualDisplay.Installed, v.Client.Hello.Features!.Contains(DesktopFeatures.Apps));
+        Assert.False(v.Client.Hello.Rights.Apps);
+        v.Start(ActiveUser.Id, DesktopConsent.None, app: new DesktopAppStart(@"C:\Windows\System32
+otepad.exe", "--secret-argument", "", false, "Notepad"));
+        var s = v.Next();
+        Assert.Equal(DesktopStatusState.Failed, s.State);
+        Assert.StartsWith("App tabs need", s.Message); // the virtual display or automatic sign-in, whichever this machine lacks
+        Assert.Equal(0, d.Helpers.Started);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopRefused), "audit entry");
+        Assert.DoesNotContain(A.AuditEvent.DesktopAppStarted, d.Audits);
     }
 
     [Fact]

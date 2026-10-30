@@ -42,6 +42,15 @@ internal enum HelperMessage : byte
     /// (text: "width height"), or the viewer's window changed size while it's on.
     /// </summary>
     DisplayRequest = 108,
+    /// <summary>
+    /// Service → helper, in an app tab: the app was started (<see cref="HelperApp"/> with its job) – from now on only its
+    /// windows are shown on the tab's monitor and input goes to them.
+    /// </summary>
+    App = 111,
+    /// <summary>Helper → service, in an app tab: the app's last window closed and its job has no process left (no payload).</summary>
+    AppClosed = 112,
+    /// <summary>Service → helper, in an app tab: the tab was closed (<see cref="DesktopAppClose"/>) – ask the app to close, or move it to the primary monitor.</summary>
+    AppClose = 113,
 }
 
 /// <param name="HoldUserDesktop">
@@ -65,7 +74,16 @@ internal enum HelperMessage : byte
 internal sealed record HelperInit(string Account, string Device, string Consent, string Pin, int TimeoutSeconds, bool ViewOnly,
     bool SecureDesktop, int FramesPerSecond, int Quality, int Monitor, bool HoldUserDesktop = false, int Clipboard = DesktopClipboardLevel.Text,
     bool Gdi = false, string VirtualDisplay = "", bool OfferToViewer = false, string UserHidden = DesktopScreenHide.None,
-    string[]? HiddenApps = null, string[]? AlwaysHidden = null, bool SignedInRemotely = false, string? PrivacyHeading = null);
+    string[]? HiddenApps = null, string[]? AlwaysHidden = null, bool SignedInRemotely = false, string? PrivacyHeading = null,
+    HelperApp? App = null);
+
+/// <summary>
+/// An app tab (docs/app-tabs-design.md): the place of its virtual monitor, and – once the service started the app – the
+/// name of the job its processes are in. Before that, the tab's monitor shows nothing and no input is let through.
+/// </summary>
+/// <param name="Job">The job's name (<c>Global\RemoteHub-AppTab-…</c>), "" until the app was started.</param>
+/// <param name="Name">The app's name, for the log.</param>
+internal sealed record HelperApp(int Place, string Job, string Name);
 
 internal sealed record HelperHiddenApps(string[] Apps);
 
@@ -78,6 +96,7 @@ internal sealed record HelperEnd(string Reason, bool ByUser = false);
 [JsonSerializable(typeof(HelperConsent))]
 [JsonSerializable(typeof(HelperEnd))]
 [JsonSerializable(typeof(HelperHiddenApps))]
+[JsonSerializable(typeof(HelperApp))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class HelperJson : JsonSerializerContext;
 
@@ -152,6 +171,21 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private volatile ScreenRect[] _mask = [];
     private readonly AppMask _appMask = new(apps);
 
+    // App tab (HelperInit.App, docs/app-tabs-design.md §6.2, §6.3): the app once it runs, its windows (capture thread),
+    // the window that last had the keyboard (for the input thread), and the shell keys that are dropped.
+    private volatile HelperApp? _app;
+    private AppTabWindows? _appWindows;
+    private string _appJob = "";
+    private IntPtr _appMain;
+    private volatile IntPtr _appFront;
+    private long _appGoneSince = -1;
+    private bool _appClosedSent, _appJobFailed, _appLeft;
+    private readonly Stopwatch _appPlaced = Stopwatch.StartNew();
+    private readonly ShellKeyFilter _shellKeys = new();
+    private volatile DesktopAppClose? _appClose; // the tab was closed: done by the capture thread, which knows the app's windows
+    private readonly AppTaskbar _taskbar = new();  // no taskbar on the tabs' monitors while the app runs (§5)
+    private bool _taskbarFailed;
+
     // Clipboard images and files: one transfer each way at a time (a newer copy replaces an unfinished one).
     private TransferReceiver? _receiving;
     private CancellationTokenSource? _sending;
@@ -183,6 +217,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     case (byte)HelperMessage.Init:
                         _init = DesktopWire.ReadJson(m, HelperJson.Default.HelperInit);
                         (_fps, _quality, _monitor) = (_init.FramesPerSecond, _init.Quality, _init.Monitor);
+                        _app = _init.App;
                         // Decided for each event on the desktop it would go to – not on what the capture thread last
                         // saw – so nothing reaches the secure desktop without the right, or a user's desktop while held.
                         var init = _init;
@@ -214,6 +249,12 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         (_monitor, _fps, _quality) = (s.Monitor, Math.Clamp(s.FramesPerSecond, 1, 60), Math.Clamp(s.Quality, 1, 100));
                         _fit = _init?.ViewOnly != false ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight); // the service checked it too
                         _settingsChanged = true;
+                        break;
+                    case (byte)HelperMessage.App when _init?.App is not null:
+                        _app = DesktopWire.ReadJson(m, HelperJson.Default.HelperApp);
+                        break;
+                    case (byte)HelperMessage.AppClose when _init?.App is not null:
+                        _appClose = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopAppClose);
                         break;
                     case (byte)DesktopMessage.Ack when _begun:
                         DesktopWire.ReadAck(m);
@@ -276,6 +317,9 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             _stop.Cancel();
             _sending?.Cancel();
             DropReceiving();
+            if (_taskbar.Off)
+                try { if (_taskbar.PutBack()) AppTaskbar.Announce(); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException) { /* the next helper or the service puts it back */ }
             _input.CompleteAdding();
             if (capture.IsAlive) capture.Join(TimeSpan.FromSeconds(3));
             if (inject.IsAlive) inject.Join(TimeSpan.FromSeconds(3));
@@ -656,6 +700,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     /// </summary>
     private void AskForVirtualDisplay(DesktopMonitor shown, int width, int height, bool dark = false)
     {
+        if (_init!.App is not null) return; // the service gave the app tab its monitor
         var mode = _init!.VirtualDisplay;
         if (mode is not (VirtualDisplayModes.Auto or VirtualDisplayModes.Always)) return;
         if (!_virtualAsked && !dark && mode == VirtualDisplayModes.Auto && DisplayModes.VirtualMonitor() is null &&
@@ -669,6 +714,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     /// <summary>Once the virtual monitor is there (also after the driver reloaded it): it becomes the primary one and is fitted.</summary>
     private void VirtualDisplayPrimary()
     {
+        if (_init?.App is not null) return; // app tabs never make their monitor the primary one (app-tabs-design §5)
         if (!_virtualAsked || _virtualCheck.IsRunning && _virtualCheck.ElapsedMilliseconds < 1000) return;
         _virtualCheck.Restart();
         if (DisplayModes.VirtualMonitor() is not { } virt) return;
@@ -696,6 +742,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
             {
                 if (_held || _init!.HoldUserDesktop && !screen.SecureDesktop) continue; // not allowed by the user now there
                 if (_userHide != DesktopScreenHide.None) continue;                      // the user hid their screen
+                if (_init.App is not null && !AppTabInput(i)) continue;
                 if (i.Key is { } k)
                 {
                     // Not typed blind into a hidden app (a password manager…): only a key's release goes through there.
@@ -716,6 +763,107 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         }
         catch (OperationCanceledException) { }
         finally { input.ReleaseAll(); }
+    }
+
+    /// <summary>
+    /// App tab: nothing goes through before the app runs; the shell's keys never (<see cref="ShellKeyFilter"/>); a key
+    /// that would go to another program's window first brings the app's window that last had the keyboard to the front.
+    /// </summary>
+    private bool AppTabInput(RemoteKeyOrMouse i)
+    {
+        if (i.Key is { } k && !_shellKeys.Pass(k)) return false;
+        if (_app is not { Job.Length: > 0 }) return false;
+        if (i.Key is { } key && (key.Flags & RemoteKeyFlags.Up) == 0 && _appFront is var front && front != IntPtr.Zero && AppTabWindows.Foreground() != front
+            && AppTabWindows.BringToFront(front))
+        {
+            // The switch reaches the window's thread a moment later: the key waits for it (at most 200 ms), so it isn't
+            // typed into the window that had the keyboard before.
+            var until = Environment.TickCount64 + 200;
+            while (AppTabWindows.Foreground() != front && Environment.TickCount64 < until) Thread.Sleep(10);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// App tab, after each capture: what to fill on the tab's monitor (all of it before the app runs), the app's windows
+    /// put where they belong (every 250 ms), the window to give the keyboard to, and the end of the app reported once its
+    /// windows are gone for 2 s and its job is empty.
+    /// </summary>
+    private ScreenRect[] AppTabFrame(HelperApp tab, DesktopMonitor monitor)
+    {
+        var area = new ScreenRect(monitor.X, monitor.Y, monitor.X + monitor.Width, monitor.Y + monitor.Height);
+        if (tab.Job.Length == 0) return [area];
+        if (_appJob != tab.Job)
+        {
+            _appWindows?.Dispose();
+            _appWindows = AppTabWindows.Open(tab.Job);
+            (_appJob, _appMain, _appFront, _appGoneSince, _appClosedSent) = (tab.Job, IntPtr.Zero, IntPtr.Zero, -1, false);
+            if (_appWindows is null && !_appJobFailed)
+            {
+                _appJobFailed = true;
+                SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, $"app tab: the job of {tab.Name} couldn't be opened – nothing is shown"));
+            }
+        }
+        if (_appWindows is not { } job) return [area];
+        if (!_taskbar.Off && !_taskbarFailed && !_appLeft) TaskbarOff();
+        var windows = apps.Visible();
+        bool Owned(AppWindow w) => job.Owns(w.Handle);
+        if (_appMain == IntPtr.Zero || !AppTabWindows.Exists(_appMain))
+            _appMain = windows.FirstOrDefault(w => Owned(w) && AppTabWindows.MainCandidate(w.Handle))?.Handle ?? IntPtr.Zero;
+
+        if (_appClose is { } close)
+        {
+            // The tab was closed (§4.3): the app's top-level windows are asked to close, as their close button would –
+            // once; or, to leave it running, moved to the primary monitor, where it stays usable without the tab.
+            _appClose = null;
+            var primaryArea = _monitors.FirstOrDefault(m => m.Primary) is { } pm ? new ScreenRect(pm.X, pm.Y, pm.X + pm.Width, pm.Y + pm.Height) : area;
+            foreach (var w in windows.Where(Owned))
+            {
+                if (close.Force) AppTabWindows.Apply(new AppTabView.Move(w.Handle, AppTabView.CentredIn(w.Bounds, primaryArea, primaryArea), false));
+                else if (AppTabWindows.MainCandidate(w.Handle)) AppTabWindows.Close(w.Handle);
+            }
+            if (close.Force) _appLeft = true; // no longer the tab's: nothing is placed or watched any more
+            else _appPlaced.Restart();
+        }
+        if (_appLeft) return [area];
+
+        if (_appPlaced.ElapsedMilliseconds >= 250)
+        {
+            _appPlaced.Restart();
+            var primary = _monitors.FirstOrDefault(m => m.Primary) is { } p ? new ScreenRect(p.X, p.Y, p.X + p.Width, p.Y + p.Height) : area;
+            foreach (var move in AppTabView.Placement(area, primary, windows, Owned, _appMain, AppTabWindows.IsMaximized, AppTabWindows.Resizable))
+                AppTabWindows.Apply(move);
+        }
+
+        var foreground = AppTabWindows.Foreground();
+        if (foreground != IntPtr.Zero && windows.Any(w => w.Handle == foreground && Owned(w))) _appFront = foreground;
+        else if (_appFront == IntPtr.Zero || !AppTabWindows.Exists(_appFront)) _appFront = _appMain;
+
+        var now = Environment.TickCount64;
+        if (windows.Any(Owned)) _appGoneSince = -1;
+        else if (_appGoneSince < 0) _appGoneSince = now;
+        else if (!_appClosedSent && now - _appGoneSince >= 2000 && job.ActiveProcesses() == 0)
+        {
+            _appClosedSent = true;
+            SendSync(DesktopWire.Empty((DesktopMessage)HelperMessage.AppClosed));
+        }
+        return [.. AppTabView.Mask(area, windows, Owned)];
+    }
+
+    /// <summary>The app runs in this session: its user's taskbar on other monitors goes (put back when the helper ends).</summary>
+    private void TaskbarOff()
+    {
+        try
+        {
+            if (SessionUser.Sid() is not { } sid) return;
+            _taskbar.Reconcile(sid); // a helper that ended abruptly may have left it off – the record is the original
+            if (_taskbar.TurnOff(sid)) AppTaskbar.Announce();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException or System.Security.SecurityException)
+        {
+            _taskbarFailed = true; // the tabs' monitors keep their taskbar; it is filled like anything that isn't the app
+            SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "app tab: the taskbar on other monitors stays: " + ex.Message));
+        }
     }
 
     private DesktopRect[]? _regionsSent;
@@ -805,7 +953,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     wakes++;
                     lastWake.Restart();
                     if (wakes == 2 && !_held && !_virtualAsked && why == "the captured picture is black" && _shown is { } s0 &&
-                        s0.Index != DesktopProtocol.AllMonitors && _init!.VirtualDisplay == VirtualDisplayModes.Auto)
+                        s0.Index != DesktopProtocol.AllMonitors && _init!.VirtualDisplay == VirtualDisplayModes.Auto && _init.App is null)
                     {
                         // Still black after waking: the monitor's output is dead (seen on Intel GPUs without a monitor that
                         // still list full display modes, while the lock screen is up). The virtual monitor takes over.
@@ -920,8 +1068,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         maskFailed = true;
                     }
                 }
-                _mask = mask;
                 ReportRegions(mask, monitor, regionClock);
+                // App tab: everything on its monitor that isn't the app is filled like a hidden app – and isn't clicked.
+                if (_app is { } tab)
+                {
+                    try { mask = [.. mask, .. AppTabFrame(tab, monitor)]; }
+                    catch (Exception ex)
+                    {
+                        mask = [.. mask, new ScreenRect(monitor.X, monitor.Y, monitor.X + monitor.Width, monitor.Y + monitor.Height)];
+                        if (!maskFailed) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "app tab: its windows couldn't be found – nothing shown until they can: " + ex.Message));
+                        maskFailed = true;
+                    }
+                }
+                _mask = mask;
 
                 var cursor = screen.Cursor(monitor, out var shape);
                 if (_scale > 1) cursor = cursor with { X = cursor.X / _scale, Y = cursor.Y / _scale };
@@ -1197,6 +1356,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private void SendLayout(out DesktopMonitor? shown)
     {
         _monitors = screen.Monitors();
+        if (_init?.App is { } tab)
+        {
+            // App tab: its own monitor only, found by its place (the driver names them anew on every change) – there is
+            // nothing else to switch to. Not there (the driver is reloading): no picture until it is.
+            shown = AppTabView.Monitor(DisplayModes.VirtualMonitors(), tab.Place, _monitors);
+            _scale = 1;
+            _shown = shown;
+            (_layoutWidth, _layoutHeight) = shown is null ? (0, 0) : (shown.Width, shown.Height);
+            SendSync(DesktopWire.Json(DesktopMessage.Layout,
+                new DesktopLayout(shown is null ? [] : [shown], shown?.Index ?? 0, _layoutWidth & ~1, _layoutHeight & ~1, screen.SecureDesktop, _init.ViewOnly),
+                DesktopJson.Default.DesktopLayout));
+            return;
+        }
         var all = _monitor == DesktopProtocol.AllMonitors && _monitors.Count > 1;
         shown = _monitors.Count == 0 ? null : all ? AllMonitors(_monitors) : _monitors[Math.Clamp(_monitor, 0, _monitors.Count - 1)];
         // All monitors in one picture: larger than H.264 allows is scaled down (mouse and pointer are scaled back).

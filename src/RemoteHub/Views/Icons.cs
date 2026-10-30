@@ -44,6 +44,30 @@ public static class IconImages
         return Convert.ToBase64String(ms.ToArray());
     }
 
+    /// <summary>The most an icon from a device may be (the agent sends at most this; anything larger isn't decoded).</summary>
+    public const int MaxDeviceIconBytes = 8 * 1024;
+
+    /// <summary>
+    /// An icon a device sent (an app tab's, PNG): untrusted bytes, so larger than <see cref="MaxDeviceIconBytes"/> or
+    /// anything that doesn't decode gives null – the caller shows a generic symbol then. Not cached: few, and short-lived.
+    /// </summary>
+    public static ImageSource? ToImage(byte[]? png)
+    {
+        if (png is not { Length: > 0 and <= MaxDeviceIconBytes }) return null;
+        try
+        {
+            var img = new BitmapImage();
+            img.BeginInit();
+            img.StreamSource = new MemoryStream(png, writable: false);
+            img.CacheOption = BitmapCacheOption.OnLoad;
+            img.DecodePixelWidth = 32;
+            img.EndInit();
+            img.Freeze();
+            return img;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or FileFormatException or ArgumentException or InvalidOperationException or IOException) { return null; }
+    }
+
     public static ImageSource? ToImage(string? base64)
     {
         if (string.IsNullOrEmpty(base64)) return null;

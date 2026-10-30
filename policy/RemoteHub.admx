@@ -1079,6 +1079,38 @@
       </elements>
     </policy>
 
+    <policy name="Agent_DesktopApps" class="Machine" displayName="$(string.Agent_DesktopApps)" explainText="$(string.Agent_DesktopApps_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="DesktopApps">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_DesktopAppsElevated" class="Machine" displayName="$(string.Agent_DesktopAppsElevated)" explainText="$(string.Agent_DesktopAppsElevated_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="DesktopAppsElevated">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
+    <policy name="Agent_DesktopAppsAllowed" class="Machine" displayName="$(string.Agent_DesktopAppsAllowed)" explainText="$(string.Agent_DesktopAppsAllowed_Help)"
+            presentation="$(presentation.Agent_DesktopAppsAllowed)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements><multiText id="DesktopAppsAllowed" valueName="DesktopAppsAllowed" required="true" /></elements>
+    </policy>
+
+    <policy name="Agent_MaxAppTabs" class="Machine" displayName="$(string.Agent_MaxAppTabs)" explainText="$(string.Agent_MaxAppTabs_Help)"
+            presentation="$(presentation.Agent_MaxAppTabs)" key="Software\Policies\RemoteHub\Agent">
+      <parentCategory ref="Agent_Desktop" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <elements>
+        <decimal id="MaxAppTabs" valueName="MaxAppTabs" minValue="1" maxValue="7" required="true" />
+      </elements>
+    </policy>
+
     <!-- ================================================================ RemoteHub Agent: consent -->
 
     <policy name="Agent_AllowedConsentModes" class="Machine" displayName="$(string.Agent_AllowedConsentModes)" explainText="$(string.Agent_AllowedConsentModes_Help)"
