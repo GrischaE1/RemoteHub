@@ -1296,8 +1296,15 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Save 'older' $z
         }
 
-        It 'J-12 the previous RemoteHub opens the database written with the jump host: Device, JumpHost and Behind are there' -Tag 'J-12' {
+        It 'J-12 the previous RemoteHub opens the database written with the jump host (Device, JumpHost and Behind are there), or says it is from a newer version' -Tag 'J-12' {
             "$($z.install)" | Should -BeIn '0', '3010'
+            # Before GA an older RemoteHub doesn't read a database of a newer schema (docs/local-db-design.md, Downgrade):
+            # then it must say so and offer the automatic backup instead of opening it or starting empty
+            $dialogs = @($z['older-dialogs']) -join "`n"
+            if ($dialogs -match 'created by a newer version of RemoteHub') {
+                $dialogs | Should -Match 'Restore the automatic backup' -Because "the previous RemoteHub ($($z.previous)) offers the backup"
+                return
+            }
             @($z.tree | Where-Object { $_ -match '\|JumpHost\|' }).Count | Should -BeGreaterThan 0
             @($z.tree | Where-Object { $_ -match '\|Behind\|' }).Count | Should -BeGreaterThan 0
             @($z.tree | Where-Object { $_ -match '\|Device\|' }).Count | Should -BeGreaterThan 0

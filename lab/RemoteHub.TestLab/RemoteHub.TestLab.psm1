@@ -1568,7 +1568,21 @@ function Invoke-LabInSession {
                                 $cpu = if ($p -and $null -ne $p.CPU) { [int]$p.CPU } else { '?' }
                                 "$($_.Name)#$($_.ProcessId) s$($_.SessionId) $([int]($now - $_.CreationDate).TotalSeconds)s old cpu ${cpu}s$(if ($_.CommandLine -like "*$enc*") { ' (this task)' })"
                             }) -join ', ')
-                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' }); processes: $procs"
+                    # the task's own PowerShell, when it started: what its threads wait on and the last modules it
+                    # loaded - tells a start stuck in .NET or AMSI from code that waits (run 20261030-110319: lane 2's
+                    # Server, PSAdmin's RDP session, PowerShell started and used 1 s of CPU in 90 s)
+                    $inside = ''
+                    $mine = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$enc*" }) | Select-Object -First 1
+                    if ($mine) {
+                        $p = Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue
+                        if ($p) {
+                            $waits = (@($p.Threads | Group-Object { if ("$($_.ThreadState)" -eq 'Wait') { "Wait/$($_.WaitReason)" } else { "$($_.ThreadState)" } } |
+                                    ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+                            $mods = try { (@($p.Modules | Select-Object -Last 8 | ForEach-Object ModuleName) -join ',') } catch { 'n/a' }
+                            $inside = "; its PowerShell: threads $waits; last modules $mods"
+                        }
+                    }
+                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' })$inside; processes: $procs"
                 }
                 catch { "no task details: $($_.Exception.Message)" }
                 throw "no result from the session task after $timeout s (is $u signed in?) - $why"
