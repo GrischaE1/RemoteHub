@@ -204,7 +204,10 @@ internal static partial class StoreApps
                         var id = Name(item, 0x80018001 /* SIGDN_PARENTRELATIVEPARSING */);
                         if (id is null || !ValidAppId(id)) continue;
                         var name = Name(item, 0 /* SIGDN_NORMALDISPLAY */) ?? id;
-                        text.Append(id).Append('\t').Append(Clean(name)).Append('\n');
+                        text.Append(id).Append('\t').Append(Clean(name));
+                        // Its icon, while the answer has room for it (icons are left out before apps are)
+                        if (text.Length < MaxOutputBytes * 3 / 4 && Icon(itemRaw) is { } png) text.Append('\t').Append(Convert.ToBase64String(png));
+                        text.Append('\n');
                         count++;
                     }
                     finally { Marshal.Release(itemRaw); }
@@ -214,6 +217,23 @@ internal static partial class StoreApps
         }
         finally { Marshal.Release(folderRaw); }
         return text.ToString();
+    }
+
+    /// <summary>The item's icon, 32×32 PNG (IShellItemImageFactory), or null.</summary>
+    private static unsafe byte[]? Icon(nint itemRaw)
+    {
+        var iid = typeof(IShellItemImageFactory).GUID;
+        if (Marshal.QueryInterface(itemRaw, in iid, out var factoryRaw) != 0) return null;
+        try
+        {
+            var factory = (IShellItemImageFactory)Wrappers.GetOrCreateObjectForComInstance(factoryRaw, CreateObjectFlags.UniqueInstance);
+            nint bitmap;
+            if (factory.GetImage(IconPng.Size | ((long)IconPng.Size << 32), 0x4 /* SIIGBF_ICONONLY */, &bitmap) != 0 || bitmap == 0) return null;
+            try { return IconPng.FromBitmap(bitmap); }
+            catch (ArgumentException) { return null; }
+            finally { DeleteObject(bitmap); }
+        }
+        finally { Marshal.Release(factoryRaw); }
     }
 
     private static unsafe string? Name(IShellItem item, uint kind)
@@ -236,8 +256,8 @@ internal static partial class StoreApps
         return output is null ? (0, why) : ParseStarted(output);
     }
 
-    /// <summary>The user's Store apps (<c>shell:AppsFolder</c>), or null and why.</summary>
-    public static (IReadOnlyList<(string Id, string Name)>? Apps, bool Truncated, string Why) List(SafeAccessTokenHandle token)
+    /// <summary>The user's Store apps (<c>shell:AppsFolder</c>) with their icons, or null and why.</summary>
+    public static (IReadOnlyList<(string Id, string Name, byte[]? Icon)>? Apps, bool Truncated, string Why) List(SafeAccessTokenHandle token)
     {
         var (output, why) = RunAsUser(token, "list\n", ListLimit);
         return output is null ? (null, false, why) : ParseList(output);
@@ -258,17 +278,18 @@ internal static partial class StoreApps
     }
 
     /// <summary>
-    /// The answer to a list: "apps" and "&lt;AUMID&gt;\t&lt;name&gt;" lines. Only IDs that can be used, each once; names
-    /// capped like a shortcut's (§6.5); at most <see cref="AppStartMenu.MaxEntries"/>.
+    /// The answer to a list: "apps" and "&lt;AUMID&gt;\t&lt;name&gt;[\t&lt;icon as base64 PNG&gt;]" lines. Only IDs that can be
+    /// used, each once; names capped like a shortcut's (§6.5); an icon only when it is a PNG of at most
+    /// <see cref="IconPng.MaxBytes"/>; at most <see cref="AppStartMenu.MaxEntries"/>.
     /// </summary>
-    internal static (IReadOnlyList<(string Id, string Name)>? Apps, bool Truncated, string Why) ParseList(byte[] output)
+    internal static (IReadOnlyList<(string Id, string Name, byte[]? Icon)>? Apps, bool Truncated, string Why) ParseList(byte[] output)
     {
         if (Text(output) is not { } text) return (null, false, "the answer wasn't understood");
         var lines = text.Split('\n');
         var first = lines[0].TrimEnd('\r');
         if (first.StartsWith("none ", StringComparison.Ordinal)) return (null, false, Shorten(first[5..]));
         if (first != "apps") return (null, false, "the answer wasn't understood");
-        var apps = new List<(string, string)>();
+        var apps = new List<(string, string, byte[]?)>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var truncated = false;
         foreach (var raw in lines.Skip(1))
@@ -277,12 +298,19 @@ internal static partial class StoreApps
             var tab = line.IndexOf('\t');
             if (tab <= 0) continue;
             var id = line[..tab];
-            var name = line[(tab + 1)..].Trim();
+            var rest = line[(tab + 1)..].Split('\t');
+            var name = rest[0].Trim();
             if (!ValidAppId(id) || !seen.Add(id)) continue;
             if (name.Length == 0 || name.Any(char.IsControl)) name = id;
             if (name.Length > AppStartMenu.MaxName) name = name[..AppStartMenu.MaxName];
+            byte[]? icon = null;
+            if (rest.Length > 1 && rest[1].Length <= (IconPng.MaxBytes + 2) / 3 * 4)
+            {
+                var buffer = new byte[IconPng.MaxBytes];
+                if (Convert.TryFromBase64String(rest[1], buffer, out var n) && IconPng.IsPng(buffer.AsSpan(0, n))) icon = buffer[..n];
+            }
             if (apps.Count == AppStartMenu.MaxEntries) { truncated = true; break; }
-            apps.Add((id, name));
+            apps.Add((id, name, icon));
         }
         return (apps, truncated, "");
     }
@@ -368,12 +396,19 @@ internal static partial class StoreApps
         [PreserveSig] int GetDisplayName(uint kind, char** name);
     }
 
+    [GeneratedComInterface, Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+    internal unsafe partial interface IShellItemImageFactory
+    {
+        [PreserveSig] int GetImage(long size, int flags, nint* bitmap);
+    }
+
     [GeneratedComInterface, Guid("70629033-e363-4a28-a567-0db78006e6d7")]
     internal unsafe partial interface IEnumShellItems
     {
         [PreserveSig] int Next(uint count, nint* items, uint* fetched);
     }
 
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint handle);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string className, string? windowName);
     private delegate bool EnumProc(nint window, nint parameter);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, nint parameter);

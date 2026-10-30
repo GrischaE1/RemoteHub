@@ -155,7 +155,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 await SendWs(DesktopWire.Json(DesktopMessage.AppList, list with { More = true }, DesktopJson.Default.DesktopAppList), ct);
                 var (store, storeTruncated, storeWhy) = await Task.Run(() => StoreApps.List(storeToken), ct);
                 DesktopListedApp[] storeApps = store is null ? [] :
-                    [.. store.Where(a => AppTabs.StoreAppAllowed(policy, a.Id)).Select(a => new DesktopListedApp(a.Name, "Store apps", StoreApps.Prefix + a.Id, "", "", false, null))];
+                    [.. store.Where(a => AppTabs.StoreAppAllowed(policy, a.Id)).Select(a => new DesktopListedApp(a.Name, "Store apps", StoreApps.Prefix + a.Id, "", "", false, a.Icon))];
                 o.Log.Write($"Desktop: the Store apps for {identity.Account} from {source}: {(store is null ? "not read – " + storeWhy : $"{storeApps.Length} app(s)")}");
                 await SendWs(DesktopWire.Json(DesktopMessage.AppList, new DesktopAppList(storeApps, storeTruncated,
                     Note: store is null ? $"Store apps couldn't be read on {DeviceName} ({storeWhy})." : null), DesktopJson.Default.DesktopAppList), ct);

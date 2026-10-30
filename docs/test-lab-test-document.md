@@ -7918,7 +7918,7 @@ P1 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
 **Preconditions:** the console account signed in by an app tab.
 **Expected:**
 - `appList` gets two parts: the Start menu (`more` true), then the Store apps (`more` false)
-- Settings is among them as `shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel`, in the group *Store apps*, not elevated
+- Settings is among them as `shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel`, in the group *Store apps*, not elevated, with its icon (PNG)
 
 #### D-APP-17 · A Store app in a tab
 P1 · How: H S E · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`

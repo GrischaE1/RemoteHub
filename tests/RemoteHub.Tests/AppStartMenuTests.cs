@@ -140,6 +140,13 @@ public class AppStartMenuTests : IDisposable
         Assert.Equal(["Tool", "Tool B"], list.Apps.Select(a => a.Name));
         Assert.False(list.Truncated);
 
+        // Icons from the file each shortcut points to: kept when they are small PNGs, left out otherwise
+        var png = A.IconPng.Encode(1, 1, new byte[4]);
+        var withIcons = A.AppStartMenu.List([_root], Defaults, _ => shortcuts, Expand, _ => true,
+            sources => [.. sources.Select((s, i) => i == 0 ? png : new byte[] { 1, 2, 3 })]);
+        Assert.Equal(png, withIcons.Apps[0].Icon);
+        Assert.Null(withIcons.Apps[1].Icon); // not a PNG
+
         var many = Enumerable.Range(0, A.AppStartMenu.MaxEntries + 5).Select(i => (A.AppStartMenu.Shortcut?)Link($@"C:\Tools\t{i}.exe", name: $"T{i}")).ToList();
         var cut = A.AppStartMenu.List([_root], Defaults, _ => many, Expand, _ => true);
         Assert.Equal(A.AppStartMenu.MaxEntries, cut.Apps.Length);

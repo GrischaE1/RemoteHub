@@ -165,6 +165,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             @($l.console) | Should -BeNullOrEmpty -Because 'listing needs no session - nobody was signed in for it'
             $ev = @($apps | Where-Object { $_.program -match '\\mmc\.exe$' -and $_.arguments -match 'eventvwr\.msc' })
             $ev | Should -Not -BeNullOrEmpty -Because 'Event Viewer (a .msc shortcut) is listed as mmc.exe with the console'
+            $ev[0].icon | Should -BeGreaterThan 0 -Because 'its icon (the console''s) comes with it'
             $mine = @($apps | Where-Object { $_.program -eq $script:exe })
             @($mine | Where-Object name -eq 'RH Lab App').Count | Should -Be 1 -Because 'the duplicate shortcut (same program and arguments) is listed once'
             @($mine | Where-Object name -eq 'RH Lab App Copy') | Should -BeNullOrEmpty
@@ -461,6 +462,7 @@ $me = (Get-Process -Id $PID).SessionId
             $settings = @($parts[1].apps | Where-Object { $_.program -eq "shell:AppsFolder\$($script:settingsId)" })
             $settings.Count | Should -Be 1 -Because "Settings is among the Store apps ($(@($parts[1].apps | ForEach-Object name) -join ', '))"
             $settings[0].group | Should -Be 'Store apps'
+            $settings[0].icon | Should -BeGreaterThan 0 -Because 'its icon comes with it'
             $settings[0].elevated | Should -BeFalse
         }
 

@@ -24,11 +24,15 @@ internal static unsafe partial class AppStartMenu
     /// profile is on this device. <paramref name="read"/> reads one shortcut file (null: unreadable).
     /// </summary>
     public static DesktopAppList List(AgentPolicy p, string? accountSid) =>
-        List(Roots(accountSid), p, ReadAll, Environment.ExpandEnvironmentVariables, File.Exists);
+        List(Roots(accountSid), p, ReadAll, Environment.ExpandEnvironmentVariables, File.Exists, IconsOf);
 
-    /// <summary>The list from <paramref name="roots"/>: read, checked, filtered by policy, without duplicates, within the limits.</summary>
+    /// <summary>
+    /// The list from <paramref name="roots"/>: read, checked, filtered by policy, without duplicates, within the limits.
+    /// <paramref name="icons"/> gives each listed app's icon from the file its shortcut points to (the program, or the
+    /// console of an <c>.msc</c>); icons are left out rather than apps once the list would pass <see cref="MaxBytes"/>.
+    /// </summary>
     internal static DesktopAppList List(IEnumerable<string> roots, AgentPolicy p, Func<IReadOnlyList<(string File, string Group)>, IReadOnlyList<Shortcut?>> read,
-        Func<string, string> expand, Func<string, bool> exists)
+        Func<string, string> expand, Func<string, bool> exists, Func<IReadOnlyList<string>, IReadOnlyList<byte[]?>>? icons = null)
     {
         var files = new List<(string File, string Group)>();
         var truncated = false;
@@ -39,6 +43,7 @@ internal static unsafe partial class AppStartMenu
                 files.Add(f);
             }
         var apps = new List<DesktopListedApp>();
+        var sources = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         long bytes = 0;
         foreach (var s in read(files))
@@ -48,6 +53,18 @@ internal static unsafe partial class AppStartMenu
             bytes += 2L * (app.Name.Length + app.Group.Length + app.Program.Length + app.Arguments.Length + app.WorkingFolder.Length) + 64;
             if (apps.Count == MaxEntries || bytes > MaxBytes) { truncated = true; break; }
             apps.Add(app);
+            sources.Add(expand(s.Target));
+        }
+        if (icons is not null && apps.Count > 0)
+        {
+            var found = icons(sources);
+            for (var i = 0; i < apps.Count && i < found.Count; i++)
+            {
+                // JSON sends the PNG as base64: a third more than its bytes
+                if (found[i] is not { Length: > 0 and <= IconPng.MaxBytes } png || !IconPng.IsPng(png) || bytes + png.Length * 4L / 3 > MaxBytes) continue;
+                bytes += png.Length * 4L / 3;
+                apps[i] = apps[i] with { Icon = png };
+            }
         }
         return new DesktopAppList([.. apps.OrderBy(a => a.Group, StringComparer.CurrentCultureIgnoreCase).ThenBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase)], truncated);
     }
@@ -147,6 +164,34 @@ internal static unsafe partial class AppStartMenu
         return read;
     }
 
+    /// <summary>
+    /// The icons of <paramref name="files"/> (programs and consoles on this device, already checked), 32×32 as the shell
+    /// shows them (SHGetFileInfo on the file itself, never the shortcut, so no link is followed); null where there is none.
+    /// </summary>
+    private static IReadOnlyList<byte[]?> IconsOf(IReadOnlyList<string> files)
+    {
+        var icons = new List<byte[]?>(files.Count);
+        var t = new Thread(() =>
+        {
+            foreach (var file in files)
+            {
+                var info = new SHFILEINFOW();
+                byte[]? png = null;
+                if (SHGetFileInfoW(file, 0, ref info, (uint)sizeof(SHFILEINFOW), 0x100 /* SHGFI_ICON, large */) != 0 && info.hIcon != 0)
+                {
+                    try { png = IconPng.FromIcon(info.hIcon); }
+                    catch (ArgumentException) { }
+                    finally { DestroyIcon(info.hIcon); }
+                }
+                icons.Add(png);
+            }
+        }) { IsBackground = true, Name = "Start menu icons" };
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        t.Join();
+        return icons;
+    }
+
     private static Shortcut? Read(string file, string group)
     {
         if (CoCreateInstance(in ShellLinkClass, 0, 1 /* CLSCTX_INPROC_SERVER */, in UnknownIid, out var unknown) != 0) return null;
@@ -225,5 +270,6 @@ internal static unsafe partial class AppStartMenu
     }
 
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(in Guid clsid, nint outer, uint context, in Guid iid, out nint instance);
+    [DllImport("user32.dll")] private static extern bool DestroyIcon(nint icon);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern nint SHGetFileInfoW(string path, uint attributes, ref SHFILEINFOW info, uint size, uint flags);
 }

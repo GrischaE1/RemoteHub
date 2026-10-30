@@ -117,7 +117,24 @@ public class StoreAppsTests
         var (apps, truncated, why) = A.StoreApps.ParseList(Utf8(text));
         Assert.Equal("", why);
         Assert.False(truncated);
-        Assert.Equal([(Terminal, "Terminal"), ("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "Calculator"), ("Pkg!App", "Pkg!App"), ("Long!App", new string('n', 256))], apps!);
+        Assert.Equal([(Terminal, "Terminal"), ("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "Calculator"), ("Pkg!App", "Pkg!App"), ("Long!App", new string('n', 256))],
+            apps!.Select(a => (a.Id, a.Name)));
+        Assert.All(apps!, a => Assert.Null(a.Icon));
+    }
+
+    [Fact]
+    public void A_listed_store_app_keeps_its_icon_only_when_it_is_a_small_png()
+    {
+        var png = A.IconPng.Encode(2, 2, new byte[16]);
+        var text = "apps\n"
+                   + "One!App\tOne\t" + Convert.ToBase64String(png) + "\n"
+                   + "Two!App\tTwo\t" + Convert.ToBase64String(Utf8("not a picture")) + "\n"
+                   + "Three!App\tThree\t%%%not base64\n"
+                   + "Four!App\tFour\t" + Convert.ToBase64String([.. png, .. new byte[A.IconPng.MaxBytes]]) + "\n";
+        var apps = A.StoreApps.ParseList(Utf8(text)).Apps!;
+        Assert.Equal(["One!App", "Two!App", "Three!App", "Four!App"], apps.Select(a => a.Id));
+        Assert.Equal(png, apps[0].Icon);
+        Assert.All(apps.Skip(1), a => Assert.Null(a.Icon));
     }
 
     [Fact]
