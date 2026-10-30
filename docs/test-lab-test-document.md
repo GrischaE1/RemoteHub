@@ -7526,7 +7526,8 @@ P2 · How: U · Needs: Jump · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 P2 · How: U PS · Needs: Jump · Status: ✅ Automated – `UI-RDP.Tests.ps1`
 
 **Expected:**
-- a RemoteHub without jump hosts (≤ 0.18.7) opens the new database and shared file, keeps the items below a jump host as ordinary items, and its save keeps them
+- the previous RemoteHub opens the database with the jump host: Device, JumpHost and Behind are in its tree
+- or, when the database has a newer schema than the previous RemoteHub knows (no downgrades before GA, local-db-design.md): it says the database was created by a newer version and offers to restore the automatic backup, instead of opening it or starting empty
 - Steps: see the test (`lab/tests/UI-RDP.Tests.ps1`).
 
 #### J-13 · Other refusals
