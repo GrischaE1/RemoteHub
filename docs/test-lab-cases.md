@@ -771,11 +771,11 @@ The agent's side of the RemoteHub Broker and RemoteHub's way to a device through
 | B-BRK-04 | Leave and join | `broker leave` → "Left the RemoteHub Broker …", offline, `broker status` "No RemoteHub Broker."; `broker join <url>` with the device secret on standard input (what *Assign to RemoteHub Broker* runs) → "Joined …", online; the console secret refused ("… console secret …", exit 1) | PS | 2 | ◐ | Broker |
 | SEC-BRK-01 | The device secret is kept nowhere | on no command line while the MSI runs (`BROKER_SECRET_FILE`), the file deleted once registered, not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status` | PS E | 1 | ◐ | Broker |
 
-### 9.15 App tabs (D-APP, D-APPSPIKE)
+### 9.15 App tabs (D-APP, D-APPSPIKE, D-APPSTORE)
 
 Apps from a connection, each started in the admin's own session on a virtual monitor of its own and shown in its own tab ([app-tabs-design.md](app-tabs-design.md)). The stand-in app is `RhLabApp.exe` (`lab/guest/RhLabApp.cs`, compiled in the guest by `Install-LabTestApp`): a window of one colour that logs where it was started, whether elevated, and what was typed into it.
 
-`lab/tests/D-APPSPIKE.Tests.ps1` is the spike of the design's §11: it checks the agent's virtual display driver and Windows before anything is built, and runs only when asked for (`# LabRuns: on request`: `-Tag AppSpike` or its case IDs). Its results are in the design's §5.1. D-APPSPIKE-02 and -03 fail because of what they found, not because of the test: a reload of the driver minimises windows on every virtual monitor, and a reload with the monitors in their own modes leaves the device failed. Before each context the test restarts a failed device, so one failure doesn't fail the cases after it. `lab/tests/D-APP.Tests.ps1` checks the feature; every case is skipped while the agent doesn't offer app tabs (no `apps` feature in Hello). Its harness steps (`start` with `app`, `appList`, `appClose`, `appRestart`) come with the feature.
+`lab/tests/D-APPSPIKE.Tests.ps1` is the spike of the design's §11: it checks the agent's virtual display driver and Windows before anything is built, and runs only when asked for (`# LabRuns: on request`: `-Tag AppSpike` or its case IDs). Its results are in the design's §5.1. D-APPSPIKE-02 and -03 fail because of what they found, not because of the test: a reload of the driver minimises windows on every virtual monitor, and a reload with the monitors in their own modes leaves the device failed. Before each context the test restarts a failed device, so one failure doesn't fail the cases after it. `lab/tests/D-APP.Tests.ps1` checks the feature; every case is skipped while the agent doesn't offer app tabs (no `apps` feature in Hello). Its harness steps (`start` with `app`, `appList`, `appClose`, `appRestart`) come with the feature. `lab/tests/D-APPSTORE.Tests.ps1` is the spike for Store apps (the design's §6.6, phase 2): Windows alone, no agent, and also only on request (`-Tag AppStoreSpike`); the stand-in runs as the console account from a scheduled task.
 
 | ID | Test | Pass when | How | P | St | Needs |
 |---|---|---|---|---|---|---|
@@ -800,6 +800,11 @@ Apps from a connection, each started in the admin's own session on a virtual mon
 | D-APP-12 | Resume | dropped and continued with the resume token: Connected again, the app started only once, a picture after | H | 2 | ◐ | – |
 | D-APP-13 | Taskbar setting after a crash | while a tab is open the account's `MMTaskbarEnabled` is 0; the service killed and started: the account's value is back, no record left | PS | 1 | ◐ | – |
 | D-APP-14 | MaxAppTabs | `MaxAppTabs` = 1 and one tab open: a second tab is refused, nothing started | H | 2 | ◐ | – |
+| D-APPSTORE-01 | Store apps listed | the console account's `shell:AppsFolder` has entries whose path is an AppUserModelID, Calculator or Settings among them; the time the list took is in the evidence | S | 1 | ◐ | – |
+| D-APPSTORE-02 | Started by AppUserModelID | `IApplicationActivationManager::ActivateApplication` from a process with no window of its own (a scheduled task as the user) starts the UWP app and Windows Terminal (where present) and returns a process ID | S | 1 | ◐ | – |
+| D-APPSTORE-03 | Process in a job | the returned process can be added to a new job object (nested jobs) | S | 1 | ◐ | – |
+| D-APPSTORE-04 | Windows by AppUserModelID | within 20 s visible top-level windows carry the app's `PKEY_AppUserModel_ID`; for the UWP app one of them is ApplicationFrameHost's `ApplicationFrameWindow` | S | 1 | ◐ | – |
+| D-APPSTORE-05 | Closed by WM_CLOSE | `WM_CLOSE` to those windows: none with the app's ID is left within 20 s | S | 1 | ◐ | – |
 
 ## 10. RemoteHub on a Windows client (C, R)
 
