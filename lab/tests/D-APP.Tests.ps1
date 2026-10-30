@@ -215,7 +215,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
                 (Park $o 'close-green'), @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('Ended', 'AppClosed'); timeout = 60 }))
             $blue = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'blue') -TimeoutSec 1800 -Steps ((Tab (App 'blue' '0,0,255')) + @(
                 (Mark $o 'blue-up'), (Park $o 'marker-on'), @{ do = 'frame'; out = 'blue-1.png' }, (Mark $o 'blue-pictured')
-                (Park $o 'resize'), @{ do = 'settings'; fitWidth = 1600; fitHeight = 900 }, @{ do = 'sleep'; seconds = 5 }, @{ do = 'frame'; out = 'blue-1600.png' }, (Mark $o 'blue-resized')
+                (Park $o 'resize'), @{ do = 'settings'; fitWidth = 1600; fitHeight = 900 }, @{ do = 'frame'; out = 'blue-1600.png'; width = 1600; height = 900; timeout = 30 }, (Mark $o 'blue-resized')
                 (Park $o 'shell'), @{ do = 'combo'; scans = @('0xE05B', '0x13') }, @{ do = 'sleep'; seconds = 3 }, (Mark $o 'blue-shell')
                 (Park $o 'close-blue'), @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('Ended', 'AppClosed'); timeout = 60 }))
             foreach ($c in 'red', 'green', 'blue') { Reached $o "$c-up" 420 }

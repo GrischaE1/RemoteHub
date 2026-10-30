@@ -1035,22 +1035,36 @@ internal static class DesktopHarness
             var c = Need();
             if (!_decode) return (false, new D { ["failed"] = "decoding is off (--decode 0)" });
             var path = Path.GetFullPath(Path.Combine(_out, Str(s, "out") ?? $"frame-{Ms}.png"));
+            // {width, height}: a picture of that size - after a resize the old size may come for a while
+            var (wantWidth, wantHeight) = ((int)Dbl(s, "width", 0), (int)Dbl(s, "height", 0));
+            var deadline = DateTime.UtcNow.AddSeconds(Dbl(s, "timeout", 30));
             Decoder? d = null;
             var start = 0;
             try
             {
-                var got = await Until(() =>
+                (byte[] Bgra, int Width, int Height) picture;
+                while (true)
                 {
-                    if (d is null && c.Decoder is { } now)
+                    var got = await Until(() =>
                     {
-                        d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures;
-                        // a screen that doesn't change sends nothing new: a key frame is decoded while we wait
-                        c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
-                    }
-                    return d is not null && (d.Failed is not null || d.Pictures > start);
-                }, Dbl(s, "timeout", 30), ct);
-                if (d?.Failed is { } failed) return (false, new D { ["failed"] = "decoder: " + failed });
-                if (!got || d!.Take() is not { } picture) return (false, new D { ["timedOut"] = true, ["frames"] = Interlocked.Read(ref _frames) });
+                        if (d is null && c.Decoder is { } now)
+                        {
+                            d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures;
+                            // a screen that doesn't change sends nothing new: a key frame is decoded while we wait
+                            c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                        }
+                        return d is not null && (d.Failed is not null || d.Pictures > start);
+                    }, Math.Max(0.1, (deadline - DateTime.UtcNow).TotalSeconds), ct);
+                    if (d?.Failed is { } failed) return (false, new D { ["failed"] = "decoder: " + failed });
+                    if (!got || d!.Take() is not { } taken) return (false, new D { ["timedOut"] = true, ["frames"] = Interlocked.Read(ref _frames) });
+                    picture = taken;
+                    if (wantWidth == 0 || (picture.Width == wantWidth && picture.Height == wantHeight)) break;
+                    if (DateTime.UtcNow >= deadline)
+                        return (false, new D { ["timedOut"] = true, ["width"] = picture.Width, ["height"] = picture.Height, ["wanted"] = $"{wantWidth}x{wantHeight}" });
+                    start = d!.Pictures;
+                    c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                    await Task.Delay(200, ct);
+                }
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 SavePng(path, picture.Bgra, picture.Width, picture.Height);
                 var image = new { path, width = picture.Width, height = picture.Height, meanLuma = MeanLuma(picture.Bgra), ms = Ms, connection = c.N };
