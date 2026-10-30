@@ -401,14 +401,20 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
                 @{ do = 'frame'; out = 'store.png' }, (Mark $o 'up'), (Park $o 'close')
                 @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('AppClosed', 'Ended'); timeout = 60 }))
             Reached $o 'up' 600
-            # the helper has placed the frame window (outside the tab's job) on the tab's monitor
-            $until = (Get-Date).AddSeconds(30)
+            # the helper has placed the frame window (outside the tab's job) on the tab's monitor - up to 90 s: a UWP app's
+            # frame may come late right after the sign-in (Server)
+            $until = (Get-Date).AddSeconds(90)
             do {
                 $st.frames = @(Invoke-LabInSessionJson -Name $VmName -Code $script:framesCode)
                 if (@($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count) { break }
                 Start-Sleep -Seconds 2
             } while ((Get-Date) -lt $until)
-            $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $o 'console.png') # where the app is, should it not be on its monitor
+            # the shell's processes in the account's session and how long they run, should the frame not be there
+            $st.procs = @(Invoke-LabInSessionJson -Name $VmName -Code @'
+$me = (Get-Process -Id $PID).SessionId
+@(Get-Process -Name ApplicationFrameHost, SystemSettings, explorer, ShellExperienceHost, StartMenuExperienceHost, RuntimeBroker -ErrorAction SilentlyContinue |
+    Where-Object SessionId -eq $me | ForEach-Object { "$($_.Name) $([int]((Get-Date) - $_.StartTime).TotalSeconds)s windows:$($_.MainWindowHandle -ne 0)" })
+'@)
             # signed in now: the list has a second part with the account's Store apps
             $st.list = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'store-list') -Steps @(@{ do = 'connect' }, @{ do = 'appList'; timeout = 200 }, @{ do = 'close' })
             Release $o 'close'
@@ -439,7 +445,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
         It 'D-APP-17 a Store app in a tab: its frame window is maximised on the tab''s monitor; audited by its ID' -Tag 'D-APP-17' {
             Skip; if ($script:noApps) { return }
             (States $st.tab) | Should -Match 'Connected: Settings started' -Because (States $st.tab)
-            @($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count | Should -BeGreaterThan 0 -Because "a maximised, shown ApplicationFrameWindow on a monitor that isn't the primary one (frames as title|maximised|primary|size|visible|cloaked: $(@($st.frames) -join '; '))"
+            @($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count | Should -BeGreaterThan 0 -Because "a maximised, shown ApplicationFrameWindow on a monitor that isn't the primary one (frames as title|maximised|primary|size|visible|cloaked: $(@($st.frames) -join '; '); processes: $(@($st.procs) -join ', '))"
             @($st.starts | Where-Object { "$_" -match [regex]::Escape("shell:AppsFolder\$($script:settingsId)") }).Count | Should -Be 1 -Because 'the start is audited by the app''s ID'
         }
 
