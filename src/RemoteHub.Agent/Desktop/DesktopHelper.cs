@@ -83,7 +83,9 @@ internal sealed record HelperInit(string Account, string Device, string Consent,
 /// </summary>
 /// <param name="Job">The job's name (<c>Global\RemoteHub-AppTab-…</c>), "" until the app was started.</param>
 /// <param name="Name">The app's name, for the log.</param>
-internal sealed record HelperApp(int Place, string Job, string Name);
+/// <param name="AppId">A Store app's AppUserModelID: its windows are also those that carry it (a UWP app's frame is drawn
+/// by ApplicationFrameHost, outside the job – app-tabs-design §6.6).</param>
+internal sealed record HelperApp(int Place, string Job, string Name, string? AppId = null);
 
 internal sealed record HelperHiddenApps(string[] Apps);
 
@@ -807,7 +809,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         if (_appWindows is not { } job) return [area];
         if (!_taskbar.Off && !_taskbarFailed && !_appLeft) TaskbarOff();
         var windows = apps.Visible();
-        bool Owned(AppWindow w) => job.Owns(w.Handle);
+        // A Store app's windows may be drawn by another process (§6.6): also those that carry its AppUserModelID.
+        bool Owned(AppWindow w) => job.Owns(w.Handle) || (tab.AppId is { } appId && job.Carries(w.Handle, appId));
         if (_appMain == IntPtr.Zero || !AppTabWindows.Exists(_appMain))
             _appMain = windows.FirstOrDefault(w => Owned(w) && AppTabWindows.MainCandidate(w.Handle))?.Handle ?? IntPtr.Zero;
 

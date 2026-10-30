@@ -1,15 +1,20 @@
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.Marshalling;
 
 namespace RemoteHub.Agent;
 
 /// <summary>
 /// The app of an app tab as Windows has it, for the helper (LocalSystem, in the admin's session): which windows are the
-/// app's – their process is in the tab's job, which the service made (app-tabs-design §6.2) – and moving, maximising and
-/// bringing them to the front. Windows are moved asynchronously, so an app that hangs never holds up the capture.
+/// app's – their process is in the tab's job, which the service made (app-tabs-design §6.2), or, for a Store app, they carry
+/// its AppUserModelID (§6.6) – and moving, maximising and bringing them to the front. Windows are moved asynchronously, so
+/// an app that hangs never holds up the capture.
 /// </summary>
-internal sealed class AppTabWindows : IDisposable
+internal sealed partial class AppTabWindows : IDisposable
 {
     private IntPtr _job;
+    // A window's AppUserModelID, by handle: read again after a while (a handle can be reused).
+    private readonly Dictionary<IntPtr, (string? Id, long At)> _appIds = [];
+    [ThreadStatic] private static bool _comReady;
     // Whether a process is in the job, by id: asked again after a while, since an id can be reused.
     private readonly Dictionary<uint, (bool InJob, long At)> _processes = [];
     private const long ProcessCacheMs = 2000;
@@ -39,6 +44,44 @@ internal sealed class AppTabWindows : IDisposable
         if (_processes.Count > 256) _processes.Clear();
         _processes[pid] = (inJob, now);
         return inJob;
+    }
+
+    /// <summary>
+    /// The window carries <paramref name="appId"/> as its AppUserModelID – a Store app's window drawn by another process
+    /// (ApplicationFrameHost for a UWP app). Read through the window's property store, at most every 2 s per window.
+    /// </summary>
+    public bool Carries(IntPtr window, string appId)
+    {
+        var now = Environment.TickCount64;
+        if (!_appIds.TryGetValue(window, out var known) || now - known.At >= ProcessCacheMs)
+        {
+            if (_appIds.Count > 512) _appIds.Clear();
+            _appIds[window] = known = (ReadAppId(window), now);
+        }
+        return string.Equals(known.Id, appId, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static readonly StrategyBasedComWrappers Wrappers = new();
+
+    private static unsafe string? ReadAppId(IntPtr window)
+    {
+        if (!_comReady)
+        {
+            _ = CoInitializeEx(IntPtr.Zero, 0 /* COINIT_MULTITHREADED */); // already in an apartment is fine too
+            _comReady = true;
+        }
+        var iid = typeof(IPropertyStore).GUID;
+        if (SHGetPropertyStoreForWindow(window, in iid, out var raw) != 0 || raw == 0) return null;
+        try
+        {
+            var store = (IPropertyStore)Wrappers.GetOrCreateObjectForComInstance(raw, CreateObjectFlags.UniqueInstance);
+            var key = new PropertyKey { Format = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), Id = 5 }; // PKEY_AppUserModel_ID
+            var value = new PropVariant();
+            if (store.GetValue(&key, &value) != 0) return null;
+            try { return value.Type == 31 /* VT_LPWSTR */ && value.Pointer != 0 ? new string((char*)value.Pointer) : null; }
+            finally { PropVariantClear(&value); }
+        }
+        finally { Marshal.Release(raw); }
     }
 
     /// <summary>Processes in the job now (−1 when it can't be read).</summary>
@@ -83,12 +126,37 @@ internal sealed class AppTabWindows : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct PropertyKey
+    {
+        public Guid Format;
+        public uint Id;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PropVariant
+    {
+        public ushort Type, Reserved1, Reserved2, Reserved3;
+        public nint Pointer, Pointer2;
+    }
+
+    [GeneratedComInterface, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")]
+    internal unsafe partial interface IPropertyStore
+    {
+        [PreserveSig] int GetCount(uint* count);
+        [PreserveSig] int GetAt(uint index, void* key);
+        [PreserveSig] int GetValue(void* key, void* value);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
     {
         public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
         public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
     }
 
+    [DllImport("shell32.dll")] private static extern int SHGetPropertyStoreForWindow(IntPtr window, in Guid iid, out nint store);
+    [DllImport("ole32.dll")] private static extern unsafe int PropVariantClear(PropVariant* value);
+    [DllImport("ole32.dll")] private static extern int CoInitializeEx(IntPtr reserved, uint model);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr OpenJobObjectW(uint access, bool inherit, string name);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern bool QueryInformationJobObject(IntPtr job, int infoClass, ref JOBOBJECT_BASIC_ACCOUNTING_INFORMATION info, int length, out int returned);

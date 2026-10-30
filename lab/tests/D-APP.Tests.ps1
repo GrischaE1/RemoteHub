@@ -18,6 +18,11 @@
 #   D-APP-12  a dropped connection continues with the same app (resume)
 #   D-APP-13  the account's taskbar setting (MMTaskbarEnabled) comes back after the service was killed
 #   D-APP-14  MaxAppTabs: one tab more than allowed is refused
+#   D-APP-15  with nobody signed in the list says Store apps come once signed in, and has none
+#   D-APP-16  signed in, the list adds the account's Store apps (Settings) in a part of its own, group "Store apps"
+#   D-APP-17  a Store app (Settings, a UWP app drawn by ApplicationFrameHost) in a tab: its frame window is maximised on
+#             the tab's monitor, not the primary one; the start is audited as shell:AppsFolder\<AppUserModelID>
+#   D-APP-18  closing the Store app's tab closes the app
 # Every case is skipped while the agent doesn't offer app tabs (Hello without the "apps" feature). The harness steps
 # for app tabs come with the feature (DesktopHarness.cs): start {app: {program, arguments, workingFolder, elevated,
 # name}}, appList (answers appLists), appClose {force}, appRestart.
@@ -50,6 +55,39 @@ BeforeAll {
             @{ do = 'settings'; fitWidth = $Width; fitHeight = $Height }, @{ do = 'sleep'; seconds = 5 })
     }
     function States($r) { @($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) -join ' / ' }
+    # Settings: a UWP app on every lab device (W11 and Server), whose window ApplicationFrameHost draws
+    $script:settingsId = 'windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel'
+    # the session's ApplicationFrameWindows: title|maximised|on the primary monitor|that monitor's size
+    $script:framesCode = @'
+Add-Type -TypeDefinition @"
+using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+public static class RhFrames {
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+    [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public int L, T, R, B, WL, WT, WR, WB; public uint Flags; }
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MonitorInfo i);
+    public static List<string> Frames() {
+        var list = new List<string>();
+        EnumWindows((h, l) => {
+            var c = new StringBuilder(256); GetClassName(h, c, 256);
+            if (c.ToString() != "ApplicationFrameWindow" || !IsWindowVisible(h)) return true;
+            var t = new StringBuilder(256); GetWindowText(h, t, 256);
+            var mi = new MonitorInfo(); mi.Size = Marshal.SizeOf(typeof(MonitorInfo));
+            GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
+            list.Add(t + "|" + IsZoomed(h) + "|" + ((mi.Flags & 1) != 0) + "|" + (mi.R - mi.L) + "x" + (mi.B - mi.T));
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+}
+"@
+@([RhFrames]::Frames())
+'@
     function Started([string]$n) { @(Get-LabTestAppLog -Name $VmName -Path (Log $n) | Where-Object e -eq 'started') }
     function ConsoleUser { @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.User }) }
     # signed out and back at the sign-in screen: the console session is there again, with nobody in it (right after a
@@ -112,6 +150,14 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             foreach ($skipped in 'RH Lab Doc', 'RH Lab Missing', 'RH Lab Web', 'RH Lab Behind Junction') {
                 @($apps | Where-Object name -eq $skipped) | Should -BeNullOrEmpty -Because "$skipped isn't a program that is there (or is behind a junction)"
             }
+        }
+
+        It 'D-APP-15 with nobody signed in the list says Store apps come once signed in, and has none' -Tag 'D-APP-15' {
+            Skip; if ($script:noApps) { return }
+            $parts = @($l.plain.appLists)
+            $parts.Count | Should -Be 1 -Because 'without a session there is no second part'
+            "$($parts[0].note)" | Should -Match 'Store apps are listed once you''re signed in on '
+            @($parts[0].apps | Where-Object group -eq 'Store apps') | Should -BeNullOrEmpty
         }
 
         It 'D-APP-02 the list follows the policy: allowed programs only, no elevation, none when app tabs are off' -Tag 'D-APP-02' {
@@ -335,6 +381,67 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             Skip; if ($script:noApps) { return }
             (States $d.second) | Should -Match 'Failed' -Because 'MaxAppTabs = 1 and one tab was open'
             @(Started 'second') | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'a Store app' {
+        BeforeAll {
+            if ($script:noApps) { return }
+            Restart-LabAgent -Name $VmName -Pin $pin | Out-Null
+            $null = Wait-SignedOut 180
+            $st = [ordered]@{}
+            $since = Get-LabGuestTime -Name $VmName
+            $o = Out 'store'
+            $settings = @{ program = "shell:AppsFolder\$($script:settingsId)"; arguments = ''; workingFolder = ''; elevated = $false; name = 'Settings' }
+            $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out $o -TimeoutSec 1200 -Steps ((Tab $settings -SignIn) + @(
+                @{ do = 'frame'; out = 'store.png' }, (Mark $o 'up'), (Park $o 'close')
+                @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('AppClosed', 'Ended'); timeout = 60 }))
+            Reached $o 'up' 600
+            # the helper has placed the frame window (outside the tab's job) on the tab's monitor
+            $until = (Get-Date).AddSeconds(30)
+            do {
+                $st.frames = @(Invoke-LabInSessionJson -Name $VmName -Code $script:framesCode)
+                if (@($st.frames | Where-Object { $_ -match '\|True\|False\|' }).Count) { break }
+                Start-Sleep -Seconds 2
+            } while ((Get-Date) -lt $until)
+            # signed in now: the list has a second part with the account's Store apps
+            $st.list = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'store-list') -Steps @(@{ do = 'connect' }, @{ do = 'appList'; timeout = 200 }, @{ do = 'close' })
+            Release $o 'close'
+            $st.tab = Receive-LabDesktop $job
+            $until = (Get-Date).AddSeconds(30)
+            do {
+                $st.running = [int](Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process SystemSettings -ErrorAction SilentlyContinue).Count })
+                if ($st.running -eq 0) { break }
+                Start-Sleep -Seconds 2
+            } while ((Get-Date) -lt $until)
+            $st.starts = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1109)
+            $null = Wait-SignedOut 180
+            Save 'store' $st
+        }
+
+        It 'D-APP-16 signed in, the list adds the account''s Store apps in a part of its own' -Tag 'D-APP-16' {
+            Skip; if ($script:noApps) { return }
+            $parts = @($st.list.appLists)
+            $parts.Count | Should -Be 2 -Because "the Start menu, then the Store apps ($(@($st.list.steps | Where-Object do -eq 'appList')[0].detail | ConvertTo-Json -Compress))"
+            $parts[0].more | Should -BeTrue
+            $parts[1].more | Should -BeFalse
+            $settings = @($parts[1].apps | Where-Object { $_.program -eq "shell:AppsFolder\$($script:settingsId)" })
+            $settings.Count | Should -Be 1 -Because "Settings is among the Store apps ($(@($parts[1].apps | ForEach-Object name) -join ', '))"
+            $settings[0].group | Should -Be 'Store apps'
+            $settings[0].elevated | Should -BeFalse
+        }
+
+        It 'D-APP-17 a Store app in a tab: its frame window is maximised on the tab''s monitor; audited by its ID' -Tag 'D-APP-17' {
+            Skip; if ($script:noApps) { return }
+            (States $st.tab) | Should -Match 'Connected: Settings started' -Because (States $st.tab)
+            @($st.frames | Where-Object { $_ -match '\|True\|False\|' }).Count | Should -BeGreaterThan 0 -Because "a maximised ApplicationFrameWindow on a monitor that isn't the primary one (frames: $(@($st.frames) -join '; '))"
+            @($st.starts | Where-Object { "$_" -match [regex]::Escape("shell:AppsFolder\$($script:settingsId)") }).Count | Should -Be 1 -Because 'the start is audited by the app''s ID'
+        }
+
+        It 'D-APP-18 closing the Store app''s tab closes the app' -Tag 'D-APP-18' {
+            Skip; if ($script:noApps) { return }
+            (States $st.tab) | Should -Match 'AppClosed|Ended'
+            $st.running | Should -Be 0 -Because 'Settings ended within 30 s of the close'
         }
     }
 

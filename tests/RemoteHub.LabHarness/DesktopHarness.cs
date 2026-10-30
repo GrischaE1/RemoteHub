@@ -88,6 +88,7 @@ internal static class DesktopHarness
         private int _statusMark; // a wait looks at statuses from here on (set by start and by a wait that found one)
         private string? _lastResume;
         private readonly List<object> _layouts = [], _stats = [], _clipboard = [], _transfers = [], _privacy = [], _closes = [], _images = [], _appLists = [];
+        private int _appListsLast; // app lists whose last part came (DesktopAppList.More false)
         private readonly List<(long Ms, string Hex)> _pongs = [];
         private readonly List<string> _errors = [];
         private readonly Dictionary<string, int> _other = [];
@@ -471,17 +472,18 @@ internal static class DesktopHarness
 
                 case "appList":
                 {
-                    // {timeout (60)}: asks for the device's Start menu instead of a start; the list goes to appLists
+                    // {timeout (60)}: asks for the device's Start menu instead of a start; the list goes to appLists, one
+                    // entry per part (the Start menu, then the Store apps when signed in) - done with the last part
                     var c = Need();
-                    int before;
-                    lock (_gate) (before, _statusMark) = (_appLists.Count, _statuses.Count);
+                    int before, lastBefore;
+                    lock (_gate) (before, lastBefore, _statusMark) = (_appLists.Count, _appListsLast, _statuses.Count);
                     c.Client.Send([(byte)DesktopMessage.AppList]);
                     var refused = "";
                     var got = await Until(() =>
                     {
                         lock (_gate)
                         {
-                            if (_appLists.Count > before) return true;
+                            if (_appListsLast > lastBefore) return true;
                             for (var k = _statusMark; k < _statuses.Count; k++)
                                 if (_statuses[k].State == DesktopStatusState.Failed) { refused = _statuses[k].Message; return true; }
                             return false;
@@ -760,11 +762,15 @@ internal static class DesktopHarness
                         break;
                     case DesktopMessage.AppList:
                         var list = Read<DesktopAppList>(m);
-                        lock (_gate) _appLists.Add(new
+                        lock (_gate)
                         {
-                            ms = Ms, connection = c.N, truncated = list.Truncated,
-                            apps = list.Apps.Select(x => new { x.Name, x.Group, x.Program, x.Arguments, x.WorkingFolder, x.Elevated, icon = x.Icon?.Length }).ToList(),
-                        });
+                            if (!list.More) _appListsLast++;
+                            _appLists.Add(new
+                            {
+                                ms = Ms, connection = c.N, truncated = list.Truncated, more = list.More, note = list.Note,
+                                apps = list.Apps.Select(x => new { x.Name, x.Group, x.Program, x.Arguments, x.WorkingFolder, x.Elevated, icon = x.Icon?.Length }).ToList(),
+                            });
+                        }
                         break;
                     case DesktopMessage.CursorShape:
                         Interlocked.Increment(ref _cursorShapes);

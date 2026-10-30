@@ -7905,6 +7905,37 @@ P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
 **Expected:**
 - `MaxAppTabs` = 1 with one tab open: a second tab ends Failed and nothing is started
 
+#### D-APP-15 · No Store apps signed out
+P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- with nobody signed in, `appList` gets one part: the Start menu, with the note *Store apps are listed once you're signed in on …*
+- no entry in the group *Store apps*
+
+#### D-APP-16 · Store apps listed
+P1 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Preconditions:** the console account signed in by an app tab.
+**Expected:**
+- `appList` gets two parts: the Start menu (`more` true), then the Store apps (`more` false)
+- Settings is among them as `shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel`, in the group *Store apps*, not elevated
+
+#### D-APP-17 · A Store app in a tab
+P1 · How: H S E · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. An app tab for Settings (a UWP app) with nobody signed in.
+**Expected:**
+- the tab is Connected ("Settings started.")
+- Settings' `ApplicationFrameWindow` – drawn by ApplicationFrameHost, outside the tab's job – is maximised on a monitor that isn't the primary one: the helper found it by its AppUserModelID
+- one 1109 names `shell:AppsFolder\<AUMID>`
+
+#### D-APP-18 · Closing a Store app
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- `appClose` on the Settings tab: the tab ends (AppClosed or Ended)
+- SystemSettings is no longer running within 30 s
+
 #### D-APPSTORE-01 · Store apps listed
 P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
 

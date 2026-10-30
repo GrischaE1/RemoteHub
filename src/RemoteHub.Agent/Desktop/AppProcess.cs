@@ -122,6 +122,35 @@ internal sealed class AppProcess : IDisposable
         }
     }
 
+    /// <summary>
+    /// A Store app's process, started by Windows for <see cref="StoreApps"/> (§6.6), put into a new job named
+    /// <paramref name="jobName"/> – a nested job, since Windows keeps packaged apps in a job of its own. Throws when it can't.
+    /// </summary>
+    public static AppProcess Adopt(int pid, string jobName)
+    {
+        const uint access = 0x0100 /* PROCESS_SET_QUOTA */ | 0x0001 /* PROCESS_TERMINATE */ | 0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */ | 0x00100000 /* SYNCHRONIZE */;
+        var process = OpenProcess(access, false, (uint)pid);
+        if (process == IntPtr.Zero) throw new Win32Exception();
+        var job = IntPtr.Zero;
+        try
+        {
+            job = Native.CreateJobObject(IntPtr.Zero, jobName);
+            if (job != IntPtr.Zero && Marshal.GetLastWin32Error() == 183 /* ERROR_ALREADY_EXISTS */)
+            {
+                Native.CloseHandle(job);
+                job = IntPtr.Zero;
+            }
+            if (job == IntPtr.Zero || !Native.AssignProcessToJobObject(job, process)) throw new Win32Exception();
+            return new AppProcess(process, job, pid);
+        }
+        catch
+        {
+            Native.CloseHandle(process);
+            if (job != IntPtr.Zero) Native.CloseHandle(job);
+            throw;
+        }
+    }
+
     /// <summary>Closes the handles; the app keeps running (closing it is the tab's business, §4.3).</summary>
     public void Dispose()
     {
@@ -140,6 +169,7 @@ internal sealed class AppProcess : IDisposable
     }
 
     [DllImport("wtsapi32.dll", SetLastError = true)] private static extern bool WTSQueryUserToken(uint session, out IntPtr token);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
     [DllImport("userenv.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool ExpandEnvironmentStringsForUserW(IntPtr token, string source, [Out] char[] destination, int size);
 }

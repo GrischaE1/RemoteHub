@@ -800,6 +800,10 @@ Apps from a connection, each started in the admin's own session on a virtual mon
 | D-APP-12 | Resume | dropped and continued with the resume token: Connected again, the app started only once, a picture after | H | 2 | ◐ | – |
 | D-APP-13 | Taskbar setting after a crash | while a tab is open the account's `MMTaskbarEnabled` is 0; the service killed and started: the account's value is back, no record left | PS | 1 | ◐ | – |
 | D-APP-14 | MaxAppTabs | `MaxAppTabs` = 1 and one tab open: a second tab is refused, nothing started | H | 2 | ◐ | – |
+| D-APP-15 | No Store apps signed out | nobody signed in: the list comes in one part, says *Store apps are listed once you're signed in on …* and has no Store apps | H | 2 | ◐ | – |
+| D-APP-16 | Store apps listed | signed in: a second part (the first has `more`) with the account's Store apps in the group *Store apps* – Settings as `shell:AppsFolder\<AUMID>`, not elevated | H | 1 | ◐ | – |
+| D-APP-17 | A Store app in a tab | Settings (a UWP app, drawn by ApplicationFrameHost outside the tab's job) started in a tab: Connected; its `ApplicationFrameWindow` is maximised on a monitor that isn't the primary one; one 1109 with `shell:AppsFolder\<AUMID>` | H S E | 1 | ◐ | – |
+| D-APP-18 | Closing a Store app | `appClose` on the Settings tab: the tab ends (AppClosed or Ended) and SystemSettings is no longer running within 30 s | H PS | 1 | ◐ | – |
 | D-APPSTORE-01 | Store apps listed | the console account's `shell:AppsFolder` has entries whose path is an AppUserModelID, Calculator or Settings among them; the time the list took is in the evidence | S | 1 | ✅ | – |
 | D-APPSTORE-02 | Started by AppUserModelID | `IApplicationActivationManager::ActivateApplication` from a process with no window of its own (a scheduled task as the user) starts the UWP app and Windows Terminal (where present) and returns a process ID | S | 1 | ✅ | – |
 | D-APPSTORE-03 | Process in a job | the returned process can be added to a new job object (nested jobs) | S | 1 | ✅ | – |

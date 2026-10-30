@@ -38,6 +38,7 @@ public partial class EditorWindow
         new("Windows PowerShell", @"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"),
         new("PowerShell 7", @"%ProgramFiles%\PowerShell\7\pwsh.exe"),
         new("Command Prompt", @"%SystemRoot%\system32\cmd.exe"),
+        new("Windows Terminal", ConnectionApp.StorePrefix + "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
     ];
 
     private readonly TextBlock _appsNote = new() { TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.None, Margin = new Thickness(0, 0, 0, 8) };
@@ -97,7 +98,11 @@ public partial class EditorWindow
         {
             _appFields.Children.Add(new TextBlock { Text = text, Margin = new Thickness(0, 0, 0, 4) });
             box.Margin = new Thickness(0, 0, 0, 10);
-            box.TextChanged += (_, _) => EditSelectedApp();
+            box.TextChanged += (_, _) =>
+            {
+                EditSelectedApp();
+                if (box == _appProgram && !_appFilling) RefreshAppsPage(); // a Store app's program greys out what doesn't apply
+            };
             AutomationProperties.SetName(box, text);
             _appFields.Children.Add(box);
         }
@@ -144,6 +149,11 @@ public partial class EditorWindow
         _appRemove.IsEnabled = own && i >= 0;
         _appFields.IsEnabled = own && i >= 0;
         _appFields.Visibility = _vm.Apps.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // A Store app starts by its ID: no folder to start in, and never as administrator (§6.6).
+        var store = i >= 0 && i < _vm.Apps.Count && _vm.Apps[i].IsStoreApp;
+        _appFolder.IsEnabled = _appElevated.IsEnabled = !store;
+        ToolTipService.SetShowOnDisabled(_appElevated, true);
+        _appElevated.ToolTip = store ? "Store apps can't be started as administrator." : null;
     }
 
     private void FillAppsList(int select = -1)

@@ -25,13 +25,23 @@ public class AppTabsViewTests
     private static readonly DesktopListedApp Services = new("Services", "Administrative Tools", @"%SystemRoot%\system32\mmc.exe", @"""%SystemRoot%\system32\services.msc""", "", true, null);
     private static readonly DesktopListedApp Notepad = new("Notepad", "", @"%SystemRoot%\system32\notepad.exe", "", "", false, [1, 2, 3]); // an icon that doesn't decode
 
-    private static AppPickerWindow Picker(Window owner, Func<CancellationToken, Task<DesktopAppList>> load, IReadOnlyList<ConnectionApp> added, bool single)
+    private static readonly DesktopListedApp Terminal = new("Windows Terminal", "Store apps", @"shell:AppsFolder\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "", "", false, null);
+
+    // A device that answers with one part: the Start menu only.
+    private static AppPickerWindow Picker(Window owner, Func<CancellationToken, Task<DesktopAppList>> load, IReadOnlyList<ConnectionApp> added, bool single) =>
+        Picker(owner, async (part, ct) => part(await load(ct)), added, single);
+
+    private static AppPickerWindow Picker(Window owner, Func<Action<DesktopAppList>, CancellationToken, Task> load, IReadOnlyList<ConnectionApp> added, bool single)
     {
         var w = Sta.Theme(new AppPickerWindow("FS01", load, added, single) { Owner = owner, Left = -20000, Top = -20000, ShowActivated = false, WindowStartupLocation = WindowStartupLocation.Manual });
         w.Show();
         for (var i = 0; i < 20 && !Sta.All<ListBoxItem>(w).Any(); i++) Sta.Pump();
         return w;
     }
+
+    /// <summary>A note under the list (no name of its own) that says <paramref name="text"/> and is shown.</summary>
+    private static bool NoteShown(Window w, string text) =>
+        Sta.All<ListBoxItem>(w).Any(i => i.Visibility == Visibility.Visible && Sta.All<TextBlock>(i).Any(t => t.Text == text));
 
     private static List<string> Rows(Window w) =>
         Sta.All<ListBoxItem>(w).Where(i => i.Visibility == Visibility.Visible).Select(i => AutomationProperties.GetName(i)).Where(n => n.Length > 0).ToList();
@@ -86,8 +96,56 @@ public class AppTabsViewTests
         Assert.Contains(Sta.All<TextBlock>(w), t => t.Text.Contains("doesn't offer app tabs"));
         Click(ButtonNamed(w, "Try again"));
         for (var i = 0; i < 20 && !Sta.All<TextBlock>(w).Any(t => t.Text.Contains("No apps found")); i++) Sta.Pump();
-        Assert.Contains(Sta.All<TextBlock>(w), t => t.Text == "No apps found in the Start menu of FS01.");
+        Assert.Contains(Sta.All<TextBlock>(w), t => t.Text == "No apps found on FS01.");
         Assert.Equal(2, asked);
+    });
+
+    [Fact]
+    public void The_start_menu_shows_at_once_and_the_store_apps_are_added_when_they_arrive() => Sta.Run(owner =>
+    {
+        Action<DesktopAppList>? send = null;
+        var last = new TaskCompletionSource();
+        var w = Picker(owner, async (part, ct) =>
+        {
+            part(new DesktopAppList([Notepad], false, More: true));
+            send = part;
+            await last.Task;
+        }, [], single: false);
+        Assert.Equal(["Notepad"], Rows(w));
+        Assert.True(NoteShown(w, "Reading the Store apps on FS01…"));
+
+        send!(new DesktopAppList([Terminal], false));
+        last.SetResult();
+        for (var i = 0; i < 20 && Rows(w).Count < 3; i++) Sta.Pump();
+        Assert.Equal(["Notepad", "Store apps, 1 app, open", "Windows Terminal"], Rows(w));
+        Assert.False(NoteShown(w, "Reading the Store apps on FS01…"));
+
+        // Searching finds both parts
+        Sta.All<Wpf.Ui.Controls.TextBox>(w).First().Text = "term";
+        Sta.Pump();
+        Assert.Equal(["Store apps, 1 app, open", "Windows Terminal"], Rows(w));
+    });
+
+    [Fact]
+    public void Without_store_apps_the_picker_says_why_under_the_start_menu() => Sta.Run(owner =>
+    {
+        // Not signed in on the device: one part, with the device's note
+        var w = Picker(owner, _ => Task.FromResult(new DesktopAppList([Events], false, Note: "Store apps are listed once you're signed in on FS01.")), [], single: false);
+        Assert.Equal(["Administrative Tools, 1 app, open", "Event Viewer"], Rows(w));
+        Assert.True(NoteShown(w, "Store apps are listed once you're signed in on FS01."));
+
+        // The Store apps didn't come: the Start menu stays, the failure is said under it
+        var storeApps = new TaskCompletionSource();
+        var failed = Picker(owner, async (part, ct) =>
+        {
+            part(new DesktopAppList([Notepad], false, More: true));
+            await storeApps.Task;
+        }, [], single: false);
+        storeApps.SetException(new InvalidOperationException("FS01 didn't send its Store apps within 150 s."));
+        for (var i = 0; i < 20 && !NoteShown(failed, "FS01 didn't send its Store apps within 150 s."); i++) Sta.Pump();
+        Assert.Equal(["Notepad"], Rows(failed));
+        Assert.True(NoteShown(failed, "FS01 didn't send its Store apps within 150 s."));
+        Assert.False(NoteShown(failed, "Reading the Store apps on FS01…"));
     });
 
     [Fact]
@@ -177,6 +235,30 @@ public class AppTabsViewTests
         Assert.False(vm.Apply());
         Assert.Equal("Give every app a name and a program (Apps page).", vm.Error);
         Assert.Null(c.Options.Apps);
+        w.Close();
+    }));
+
+    [Fact]
+    public void A_store_app_has_no_folder_to_start_in_and_never_runs_as_administrator() => Sta.Run(owner => BrokerUiTests.WithAppResources(() =>
+    {
+        var (c, folder, data) = Tree();
+        folder.Options.Apps = [new ConnectionApp("Windows Terminal", ConnectionApp.StorePrefix + "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"), new ConnectionApp("Tool", @"C:\Tools	ool.exe")];
+        var w = Editor(owner, c, data);
+        var vm = (EditorViewModel)w.DataContext;
+        vm.AppsRow.Selected = vm.AppsRow.Choices[1];
+        Sta.Pump();
+        var list = Sta.All<ListBox>(w).First(l => AutomationProperties.GetName(l) == "Apps");
+        var elevated = Sta.All<CheckBox>(w).First(b => Equals(b.Content, "Run as administrator"));
+        var startIn = Sta.All<System.Windows.Controls.TextBox>(w).First(t => t is Wpf.Ui.Controls.TextBox { PlaceholderText: "The program's folder" });
+        list.SelectedIndex = 0;
+        Sta.Pump();
+        Assert.True(vm.Apps[0].IsStoreApp);
+        Assert.False(elevated.IsEnabled);
+        Assert.False(startIn.IsEnabled);
+        list.SelectedIndex = 1;
+        Sta.Pump();
+        Assert.True(elevated.IsEnabled);
+        Assert.True(startIn.IsEnabled);
         w.Close();
     }));
 

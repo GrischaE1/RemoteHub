@@ -282,7 +282,8 @@ public sealed record DesktopStart(int SessionId, string Consent, bool ViewOnly, 
     string[]? Features = null, bool AutoSignIn = false, string? AutoSignInEndAction = null, DesktopAppStart? App = null);
 
 /// <summary>An app for an app tab, as RemoteHub has it on the connection or took it from the Start menu list.</summary>
-/// <param name="Program">Full path on the device; environment variables are expanded in the account's environment.</param>
+/// <param name="Program">Full path on the device; environment variables are expanded in the account's environment. A Store
+/// app is <c>shell:AppsFolder\&lt;AppUserModelID&gt;</c> (app-tabs-design §6.6).</param>
 /// <param name="Arguments">Command line arguments – never logged on either side.</param>
 /// <param name="WorkingFolder">Start in this folder ("" = the program's folder).</param>
 /// <param name="Elevated">Start with the account's full administrator token (<see cref="DesktopRights.AppsElevated"/>).</param>
@@ -297,8 +298,15 @@ public sealed record DesktopAppClose(bool Force);
 /// <param name="Icon">32×32 PNG, null when there is none or it was too large.</param>
 public sealed record DesktopListedApp(string Name, string Group, string Program, string Arguments, string WorkingFolder, bool Elevated, byte[]? Icon);
 
+/// <summary>
+/// The answer to <see cref="DesktopMessage.AppList"/>, in parts: the Start menu at once, then – when the account is signed
+/// in on the device – its Store apps, which take longer (app-tabs-design §6.6). The last part has <paramref name="More"/>
+/// false; RemoteHub shows each part as it arrives.
+/// </summary>
 /// <param name="Truncated">More than the limits allow were found; the rest is left out.</param>
-public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated);
+/// <param name="More">Another part follows (the Store apps).</param>
+/// <param name="Note">Said under the list: why Store apps aren't there ("listed once you're signed in on FS01").</param>
+public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated, bool More = false, string? Note = null);
 
 /// <param name="Resume">With Connected: a single-use token to continue after a dropped connection (see <see cref="DesktopStart.Resume"/>).</param>
 /// <param name="EndAction">With SignedIn: what happens to the session when the connection ends on purpose (Lock or SignOut).</param>

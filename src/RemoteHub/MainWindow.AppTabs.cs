@@ -79,7 +79,7 @@ public partial class MainWindow
             return null;
         }
         if (AgentDesktopTarget(c, null) is not { } t) return null;
-        var picker = new AppPickerWindow(c.Name, ct => AgentDesktopSession.ListAppsAsync(t.Target, ct), current, singleChoice: false,
+        var picker = new AppPickerWindow(c.Name, (part, ct) => AgentDesktopSession.ListAppsAsync(t.Target, part, ct), current, singleChoice: false,
             explain: ex => PsRemoting.Explain(ex, t.Target)) { Owner = owner };
         return picker.ShowDialog() == true ? picker.Chosen : null;
     }
@@ -131,7 +131,7 @@ public partial class MainWindow
     {
         if (Refused(Feature.AgentDesktop) || AgentDesktopTarget(c, null) is not { } t) return;
         var current = Inheritance.ResolveOptions(c, _vm.Data).Apps ?? [];
-        var picker = new AppPickerWindow(c.Name, ct => AgentDesktopSession.ListAppsAsync(t.Target, ct), current, singleChoice: true,
+        var picker = new AppPickerWindow(c.Name, (part, ct) => AgentDesktopSession.ListAppsAsync(t.Target, part, ct), current, singleChoice: true,
             canKeep: Features.IsAllowed(Feature.ConnectionEditing), explain: ex => PsRemoting.Explain(ex, t.Target)) { Owner = this };
         if (picker.ShowDialog() != true)
         {
