@@ -57,7 +57,8 @@ BeforeAll {
     function States($r) { @($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) -join ' / ' }
     # Settings: a UWP app on every lab device (W11 and Server), whose window ApplicationFrameHost draws
     $script:settingsId = 'windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel'
-    # the session's ApplicationFrameWindows: title|maximised|on the primary monitor|that monitor's size
+    # the session's ApplicationFrameWindows: title|maximised|on the primary monitor|that monitor's size|visible|cloaked
+    # (hidden and cloaked ones too, for the evidence; the cases look at the visible, uncloaked ones)
     $script:framesCode = @'
 Add-Type -TypeDefinition @"
 using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
@@ -69,17 +70,20 @@ public static class RhFrames {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int size);
     [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public int L, T, R, B, WL, WT, WR, WB; public uint Flags; }
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MonitorInfo i);
     public static List<string> Frames() {
         var list = new List<string>();
         EnumWindows((h, l) => {
             var c = new StringBuilder(256); GetClassName(h, c, 256);
-            if (c.ToString() != "ApplicationFrameWindow" || !IsWindowVisible(h)) return true;
+            if (c.ToString() != "ApplicationFrameWindow") return true;
             var t = new StringBuilder(256); GetWindowText(h, t, 256);
             var mi = new MonitorInfo(); mi.Size = Marshal.SizeOf(typeof(MonitorInfo));
             GetMonitorInfo(MonitorFromWindow(h, 2), ref mi);
-            list.Add(t + "|" + IsZoomed(h) + "|" + ((mi.Flags & 1) != 0) + "|" + (mi.R - mi.L) + "x" + (mi.B - mi.T));
+            int cloaked;
+            if (DwmGetWindowAttribute(h, 14, out cloaked, 4) != 0) cloaked = -1; // DWMWA_CLOAKED
+            list.Add(t + "|" + IsZoomed(h) + "|" + ((mi.Flags & 1) != 0) + "|" + (mi.R - mi.L) + "x" + (mi.B - mi.T) + "|" + IsWindowVisible(h) + "|" + cloaked);
             return true;
         }, IntPtr.Zero);
         return list;
@@ -401,9 +405,10 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             $until = (Get-Date).AddSeconds(30)
             do {
                 $st.frames = @(Invoke-LabInSessionJson -Name $VmName -Code $script:framesCode)
-                if (@($st.frames | Where-Object { $_ -match '\|True\|False\|' }).Count) { break }
+                if (@($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count) { break }
                 Start-Sleep -Seconds 2
             } while ((Get-Date) -lt $until)
+            $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $o 'console.png') # where the app is, should it not be on its monitor
             # signed in now: the list has a second part with the account's Store apps
             $st.list = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'store-list') -Steps @(@{ do = 'connect' }, @{ do = 'appList'; timeout = 200 }, @{ do = 'close' })
             Release $o 'close'
@@ -434,7 +439,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
         It 'D-APP-17 a Store app in a tab: its frame window is maximised on the tab''s monitor; audited by its ID' -Tag 'D-APP-17' {
             Skip; if ($script:noApps) { return }
             (States $st.tab) | Should -Match 'Connected: Settings started' -Because (States $st.tab)
-            @($st.frames | Where-Object { $_ -match '\|True\|False\|' }).Count | Should -BeGreaterThan 0 -Because "a maximised ApplicationFrameWindow on a monitor that isn't the primary one (frames: $(@($st.frames) -join '; '))"
+            @($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count | Should -BeGreaterThan 0 -Because "a maximised, shown ApplicationFrameWindow on a monitor that isn't the primary one (frames as title|maximised|primary|size|visible|cloaked: $(@($st.frames) -join '; '))"
             @($st.starts | Where-Object { "$_" -match [regex]::Escape("shell:AppsFolder\$($script:settingsId)") }).Count | Should -Be 1 -Because 'the start is audited by the app''s ID'
         }
 
