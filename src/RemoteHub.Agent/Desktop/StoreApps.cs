@@ -23,8 +23,14 @@ internal static partial class StoreApps
 
     public const int MaxAppId = 256;
 
-    /// <summary>How long a start may take: a first start after the sign-in took 12 s in the spike.</summary>
-    public static readonly TimeSpan StartLimit = TimeSpan.FromSeconds(45);
+    /// <summary>
+    /// How long a start may take: up to <see cref="ShellWait"/> for the shell after a sign-in, and a first start took 12 s
+    /// in the spike.
+    /// </summary>
+    public static readonly TimeSpan StartLimit = TimeSpan.FromSeconds(90);
+
+    /// <summary>How long a start waits for the shell of a session just signed in to (<see cref="WaitForShell"/>).</summary>
+    public static readonly TimeSpan ShellWait = TimeSpan.FromSeconds(60);
 
     /// <summary>How long the list may take: 0.2–2.4 s in the spike, once 89 s right after a profile's first sign-in.</summary>
     public static readonly TimeSpan ListLimit = TimeSpan.FromSeconds(120);
@@ -86,6 +92,7 @@ internal static partial class StoreApps
 
     private static unsafe string Activate(string id, string arguments)
     {
+        WaitForShell();
         var clsid = new Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C"); // ApplicationActivationManager
         var iid = typeof(IApplicationActivationManager).GUID;
         var hr = CoCreateInstance(in clsid, 0, 0x17 /* CLSCTX_ALL */, in iid, out var raw);
@@ -100,6 +107,28 @@ internal static partial class StoreApps
             return hr == 0 && pid != 0 ? $"started {pid}\n" : $"none ActivateApplication 0x{hr:X8}\n";
         }
         finally { Marshal.Release(raw); }
+    }
+
+    /// <summary>
+    /// Waits until the session's shell can host a Store app: its immersive shell window is there. Right after an automatic
+    /// sign-in the app tab's start can come before Explorer; a UWP app activated then gets no frame (ApplicationFrameHost)
+    /// and shows nowhere (lab run 20261030-151905, Server 2025: Settings one second before Explorer). Goes ahead once the
+    /// taskbar has been there for 10 s without it (a shell without one), or after <see cref="ShellWait"/>.
+    /// </summary>
+    private static void WaitForShell()
+    {
+        var until = Environment.TickCount64 + (long)ShellWait.TotalMilliseconds;
+        long trayAt = -1;
+        while (Environment.TickCount64 < until)
+        {
+            if (FindWindowW("ApplicationManager_ImmersiveShellWindow", null) != 0) return;
+            if (FindWindowW("Shell_TrayWnd", null) != 0)
+            {
+                if (trayAt < 0) trayAt = Environment.TickCount64;
+                else if (Environment.TickCount64 - trayAt >= 10_000) return;
+            }
+            Thread.Sleep(250);
+        }
     }
 
     private static unsafe string ReadList()
@@ -296,6 +325,7 @@ internal static partial class StoreApps
         [PreserveSig] int Next(uint count, nint* items, uint* fetched);
     }
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string className, string? windowName);
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(in Guid clsid, nint outer, uint context, in Guid iid, out nint instance);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHCreateItemFromParsingName(string path, nint bindContext, in Guid iid, out nint item);
 }
