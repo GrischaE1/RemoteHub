@@ -25,8 +25,12 @@ internal static class AppTabs
         : autoSignInWhyNot is { } why ? "App tabs need automatic sign-in on this device. " + why
         : null;
 
-    /// <summary>A checked start: the program to run, its whole command line, where it starts and whether elevated.</summary>
-    public sealed record Launch(string Program, string CommandLine, string WorkingFolder, bool Elevated, string Name);
+    /// <summary>
+    /// A checked start: the program to run, its whole command line, where it starts and whether elevated. A Store app
+    /// (<paramref name="AppId"/> set, §6.6) has <c>shell:AppsFolder\&lt;AUMID&gt;</c> as its program and only its
+    /// arguments as the command line.
+    /// </summary>
+    public sealed record Launch(string Program, string CommandLine, string WorkingFolder, bool Elevated, string Name, string? AppId = null);
 
     /// <summary>
     /// Checks an app start from the wire (§6.1): the program must be a fully qualified <c>.exe</c> – or an <c>.msc</c>
@@ -39,6 +43,7 @@ internal static class AppTabs
     {
         var name = app.Name.Trim();
         if (name.Length == 0 || name.Length > MaxNameLength || name.Any(char.IsControl)) return (null, "The app's name is empty or too long.");
+        if (StoreApps.IsStoreApp(app.Program)) return CheckStoreApp(app, name, p);
         if (app.Elevated && !p.DesktopAppsElevated) return (null, $"{name} can't be started as administrator on this device (policy DesktopAppsElevated).");
 
         if (Path(app.Program, expand) is not { } program) return (null, $"{name}: the program isn't a full path on the device.");
@@ -71,6 +76,27 @@ internal static class AppTabs
 
         return (new Launch(program, commandLine, folder, app.Elevated, name), null);
     }
+
+    /// <summary>
+    /// A Store app (§6.6): its AppUserModelID must be usable (<see cref="StoreApps.ValidAppId"/>); never elevated (a package
+    /// can't be started with the linked token); among <see cref="AgentPolicy.DesktopAppsAllowed"/> when that is set; the
+    /// arguments within Windows' limit. Whether it is installed for the account shows when it is started.
+    /// </summary>
+    private static (Launch? Launch, string? Refusal) CheckStoreApp(DesktopAppStart app, string name, AgentPolicy p)
+    {
+        if (StoreApps.AppId(app.Program) is not { } id) return (null, $"{name}: the Store app's ID can't be used.");
+        if (app.Elevated) return (null, $"{name} is a Store app – Store apps can't be started as administrator.");
+        if (!StoreAppAllowed(p, id)) return (null, $"{name} isn't among the programs this device allows in app tabs (policy DesktopAppsAllowed).");
+        if (app.Arguments.Contains('\0')) return (null, $"{name}: the arguments can't be used.");
+        var arguments = app.Arguments.Trim();
+        if (arguments.Length > MaxCommandLine) return (null, $"{name}: the arguments are too long.");
+        return (new Launch(StoreApps.Prefix + id, arguments, "", false, name, id), null);
+    }
+
+    /// <summary>A Store app is allowed when <see cref="AgentPolicy.DesktopAppsAllowed"/> isn't set, or names it – as <c>shell:AppsFolder\&lt;AUMID&gt;</c> or the AUMID alone.</summary>
+    public static bool StoreAppAllowed(AgentPolicy p, string appId) =>
+        p.DesktopAppsAllowed is not { } allowed
+        || allowed.Any(a => a.Trim().Equals(appId, StringComparison.OrdinalIgnoreCase) || a.Trim().Equals(StoreApps.Prefix + appId, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>A fully qualified path after expanding, without device paths (<c>\\.\</c>, <c>\\?\</c>, <c>\??\</c>), quotes or control characters; else null.</summary>
     private static string? Path(string raw, Func<string, string> expand)

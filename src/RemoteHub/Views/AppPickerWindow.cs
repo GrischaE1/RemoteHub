@@ -14,15 +14,16 @@ using TextBox = Wpf.Ui.Controls.TextBox;
 namespace RemoteHub.Views;
 
 /// <summary>
-/// "Apps on FS01" (docs/app-tabs-design.md §8.2): the apps in the device's Start menu, by its folders, searched; ticked
-/// to add them to a connection – or, choosing one to open, picked and kept in the connection's apps if wanted. Opens at
-/// once and reads the list from the device meanwhile. Built like the other pickers (RunScriptWindow's pick page).
+/// "Apps on FS01" (docs/app-tabs-design.md §8.2): the apps in the device's Start menu, by its folders, and its Store apps
+/// (§6.6), searched; ticked to add them to a connection – or, choosing one to open, picked and kept in the connection's
+/// apps if wanted. Opens at once and reads the list from the device meanwhile: the Start menu shows as soon as it is
+/// there, the Store apps are added when they arrive. Built like the other pickers (RunScriptWindow's pick page).
 /// </summary>
 public sealed class AppPickerWindow : FluentWindow
 {
     private const int MaxShown = 500;
     private readonly string _device;
-    private readonly Func<CancellationToken, Task<DesktopAppList>> _load;
+    private readonly Func<Action<DesktopAppList>, CancellationToken, Task> _load;
     private readonly Func<Exception, string> _explain;
     private readonly IReadOnlyList<ConnectionApp> _added;
     private readonly bool _single;
@@ -35,14 +36,15 @@ public sealed class AppPickerWindow : FluentWindow
     private readonly HashSet<DesktopListedApp> _ticked = [];
     private readonly HashSet<string> _closedGroups = [];
     private DesktopAppList? _apps;
+    private int _loads;
 
     /// <param name="device">The connection's name ("FS01").</param>
-    /// <param name="load">Reads the device's Start menu (AgentDesktopSession.ListAppsAsync).</param>
+    /// <param name="load">Reads the device's apps, handing over each part as it arrives (AgentDesktopSession.ListAppsAsync).</param>
     /// <param name="added">The connection's apps now: shown ticked and "Added".</param>
     /// <param name="singleChoice">One app to open (Enter or a double-click), with "Keep it in the connection's apps".</param>
     /// <param name="canKeep">The connection may be changed (policy AllowConnectionEditing): otherwise nothing is kept.</param>
     /// <param name="explain">A failure in words for the user (PsRemoting.Explain); null: its message.</param>
-    public AppPickerWindow(string device, Func<CancellationToken, Task<DesktopAppList>> load, IReadOnlyList<ConnectionApp> added, bool singleChoice,
+    public AppPickerWindow(string device, Func<Action<DesktopAppList>, CancellationToken, Task> load, IReadOnlyList<ConnectionApp> added, bool singleChoice,
         bool canKeep = true, Func<Exception, string>? explain = null)
     {
         _device = device;
@@ -58,7 +60,7 @@ public sealed class AppPickerWindow : FluentWindow
         var another = new Button { Content = "Not in the list? Add another app", Appearance = ControlAppearance.Transparent, VerticalAlignment = VerticalAlignment.Bottom };
         another.Click += (_, _) => { AddAnother = true; Close(); };
 
-        var refresh = RemoteToolChrome.Tool(SymbolRegular.ArrowSync24, "Read the Start menu again", () => _ = Load());
+        var refresh = RemoteToolChrome.Tool(SymbolRegular.ArrowSync24, "Read the apps again", () => _ = Load());
         refresh.Margin = new Thickness(6, 0, 0, 8);
         refresh.VerticalAlignment = VerticalAlignment.Top;
         var top = new DockPanel();
@@ -67,8 +69,8 @@ public sealed class AppPickerWindow : FluentWindow
         top.Children.Add(_search);
         var head = new StackPanel();
         head.Children.Add(ScriptWindowFrame.Info(singleChoice
-            ? $"The apps in the Start menu of {device}. Enter or a double-click opens one in a tab of its own."
-            : $"The apps in the Start menu of {device}. Tick the apps to add."));
+            ? $"The apps on {device}: its Start menu and Store apps. Enter or a double-click opens one in a tab of its own."
+            : $"The apps on {device}: its Start menu and Store apps. Tick the apps to add."));
         head.Children.Add(top);
 
         var bottom = new StackPanel();
@@ -128,14 +130,20 @@ public sealed class AppPickerWindow : FluentWindow
         p.Children.Add(ScriptWindowFrame.Info($"Reading the Start menu of {_device}…"));
         _body.Content = p;
         _primary.IsEnabled = false;
+        _apps = null;
+        var run = ++_loads; // parts of a list read before "Read the apps again" are dropped
         try
         {
-            _apps = await _load(_cancel.Token);
-            _body.Content = _list;
-            BuildList();
+            await _load(part => Dispatcher.InvokeAsync(() => { if (run == _loads) AddPart(part); }), _cancel.Token);
         }
         catch (OperationCanceledException) when (_cancel.IsCancellationRequested) { /* closed */ }
-        catch (Exception ex)
+        catch (Exception ex) when (run == _loads && _apps is not null)
+        {
+            // The Start menu is shown; only the Store apps didn't come: said under the list.
+            _apps = _apps with { More = false, Note = ex is InvalidOperationException ? ex.Message : _explain(ex) };
+            FillList();
+        }
+        catch (Exception ex) when (run == _loads)
         {
             // The device's own words when it refused; otherwise the connection's failure explained (as for the other tools).
             var failed = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 480 };
@@ -154,6 +162,22 @@ public sealed class AppPickerWindow : FluentWindow
     private readonly List<(ListBoxItem Item, DesktopListedApp App)> _rows = [];
     private readonly Dictionary<string, (ListBoxItem Item, SymbolIcon Chevron, int Count)> _headers = [];
     private readonly ListBoxItem _note = new() { IsEnabled = false };
+    private readonly ListBoxItem _later = new() { IsEnabled = false }; // Store apps still being read, or why there are none
+
+    /// <summary>A part of the list from the device: the first one starts the list, later ones (the Store apps) are added below.</summary>
+    private void AddPart(DesktopAppList part)
+    {
+        if (_apps is null)
+        {
+            _apps = part;
+            _body.Content = _list;
+            BuildList();
+            return;
+        }
+        _apps = new DesktopAppList([.. _apps.Apps, .. part.Apps], _apps.Truncated || part.Truncated, part.More, part.Note ?? _apps.Note);
+        AddRows(part.Apps);
+        FillList();
+    }
 
     /// <summary>The items for a list just read: the Start menu's own apps first, then its folders by name.</summary>
     private void BuildList()
@@ -162,18 +186,26 @@ public sealed class AppPickerWindow : FluentWindow
         _rows.Clear();
         _headers.Clear();
         if (_apps is not { } all) return;
-        foreach (var group in all.Apps.GroupBy(a => a.Group).OrderBy(g => g.Key.Length > 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase))
+        _list.Items.Add(_note);
+        _list.Items.Add(_later);
+        AddRows(all.Apps);
+        FillList();
+    }
+
+    /// <summary>Rows for <paramref name="apps"/>, above the notes: the apps without a folder first, then the folders by name.</summary>
+    private void AddRows(IEnumerable<DesktopListedApp> apps)
+    {
+        var at = _list.Items.IndexOf(_note);
+        foreach (var group in apps.GroupBy(a => a.Group).OrderBy(g => g.Key.Length > 0).ThenBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase))
         {
-            if (group.Key.Length > 0) _list.Items.Add(GroupHeader(group.Key, group.Count()));
+            if (group.Key.Length > 0 && !_headers.ContainsKey(group.Key)) _list.Items.Insert(at++, GroupHeader(group.Key, group.Count()));
             foreach (var a in group)
             {
                 var item = Row(a);
                 _rows.Add((item, a));
-                _list.Items.Add(item);
+                _list.Items.Insert(at++, item);
             }
         }
-        _list.Items.Add(_note);
-        FillList();
     }
 
     /// <summary>Shows what the search finds (at most <see cref="MaxShown"/>), the open folders' apps, and a note when nothing or not everything is shown.</summary>
@@ -200,10 +232,13 @@ public sealed class AppPickerWindow : FluentWindow
             AutomationProperties.SetName(item, $"{name}, {count} app{(count == 1 ? "" : "s")}, {(closed ? "closed" : "open")}");
         }
         var cut = all.Truncated || found == MaxShown;
-        _note.Content = ScriptWindowFrame.Info(all.Apps.Length == 0 ? $"No apps found in the Start menu of {_device}."
+        var waiting = all.Apps.Length == 0 && all.More; // nothing in the Start menu, the Store apps still to come
+        _note.Content = ScriptWindowFrame.Info(all.Apps.Length == 0 ? $"No apps found on {_device}."
             : found == 0 ? "No app matches."
             : $"Only the first {(all.Truncated ? all.Apps.Length : MaxShown):N0} apps are shown – search to narrow them down.");
-        _note.Visibility = found == 0 || cut ? Visibility.Visible : Visibility.Collapsed;
+        _note.Visibility = (found == 0 && !waiting) || cut ? Visibility.Visible : Visibility.Collapsed;
+        _later.Content = ScriptWindowFrame.Info(all.More ? $"Reading the Store apps on {_device}…" : all.Note ?? "");
+        _later.Visibility = all.More || all.Note is not null ? Visibility.Visible : Visibility.Collapsed;
         UpdatePrimary();
     }
 

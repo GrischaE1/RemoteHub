@@ -9,6 +9,13 @@ if (args.Length == 1 && args[0] == ClipboardFilesReader.Verb)
     using var stdout = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false));
     return ClipboardFilesReader.Run(stdout);
 }
+// Store apps in app tabs, started and listed as the signed-in user (app-tabs-design §6.6): also before anything else.
+if (args.Length == 1 && args[0] == StoreApps.Verb)
+{
+    using var stdin = new StreamReader(Console.OpenStandardInput(), new System.Text.UTF8Encoding(false));
+    using var stdout = new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false));
+    return StoreApps.Run(stdin, stdout);
+}
 
 var log = new AgentLog(Path.Combine(AgentConfig.Folder, "logs"), 30);
 

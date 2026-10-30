@@ -7749,9 +7749,9 @@ P1 · How: PS E · Needs: Broker · Status: ◐ Written – `B-BRK.Tests.ps1`
 - on no process's command line while the MSI runs (msiexec's and the agent's enrollment included – `BROKER_SECRET_FILE` passes only the path), and the file is gone once the device has registered
 - not in the installer log, not in agent.json (only the derived enroll and record keys), not in the agent's logs or the Application log, not in `broker status`
 
-### 9.15 App tabs (D-APP, D-APPSPIKE)
+### 9.15 App tabs (D-APP, D-APPSPIKE, D-APPSTORE)
 
-Design: [app-tabs-design.md](app-tabs-design.md). The test app is `RhLabApp.exe` (`lab/guest/RhLabApp.cs`, built in the guest by `Install-LabTestApp`): one colour, a text box, a log of start (pid, elevated), typing and closing. D-APPSPIKE runs only when asked for (`-Tag AppSpike`); every D-APP case is skipped while the agent has no `apps` feature.
+Design: [app-tabs-design.md](app-tabs-design.md). The test app is `RhLabApp.exe` (`lab/guest/RhLabApp.cs`, built in the guest by `Install-LabTestApp`): one colour, a text box, a log of start (pid, elevated), typing and closing. D-APPSPIKE and D-APPSTORE run only when asked for (`-Tag AppSpike`, `-Tag AppStoreSpike`); every D-APP case is skipped while the agent has no `apps` feature.
 
 #### D-APPSPIKE-01 · Monitors one at a time
 P1 · How: PS S · Needs: – · Status: ✅ Automated – `D-APPSPIKE.Tests.ps1`
@@ -7905,6 +7905,72 @@ P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
 
 **Expected:**
 - `MaxAppTabs` = 1 with one tab open: a second tab ends Failed and nothing is started
+
+#### D-APP-15 · No Store apps signed out
+P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- with nobody signed in, `appList` gets one part: the Start menu, with the note *Store apps are listed once you're signed in on …*
+- no entry in the group *Store apps*
+
+#### D-APP-16 · Store apps listed
+P1 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Preconditions:** the console account signed in by an app tab.
+**Expected:**
+- `appList` gets two parts: the Start menu (`more` true), then the Store apps (`more` false)
+- Settings is among them as `shell:AppsFolder\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel`, in the group *Store apps*, not elevated, with its icon (PNG)
+
+#### D-APP-17 · A Store app in a tab
+P1 · How: H S E · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. An app tab for Settings (a UWP app) with nobody signed in.
+**Expected:**
+- the tab is Connected ("Settings started.")
+- Settings' `ApplicationFrameWindow` – drawn by ApplicationFrameHost, outside the tab's job – is maximised on a monitor that isn't the primary one: the helper found it by its AppUserModelID
+- one 1109 names `shell:AppsFolder\<AUMID>`
+
+#### D-APP-18 · Closing a Store app
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Expected:**
+- `appClose` on the Settings tab: the tab ends (AppClosed or Ended)
+- SystemSettings is no longer running within 30 s
+
+#### D-APPSTORE-01 · Store apps listed
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
+
+**Preconditions:** the console account signed in on the console; no agent needed.
+**Steps:** 1. In the account's session, list `shell:AppsFolder` (`Shell.Application`) and time it.
+**Expected:**
+- entries whose path is an AppUserModelID (`PackageFamilyName!AppId`), Calculator or Settings among them
+- the time the list took is in the evidence (it decides whether the picker waits for Store apps)
+
+#### D-APPSTORE-02 · Started by AppUserModelID
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
+
+**Steps:** 1. From a scheduled task as the account (no window of its own), `IApplicationActivationManager::ActivateApplication` for the UWP app (Calculator, else Settings) and for Windows Terminal where the device has it.
+**Expected:**
+- each is started and a process ID is returned
+
+#### D-APPSTORE-03 · Process in a job
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
+
+**Expected:**
+- the returned process can be added to a new job object of the stand-in's (nested jobs)
+
+#### D-APPSTORE-04 · Windows by AppUserModelID
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
+
+**Expected:**
+- within 20 s the app has a visible top-level window: for the UWP app ApplicationFrameHost's `ApplicationFrameWindow`, which carries the app's `PKEY_AppUserModel_ID` (`SHGetPropertyStoreForWindow`); for Windows Terminal a window of the started process (it has no such property)
+- the evidence lists each window's class and process
+
+#### D-APPSTORE-05 · Closed by WM_CLOSE
+P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
+
+**Expected:**
+- after `WM_CLOSE` to those windows none with the app's ID is left within 20 s; whether the process still runs afterwards is in the evidence
 
 ### 10.1 Installer
 

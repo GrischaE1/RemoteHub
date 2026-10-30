@@ -143,7 +143,22 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 }
                 var list = await Task.Run(() => AppStartMenu.List(policy, identity.UserSid), ct);
                 o.Log.Write($"Desktop: the Start menu list for {identity.Account} from {source}: {list.Apps.Length} app(s){(list.Truncated ? ", more left out" : "")}");
-                await SendWs(DesktopWire.Json(DesktopMessage.AppList, list, DesktopJson.Default.DesktopAppList), ct);
+                // Store apps are read as the account, so only when it is signed in here (§6.6): sent as a second part.
+                var own = sessions.FirstOrDefault(s => IsSelfSession(s) && s.Console) ?? sessions.FirstOrDefault(IsSelfSession);
+                using var storeToken = own is not null && identity.UserSid is { } listSid ? AppProcess.Token(own.Id, listSid) : null;
+                if (storeToken is null)
+                {
+                    await SendWs(DesktopWire.Json(DesktopMessage.AppList, list with { Note = $"Store apps are listed once you're signed in on {DeviceName}." },
+                        DesktopJson.Default.DesktopAppList), ct);
+                    return;
+                }
+                await SendWs(DesktopWire.Json(DesktopMessage.AppList, list with { More = true }, DesktopJson.Default.DesktopAppList), ct);
+                var (store, storeTruncated, storeWhy) = await Task.Run(() => StoreApps.List(storeToken), ct);
+                DesktopListedApp[] storeApps = store is null ? [] :
+                    [.. store.Where(a => AppTabs.StoreAppAllowed(policy, a.Id)).Select(a => new DesktopListedApp(a.Name, "Store apps", StoreApps.Prefix + a.Id, "", "", false, a.Icon))];
+                o.Log.Write($"Desktop: the Store apps for {identity.Account} from {source}: {(store is null ? "not read – " + storeWhy : $"{storeApps.Length} app(s)")}");
+                await SendWs(DesktopWire.Json(DesktopMessage.AppList, new DesktopAppList(storeApps, storeTruncated,
+                    Note: store is null ? $"Store apps couldn't be read on {DeviceName} ({storeWhy})." : null), DesktopJson.Default.DesktopAppList), ct);
                 return;
             }
             if (first is null || DesktopWire.TypeOf(first) != DesktopMessage.Start) return;
@@ -908,7 +923,21 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             {
                 (launch, why) = AppTabs.Check(app, policy, text => AppProcess.Expand(token, text), File.Exists);
                 if (launch is not null)
-                    try { _appProcess = AppProcess.Start(token, launch, job); }
+                    try
+                    {
+                        if (launch.AppId is { } appId)
+                        {
+                            // A Store app (§6.6): started as the account by store-apps, its process then put into the tab's job.
+                            var (pid, failed) = await Task.Run(() => StoreApps.Start(token, appId, launch.CommandLine), ct);
+                            if (pid > 0)
+                            {
+                                _appProcess = AppProcess.Adopt(pid, job);
+                                if (failed.Length > 0) o.Log.Write($"Desktop: app tab: {app.Name} started ({failed})");
+                            }
+                            else why = $"{app.Name} couldn't be started: {failed}.";
+                        }
+                        else _appProcess = AppProcess.Start(token, launch, job);
+                    }
                     catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { why = $"{app.Name} couldn't be started: {ex.Message}"; }
             }
         }
@@ -920,7 +949,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         }
         o.Log.Audit(AuditEvent.DesktopAppStarted,
             $"Desktop: {identity.Account} from {source} started {launch.Program}{(launch.Elevated ? " (elevated)" : "")} in session {sessionId} for an app tab");
-        _helperApp = tab with { Job = job };
+        _helperApp = tab with { Job = job, AppId = launch.AppId };
         _appSession = sessionId;
         AppTabsOpen.AddOrUpdate(sessionId, 1, (_, n) => n + 1);
         await SendPipe(DesktopWire.Json((DesktopMessage)HelperMessage.App, _helperApp, HelperJson.Default.HelperApp), ct);
