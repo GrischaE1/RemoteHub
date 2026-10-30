@@ -213,10 +213,13 @@ $null = @((New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder'
     $desktop = @('Microsoft.WindowsTerminal_8wekyb3d8bbwe!App') | Where-Object { $ids -contains $_ } | Select-Object -First 1
     $s.uwpId = $uwp
     $s.desktopId = $desktop
-    # D-APPSTORE-02..05, per app
+    # D-APPSTORE-02..05, per app. The C# goes as a file: in -Data it would make the session task's command line too
+    # long (0x800700CE).
+    $csFile = 'C:\ProgramData\RemoteHubLab\session\d-appstore.cs'
+    Invoke-LabGuest -Name $VmName -ArgumentList $csFile, $script:cs -ScriptBlock { param($f, $c) [IO.File]::WriteAllText($f, $c, (New-Object Text.UTF8Encoding $false)) }
     $s.apps = @(foreach ($id in @($uwp, $desktop) | Where-Object { $_ }) {
-        Invoke-LabInSessionJson -Name $VmName -Data @{ cs = $script:cs; id = $id } -TimeoutSec 120 -Code @'
-Add-Type -TypeDefinition $A.cs
+        Invoke-LabInSessionJson -Name $VmName -Data @{ cs = $csFile; id = $id } -TimeoutSec 120 -Code @'
+Add-Type -Path $A.cs
 [RhStore]::Try($A.id)
 '@
     })
