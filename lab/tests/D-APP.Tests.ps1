@@ -52,9 +52,15 @@ BeforeAll {
     function States($r) { @($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) -join ' / ' }
     function Started([string]$n) { @(Get-LabTestAppLog -Name $VmName -Path (Log $n) | Where-Object e -eq 'started') }
     function ConsoleUser { @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.User }) }
+    # signed out and back at the sign-in screen: the console session is there again, with nobody in it (right after a
+    # sign-out Windows has no console session for a moment, and a start then finds none)
     function Wait-SignedOut([int]$TimeoutSec = 120) {
         $until = (Get-Date).AddSeconds($TimeoutSec)
-        do { if (-not (ConsoleUser)) { return $true }; Start-Sleep -Seconds 3 } while ((Get-Date) -lt $until)
+        do {
+            $s = @(Get-LabSessions -Name $VmName | Where-Object Console)
+            if ($s.Count -gt 0 -and -not ($s | Where-Object User)) { return $true }
+            Start-Sleep -Seconds 3
+        } while ((Get-Date) -lt $until)
         $false
     }
 
@@ -253,6 +259,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             $e.on = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'elevated') -TimeoutSec 900 -Steps ((Tab (App 'elevated' '0,255,0' -Elevated) -SignIn) + @(
                 @{ do = 'sleep'; seconds = 3 }, @{ do = 'appClose'; force = $false }, @{ do = 'wait'; anyOf = @('Ended', 'AppClosed'); timeout = 60 }))
             $e.started = @(Started 'elevated')
+            $null = Wait-SignedOut 120
             $e.consent = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688 } -MaxEvents 400 -ErrorAction SilentlyContinue | Where-Object { $_.Message -match '\\consent\.exe' }).Count }
             Set-LabAgentPolicy -Name $VmName -Values @{ DesktopAppsElevated = 0 }
             $e.off = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'elevated-off') -TimeoutSec 900 -Steps (Tab (App 'elevated-off' '0,255,0' -Elevated) -SignIn)
@@ -300,12 +307,13 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             $d.job = $null
             Invoke-LabGuest -Name $VmName -ScriptBlock { Start-Service RemoteHubAgent -ErrorAction SilentlyContinue }
             Restart-LabAgent -Name $VmName -Pin $pin | Out-Null
+            # the value comes back first and the record goes after it: wait for both
             $until = (Get-Date).AddSeconds(90)
             do {
                 $d.after = Invoke-LabGuest -Name $VmName -ArgumentList $sid -ScriptBlock { param($s) (Get-ItemProperty "Registry::HKEY_USERS\$s\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name MMTaskbarEnabled -ErrorAction SilentlyContinue).MMTaskbarEnabled }
-                if ($d.after -ne 0) { break }; Start-Sleep -Seconds 3
+                $d.records = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\ProgramData\RemoteHub\Agent' -Filter '*taskbar*' -ErrorAction SilentlyContinue | ForEach-Object Name) }
+                if ($d.after -ne 0 -and @($d.records).Count -eq 0) { break }; Start-Sleep -Seconds 3
             } while ((Get-Date) -lt $until)
-            $d.records = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\ProgramData\RemoteHub\Agent' -Filter '*taskbar*' -ErrorAction SilentlyContinue | ForEach-Object Name) }
             Save 'drop' $d
         }
 
