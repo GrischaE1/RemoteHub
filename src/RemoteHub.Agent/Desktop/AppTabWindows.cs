@@ -63,6 +63,9 @@ internal sealed partial class AppTabWindows : IDisposable
 
     private static readonly StrategyBasedComWrappers Wrappers = new();
 
+    /// <summary>The window's AppUserModelID, read now (null when it has none).</summary>
+    public static string? ReadAppIdOf(IntPtr window) => ReadAppId(window);
+
     private static unsafe string? ReadAppId(IntPtr window)
     {
         if (!_comReady)

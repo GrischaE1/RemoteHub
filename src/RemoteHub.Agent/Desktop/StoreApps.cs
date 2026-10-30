@@ -58,8 +58,8 @@ internal static partial class StoreApps
 
     /// <summary>
     /// <c>RemoteHubAgent.exe store-apps</c>. Input: "start", the AppUserModelID and the arguments (the rest of the input),
-    /// each on its own line – or "list". Output: "started &lt;process id&gt;", or "apps" and one "&lt;AUMID&gt;\t&lt;name&gt;"
-    /// per line, or "none &lt;why&gt;". Exit code 0 when it did what was asked.
+    /// each on its own line – or "list". Output: "started &lt;process id&gt; &lt;how&gt;" (<see cref="Shown"/>), or "apps" and
+    /// one "&lt;AUMID&gt;\t&lt;name&gt;" per line, or "none &lt;why&gt;". Exit code 0 when it did what was asked.
     /// </summary>
     public static int Run(TextReader input, TextWriter output)
     {
@@ -101,12 +101,57 @@ internal static partial class StoreApps
         {
             var manager = (IApplicationActivationManager)Wrappers.GetOrCreateObjectForComInstance(raw, CreateObjectFlags.UniqueInstance);
             uint pid = 0;
-            fixed (char* i = id)
-            fixed (char* a = arguments)
-                hr = manager.ActivateApplication(i, a, 0 /* AO_NONE */, &pid);
-            return hr == 0 && pid != 0 ? $"started {pid}\n" : $"none ActivateApplication 0x{hr:X8}\n";
+            int Activate()
+            {
+                uint started = 0;
+                int result;
+                fixed (char* i = id)
+                fixed (char* a = arguments)
+                    result = manager.ActivateApplication(i, a, 0 /* AO_NONE */, &started);
+                if (result == 0) pid = started;
+                return result;
+            }
+            hr = Activate();
+            if (hr != 0 || pid == 0) return $"none ActivateApplication 0x{hr:X8}\n";
+            // The shell may keep an app it activated hidden (cloaked, no frame): seen on Server 2025 right after a sign-in
+            // (lab run 20261030-160524). Activated once more then, as a click on its tile would.
+            var how = Shown;
+            if (!WaitShown(id, pid, ShowWait))
+            {
+                how = Activate() == 0 && WaitShown(id, pid, ShowWait) ? Reactivated : Hidden;
+            }
+            return $"started {pid} {how}\n";
         }
         finally { Marshal.Release(raw); }
+    }
+
+    /// <summary>How a started app came up: on its own, after a second activation, or still hidden after it.</summary>
+    public const string Shown = "shown", Reactivated = "reactivated", Hidden = "hidden";
+
+    /// <summary>How long a start waits for the app's window to show before it activates it again.</summary>
+    private static readonly TimeSpan ShowWait = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// The app has a window the user can see: visible and not cloaked, of its process or carrying its AppUserModelID (a UWP
+    /// app's frame, drawn by ApplicationFrameHost).
+    /// </summary>
+    private static bool WaitShown(string id, uint pid, TimeSpan limit)
+    {
+        var until = Environment.TickCount64 + (long)limit.TotalMilliseconds;
+        do
+        {
+            var shown = false;
+            EnumWindows((h, _) =>
+            {
+                if (!IsWindowVisible(h) || (DwmGetWindowAttribute(h, 14 /* DWMWA_CLOAKED */, out var cloaked, sizeof(int)) == 0 && cloaked != 0)) return true;
+                GetWindowThreadProcessId(h, out var owner);
+                if (owner == pid || string.Equals(AppTabWindows.ReadAppIdOf(h), id, StringComparison.OrdinalIgnoreCase)) shown = true;
+                return !shown;
+            }, 0);
+            if (shown) return true;
+            Thread.Sleep(250);
+        } while (Environment.TickCount64 < until);
+        return false;
     }
 
     /// <summary>
@@ -198,13 +243,17 @@ internal static partial class StoreApps
         return output is null ? (null, false, why) : ParseList(output);
     }
 
-    /// <summary>The answer to a start: "started &lt;pid&gt;" (a positive number), else 0 and why.</summary>
+    /// <summary>
+    /// The answer to a start: "started &lt;pid&gt; &lt;how&gt;" (a positive number, and <see cref="Shown"/>,
+    /// <see cref="Reactivated"/> or <see cref="Hidden"/> as the Why), else 0 and why.
+    /// </summary>
     internal static (int Pid, string Why) ParseStarted(byte[] output)
     {
         if (Text(output) is not { } text) return (0, "the answer wasn't understood");
         var line = text.Split('\n')[0].TrimEnd('\r');
-        if (line.StartsWith("started ", StringComparison.Ordinal) && int.TryParse(line[8..], System.Globalization.NumberStyles.None, null, out var pid) && pid > 0)
-            return (pid, "");
+        var parts = line.Split(' ');
+        if (parts is ["started", var number, ..] && parts.Length <= 3 && int.TryParse(number, System.Globalization.NumberStyles.None, null, out var pid) && pid > 0)
+            return (pid, parts.Length == 3 && parts[2] is Shown or Reactivated or Hidden ? parts[2] : "");
         return (0, line.StartsWith("none ", StringComparison.Ordinal) ? Shorten(line[5..]) : "the answer wasn't understood");
     }
 
@@ -326,6 +375,11 @@ internal static partial class StoreApps
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern nint FindWindowW(string className, string? windowName);
+    private delegate bool EnumProc(nint window, nint parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, nint parameter);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out uint pid);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint window, int attribute, out int value, int size);
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(in Guid clsid, nint outer, uint context, in Guid iid, out nint instance);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SHCreateItemFromParsingName(string path, nint bindContext, in Guid iid, out nint item);
 }

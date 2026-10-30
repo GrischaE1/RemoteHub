@@ -929,7 +929,11 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         {
                             // A Store app (§6.6): started as the account by store-apps, its process then put into the tab's job.
                             var (pid, failed) = await Task.Run(() => StoreApps.Start(token, appId, launch.CommandLine), ct);
-                            if (pid > 0) _appProcess = AppProcess.Adopt(pid, job);
+                            if (pid > 0)
+                            {
+                                _appProcess = AppProcess.Adopt(pid, job);
+                                if (failed.Length > 0) o.Log.Write($"Desktop: app tab: {app.Name} started ({failed})");
+                            }
                             else why = $"{app.Name} couldn't be started: {failed}.";
                         }
                         else _appProcess = AppProcess.Start(token, launch, job);

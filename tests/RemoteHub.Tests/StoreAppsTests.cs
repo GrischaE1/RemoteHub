@@ -94,10 +94,12 @@ public class StoreAppsTests
     public void The_answer_to_a_start_is_a_positive_process_id_or_why_not()
     {
         Assert.Equal((4242, ""), A.StoreApps.ParseStarted(Utf8("started 4242\n")));
+        Assert.Equal((4242, "reactivated"), A.StoreApps.ParseStarted(Utf8("started 4242 reactivated\n")));
+        Assert.Equal((4242, ""), A.StoreApps.ParseStarted(Utf8("started 4242 whatever\n"))); // only the known words are passed on
         Assert.Equal((0, "ActivateApplication 0x80270254"), A.StoreApps.ParseStarted(Utf8("none ActivateApplication 0x80270254\n")));
         Assert.Equal(0, A.StoreApps.ParseStarted(Utf8("started 0\n")).Pid);
         Assert.Equal(0, A.StoreApps.ParseStarted(Utf8("started -5\n")).Pid);
-        Assert.Equal(0, A.StoreApps.ParseStarted(Utf8("started 12 34\n")).Pid);
+        Assert.Equal(0, A.StoreApps.ParseStarted(Utf8("started 12 shown more\n")).Pid);
         Assert.Equal((0, "the answer wasn't understood"), A.StoreApps.ParseStarted(Utf8("hello\n")));
         Assert.Equal((0, "the answer wasn't understood"), A.StoreApps.ParseStarted([0xC3, 0x28])); // not UTF-8
         Assert.Equal(80, A.StoreApps.ParseStarted(Utf8("none " + new string('x', 500))).Why.Length);
