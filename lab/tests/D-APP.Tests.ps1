@@ -73,6 +73,26 @@ public static class RhFrames {
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int size);
     [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public int L, T, R, B, WL, WT, WR, WB; public uint Flags; }
     [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr m, ref MonitorInfo i);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowW(string c, string n);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [StructLayout(LayoutKind.Sequential)] struct Rect { public int L, T, R, B; }
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out Rect r);
+    // the shell's windows a Store app needs, and the top-level windows of one process: class|visible|cloaked|rect
+    public static List<string> Shell(uint pid) {
+        var list = new List<string>();
+        list.Add("immersiveShell=" + (FindWindowW("ApplicationManager_ImmersiveShellWindow", null) != IntPtr.Zero));
+        list.Add("tray=" + (FindWindowW("Shell_TrayWnd", null) != IntPtr.Zero));
+        EnumWindows((h, l) => {
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (p != pid) return true;
+            var c = new StringBuilder(256); GetClassName(h, c, 256);
+            int cloaked; if (DwmGetWindowAttribute(h, 14, out cloaked, 4) != 0) cloaked = -1;
+            Rect r; GetWindowRect(h, out r);
+            list.Add(c + "|" + IsWindowVisible(h) + "|" + cloaked + "|" + r.L + "," + r.T + "," + r.R + "," + r.B);
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
     public static List<string> Frames() {
         var list = new List<string>();
         EnumWindows((h, l) => {
@@ -410,6 +430,8 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
                 Start-Sleep -Seconds 2
             } while ((Get-Date) -lt $until)
             # the shell's processes in the account's session and how long they run, should the frame not be there
+            $st.shell = @(Invoke-LabInSessionJson -Name $VmName -Code ($script:framesCode.Replace('@([RhFrames]::Frames())',
+                '$s = @(Get-Process SystemSettings -ErrorAction SilentlyContinue | Where-Object SessionId -eq (Get-Process -Id $PID).SessionId)[0]; @([RhFrames]::Shell($(if ($s) { [uint32]$s.Id } else { [uint32]0 })))')))
             $st.procs = @(Invoke-LabInSessionJson -Name $VmName -Code @'
 $me = (Get-Process -Id $PID).SessionId
 @(Get-Process -Name ApplicationFrameHost, SystemSettings, explorer, ShellExperienceHost, StartMenuExperienceHost, RuntimeBroker -ErrorAction SilentlyContinue |
@@ -445,7 +467,7 @@ $me = (Get-Process -Id $PID).SessionId
         It 'D-APP-17 a Store app in a tab: its frame window is maximised on the tab''s monitor; audited by its ID' -Tag 'D-APP-17' {
             Skip; if ($script:noApps) { return }
             (States $st.tab) | Should -Match 'Connected: Settings started' -Because (States $st.tab)
-            @($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count | Should -BeGreaterThan 0 -Because "a maximised, shown ApplicationFrameWindow on a monitor that isn't the primary one (frames as title|maximised|primary|size|visible|cloaked: $(@($st.frames) -join '; '); processes: $(@($st.procs) -join ', '))"
+            @($st.frames | Where-Object { $_ -match '\|True\|False\|\d+x\d+\|True\|0$' }).Count | Should -BeGreaterThan 0 -Because "a maximised, shown ApplicationFrameWindow on a monitor that isn't the primary one (frames as title|maximised|primary|size|visible|cloaked: $(@($st.frames) -join '; '); processes: $(@($st.procs | ForEach-Object { $_ }) -join ', '); shell: $(@($st.shell | ForEach-Object { $_ }) -join '; '))"
             @($st.starts | Where-Object { "$_" -match [regex]::Escape("shell:AppsFolder\$($script:settingsId)") }).Count | Should -Be 1 -Because 'the start is audited by the app''s ID'
         }
 
