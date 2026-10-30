@@ -5,8 +5,9 @@
 #   D-APPSTORE-02  IApplicationActivationManager started from a process with no window of its own (as "store-apps"
 #                  will be) starts the app and returns its process
 #   D-APPSTORE-03  that process can be added to a job of our own
-#   D-APPSTORE-04  the app's top-level windows carry its AppUserModelID (PKEY_AppUserModel_ID) - also the frame window
-#                  a UWP app's ApplicationFrameHost draws
+#   D-APPSTORE-04  a UWP app's frame window (drawn by ApplicationFrameHost) carries the app's AppUserModelID
+#                  (PKEY_AppUserModel_ID); a packaged desktop app's window belongs to the started process (first run:
+#                  Windows Terminal's window had no such property)
 #   D-APPSTORE-05  WM_CLOSE to those windows closes the app: no window with its AppUserModelID is left
 # The stand-in runs as the session's user from a scheduled task, not as the agent's LocalSystem helper, as for
 # D-APPSPIKE-06. One UWP app (Calculator, else Settings) and one packaged desktop app (Windows Terminal) when the
@@ -107,6 +108,30 @@ public static class RhStore
         return found;
     }
 
+    // the visible top-level windows of one process (a packaged desktop app draws its own, without the window property)
+    public static List<Dictionary<string, object>> WindowsOf(uint ofPid)
+    {
+        var found = new List<Dictionary<string, object>>();
+        EnumWindows((h, l) =>
+        {
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid != ofPid || !IsWindowVisible(h)) return true;
+            var cls = new StringBuilder(256); GetClassName(h, cls, 256);
+            var title = new StringBuilder(256); GetWindowText(h, title, 256);
+            found.Add(new Dictionary<string, object> { { "hwnd", h.ToInt64() }, { "class", cls.ToString() }, { "title", title.ToString() }, { "pid", pid }, { "appId", WindowAppId(h) ?? "" } });
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    static List<Dictionary<string, object>> Union(List<Dictionary<string, object>> a, List<Dictionary<string, object>> b)
+    {
+        var all = new List<Dictionary<string, object>>(a);
+        foreach (var w in b) if (!all.Exists(x => (long)x["hwnd"] == (long)w["hwnd"])) all.Add(w);
+        return all;
+    }
+
     public static Dictionary<string, object> Try(string appId)
     {
         var r = new Dictionary<string, object> { { "appId", appId } };
@@ -136,25 +161,28 @@ public static class RhStore
             CloseHandle(process);
         }
 
-        // its windows, by AppUserModelID
+        // its windows: by AppUserModelID (the UWP frame) and by the started process (a packaged desktop app)
         List<Dictionary<string, object>> windows = new List<Dictionary<string, object>>();
+        List<Dictionary<string, object>> own = new List<Dictionary<string, object>>();
         var until = DateTime.UtcNow.AddSeconds(20);
         while (DateTime.UtcNow < until)
         {
             windows = Windows(appId);
-            if (windows.Count > 0) break;
+            own = WindowsOf(pid);
+            if (windows.Count > 0 || own.Count > 0) break;
             Thread.Sleep(250);
         }
         r["windowMs"] = sw.ElapsedMilliseconds;
         r["windows"] = windows;
+        r["processWindows"] = own;
         Thread.Sleep(2000); // fully up before it is asked to close
 
         // closed the way a tab closes its app
-        foreach (var w in Windows(appId)) PostMessage(new IntPtr((long)w["hwnd"]), 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
+        foreach (var w in Union(Windows(appId), WindowsOf(pid))) PostMessage(new IntPtr((long)w["hwnd"]), 0x0010, IntPtr.Zero, IntPtr.Zero); // WM_CLOSE
         var closeWatch = Stopwatch.StartNew();
-        var left = Windows(appId);
+        var left = Union(Windows(appId), WindowsOf(pid));
         var closeUntil = DateTime.UtcNow.AddSeconds(20);
-        while (left.Count > 0 && DateTime.UtcNow < closeUntil) { Thread.Sleep(250); left = Windows(appId); }
+        while (left.Count > 0 && DateTime.UtcNow < closeUntil) { Thread.Sleep(250); left = Union(Windows(appId), WindowsOf(pid)); }
         r["closedMs"] = left.Count == 0 ? (object)closeWatch.ElapsedMilliseconds : null;
         r["left"] = left;
         bool stillRunning = false;
@@ -174,7 +202,11 @@ public static class RhStore
     $s.list = Invoke-LabInSessionJson -Name $VmName -Code @'
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $items = @((New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder').Items() | ForEach-Object { [pscustomobject]@{ name = $_.Name; id = $_.Path } })
-[pscustomobject]@{ ms = $sw.ElapsedMilliseconds; total = $items.Count; store = @($items | Where-Object { $_.id -match '^[A-Za-z0-9._-]+_[a-z0-9]{13}![A-Za-z0-9._-]+$' }) }
+$first = $sw.ElapsedMilliseconds
+# a second time: is the first list's time a one-off after the sign-in?
+$sw.Restart()
+$null = @((New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder').Items() | ForEach-Object { $_.Path })
+[pscustomobject]@{ ms = $first; againMs = $sw.ElapsedMilliseconds; total = $items.Count; store = @($items | Where-Object { $_.id -match '^[A-Za-z0-9._-]+_[a-z0-9]{13}![A-Za-z0-9._-]+$' }) }
 '@
     $ids = @($s.list.store | ForEach-Object id)
     $uwp = @('Microsoft.WindowsCalculator_8wekyb3d8bbwe!App', 'windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel') | Where-Object { $ids -contains $_ } | Select-Object -First 1
@@ -199,7 +231,7 @@ AfterAll {
 Describe 'D-APPSTORE <VmName>' -Tag AppStoreSpike {
 
     It 'D-APPSTORE-01 shell:AppsFolder lists Store apps by AppUserModelID' -Tag 'D-APPSTORE-01' {
-        @($s.list.store).Count | Should -BeGreaterThan 0 -Because "$($s.list.total) entries, $($s.list.ms) ms"
+        @($s.list.store).Count | Should -BeGreaterThan 0 -Because "$($s.list.total) entries, $($s.list.ms) ms (again $($s.list.againMs) ms)"
         $s.uwpId | Should -Not -BeNullOrEmpty -Because 'Calculator or Settings is a Store app on every lab device'
     }
 
@@ -214,13 +246,16 @@ Describe 'D-APPSTORE <VmName>' -Tag AppStoreSpike {
         foreach ($a in $s.apps) { $a.inJob | Should -BeTrue -Because "$($a.appId) ($($a.process)): $($a.jobError)" }
     }
 
-    It 'D-APPSTORE-04 the app''s windows carry its AppUserModelID, the UWP frame window too' -Tag 'D-APPSTORE-04' {
-        foreach ($a in $s.apps) { @($a.windows).Count | Should -BeGreaterThan 0 -Because "a visible window of $($a.appId) within 20 s" }
+    It 'D-APPSTORE-04 the UWP app''s frame window carries its AppUserModelID; a packaged desktop app''s window is its own process''s' -Tag 'D-APPSTORE-04' {
+        foreach ($a in $s.apps) { (@($a.windows).Count + @($a.processWindows).Count) | Should -BeGreaterThan 0 -Because "a visible window of $($a.appId) within 20 s, by its ID or its process" }
         $frame = @($s.apps | Where-Object appId -eq $s.uwpId | ForEach-Object { $_.windows } | Where-Object class -eq 'ApplicationFrameWindow')
         $frame.Count | Should -BeGreaterThan 0 -Because "the UWP app's ApplicationFrameHost window has the app's ID ($(@($s.apps | ForEach-Object { $_.windows } | ForEach-Object { "$($_.class)/$($_.process)" }) -join ', '))"
     }
 
     It 'D-APPSTORE-05 WM_CLOSE to those windows closes the app' -Tag 'D-APPSTORE-05' {
-        foreach ($a in $s.apps) { $a.closedMs | Should -Not -BeNullOrEmpty -Because "no window of $($a.appId) is left 20 s after WM_CLOSE ($(@($a.left | ForEach-Object class) -join ', '))" }
+        foreach ($a in $s.apps) {
+            (@($a.windows).Count + @($a.processWindows).Count) | Should -BeGreaterThan 0 -Because "$($a.appId) had a window to close"
+            $a.closedMs | Should -Not -BeNullOrEmpty -Because "no window of $($a.appId) is left 20 s after WM_CLOSE ($(@($a.left | ForEach-Object class) -join ', '))"
+        }
     }
 }
