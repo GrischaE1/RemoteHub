@@ -800,11 +800,11 @@ Apps from a connection, each started in the admin's own session on a virtual mon
 | D-APP-12 | Resume | dropped and continued with the resume token: Connected again, the app started only once, a picture after | H | 2 | ◐ | – |
 | D-APP-13 | Taskbar setting after a crash | while a tab is open the account's `MMTaskbarEnabled` is 0; the service killed and started: the account's value is back, no record left | PS | 1 | ◐ | – |
 | D-APP-14 | MaxAppTabs | `MaxAppTabs` = 1 and one tab open: a second tab is refused, nothing started | H | 2 | ◐ | – |
-| D-APPSTORE-01 | Store apps listed | the console account's `shell:AppsFolder` has entries whose path is an AppUserModelID, Calculator or Settings among them; the time the list took is in the evidence | S | 1 | ◐ | – |
-| D-APPSTORE-02 | Started by AppUserModelID | `IApplicationActivationManager::ActivateApplication` from a process with no window of its own (a scheduled task as the user) starts the UWP app and Windows Terminal (where present) and returns a process ID | S | 1 | ◐ | – |
-| D-APPSTORE-03 | Process in a job | the returned process can be added to a new job object (nested jobs) | S | 1 | ◐ | – |
-| D-APPSTORE-04 | Windows by AppUserModelID | within 20 s visible top-level windows carry the app's `PKEY_AppUserModel_ID`; for the UWP app one of them is ApplicationFrameHost's `ApplicationFrameWindow` | S | 1 | ◐ | – |
-| D-APPSTORE-05 | Closed by WM_CLOSE | `WM_CLOSE` to those windows: none with the app's ID is left within 20 s | S | 1 | ◐ | – |
+| D-APPSTORE-01 | Store apps listed | the console account's `shell:AppsFolder` has entries whose path is an AppUserModelID, Calculator or Settings among them; the time the list took is in the evidence | S | 1 | ✅ | – |
+| D-APPSTORE-02 | Started by AppUserModelID | `IApplicationActivationManager::ActivateApplication` from a process with no window of its own (a scheduled task as the user) starts the UWP app and Windows Terminal (where present) and returns a process ID | S | 1 | ✅ | – |
+| D-APPSTORE-03 | Process in a job | the returned process can be added to a new job object (nested jobs) | S | 1 | ✅ | – |
+| D-APPSTORE-04 | The app's windows | within 20 s a visible window: for the UWP app ApplicationFrameHost's `ApplicationFrameWindow` with the app's `PKEY_AppUserModel_ID`; for Windows Terminal a window of the started process | S | 1 | ✅ | – |
+| D-APPSTORE-05 | Closed by WM_CLOSE | `WM_CLOSE` to those windows: none with the app's ID is left within 20 s | S | 1 | ✅ | – |
 
 ## 10. RemoteHub on a Windows client (C, R)
 
