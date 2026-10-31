@@ -7941,7 +7941,7 @@ P1 · How: PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
 
 **Expected:**
 - while the tab is open, the account's `MMTaskbarEnabled` is 0
-- the service killed and started again: the account's value is back, no record file left
+- the service killed and started again: the account's value is back, no record file left – put back by the service (its log says so) before it signs out the session the killed one left open
 
 #### D-APP-14 · MaxAppTabs
 P2 · How: H · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`

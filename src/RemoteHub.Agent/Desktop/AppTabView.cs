@@ -8,6 +8,25 @@ namespace RemoteHub.Agent;
 internal static class AppTabView
 {
     /// <summary>
+    /// Before a key goes to the tab's app (§6.3): when another window has the keyboard, the app's window that last had it
+    /// (<paramref name="front"/>) is brought to the front, and the key waits for the switch to arrive – at most
+    /// <paramref name="waitMs"/> – so it isn't typed into the window that had the keyboard before. Null when the app has
+    /// the keyboard (or has no window yet); otherwise what happened instead, for the log.
+    /// </summary>
+    public static string? GiveKeyboard(IntPtr front, Func<IntPtr> foreground, Func<IntPtr, bool> bringToFront, Func<long> now, Action wait, int waitMs = 200)
+    {
+        if (front == IntPtr.Zero || foreground() == front) return null;
+        if (!bringToFront(front)) return "Windows refused to switch to it";
+        var until = now() + waitMs;
+        while (foreground() != front)
+        {
+            if (now() >= until) return $"the switch didn't arrive within {waitMs} ms";
+            wait();
+        }
+        return null;
+    }
+
+    /// <summary>
     /// The monitor of the tab's place: the <paramref name="place"/>-th of the driver's monitors in the order Windows lists
     /// them (<paramref name="virtualInOrder"/>, its device names), which is the order the driver made them in. Found by
     /// place, never by a remembered name: every change of the driver's count names them all anew (§5.1). Null when the
