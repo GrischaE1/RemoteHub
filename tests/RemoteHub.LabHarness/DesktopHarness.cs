@@ -463,9 +463,9 @@ internal static class DesktopHarness
 
                 case "settings":
                 {
-                    // {monitor (0), fps (30), quality (60), fitWidth (0), fitHeight (0)}
+                    // {monitor (0), fps (30), quality (60), fitWidth (0), fitHeight (0), scale (0: the monitor's own)}
                     var settings = new DesktopSettings(Int(s, "monitor", 0), Int(s, "fps", DesktopProtocol.DefaultFramesPerSecond), Int(s, "quality", DesktopProtocol.DefaultQuality),
-                        Int(s, "fitWidth", 0), Int(s, "fitHeight", 0));
+                        Int(s, "fitWidth", 0), Int(s, "fitHeight", 0), Int(s, "scale", 0));
                     Need().Client.Send(Msg(DesktopMessage.Settings, settings));
                     return (true, new D { ["settings"] = settings });
                 }

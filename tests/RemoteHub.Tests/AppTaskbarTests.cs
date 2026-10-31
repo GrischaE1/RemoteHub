@@ -36,6 +36,50 @@ public class AppTaskbarTests : IDisposable
         k.SetValue(A.AppTaskbar.Name, v, RegistryValueKind.DWord);
     }
 
+    private void SetScale(string monitor, int? v)
+    {
+        using var k = Registry.CurrentUser.CreateSubKey($@"{_root}\{Sid}\{A.AppTaskbar.ScaleKey}\{monitor}");
+        if (v is { } value) k.SetValue(A.AppTaskbar.ScaleName, value, RegistryValueKind.DWord);
+    }
+
+    private object? ScaleOf(string monitor)
+    {
+        using var k = Registry.CurrentUser.OpenSubKey($@"{_root}\{Sid}\{A.AppTaskbar.ScaleKey}\{monitor}");
+        return k?.GetValue(A.AppTaskbar.ScaleName);
+    }
+
+    [Fact]
+    public void The_virtual_monitors_scale_comes_back_as_it_was_and_the_users_own_monitors_are_left_alone()
+    {
+        SetScale("MTT1337518463207_1C_07E8^AA", 1);   // a scale the user chose on the virtual monitor
+        SetScale("MTT1337518463207_1C_07E9^BB", null); // an entry without one
+        SetScale("DEL41A8^CC", 2);                     // the user's own monitor
+        var t = New();
+        Assert.True(t.TurnOff(Sid));
+
+        // App tabs set their scales; Windows keeps them in the profile, also for a monitor it hadn't seen before
+        SetScale("MTT1337518463207_1C_07E8^AA", 2);
+        SetScale("MTT1337518463207_1C_07E9^BB", -1);
+        SetScale("MTT1337518463207_1C_07EA^DD", 3);
+        SetScale("DEL41A8^CC", 3);                     // the user, meanwhile, at the device
+        Assert.True(t.PutBack());
+
+        Assert.Equal(1, ScaleOf("MTT1337518463207_1C_07E8^AA"));
+        Assert.Null(ScaleOf("MTT1337518463207_1C_07E9^BB"));
+        Assert.Null(ScaleOf("MTT1337518463207_1C_07EA^DD"));
+        Assert.Equal(3, ScaleOf("DEL41A8^CC"));
+    }
+
+    [Fact]
+    public void A_scale_left_by_a_helper_that_ended_abruptly_is_put_back_by_the_service()
+    {
+        SetScale("MTT1337518463207_1C_07E8^AA", 0);
+        Assert.True(New().TurnOff(Sid)); // never put back: its helper died
+        SetScale("MTT1337518463207_1C_07E8^AA", 2);
+        Assert.NotNull(New().RestoreLeftovers());
+        Assert.Equal(0, ScaleOf("MTT1337518463207_1C_07E8^AA"));
+    }
+
     [Fact]
     public void Off_while_a_tab_is_open_then_absent_again()
     {

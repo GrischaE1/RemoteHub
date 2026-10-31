@@ -2280,9 +2280,11 @@ function Get-LabTestAppLog {
     }
 }
 
-# The account's session as Windows lays it out: monitors (device, bounds, primary), the visible top-level windows in
-# z-order (pid, class, title, bounds, the monitor their centre is on), the foreground window, and the taskbars on other
-# monitors (Shell_SecondaryTrayWnd). -Pids narrows the windows to those processes.
+# The account's session as Windows lays it out: monitors (device, bounds, primary, dpi - 96 at 100 %), the visible
+# top-level windows in z-order (pid, class, title, bounds, the monitor their centre is on), the foreground window, the
+# taskbars on other monitors (Shell_SecondaryTrayWnd), and the account's scale per monitor as Windows keeps it
+# (PerMonitorSettings: name=DpiValue). Bounds in pixels, as a per-monitor aware program sees them. -Pids narrows the
+# windows to those processes.
 function Get-LabScreenLayout {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int[]]$Pids = @())
@@ -2309,14 +2311,21 @@ public static class RhLabLayout {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr m, int type, out uint x, out uint y);
+    // per-monitor aware (v2): pixels and each monitor's own dpi, not what Windows shows an unaware program
+    static void Aware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
     public static List<object[]> Monitors() {
+        Aware();
         var list = new List<object[]>();
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr m, IntPtr dc, ref RECT r, IntPtr d) {
             var i = new MONITORINFOEX(); i.Size = Marshal.SizeOf(typeof(MONITORINFOEX)); GetMonitorInfo(m, ref i);
-            list.Add(new object[] { i.Device, i.Monitor.L, i.Monitor.T, i.Monitor.R, i.Monitor.B, (i.Flags & 1) != 0 }); return true; }, IntPtr.Zero);
+            uint dx, dy; if (GetDpiForMonitor(m, 0 /* MDT_EFFECTIVE_DPI */, out dx, out dy) != 0) dx = 0;
+            list.Add(new object[] { i.Device, i.Monitor.L, i.Monitor.T, i.Monitor.R, i.Monitor.B, (i.Flags & 1) != 0, (int)dx }); return true; }, IntPtr.Zero);
         return list;
     }
     public static List<object[]> Windows() {
+        Aware();
         var list = new List<object[]>();
         EnumWindows(delegate(IntPtr h, IntPtr d) {
             if (!IsWindowVisible(h)) return true;
@@ -2328,7 +2337,7 @@ public static class RhLabLayout {
 }
 "@
 }
-$monitors = @([RhLabLayout]::Monitors() | ForEach-Object { [pscustomobject]@{ device = $_[0]; left = $_[1]; top = $_[2]; right = $_[3]; bottom = $_[4]; primary = $_[5] } })
+$monitors = @([RhLabLayout]::Monitors() | ForEach-Object { [pscustomobject]@{ device = $_[0]; left = $_[1]; top = $_[2]; right = $_[3]; bottom = $_[4]; primary = $_[5]; dpi = $_[6] } })
 function On($x, $y) { foreach ($m in $monitors) { if ($x -ge $m.left -and $x -lt $m.right -and $y -ge $m.top -and $y -lt $m.bottom) { return $m.device } }; '' }
 $pids = @($A.pids)
 $all = @([RhLabLayout]::Windows())
@@ -2340,6 +2349,7 @@ $windows = @($all | Where-Object { $pids.Count -eq 0 -or $pids -contains $_[1] }
     windows    = $windows
     foreground = [RhLabLayout]::GetForegroundWindow().ToInt64()
     trays      = @($all | Where-Object { $_[2] -eq 'Shell_SecondaryTrayWnd' }).Count
+    perMonitor = @(Get-ChildItem 'HKCU:\Control Panel\Desktop\PerMonitorSettings' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.PSChildName)=$($_.GetValue('DpiValue'))" })
 }
 '@
 }

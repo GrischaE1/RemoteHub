@@ -1072,8 +1072,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         var refit = await Task.Run(() => VirtualDisplay.Open(tabLease, w, h, policy.MaxAppTabs, out var m, out _) is null ? m : null, ct);
                         if (refit is not null) (fitWidth, fitHeight) = (refit.Width, refit.Height);
                     }
+                    // The display scale only for an app tab's own monitor: a desktop's monitors are the user's, and keep theirs.
                     _settings = new DesktopSettings(all ? DesktopProtocol.AllMonitors : ClampMonitor(s.Monitor, _monitorCount), Math.Clamp(s.FramesPerSecond, 1, policy.MaxFramesPerSecond),
-                        Math.Clamp(s.Quality, 1, policy.MaxQuality), fitWidth, fitHeight);
+                        Math.Clamp(s.Quality, 1, policy.MaxQuality), fitWidth, fitHeight, _appLease is not null && !_viewOnly ? DesktopProtocol.ValidScale(s.Scale) : 0);
                     await SendPipe(DesktopWire.Json(DesktopMessage.Settings, _settings, DesktopJson.Default.DesktopSettings), ct);
                     break;
                 case DesktopMessage.Ack or DesktopMessage.KeyFrameRequest when _live:

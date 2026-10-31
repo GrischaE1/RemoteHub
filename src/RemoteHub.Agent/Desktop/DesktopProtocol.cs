@@ -47,6 +47,16 @@ public static class DesktopProtocol
     public static (int Width, int Height) ValidFitSize(int width, int height) =>
         width < MinFitWidth || height < MinFitHeight ? (0, 0) : (Math.Min(width, MaxFitWidth) & ~1, Math.Min(height, MaxFitHeight) & ~1);
 
+    /// <summary>Windows' display scales in percent, the steps its Settings app offers per monitor.</summary>
+    public static readonly int[] ScaleSteps = [100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500];
+
+    /// <summary>
+    /// A requested scale (<see cref="DesktopSettings.Scale"/>) as the agent applies it: the nearest of
+    /// <see cref="ScaleSteps"/>; 0 – the monitor's own – for anything outside them.
+    /// </summary>
+    public static int ValidScale(int percent) =>
+        percent < ScaleSteps[0] || percent > ScaleSteps[^1] ? 0 : ScaleSteps.MinBy(s => Math.Abs(s - percent));
+
     /// <summary>Clipboard images and files: at most this much per copy, sent in chunks of <see cref="TransferChunkBytes"/>.</summary>
     public const long MaxTransferBytes = 100L * 1024 * 1024;
     public const int MaxTransferItems = 1000;
@@ -370,8 +380,10 @@ public sealed record DesktopLayout(DesktopMonitor[] Monitors, int Monitor, int W
 /// RemoteHub changes the monitor or the quality during the session. FitWidth/FitHeight (pixels, 0 = off): set the shown
 /// monitor's resolution to this size – the viewer's window, or a size the admin chose, larger than the window too (the
 /// nearest mode the display supports, checked with <see cref="DesktopProtocol.ValidFitSize"/>); it is restored at the end.
+/// Scale (percent, 0 = the monitor's own): an app tab's monitor runs at the admin's display scale, so the app looks as large
+/// as it would on the admin's own screen (docs/app-tabs-design.md §5.2); a desktop connection's monitors keep theirs.
 /// </summary>
-public sealed record DesktopSettings(int Monitor, int FramesPerSecond, int Quality, int FitWidth = 0, int FitHeight = 0);
+public sealed record DesktopSettings(int Monitor, int FramesPerSecond, int Quality, int FitWidth = 0, int FitHeight = 0, int Scale = 0);
 
 public enum RemoteMouseAction : byte { Move = 0, Down = 1, Up = 2, Wheel = 3, HorizontalWheel = 4 }
 

@@ -940,12 +940,21 @@ public sealed class AgentDesktopView : Border, IRecordableView
         Canvas.SetTop(_cursorOverlay, _session.CursorPosition.Y - _session.CursorHotspot.Y);
     }
 
-    /// <summary>The picture area in device pixels, so a fitted resolution is shown 1:1 (sharp).</summary>
+    /// <summary>The picture area in device pixels, so a fitted resolution is shown 1:1 (sharp), and this monitor's scale.</summary>
     private void ReportSize()
     {
         if (_content.ActualWidth < 1 || PresentationSource.FromVisual(_content) is not { CompositionTarget: { } target }) return;
         var m = target.TransformToDevice;
-        _session.WindowSizeChanged((int)Math.Round(_content.ActualWidth * m.M11), (int)Math.Round(_content.ActualHeight * m.M22));
+        _session.WindowSizeChanged((int)Math.Round(_content.ActualWidth * m.M11), (int)Math.Round(_content.ActualHeight * m.M22), (int)Math.Round(m.M11 * 100));
+    }
+
+    /// <summary>Moved to a monitor with another scale: the size in pixels and the scale both change.</summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        UpdatePictureScale();
+        _resizeDebounce.Stop();
+        _resizeDebounce.Start();
     }
 
     /// <summary>
