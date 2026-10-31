@@ -92,10 +92,46 @@ public class DesktopResolutionTests
         Assert.Equal((0, 0), (s.CurrentSettings().FitWidth, s.CurrentSettings().FitHeight));
     }
 
+    [Theory]
+    [InlineData(100, 100)]
+    [InlineData(150, 150)]
+    [InlineData(112, 100)]   // between two steps: the nearer
+    [InlineData(113, 125)]
+    [InlineData(168, 175)]   // 168 dpi
+    [InlineData(500, 500)]
+    [InlineData(99, 0)]      // outside Windows' steps: the monitor's own
+    [InlineData(501, 0)]
+    [InlineData(0, 0)]
+    [InlineData(-150, 0)]
+    [InlineData(int.MaxValue, 0)]
+    public void Requested_scales_are_one_of_the_steps_Windows_offers(int percent, int expected) =>
+        Assert.Equal(expected, DesktopProtocol.ValidScale(percent));
+
+    [Fact]
+    public void Only_an_app_tab_asks_for_this_pcs_display_scale()
+    {
+        var layout = new DesktopLayout([new DesktopMonitor(0, @"\\.\DISPLAY1", 0, 0, 1280, 720, true)], 0, 1280, 720, false, false);
+        var app = new AgentDesktopSession(new Connection { Name = "FS01", Host = "fs01.contoso.local" }, new ConnectionApp("Event Viewer", @"%SystemRoot%\system32\mmc.exe", "eventvwr.msc"))
+        {
+            Layout = layout,
+        };
+        app.WindowSizeChanged(1800, 1000, 150);
+        Assert.Equal(new DesktopSettings(0, 30, 60, 1800, 1000, 150), app.CurrentSettings());
+        app.WindowSizeChanged(1800, 1000, 120); // moved to a monitor at 120 dpi: the nearest step
+        Assert.Equal(125, app.CurrentSettings().Scale);
+        app.WindowSizeChanged(1800, 1000, 50);
+        Assert.Equal(0, app.CurrentSettings().Scale);
+
+        // A desktop keeps the device's scale, whatever this PC runs at
+        var desktop = new AgentDesktopSession(new Connection { Name = "FS01", Host = "fs01.contoso.local" }) { Layout = layout };
+        desktop.WindowSizeChanged(1800, 1000, 150);
+        Assert.Equal(new DesktopSettings(0, 30, 60, 1800, 1000), desktop.CurrentSettings());
+    }
+
     [Fact]
     public void The_chosen_size_survives_the_wire_format()
     {
-        var sent = new DesktopSettings(0, 30, 60, 3840, 2160);
+        var sent = new DesktopSettings(0, 30, 60, 3840, 2160, 150);
         var m = DesktopWire.Json(DesktopMessage.Settings, sent, DesktopJson.Default.DesktopSettings);
         Assert.Equal(DesktopMessage.Settings, DesktopWire.TypeOf(m));
         Assert.Equal(sent, DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings));

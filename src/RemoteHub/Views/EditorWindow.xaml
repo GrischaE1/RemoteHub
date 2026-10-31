@@ -284,6 +284,8 @@
                            Visibility="{Binding PsStatusText, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
 
+                <StackPanel x:Name="PageApps" Visibility="Collapsed" />
+
                 <StackPanel x:Name="PageTools" Visibility="Collapsed">
                 <StackPanel>
                     <ItemsControl ItemsSource="{Binding ToolRows}" ItemTemplate="{StaticResource OptionRowTemplate}" />

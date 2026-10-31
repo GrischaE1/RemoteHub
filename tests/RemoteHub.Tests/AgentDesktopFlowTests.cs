@@ -173,6 +173,12 @@ public partial class AgentDesktopFlowTests
         public readonly ConcurrentQueue<(int, int)> Fits = new();
         public int Restores;
         public void FitResolution(A.DesktopMonitor monitor, int width, int height) => Fits.Enqueue((width, height));
+        public readonly ConcurrentQueue<int> Scales = new();
+        public string SetScale(A.DesktopMonitor monitor, int percent)
+        {
+            Scales.Enqueue(percent);
+            return $"{percent} %";
+        }
         public void RestoreResolution() => Interlocked.Increment(ref Restores);
         /// <summary>Set to false to simulate the user's desktop appearing (unlock or sign-in).</summary>
         public volatile bool Secure = secure;
@@ -351,8 +357,8 @@ public partial class AgentDesktopFlowTests
             }
         }
 
-        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
-            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
+        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false, DesktopAppStart? app = null) =>
+            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn, App: app), DesktopJson.Default.DesktopStart));
 
         /// <summary>Closes like RemoteHub ending the session on purpose, and waits until the agent has read the close: disposing
         /// right away can reset the connection first, which the agent rightly takes for a drop.</summary>
@@ -993,6 +999,26 @@ public partial class AgentDesktopFlowTests
         Assert.Null(d.Helpers.Uis[1].Pin);
         Assert.Equal(0, d.Helpers.Uis[1].Asked);
         Assert.DoesNotContain(v.Statuses, s => s.State is DesktopStatusState.EnterPin or DesktopStatusState.WaitingForUser);
+    }
+
+    [Fact]
+    public async Task An_app_tab_without_the_virtual_display_or_automatic_sign_in_is_refused_before_anything_runs()
+    {
+        await using var d = await StartDevice();
+        d.Sessions.Current = [ActiveUser with { User = @"TESTdmin" }];
+        using var v = await Connect(d);
+        // Offered where the virtual display is installed (as on some test machines); never to this account here, which has no
+        // automatic sign-in on the test device.
+        Assert.Equal(A.VirtualDisplay.Installed, v.Client.Hello.Features!.Contains(DesktopFeatures.Apps));
+        Assert.False(v.Client.Hello.Rights.Apps);
+        v.Start(ActiveUser.Id, DesktopConsent.None, app: new DesktopAppStart(@"C:\Windows\System32
+otepad.exe", "--secret-argument", "", false, "Notepad"));
+        var s = v.Next();
+        Assert.Equal(DesktopStatusState.Failed, s.State);
+        Assert.StartsWith("App tabs need", s.Message); // the virtual display or automatic sign-in, whichever this machine lacks
+        Assert.Equal(0, d.Helpers.Started);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopRefused), "audit entry");
+        Assert.DoesNotContain(A.AuditEvent.DesktopAppStarted, d.Audits);
     }
 
     [Fact]
@@ -1864,11 +1890,36 @@ public partial class AgentDesktopFlowTests
             v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, int.MaxValue, 99999), DesktopJson.Default.DesktopSettings));
             WaitFor(() => d.Helpers.Screens[0].Fits.Contains((DesktopProtocol.MaxFitWidth, DesktopProtocol.MaxFitHeight)), "the largest resolution");
             Assert.DoesNotContain(d.Helpers.Screens[0].Fits, f => f.Item1 > DesktopProtocol.MaxFitWidth || f.Item2 > DesktopProtocol.MaxFitHeight || f.Item1 <= 0 || f.Item2 <= 0);
+            // A display scale is for an app tab's own monitor: a desktop's monitors are the user's and keep theirs
+            v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, 1600, 900, 150), DesktopJson.Default.DesktopSettings));
+            WaitFor(() => d.Helpers.Screens[0].Fits.Contains((1600, 900)), "the size with a scale asked for");
+            Assert.Empty(d.Helpers.Screens[0].Scales);
             restores = d.Helpers.Screens[0].Restores; // a size is set: nothing restores it until the end
         }
         finally { v.Dispose(); }
         WaitFor(() => d.Helpers.Screens[0].Restores > restores, "the device's own resolution back after disconnecting");
     }
+
+    [Theory]
+    [InlineData(150, 0, 0, 0, 0, 100)]     // the recommended scale is 100 % and nothing more is allowed: 100 %
+    [InlineData(150, 0, 2, 2, 2, 150)]     // allowed: two steps up
+    [InlineData(150, 0, 1, 1, 1, 125)]     // only 125 % allowed at this resolution: the most allowed
+    [InlineData(100, -1, 1, -1, 0, 100)]   // recommended 125 %: 100 % is a step down
+    [InlineData(175, -2, 2, 1, 3, 175)]    // recommended 150 %
+    [InlineData(500, 0, 20, 11, 11, 500)]  // a range past the last step is cut to it
+    public void The_scale_is_set_in_steps_from_the_recommended_one_within_what_Windows_allows(int percent, int minRel, int maxRel, int rel, int index, int expected)
+    {
+        Assert.Equal(expected, DesktopProtocol.ScaleSteps[index]);
+        Assert.Equal((rel, expected), A.DisplayModes.ScaleFor(percent, minRel, maxRel));
+    }
+
+    [Theory]
+    [InlineData(130, 0, 2)]   // not one of the steps
+    [InlineData(150, 1, 2)]   // the smallest scale above 100 %: not a range Windows reports
+    [InlineData(150, -12, 0)] // the recommended scale past the last step
+    [InlineData(150, 0, -1)]  // the largest below the smallest
+    public void A_scale_range_that_does_not_fit_the_steps_is_left_alone(int percent, int minRel, int maxRel) =>
+        Assert.Null(A.DisplayModes.ScaleFor(percent, minRel, maxRel));
 
     [Theory]
     [InlineData(1600, 900, 1600, 900)]   // listed: exact

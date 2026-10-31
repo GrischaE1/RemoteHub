@@ -483,6 +483,7 @@
                                 <MenuItem x:Name="CmConnect" Header="Connect" FontWeight="SemiBold" Click="CmConnect_Click" Icon="{ui:SymbolIcon PlugConnected24}" />
                                 <MenuItem x:Name="CmConnectNew" Header="Open additional session" Click="CmConnectNew_Click" Icon="{ui:SymbolIcon WindowNew24}" />
                                 <MenuItem x:Name="CmDesktopOther" Click="CmDesktopOther_Click" />
+                                <MenuItem x:Name="CmOpenApp" Header="Open app" Icon="{ui:SymbolIcon Apps24}" />
                                 <MenuItem x:Name="CmConnectAll" Header="Connect all in folder" Click="CmConnectAll_Click" Icon="{ui:SymbolIcon PlugConnected24}" />
                                 <Separator x:Name="CmPsSep" />
                                 <!-- Groups open on hover: tools for the device, setting it up, and the rarer actions (more, new). -->

@@ -63,6 +63,7 @@ public partial class EditorWindow : FluentWindow
         // Policy AllowSavedPasswords = 0: no password can be stored; the one there stays until it is removed (§14 Q2).
         if (!Features.IsAllowed(Feature.SavedPasswords)) PolicyLock.TurnedOff(PasswordInput);
         BuildNav();
+        InitAppsPage();
         if (_vm.IsDefaults) InitAppPages();
         Show(page ?? (_vm.IsDefaults ? PageAppSettings : "PageGeneral"));
         Loaded += (_, _) => FitNavigation();
@@ -116,6 +117,7 @@ public partial class EditorWindow : FluentWindow
             Page("PageResources", "Local resources & keyboard", SymbolRegular.Keyboard24, item);
             Page("PageSecurity", "Security & session", SymbolRegular.LockClosed24, item);
             Page("PagePs", "PowerShell remoting", SymbolRegular.WindowConsole20, item);
+            Page("PageApps", "Apps", SymbolRegular.Apps24, item);
             Page("PageAppearance", "Colour", SymbolRegular.Color24, item);
             Page("PageTools", "Remote tools", SymbolRegular.WrenchScrewdriver24, "How often the Processes and Services tabs refresh.");
         }
@@ -129,6 +131,7 @@ public partial class EditorWindow : FluentWindow
             Page("PageResources", "Local resources & keyboard", SymbolRegular.Keyboard24, item);
             Page("PageSecurity", "Security & session", SymbolRegular.LockClosed24, item);
             Page("PagePs", "PowerShell remoting", SymbolRegular.WindowConsole20, item);
+            Page("PageApps", "Apps", SymbolRegular.Apps24, item);
         }
     }
 
@@ -564,6 +567,7 @@ public partial class EditorWindow : FluentWindow
             var err = _vm.Error ?? "";
             if (err.Contains("username", StringComparison.OrdinalIgnoreCase) || err.Contains("credential", StringComparison.OrdinalIgnoreCase)) Show("PageCredentials");
             else if (err.Contains("colour", StringComparison.OrdinalIgnoreCase) || err.Contains("color", StringComparison.OrdinalIgnoreCase)) Show("PageAppearance");
+            else if (err.Contains("(Apps page)", StringComparison.Ordinal)) Show("PageApps");
             else if (!_vm.IsDefaults) Show("PageGeneral");
             return;
         }

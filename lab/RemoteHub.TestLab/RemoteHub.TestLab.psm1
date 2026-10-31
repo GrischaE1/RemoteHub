@@ -109,7 +109,8 @@ function Test-LabVmReady {
 # What a scenario file needs, from its header (see Invoke-LabTests.ps1): its role, whether it uses other VMs (LabNeeds:
 # lane - found by itself when it calls Get-LabDevice) and of which kinds, the jump host, its time limit, whether a
 # quick run still takes it on every kind (LabQuick: every kind), and whether it runs only after every other file of its
-# kind (LabNeeds: last - D-ZAUDIT reads what the others left).
+# kind (LabNeeds: last - D-ZAUDIT reads what the others left), and whether it runs only when asked for by tag (LabRuns:
+# on request - a spike).
 function Get-LabFileNeeds {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$File, [int]$DefaultLimitMin = 60)
@@ -129,6 +130,7 @@ function Get-LabFileNeeds {
         Limit     = $limit
         EveryKind = $head -match '(?m)^#\s*LabQuick:\s*every kind'
         Last      = $head -match '(?m)^#\s*LabNeeds:.*\blast\b'
+        OnRequest = $head -match '(?m)^#\s*LabRuns:\s*on request'
     }
 }
 
@@ -1460,7 +1462,7 @@ function Set-LabAutoLogon {
     }
     Disable-LabIdleLock -Name $Name
     Restart-LabVm -Name $Name -TimeoutSec $TimeoutSec
-    Wait-LabDesktop -Name $Name -Account $user -TimeoutSec $TimeoutSec
+    Wait-LabDesktop -Name $Name -Account $Account -TimeoutSec $TimeoutSec
 }
 
 function Clear-LabAutoLogon {
@@ -1569,7 +1571,21 @@ function Invoke-LabInSession {
                                 $cpu = if ($p -and $null -ne $p.CPU) { [int]$p.CPU } else { '?' }
                                 "$($_.Name)#$($_.ProcessId) s$($_.SessionId) $([int]($now - $_.CreationDate).TotalSeconds)s old cpu ${cpu}s$(if ($_.CommandLine -like "*$enc*") { ' (this task)' })"
                             }) -join ', ')
-                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' }); processes: $procs"
+                    # the task's own PowerShell, when it started: what its threads wait on and the last modules it
+                    # loaded - tells a start stuck in .NET or AMSI from code that waits (run 20261030-110319: lane 2's
+                    # Server, PSAdmin's RDP session, PowerShell started and used 1 s of CPU in 90 s)
+                    $inside = ''
+                    $mine = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$enc*" }) | Select-Object -First 1
+                    if ($mine) {
+                        $p = Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue
+                        if ($p) {
+                            $waits = (@($p.Threads | Group-Object { if ("$($_.ThreadState)" -eq 'Wait') { "Wait/$($_.WaitReason)" } else { "$($_.ThreadState)" } } |
+                                    ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+                            $mods = try { (@($p.Modules | Select-Object -Last 8 | ForEach-Object ModuleName) -join ',') } catch { 'n/a' }
+                            $inside = "; its PowerShell: threads $waits; last modules $mods"
+                        }
+                    }
+                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' })$inside; processes: $procs"
                 }
                 catch { "no task details: $($_.Exception.Message)" }
                 throw "no result from the session task after $timeout s (is $u signed in?) - $why"
@@ -2217,6 +2233,137 @@ function Copy-LabPerson {
         $f = "$d\RhPerson.ps1"
         if (-not (Test-Path $f) -or [IO.File]::ReadAllText($f) -ne $text) { [IO.File]::WriteAllText($f, $text) }
     }
+}
+
+# The lab's test app for app tabs (guest\RhLabApp.cs): compiled in the guest to C:\ProgramData\RemoteHubLab\RhLabApp.exe
+# (again only when the source changed). -StartMenu also puts the D-APP shortcuts in the common Start menu - one of each
+# kind the agent's list must take or skip (docs/app-tabs-design.md section 6.5). Returns the exe's path.
+function Install-LabTestApp {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [switch]$StartMenu)
+    $src = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\guest\RhLabApp.cs'))
+    # a plain string: the remoting result carries PSComputerName, which ConvertTo-Json would turn into an object
+    [string](Invoke-LabGuest -Name $Name -ArgumentList $src, $StartMenu.IsPresent -ScriptBlock {
+        param($text, $menu)
+        $d = 'C:\ProgramData\RemoteHubLab'
+        $null = New-Item -ItemType Directory -Path "$d\session" -Force
+        icacls "$d\session" /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+        $exe = "$d\RhLabApp.exe"
+        if (-not (Test-Path "$d\RhLabApp.cs") -or [IO.File]::ReadAllText("$d\RhLabApp.cs") -ne $text -or -not (Test-Path $exe)) {
+            Remove-Item $exe -Force -ErrorAction SilentlyContinue
+            Add-Type -TypeDefinition $text -OutputAssembly $exe -OutputType WindowsApplication -ReferencedAssemblies System.Windows.Forms, System.Drawing
+            [IO.File]::WriteAllText("$d\RhLabApp.cs", $text)
+        }
+        if ($menu) {
+            $programs = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
+            $shell = New-Object -ComObject WScript.Shell
+            function Link([string]$Path, [string]$Target, [string]$Arguments = '', [switch]$RunAs) {
+                $null = New-Item -ItemType Directory -Path (Split-Path $Path) -Force
+                $l = $shell.CreateShortcut($Path); $l.TargetPath = $Target; $l.Arguments = $Arguments; $l.WorkingDirectory = $d; $l.Save()
+                if ($RunAs) {
+                    # SLDF_RUNAS_USER (0x2000) in the shell link header's LinkFlags (offset 0x14): WScript.Shell can't set it
+                    $b = [IO.File]::ReadAllBytes($Path); $b[0x15] = $b[0x15] -bor 0x20; [IO.File]::WriteAllBytes($Path, $b)
+                }
+            }
+            Set-Content "$d\readme.txt" 'RH Lab document' -Encoding ASCII
+            Link "$programs\RH Lab App.lnk" $exe '/colour:255,0,0 /title:RH-Lab-App'
+            Link "$programs\RH Lab App Copy.lnk" $exe '/colour:255,0,0 /title:RH-Lab-App'                 # a duplicate: listed once
+            Link "$programs\RH Lab Admin.lnk" $exe '/colour:0,255,0 /title:RH-Lab-Admin' -RunAs          # Run as administrator
+            Link "$programs\RH Lab\RH Lab Tool.lnk" $exe '/colour:0,0,255 /title:RH-Lab-Tool'              # in a group
+            Link "$programs\RH Lab Doc.lnk" "$d\readme.txt"                                                # a document: skipped
+            Link "$programs\RH Lab Missing.lnk" "$d\missing.exe"                                           # no target: skipped
+            Set-Content "$programs\RH Lab Web.url" "[InternetShortcut]`r`nURL=https://example.invalid/" -Encoding ASCII  # skipped
+            # a junction in the Start menu: what is behind it must not be listed
+            $null = New-Item -ItemType Directory -Path "$d\junction-target" -Force
+            Link "$d\junction-target\RH Lab Behind Junction.lnk" $exe '/colour:255,255,0'
+            if (-not (Test-Path "$programs\RH Lab Junction")) { cmd /c mklink /J "$programs\RH Lab Junction" "$d\junction-target" | Out-Null }
+        }
+        $exe
+    })
+}
+
+# The test app's log (RhLabApp /log:<file>): one object per line - e (started, activated, text, closing, asked, closed),
+# at, and pid / elevated / title / text / answer where the event has them. Empty when there is no log yet.
+function Get-LabTestAppLog {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Path)
+    Invoke-LabGuest -Name $Name -ArgumentList $Path -ScriptBlock {
+        param($f) @(Get-Content $f -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+    }
+}
+
+# The account's session as Windows lays it out: monitors (device, bounds, primary, dpi - 96 at 100 %), the visible
+# top-level windows in z-order (pid, class, title, bounds, the monitor their centre is on), the foreground window, the
+# taskbars on other monitors (Shell_SecondaryTrayWnd), and the account's scale per monitor as Windows keeps it
+# (PerMonitorSettings: name=DpiValue). Bounds in pixels, as a per-monitor aware program sees them. -Pids narrows the
+# windows to those processes.
+function Get-LabScreenLayout {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int[]]$Pids = @())
+    Invoke-LabInSessionJson -Name $Name -Account $Account -Data @{ pids = @($Pids) } -Code @'
+if (-not ('RhLabLayout' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class RhLabLayout {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct MONITORINFOEX { public int Size; public RECT Monitor, Work; public uint Flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Device; }
+    public delegate bool MonitorProc(IntPtr m, IntPtr dc, ref RECT r, IntPtr data);
+    public delegate bool WindowProc(IntPtr h, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorProc proc, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFOEX info);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(WindowProc proc, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr m, int type, out uint x, out uint y);
+    // per-monitor aware (v2): pixels and each monitor's own dpi, not what Windows shows an unaware program
+    static void Aware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
+    public static List<object[]> Monitors() {
+        Aware();
+        var list = new List<object[]>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr m, IntPtr dc, ref RECT r, IntPtr d) {
+            var i = new MONITORINFOEX(); i.Size = Marshal.SizeOf(typeof(MONITORINFOEX)); GetMonitorInfo(m, ref i);
+            uint dx, dy; if (GetDpiForMonitor(m, 0 /* MDT_EFFECTIVE_DPI */, out dx, out dy) != 0) dx = 0;
+            list.Add(new object[] { i.Device, i.Monitor.L, i.Monitor.T, i.Monitor.R, i.Monitor.B, (i.Flags & 1) != 0, (int)dx }); return true; }, IntPtr.Zero);
+        return list;
+    }
+    public static List<object[]> Windows() {
+        Aware();
+        var list = new List<object[]>();
+        EnumWindows(delegate(IntPtr h, IntPtr d) {
+            if (!IsWindowVisible(h)) return true;
+            RECT r; GetWindowRect(h, out r); uint pid; GetWindowThreadProcessId(h, out pid);
+            var c = new StringBuilder(256); GetClassName(h, c, 256); var t = new StringBuilder(256); GetWindowText(h, t, 256);
+            list.Add(new object[] { h.ToInt64(), (int)pid, c.ToString(), t.ToString(), r.L, r.T, r.R, r.B, IsIconic(h), IsZoomed(h) }); return true; }, IntPtr.Zero);
+        return list;
+    }
+}
+"@
+}
+$monitors = @([RhLabLayout]::Monitors() | ForEach-Object { [pscustomobject]@{ device = $_[0]; left = $_[1]; top = $_[2]; right = $_[3]; bottom = $_[4]; primary = $_[5]; dpi = $_[6] } })
+function On($x, $y) { foreach ($m in $monitors) { if ($x -ge $m.left -and $x -lt $m.right -and $y -ge $m.top -and $y -lt $m.bottom) { return $m.device } }; '' }
+$pids = @($A.pids)
+$all = @([RhLabLayout]::Windows())
+$windows = @($all | Where-Object { $pids.Count -eq 0 -or $pids -contains $_[1] } | ForEach-Object {
+    [pscustomobject]@{ hwnd = $_[0]; pid = $_[1]; class = $_[2]; title = $_[3]; left = $_[4]; top = $_[5]; right = $_[6]; bottom = $_[7]
+        minimized = $_[8]; maximized = $_[9]; monitor = (On ([int](($_[4] + $_[6]) / 2)) ([int](($_[5] + $_[7]) / 2))) } })
+[pscustomobject]@{
+    monitors   = $monitors
+    windows    = $windows
+    foreground = [RhLabLayout]::GetForegroundWindow().ToInt64()
+    trays      = @($all | Where-Object { $_[2] -eq 'Shell_SecondaryTrayWnd' }).Count
+    perMonitor = @(Get-ChildItem 'HKCU:\Control Panel\Desktop\PerMonitorSettings' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.PSChildName)=$($_.GetValue('DpiValue'))" })
+}
+'@
 }
 
 # One person action through RhPerson -Do serve in the account's session (started when it isn't running): the script
