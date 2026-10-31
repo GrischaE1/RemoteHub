@@ -239,6 +239,8 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             $t.redLog = @(Get-LabTestAppLog -Name $VmName -Path (Log 'red'))
             $t.greenLog = @(Get-LabTestAppLog -Name $VmName -Path (Log 'green'))
             $t.markerKeys = @(Get-LabMarker -Name $VmName -Marker $marker | Where-Object e -eq 'char')
+            # a tab whose app didn't get the keyboard says so in the agent's log (and why)
+            $t.keyboard = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'didn''t get the keyboard' })
             # D-APP-05 and D-APP-06 in blue's tab
             Release $o 'resize'; Reached $o 'blue-resized'
             $t.resized = Get-LabScreenLayout -Name $VmName -Pids @($t.pids.blue)
@@ -283,7 +285,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
 
         It 'D-APP-04 typing in a tab reaches that tab''s app, after a click in another tab and with another window in front' -Tag 'D-APP-04' {
             Skip; if ($script:noApps) { return }
-            (@($t.greenLog | Where-Object e -eq 'text') | Select-Object -Last 1).text | Should -Be 'green'
+            (@($t.greenLog | Where-Object e -eq 'text') | Select-Object -Last 1).text | Should -Be 'green' -Because "green's app takes the typing (agent: $(if ($t.keyboard) { $t.keyboard -join '; ' } else { 'no keyboard refusal logged' }))"
             @($t.redLog | Where-Object e -eq 'text') | Should -BeNullOrEmpty -Because 'red''s app had the keyboard last, but the typing was in green''s tab'
             @($t.markerKeys) | Should -BeNullOrEmpty -Because 'the marker window had the keyboard before the tabs were used'
         }
@@ -378,6 +380,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             $sid = Invoke-LabInSessionJson -Name $VmName -Account Console -Code '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'
             $d.sid = $sid
             $d.during = Invoke-LabGuest -Name $VmName -ArgumentList $sid -ScriptBlock { param($s) (Get-ItemProperty "Registry::HKEY_USERS\$s\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name MMTaskbarEnabled -ErrorAction SilentlyContinue).MMTaskbarEnabled }
+            $killed = Get-LabGuestTime -Name $VmName
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHubAgent -ErrorAction SilentlyContinue | Stop-Process -Force }
             Release $o 'kill'
             $d.resume = Receive-LabDesktop $d.job
@@ -391,6 +394,8 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
                 $d.records = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\ProgramData\RemoteHub\Agent' -Filter '*taskbar*' -ErrorAction SilentlyContinue | ForEach-Object Name) }
                 if ($d.after -ne 0 -and @($d.records).Count -eq 0) { break }; Start-Sleep -Seconds 3
             } while ((Get-Date) -lt $until)
+            # the account is signed out at the service's start, so only the service's log says it was put back before that
+            $d.putBack = @(Get-LabAgentLog -Name $VmName -Since $killed | Where-Object { $_ -match 'taskbar on other monitors is back|taskbar setting an earlier helper changed' })
             Save 'drop' $d
         }
 
@@ -405,6 +410,7 @@ Describe 'D-APP <VmName>' -Tag Device, 'D-APP' {
             Skip; if ($script:noApps) { return }
             $d.during | Should -Be 0 -Because 'while an app tab is open the other monitors have no taskbar'
             $d.after | Should -Not -Be 0 -Because 'the restarted service (or the next helper) puts the account''s value back'
+            @($d.putBack) | Should -Match 'is back' -Because 'the service puts it back before it signs out the session the killed one left open'
             @($d.records) | Should -BeNullOrEmpty -Because 'no record is left once it is back'
         }
 

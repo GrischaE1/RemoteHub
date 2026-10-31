@@ -777,17 +777,19 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private bool AppTabInput(RemoteKeyOrMouse i)
     {
         if (i.Key is { } k && !_shellKeys.Pass(k)) return false;
-        if (_app is not { Job.Length: > 0 }) return false;
-        if (i.Key is { } key && (key.Flags & RemoteKeyFlags.Up) == 0 && _appFront is var front && front != IntPtr.Zero && AppTabWindows.Foreground() != front
-            && AppTabWindows.BringToFront(front))
+        if (_app is not { Job.Length: > 0 } app) return false;
+        if (i.Key is { } key && (key.Flags & RemoteKeyFlags.Up) == 0)
         {
-            // The switch reaches the window's thread a moment later: the key waits for it (at most 200 ms), so it isn't
-            // typed into the window that had the keyboard before.
-            var until = Environment.TickCount64 + 200;
-            while (AppTabWindows.Foreground() != front && Environment.TickCount64 < until) Thread.Sleep(10);
+            var refused = AppTabView.GiveKeyboard(_appFront, AppTabWindows.Foreground, AppTabWindows.BringToFront, () => Environment.TickCount64, () => Thread.Sleep(10));
+            // Said once until it works again: a lost key otherwise leaves no trace (lab D-APP-04).
+            if (refused is not null && !_keyboardRefusedLogged)
+                SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, $"app tab: {app.Name} didn't get the keyboard ({refused}) – typed into the window in front"));
+            _keyboardRefusedLogged = refused is not null;
         }
         return true;
     }
+
+    private bool _keyboardRefusedLogged;
 
     /// <summary>
     /// App tab, after each capture: what to fill on the tab's monitor (all of it before the app runs), the app's windows

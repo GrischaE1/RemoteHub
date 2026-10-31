@@ -27,6 +27,34 @@ public class AppTabViewTests
     }
 
     [Fact]
+    public void A_key_waits_until_the_tab_s_app_has_the_keyboard_and_says_why_when_it_doesn_t_get_it()
+    {
+        var app = (IntPtr)7;
+        var other = (IntPtr)9; // another tab's app, clicked last
+        long clock = 0;
+        string? Give(Func<IntPtr> foreground, Func<IntPtr, bool> bring) => A.AppTabView.GiveKeyboard(app, foreground, bring, () => clock, () => clock += 10);
+
+        // already in front: nothing is switched
+        var asked = 0;
+        Assert.Null(Give(() => app, _ => { asked++; return true; }));
+        Assert.Equal(0, asked);
+
+        // behind another tab's app: brought to the front, and the key waits until the switch arrives
+        var now = other;
+        Assert.Null(Give(() => { if (clock >= 50) now = app; return now; }, w => { asked++; return w == app; }));
+        Assert.Equal((1, app), (asked, now));
+
+        // Windows refuses, or the switch never arrives: the key isn't held longer than the wait, and the reason is given
+        Assert.Equal("Windows refused to switch to it", Give(() => other, _ => false));
+        clock = 0;
+        Assert.Equal("the switch didn't arrive within 200 ms", Give(() => other, _ => true));
+        Assert.InRange(clock, 200, 210);
+
+        // no window of the app yet: nothing to switch to
+        Assert.Null(A.AppTabView.GiveKeyboard(IntPtr.Zero, () => other, _ => throw new InvalidOperationException(), () => 0, () => { }));
+    }
+
+    [Fact]
     public void Only_the_app_s_visible_windows_are_shown_the_rest_of_the_monitor_is_filled()
     {
         var app = W(1, new(1124, 100, 1724, 500));

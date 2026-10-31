@@ -116,8 +116,25 @@ internal sealed partial class AppTabWindows : IDisposable
     /// <summary>The window that has the keyboard, and its top-level window.</summary>
     public static IntPtr Foreground() => GetAncestor(GetForegroundWindow(), 2 /* GA_ROOT */);
 
-    /// <summary>Gives the keyboard to <paramref name="window"/>: allowed because the helper sent the last input (§6.3).</summary>
-    public static bool BringToFront(IntPtr window) => SetForegroundWindow(window);
+    /// <summary>
+    /// Gives the keyboard to <paramref name="window"/> (§6.3). Windows lets only the process that sent the last input move
+    /// the foreground, and that may be another tab's helper – a click in red's tab, then typing in green's (lab D-APP-04,
+    /// where the keys then reached no app). So this helper sends input first: the pointer nudged a pixel and back, as
+    /// <see cref="WindowsScreen.WakeDisplay"/> does. Still refused, the call borrows the foreground window's input state.
+    /// </summary>
+    public static unsafe bool BringToFront(IntPtr window)
+    {
+        var nudge = stackalloc InputNative.INPUT[2];
+        nudge[0] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = 1, dwFlags = InputNative.MOVE, dwExtraInfo = InputNative.Tag } };
+        nudge[1] = new InputNative.INPUT { type = 0, mi = new InputNative.MOUSEINPUT { dx = -1, dwFlags = InputNative.MOVE, dwExtraInfo = InputNative.Tag } };
+        InputNative.SendInput(2, nudge, sizeof(InputNative.INPUT));
+        if (SetForegroundWindow(window)) return true;
+        var theirs = GetWindowThreadProcessId(GetForegroundWindow(), out _);
+        var mine = GetCurrentThreadId();
+        if (theirs == 0 || theirs == mine || !AttachThreadInput(mine, theirs, true)) return false;
+        try { return SetForegroundWindow(window); }
+        finally { AttachThreadInput(mine, theirs, false); }
+    }
 
     /// <summary>Asks the window to close, as its close button would.</summary>
     public static void Close(IntPtr window) => PostMessageW(window, 0x10 /* WM_CLOSE */, IntPtr.Zero, IntPtr.Zero);
@@ -177,5 +194,7 @@ internal sealed partial class AppTabWindows : IDisposable
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint attach, uint to, bool on);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr window, uint message, IntPtr w, IntPtr l);
 }

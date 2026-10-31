@@ -58,6 +58,15 @@ try
     // provider can be added to a running agent (RemoteHub's "Install credential provider" doesn't restart it).
     using var autoSignIn = AutoSignInBroker.Start(log);
     var desktop = DesktopServices.Windows(autoSignIn);
+    // What helpers that ended abruptly left changed in a user's hive is put back while that user is still signed in:
+    // the next step signs out the sessions automatic sign-in left open, and a hive that is unloaded keeps its record
+    // until the user is back (lab D-APP-13).
+    try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
+    catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
+    try { if (new AppTaskbar().RestoreLeftovers() is { } taskbar) log.Write(taskbar); } // the taskbar app tabs turned off
+    catch (Exception ex) { log.Write("App tabs: the taskbar setting an earlier helper changed could not be put back: " + ex.Message); }
+    try { if (new KeepRdpDrawing().RestoreLeftovers() is { } rdp) log.Write(rdp); } // the same for RDP windows' drawing
+    catch (Exception ex) { log.Write("RDP minimize setting an earlier helper changed could not be put back: " + ex.Message); }
     // Sessions automatic sign-in created that the last run left open: no connection has them any more (design §9.3).
     desktop.AutoSigned.Recover(log);
     // Streams through the RemoteHub Broker reach the same HTTPS endpoint as the network does.
@@ -72,12 +81,6 @@ try
     log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
-    try { if (new SasActions().RestoreLeftovers() is { } back) log.Write(back); } // a helper that ended without putting them back
-    catch (Exception ex) { log.Write("Ctrl+Alt+Del screen: actions an earlier helper hid could not be put back: " + ex.Message); }
-    try { if (new AppTaskbar().RestoreLeftovers() is { } taskbar) log.Write(taskbar); } // the taskbar app tabs turned off
-    catch (Exception ex) { log.Write("App tabs: the taskbar setting an earlier helper changed could not be put back: " + ex.Message); }
-    try { if (new KeepRdpDrawing().RestoreLeftovers() is { } rdp) log.Write(rdp); } // the same for RDP windows' drawing
-    catch (Exception ex) { log.Write("RDP minimize setting an earlier helper changed could not be put back: " + ex.Message); }
     // The virtual monitor is off until a connection needs it (a crash may have left it on) – in the background: the
     // service must report running within Windows' 30 s, whatever pnputil does.
     _ = VirtualDisplay.ResetInBackground(log.Write);
