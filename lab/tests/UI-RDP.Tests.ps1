@@ -768,7 +768,11 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Start-Sleep -Milliseconds 500
                 Send-LabKey -Name $VmName -Key Enter
                 $p.connected = Wait-RdpTab 60
-                $p.clip3 = InSession $VmName Console $code.clipInfo
+                # the tab's text shows on connect, a moment before the sign-in that clears the clipboard (the retry of
+                # run 20261030-194701 read it in between); waited for up to 10 s - the helper's own timer is 30 s
+                $cleared = Get-Date
+                $null = Wait-LabCondition -Until { $p.clip3 = InSession $VmName Console $code.clipInfo; -not $p.clip3.length } -Because 'the clipboard still held the password after the sign-in' -TimeoutSec 10 -IntervalMs 1000 -NoThrow
+                $p.clip3ClearedSec = [int]((Get-Date) - $cleared).TotalSeconds
                 Shot 'prompt-pasted'
             }
             Step $p audit {

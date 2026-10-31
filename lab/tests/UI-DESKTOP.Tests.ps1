@@ -396,7 +396,15 @@ public static class RhRes {
         $until = (Get-Date).AddSeconds($TimeoutSec)
         do {
             $r = try { Invoke-LabPerson -Name $dn -Do click -Text $Answer -TimeoutSec 20 } catch { [pscustomobject]@{ clicked = $false; error = "$_" } }
-            if ($r.PSObject.Properties['clicked'] -and $r.clicked) { return $r }
+            if ($r.PSObject.Properties['clicked'] -and $r.clicked) {
+                # a click reported but not taken (UI-AD-07, run 20261030-194701: the dialog ran out its time after it):
+                # the request window is clicked again while it is still there
+                $gone = Wait-LabCondition -NoThrow -TimeoutSec 5 -IntervalMs 1000 -Because 'the request window stayed after the click' -Until {
+                    $w = try { Invoke-LabPerson -Name $dn -Do windows -TimeoutSec 10 } catch { $null }
+                    -not @($w | Where-Object { $_ -and "$($_.Title)" -like '*Remote access request*' }).Count
+                }
+                if ($gone) { return $r }
+            }
             Start-Sleep -Seconds 2
         } while ((Get-Date) -lt $until)
         $r
@@ -414,6 +422,8 @@ public static class RhRes {
             if ($d.found) { return $d }
             $rows = @((Ui '*' -Title $Title -Value list -Optional -TimeoutSec 5).items)
             if (-not $rows.Count) { return $d }
+            # the confirmation before it has the same title: still asking means nothing is in progress to wait for
+            if (@($rows | Where-Object { $_ -match '(?s)^Text\|.*(Install|Remove|Uninstall) it\?' }).Count) { return $d }
             if (@($rows | Where-Object { $_ -match "^Text\|(Failed|Cancelled|The update didn.t install|The agent didn.t answer again|The device.s agent uses a certificate|Installed, but this PC can.t reach)" }).Count) { return $d }
         } while ((Get-Date) -lt $until)
         $d
@@ -425,7 +435,21 @@ public static class RhRes {
     function EditConnection([scriptblock]$Do) {
         Menu 'Edit*'
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
-        & $Do
+        # The window closed by itself halfway in run 20261030-194701 (UI-AG-04, UI-AG-08), with no error box: what
+        # RemoteHub logged, the session's windows and whether a crash was written go into the results to tell why.
+        try { & $Do }
+        catch {
+            if (-not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 2).found) {
+                $R['editorGone'] = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                        param($u)
+                        $d = "C:\Users\$u\AppData\Roaming\RemoteHub"
+                        Get-Content "$d\logs\remotehub.log" -Tail 30 -ErrorAction SilentlyContinue
+                        Get-ChildItem "$d\logs" -Filter '*crash*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | ForEach-Object { "crash file: $($_.Name) $($_.LastWriteTime)" }
+                    })
+                $R['editorGoneWindows'] = try { (Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'zz-no-such-window' -Text 'zz' -Value exists -TimeoutSec 1).windows -join ', ' } catch { "$_" }
+            }
+            throw
+        }
         $null = Ui 'Save' -Title 'Edit connection'
         $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the Edit connection window did not close after Save' -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found }
     }
@@ -1114,7 +1138,10 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = OpenChoose
                 $mark = NoticeMark
                 ConnectChosen -Consent 'Show them a code*'
-                $real = (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin
+                # once more when the person server took the request but never answered (run 20261030-194701: the whole
+                # process stuck; the agent's code window stays up 3 min, time for a second read)
+                $real = try { (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin }
+                catch { if ("$_" -notlike "*took the request but didn't answer*") { throw }; $R.pinRetried = $true; (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin }
                 $wrong = if ($real -eq '135792') { '246801' } else { '135792' }
                 $R.pinLeft = @()
                 foreach ($i in 1..3) {
@@ -1344,7 +1371,12 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
         BeforeAll {
             function Provider([string]$Header, [string]$Button) {
                 Menu "RemoteHub Agent>$Header"
-                $confirm = Message -Button $Button -TimeoutSec 60
+                # the confirmation by its question and button, in any window: Message's list took the first window with
+                # any element - Program Manager, before the question showed - and Install was never clicked (UI-AG-07,
+                # run 20261030-194701); and RemoteHub's message boxes aren't found under their title (run 20261031-075755)
+                $q = Ui "*$Button it?" -Title '?*' -Value exists -TimeoutSec 60 -Optional
+                $confirm = if ($q.found) { "$($q.name)" } else { '' }
+                $null = Ui $Button -Title '?*' -TimeoutSec 10
                 $done = WaitDone $Header
                 $rows = (Ui '*' -Title $Header -Value list -Optional).items
                 CloseProgress $Header

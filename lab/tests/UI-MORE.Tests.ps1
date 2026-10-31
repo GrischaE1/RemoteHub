@@ -616,7 +616,11 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     }
                     Shot 'cp15-progress'
                     $R.cp15Cancel = Ui 'Cancel' -TimeoutSec 10
-                    $R.cp15Notices = NoticesWhen $mark 'Cancelled'
+                    # the notice asked for directly as well: it lasts 6 s, and a pass of the text watcher over RemoteHub's
+                    # window can take 30 s while a tab is open (the retry of run 20261030-194701 missed it)
+                    $direct = Ui 'Cancelled*nothing was copied to the device*' -Value exists -Optional -TimeoutSec 8
+                    $R.cp15Notices = @(NoticesWhen $mark 'Cancelled' -TimeoutSec $(if ($direct.found) { 1 } else { 20 })) +
+                        @(if ($direct.found) { "direct|$($direct.name)" })
                     # nothing complete may arrive on the device in this time
                     Start-Sleep -Seconds 10
                     $R.cp15Arrived = @(Invoke-LabGuest -Name $dn -ScriptBlock { @(Get-ChildItem 'C:\Users\*\cp15' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Length)" }) })

@@ -45,8 +45,10 @@ BeforeAll {
     # (Reveal), clicked, and the menu tried once more; the retries are written down in the results.
     function MenuTry([string]$Entry, [string]$Node, [int]$TimeoutSec = 30) {
         $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        # (a menu of only a text box's entries is the search box's: missed as well - J-19 in run 20261030-194701)
         $none = $m.found -and $m.PSObject.Properties['error'] -and "$($m.error)" -like 'no menu entry*' -and
-            -not @(@($m.PSObject.Properties['entries'] | ForEach-Object { $_.Value }) | Where-Object { $_ }).Count
+            -not @(@($m.PSObject.Properties['entries'] | ForEach-Object { $_.Value }) |
+                Where-Object { $_ -and $_ -notin 'Copy', 'Cut', 'Paste', 'Select all', 'Select All', 'Undo', 'Redo' }).Count
         if ($none) {
             if (-not $R.Contains('menuRetries')) { $R.menuRetries = New-Object System.Collections.ArrayList }
             $v = Reveal $Node
@@ -755,9 +757,10 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Save 'tree' $t
         }
 
-        It 'J-15 inside a jump host''s frame its connections, folders and shares sit 12 px further in than a folder''s items' -Tag 'J-15' {
+        # (one step, like a folder's contents, since the guide lines replaced the frames - no extra 12 px)
+        It 'J-15 under a jump host its connections, folders and shares sit one step in, like a folder''s items' -Tag 'J-15' {
             foreach ($k in 'folder', 'behind', 'jfolder', 'jshare') { $t.indent[$k] | Should -Not -BeNullOrEmpty -Because $k }
-            foreach ($k in 'behind', 'jfolder', 'jshare') { ($t.indent[$k] - $t.indent.folder) | Should -BeIn 11, 12, 13 -Because "$k against a folder's item" }
+            foreach ($k in 'behind', 'jfolder', 'jshare') { [math]::Abs($t.indent[$k] - $t.indent.folder) | Should -BeLessOrEqual 1 -Because "$k against a folder's item: the same step" }
         }
 
         It 'J-16 route shown in the tree ("via JumpHost", its tooltip), the editor and the tooltip''s location' -Tag 'J-16' {

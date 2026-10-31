@@ -46,6 +46,36 @@ public static class RhNative
     // the like) ends the process; the handler first writes it there as a serveError, so the lab host reads why.
     public static string CrashOut;
     private static bool _watching;
+
+    // -Do serve: a deadline kept on a thread of its own. The server's PowerShell thread answers a stuck action itself at
+    // its deadline, but in run 20261031-075755 (UI-AD-07) and 20261030-194701 (UI-AD-06) no answer came at all - that
+    // thread was stuck too. Unless Done() is called first, this writes a serveError into -Out at -Seconds and ends the
+    // process, so the host gets its answer and its next request starts a new server.
+    private static System.Threading.ManualResetEvent _done;
+    public static void Deadline(string outPath, int seconds)
+    {
+        var done = new System.Threading.ManualResetEvent(false);
+        _done = done;
+        var t = new System.Threading.Thread(() =>
+        {
+            if (done.WaitOne(seconds * 1000)) return;
+            try
+            {
+                if (!File.Exists(outPath))
+                {
+                    var part = outPath + ".deadline.part";
+                    File.WriteAllText(part, "{\"serveError\":\"the person server didn't answer by its deadline of " + seconds +
+                        " s - its own thread was stuck as well\"}");
+                    File.Move(part, outPath);
+                }
+            }
+            catch { }
+            System.Diagnostics.Process.GetCurrentProcess().Kill();
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+    public static void Done() { var d = _done; if (d != null) d.Set(); }
     public static void WatchCrash()
     {
         if (_watching) return;
@@ -246,7 +276,29 @@ function Test-RhHung($p) {
 
 function Get-RhMid($el) {
     $r = $el.Current.BoundingRectangle
-    if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
+    # A tree or list row scrolled above or below its list still has a place on the screen for UI Automation, so its
+    # centre lands on whatever is there (the search box above the tree - J-19 in run 20261030-194701 got the text
+    # box's Copy/Cut/Paste menu). Such a row is scrolled into view first.
+    $outside = $false
+    if (-not $r.IsEmpty -and $r.Width -gt 0) {
+        try {
+            $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+            $p = $walker.GetParent($el)
+            $box = $null
+            for ($i = 0; $p -and $i -lt 12; $i++) {
+                $type = $p.Current.ControlType
+                if ($type -eq [Windows.Automation.ControlType]::Tree -or $type -eq [Windows.Automation.ControlType]::List -or
+                    $type -eq [Windows.Automation.ControlType]::DataGrid) { $box = $p.Current.BoundingRectangle; break }
+                $p = $walker.GetParent($p)
+            }
+            if ($box -and -not $box.IsEmpty) {
+                $midY = $r.Y + $r.Height / 2
+                $outside = $midY -lt $box.Top -or $midY -gt $box.Bottom
+            }
+        }
+        catch { }
+    }
+    if ($outside -or $r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
         $sp = $null
         # (the pause: the list lays itself out again after the scroll before the new place is read)
         if ($el.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch { } }
@@ -389,10 +441,13 @@ switch ($Do) {
                 foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
                 $limit = [Math]::Max(5, $a.TimeoutSec) + 50
                 [RhNative]::CrashOut = $req.out
+                # 10 s after the PowerShell thread's own deadline and its window check (15 s), 5 s before the host gives up
+                [RhNative]::Deadline($req.out, $limit + 25)
                 $h = $ps.BeginInvoke()
             }
             catch {
                 [RhNative]::CrashOut = $null
+                [RhNative]::Done()
                 $why = "the action couldn't start: $($_.Exception.Message)"
                 try { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $why } -Compress)) } catch { }
                 if ($worker) { try { $worker.Dispose() } catch { }; $worker = $null }
@@ -414,6 +469,7 @@ switch ($Do) {
                     [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $ex.Message } -Compress))
                 }
                 $ps.Dispose()
+                [RhNative]::Done()
             }
             else {
                 [RhNative]::CrashOut = $null
@@ -442,7 +498,12 @@ switch ($Do) {
         }
         Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
     }
-    'windows' { Out-Json @(Get-AgentWindows) }
+    # -Value <window class>: the visible top-level windows of that class (owned ones too), e.g. Windows' credential
+    # dialog, which UI Automation can miss (R-RDP-04, run 20261030-194701)
+    'windows' {
+        if ($Value) { Out-Json @([RhNative]::Windows($Value) | ForEach-Object { [pscustomobject]@{ Handle = $_[0]; Title = $_[1] } }) }
+        else { Out-Json @(Get-AgentWindows) }
+    }
     'read' {
         $r = Read-AgentWindow
         if (-not $r) { Out-Json @{ found = $false }; break }

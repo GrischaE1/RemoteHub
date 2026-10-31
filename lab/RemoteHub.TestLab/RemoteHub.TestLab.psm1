@@ -3845,6 +3845,10 @@ function Wait-LabCredentialDialog {
     $titles = 'Windows Security', 'Credential Dialog Xaml Host'
     $until = (Get-Date).AddSeconds($TimeoutSec)
     do {
+        # by window class first, as RemoteHub itself finds it: in run 20261030-194701 (R-RDP-04) the dialog was on the
+        # screen for the whole minute while neither UI Automation check below saw it
+        $c = try { Invoke-LabPerson -Name $Name -Account $Account -Do windows -Value 'Credential Dialog Xaml Host' -TimeoutSec 10 } catch { $null }
+        if (@($c | Where-Object { $_ -and $_.PSObject.Properties['Handle'] }).Count -gt 0) { return $true }
         $l = Invoke-LabUi -Name $Name -Account $Account -Text '*' -Value list -Optional -TimeoutSec 5
         $items = if ($l -and $l.PSObject.Properties['items']) { @($l.items) } else { @() }
         if (@($items | Where-Object { "$_" -match '^Window\|(Windows Security|Credential Dialog Xaml Host)\|' }).Count -gt 0) { return $true }

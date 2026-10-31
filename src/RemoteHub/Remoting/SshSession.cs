@@ -26,7 +26,17 @@ public sealed class SshShell : IDisposable
     private readonly PrivateKeyFile? _key;
     private readonly LocalForward? _forward;
 
-    public string ServerVersion => Client.ConnectionInfo.ServerVersion ?? "";
+    public string ServerVersion => Software(Client.ConnectionInfo.ServerVersion);
+
+    /// <summary>
+    /// The server's software from its identification string: "OpenSSH_for_Windows_9.5" from
+    /// "SSH-2.0-OpenSSH_for_Windows_9.5" – the protocol part says nothing to the user.
+    /// </summary>
+    internal static string Software(string? identification)
+    {
+        var v = identification ?? "";
+        return v.StartsWith("SSH-2.0-", StringComparison.Ordinal) ? v["SSH-2.0-".Length..] : v;
+    }
 
     /// <summary>
     /// Connects to <paramref name="entry"/> and opens a shell of <paramref name="columns"/> × <paramref name="rows"/>

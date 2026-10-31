@@ -7547,7 +7547,7 @@ P3 · How: PS H · Needs: Jump · Status: ✅ Automated – `J-JUMP.Tests.ps1`
 P3 · How: U · Needs: Jump · Status: ✅ Automated – `UI-JUMP.Tests.ps1`
 
 **Expected:**
-- inside a jump host's frame its connections, folders and shares sit 12 px further in than a folder's items
+- under a jump host its connections, folders and shares sit one step in beside its guide line, like a folder's items (no extra indent)
 
 #### J-16 · Route shown
 P2 · How: U · Needs: Jump · Status: ✅ Automated – `UI-JUMP.Tests.ps1`
