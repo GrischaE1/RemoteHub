@@ -117,7 +117,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         // sign-in is available to it too (app-tabs-design §4.1, §9).
         var appsRight = AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is null;
         if (VirtualDisplay.Installed && policy.DesktopApps) features = [.. features, DesktopFeatures.Apps];
-        if (autoSignInRight) features = [.. features, DesktopFeatures.AutoSignIn];
+        if (autoSignInRight) features = [.. features, DesktopFeatures.AutoSignIn, DesktopFeatures.AutoUnlock];
         // The device allows it by policy, yet it isn't offered: say why, so the log answers "where is the option?"
         else if (policy.NoUserBehavior == NoUserBehaviors.AutoSignIn && sessions.Any(s => s.Console && s.State == DesktopSessionState.SignIn))
             o.Log.Write($"Desktop: automatic sign-in not offered to {identity.Account}: {autoSignInWhyNot}");
@@ -171,8 +171,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 await Status(DesktopStatusState.Failed, reason, ct);
             }
 
-            // App tab: the account's own console session, or automatic sign-in when nobody is signed in (§4.1) – never
-            // someone else's. Its monitor is taken before anything starts, so a full device refuses at once.
+            // App tab: the account's own console session – unlocked first when it is locked – or automatic sign-in when
+            // nobody is signed in (§4.1) – never someone else's. Its monitor is taken before anything starts, so a full
+            // device refuses at once.
             if (start.App is { } app)
             {
                 if (AppTabs.Refusal(policy, control, autoSignInWhyNot, VirtualDisplay.Installed) is { } notHere)
@@ -195,7 +196,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         console = sessions.FirstOrDefault(s => s.Console);
                         continue;
                     }
-                    if (console is { State: DesktopSessionState.SignIn })
+                    if (console is { State: DesktopSessionState.SignIn } || OwnLocked(console))
                     {
                         var mine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                         if (AppSignIns.TryAdd(signer, mine)) _appSignIn = (signer, mine);
@@ -212,8 +213,9 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 start = start with
                 {
                     SessionId = console!.Id, Consent = DesktopConsent.None, ViewOnly = false, Monitor = 0,
-                    AutoSignIn = console.State == DesktopSessionState.SignIn,
-                    // The apps were started for these tabs: signed out at the end unless the policy or RemoteHub says otherwise (§12, Q1).
+                    AutoSignIn = console.State == DesktopSessionState.SignIn || OwnLocked(console),
+                    // The apps were started for these tabs: signed out at the end unless the policy or RemoteHub says otherwise
+                    // (§12, Q1). A session that was there before is only ever locked again (credential-provider-design §12.1).
                     AutoSignInEndAction = start.AutoSignInEndAction ?? AutoSignInEndActions.SignOut,
                 };
             }
@@ -670,19 +672,38 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         return SessionRefusal(session.Id) is { } state ? (state.Code, state.Message) : null;
     }
 
-    /// <summary>§6.2 checks 4–5: the console in the SignIn state, and no other session of this account.</summary>
+    /// <summary>
+    /// §6.2 checks 4–5 and §12.1: the console in the SignIn state and no session of this account in use (a disconnected
+    /// one is reconnected by the sign-in), or the console locked in this account's own session (unlocked).
+    /// </summary>
     private (string Code, string Message)? SessionRefusal(int sessionId)
     {
         var sessions = o.Desktop!.Sessions;
         if (sessions.ConsoleSessionId() != sessionId) return (AutoSignInFailure.SessionState, "Automatic sign-in works only on the device's console.");
         var list = sessions.List();
-        if (list.FirstOrDefault(s => s.Id == sessionId) is not { State: DesktopSessionState.SignIn })
-            return (AutoSignInFailure.SessionState, "Someone is signed in on the console now – automatic sign-in only works when nobody is.");
-        // On client Windows, signing in on the console would take over an RDP session of the same account.
-        if (list.Any(s => s.User.Length > 0 && string.Equals(sessions.UserSid(s.Id), identity.UserSid, StringComparison.OrdinalIgnoreCase)))
+        var console = list.FirstOrDefault(s => s.Id == sessionId);
+        if (OwnLocked(console)) return null;
+        if (console is not { State: DesktopSessionState.SignIn })
+            return (AutoSignInFailure.SessionState, "Someone is signed in on the console now – automatic sign-in only works when nobody is, or in your own locked session.");
+        // On client Windows, signing in on the console would take over an RDP session of the same account and disconnect
+        // whoever uses it. A disconnected one has nobody at it: the sign-in reconnects it to the console.
+        if (list.Any(s => s.User.Length > 0 && s.State != DesktopSessionState.Disconnected && string.Equals(sessions.UserSid(s.Id), identity.UserSid, StringComparison.OrdinalIgnoreCase)))
             return (AutoSignInFailure.ExistingSession, "This account already has a session on the device – connect to that session instead.");
         return null;
     }
+
+    /// <summary>
+    /// The session is locked and is this account's own – by SID only, never by name: it is unlocked with the account's
+    /// password (credential-provider-design §12.1).
+    /// </summary>
+    private bool OwnLocked(DesktopSessionInfo? s) =>
+        s is { State: DesktopSessionState.Locked } && identity.UserSid is { } mine
+        && string.Equals(o.Desktop?.Sessions.UserSid(s.Id), mine, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The account's disconnected sessions now: a sign-in on the console that lands in one of them reconnected it (§12.1).</summary>
+    private HashSet<int> OwnDisconnected() =>
+        [.. o.Desktop!.Sessions.List().Where(s => s.State == DesktopSessionState.Disconnected
+            && string.Equals(o.Desktop.Sessions.UserSid(s.Id), identity.UserSid, StringComparison.OrdinalIgnoreCase)).Select(s => s.Id)];
 
     private async Task RefuseAutoSignIn(string code, string message, CancellationToken ct)
     {
@@ -710,14 +731,19 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     /// <summary>
     /// SignInReady → the password from RemoteHub (30 s) → the provider signs the account in → the new session's user is
     /// checked against the account's SID. The picture follows the console into the new session (the main loop), where
-    /// the operator's own account is connected to without asking.
+    /// the operator's own account is connected to without asking. The account's own locked session on the console is
+    /// unlocked the same way (§12.1).
     /// </summary>
     private async Task AutoSignInAsync(int sessionId, string endAction, CancellationToken ct)
     {
         try
         {
+            // §12.1: the console locked in the account's own session is unlocked rather than signed in to; a sign-in that
+            // lands in one of the account's disconnected sessions reconnected it. Either way the session was there before.
+            var unlock = OwnLocked(o.Desktop!.Sessions.List().FirstOrDefault(s => s.Id == sessionId));
+            HashSet<int> reconnectable = [];
             _signInReady = true;
-            await Status(DesktopStatusState.SignInReady, $"Ready to sign in as {identity.Account}.", ct);
+            await Status(DesktopStatusState.SignInReady, $"Ready to {(unlock ? "unlock" : "sign in")} as {identity.Account}.", ct);
             ProtectedSecret secret;
             using (var wait = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
@@ -739,7 +765,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     await RefuseAutoSignIn(AutoSignInFailure.RateLimit, "Too many automatic sign-ins for this account – try again in 15 minutes, or sign in at the sign-in screen.", ct);
                     return;
                 }
-                await Status(DesktopStatusState.SigningIn, $"Signing in as {identity.Account}…", ct);
+                await Status(DesktopStatusState.SigningIn, $"{(unlock ? "Unlocking" : "Signing in")} as {identity.Account}…", ct);
                 // §9.1: the new session starts covered – every helper started in it gets the privacy screen after Begin.
                 var p = o.CurrentPolicy();
                 if (PrivacyScreenSupported && p.PrivacyScreen != PrivacyScreenLevel.Off)
@@ -752,6 +778,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 }
                 var slash = identity.Account.IndexOf('\\');
                 var (domain, user) = slash < 0 ? (Environment.MachineName, identity.Account) : (identity.Account[..slash], identity.Account[(slash + 1)..]);
+                if (!unlock) reconnectable = OwnDisconnected();
                 _autoSignInPending = true;
                 result = await o.Desktop!.AutoSignIn!.SignInAsync(new AutoSignInRequest(sessionId, domain, user, identity.UserSid!, secret,
                     () => RecheckAutoSignIn(sessionId), o.Desktop.SecureAttention), ct);
@@ -762,7 +789,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             var lost = !result.Ok && result.Unconfirmed;
             // Not cancelled with the connection: once the ticket has gone out, the outcome must be known even when nobody is connected.
             var (console, sid) = result.Ok || lost ? await ConsoleUser() : (null, null);
-            if (lost && string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase))
+            // An unlocked session had the account before as well: only the lock screen gone says Windows took it.
+            if (lost && string.Equals(sid, identity.UserSid, StringComparison.OrdinalIgnoreCase) && (!unlock || await Unlocked(console!.Value)))
             {
                 o.Log.Write($"Automatic sign-in: Windows' answer didn't arrive ({result.Code}), but console session {console} has the account – treated as signed in");
                 result = new AutoSignInResult(true, "", "Signed in.");
@@ -793,8 +821,12 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 _endRequested.TrySetResult();
                 return;
             }
-            o.Desktop.AutoSigned.Signed(console!.Value, sid!, identity.Account, endAction);
-            o.Log.Audit(AuditEvent.AutoSignInSucceeded, $"Automatic sign-in: {identity.Account} from {source} signed in to console session {console} " +
+            // §12.1: the work in a session that was there before isn't this connection's – it is locked again at the end, never signed out.
+            var existing = reconnectable.Contains(console!.Value) || unlock;
+            if (existing) endAction = AutoSignInEndActions.Lock;
+            o.Desktop.AutoSigned.Signed(console.Value, sid!, identity.Account, endAction, existing);
+            o.Log.Audit(AuditEvent.AutoSignInSucceeded, $"Automatic sign-in: {identity.Account} from {source} " +
+                (unlock ? $"unlocked console session {console} " : existing ? $"signed in to console session {console}, their disconnected session, reconnected " : $"signed in to console session {console} ") +
                 $"(when the connection ends: {(endAction == AutoSignInEndActions.SignOut ? "sign out" : "lock")}{(_screenByService ? ", privacy screen on" : ", no privacy screen on this device")}" +
                 $"{(lost ? "; Windows' answer was lost, the console session confirmed it" : "")})");
             // Hand the session to the connection's end – unless that has already run (the connection ended while the
@@ -812,7 +844,8 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                     _lost ? AutoSignInEndActions.SignOut : null);
                 return;
             }
-            await SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(DesktopStatusState.SignedIn, $"Signed in as {identity.Account}.", EndAction: endAction),
+            await SendWs(DesktopWire.Json(DesktopMessage.Status, new DesktopStatus(DesktopStatusState.SignedIn,
+                $"{(unlock ? "Unlocked" : existing ? "Signed in to your session" : "Signed in")} as {identity.Account}.", EndAction: endAction, Existing: existing),
                 DesktopJson.Default.DesktopStatus), ct);
         }
         catch (OperationCanceledException) { /* the connection ended */ }
@@ -840,6 +873,17 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
             if (sid is null) await Task.Delay(500);
         }
         return (console, sid);
+    }
+
+    /// <summary>Until the session's lock screen has gone (up to 30 s, like <see cref="ConsoleUser"/>): Windows unlocked it.</summary>
+    private async Task<bool> Unlocked(int session)
+    {
+        for (var i = 0; i < ConsoleUserPolls; i++)
+        {
+            if (o.Desktop!.Sessions.List().FirstOrDefault(s => s.Id == session) is { State: DesktopSessionState.Active }) return true;
+            await Task.Delay(500);
+        }
+        return false;
     }
 
     /// <summary>Right before the ticket goes out (§6.2): the policy and right still allow it, and the console is still waiting.</summary>
@@ -891,15 +935,16 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
     private string DeviceName => o.Config.DeviceLabel.Length > 0 ? o.Config.DeviceLabel : Environment.MachineName;
 
     /// <summary>
-    /// App tab (§4.1): why the console session can't take it, or null – the account's own unlocked session, or nobody
-    /// signed in (then automatic sign-in makes the session). Someone else's session is never used.
+    /// App tab (§4.1): why the console session can't take it, or null – the account's own session (automatic sign-in
+    /// unlocks it when it is locked), or nobody signed in (automatic sign-in makes the session or reconnects the account's
+    /// disconnected one). Someone else's session is never used.
     /// </summary>
     private string? AppSessionRefusal(DesktopSessionInfo? console) => console switch
     {
         null => "This device has no console session at the moment.",
         { State: DesktopSessionState.SignIn } => null,
         { State: DesktopSessionState.Active } when IsSelfSession(console) => null,
-        { State: DesktopSessionState.Locked } when IsSelfSession(console) => $"Your session on {DeviceName} is locked – unlock it in a desktop tab first.",
+        _ when OwnLocked(console) => null,
         _ when IsSelfSession(console) => $"Your session on {DeviceName} has no screen at the moment – connect to it in a desktop tab first.",
         _ => $"{console.User} is signed in on {DeviceName} – app tabs need your own session.",
     };

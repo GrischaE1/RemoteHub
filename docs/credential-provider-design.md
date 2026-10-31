@@ -35,7 +35,7 @@ Each rule below is there to keep that true. Every design choice is judged agains
 
 ## 2. Non-goals (v1)
 
-- **Unlocking a locked session.** Only `CPUS_LOGON` is supported, not `CPUS_UNLOCK_WORKSTATION`. Unlocking could come later in phase 2 (§12), and only for the session of the same account.
+- **Unlocking someone else's session.** Since 0.22 the account's *own* locked session is unlocked (`CPUS_UNLOCK_WORKSTATION`) and its own disconnected session reconnected (§12.1); nobody else's.
 - **Signing in as a different account** from the one that authenticated the agent connection.
 - **RDP sessions' sign-in screens and Remote Desktop Services servers.** Only the physical console session is supported. The provider is still loaded into every `LogonUI.exe`, so it must stay inert outside the console session (§7.2, §8.2).
 - **Storing anything on the device:**
@@ -156,8 +156,9 @@ Checks 1–3 also decide Hello's `DesktopRights.AutoSignIn` (`AutoSignInRefusal`
    - its state is **`SignIn`**: no user, `LogonUI` running in it;
    - it's not `Locked` or `Disconnected`, and no user is signed in on the console.
    - Use the agent's existing session detection (`DesktopServices`, the `LogonUI` check since 0.15.11). On Windows 11 and Server 2025 the "Press Ctrl+Alt+Delete" screen runs on the **Default** desktop, not Winlogon's, so the desktop name alone isn't a reliable signal.
-   - Texts: "Automatic sign-in works only on the device's console." / "Someone is signed in on the console now – automatic sign-in only works when nobody is." (`sessionState`).
-5. The authenticated account has **no other session on the device** (`WTSEnumerateSessions`, compared by SID). On client Windows, signing in on the console would take over an existing RDP session of that account and disconnect the person using it. → Refused with "This account already has a session on the device – connect to that session instead." (`existingSession`).
+   - Or, since 0.22, the console is **locked in the account's own session** (by SID): it is unlocked instead (§12.1).
+   - Texts: "Automatic sign-in works only on the device's console." / "Someone is signed in on the console now – automatic sign-in only works when nobody is, or in your own locked session." (`sessionState`).
+5. The authenticated account has **no other session in use on the device** (`WTSEnumerateSessions`, compared by SID). On client Windows, signing in on the console would take over an existing RDP session of that account and disconnect the person using it. → Refused with "This account already has a session on the device – connect to that session instead." (`existingSession`). A *disconnected* session of the account has nobody at it: the sign-in reconnects it to the console (§12.1).
 6. Only one sign-in at a time per device (§7.3). A second one while one is running → "Another automatic sign-in is running on this device." (`busy`).
 7. At most one attempt per desktop connection (a second `SignInRequest` is a protocol error and ends the connection). At most 3 attempts per account per 15 minutes, counted when the password arrives: the 4th → "Too many automatic sign-ins for this account – try again in 15 minutes, or sign in at the sign-in screen." (`rateLimit`). This protects against account lockout when the stored password is out of date.
    - The counter is a **new, small class** (`AutoSignInGate`), keyed by the account SID, not by source address, for the whole device (in memory: a service restart resets it). The existing `SignInGate` (`AgentHost.cs`) counts failures and parallel attempts per source address for the Basic sign-in. Through a jump host every operator has the jump host's address as their source, so a per-source limit would let one operator's bad password block everyone else.
@@ -274,7 +275,8 @@ SignInRequest(pw) ─────────▶ checks 6.2 (7–8); ticket = {S
 
 - **`SetUsageScenario`:**
   - `CPUS_LOGON` → active, but only in the console session (§7.2). In any other session it behaves as if no ticket is ever pending.
-  - every other scenario (`CPUS_UNLOCK_WORKSTATION`, `CPUS_CREDUI`, `CPUS_CHANGE_PASSWORD`, `CPUS_PLAP`) → `E_NOTIMPL`. The provider then never loads in user processes through CredUI.
+  - `CPUS_UNLOCK_WORKSTATION` → the same, since 0.22: the lock screen of the account's own session (§12.1). The ticket is packed as `KerbWorkstationUnlockLogon` there, and the tile says "Unlocking *DOMAIN\user*…".
+  - every other scenario (`CPUS_CREDUI`, `CPUS_CHANGE_PASSWORD`, `CPUS_PLAP`) → `E_NOTIMPL` (`TakesScenario`, `Logon.h`). The provider then never loads in user processes through CredUI.
 - **With no ticket pending, `GetCredentialCount` returns 0.** No tile, no fields, nothing shown, and every other provider works as before. A person at the device can't do anything with it.
 - **With a ticket pending:**
   - one tile, labelled "RemoteHub", with the status text "Signing in *DOMAIN\user*…";
@@ -466,7 +468,7 @@ Privacy mode (0.18.3) provides what v2 had to leave out: an overlay on the devic
 
 | ID | Event | Level | Text |
 |---|---|---|---|
-| 1106 | `AutoSignInSucceeded` | Information | Automatic sign-in: *account* from *source* signed in to console session *n* (when the connection ends: lock / sign out, privacy screen on / no privacy screen on this device) |
+| 1106 | `AutoSignInSucceeded` | Information | Automatic sign-in: *account* from *source* signed in to console session *n* – or "unlocked console session *n*", "signed in to console session *n*, their disconnected session, reconnected" (§12.1) – (when the connection ends: lock / sign out, privacy screen on / no privacy screen on this device) |
 | 1107 | `AutoSignInEnded` | Information | Automatic sign-in session *n* of *account* locked / signed out / couldn't be locked / couldn't be signed out (*reason*: "closed by RemoteHub", idle, "connection lost and not continued in time", "the screen cover ended after the connection dropped", "connection lost, nothing to cover the screen", "the agent restarted while it was open"). "Locked" on Server too (§9.2). |
 | 2104 | `AutoSignInRefused` | Warning | Automatic sign-in refused: *account* from *source* – *message* (*code*): every refusal of §6.2 and the broker's failures (`notAllowed`, `unavailable`, `sessionState`, `existingSession`, `busy`, `rateLimit`, `timeout`, `noProvider`, `sessionChanged`) |
 | 2105 | `AutoSignInFailed` | Warning | Automatic sign-in failed: *account* from *source* – Windows reported 0x*status* (0x*substatus*): *text* (§6.1) |
@@ -479,12 +481,26 @@ A foreign pipe client is refused and only logged (§7.1). The service's own priv
 
 **Windows:** Security log 4624 with **logon type 2** (interactive) on the device, plus 4648 where applicable. README note for SIEM: an interactive logon of an admin account on a client device means automatic sign-in when a 1106 event comes right before it.
 
-## 12. Phase 2 (not in v1, design kept open)
+## 12. Phase 2
 
-- **Unlock the operator's own locked session** (`CPUS_UNLOCK_WORKSTATION`). Only if the locked session's user SID equals the authenticated SID, under the same right, policy and ticket. Also needs the "end action = lock again" rule.
-- **RBAC server:** issues `AutoSignIn` in its signed rights token instead of the Windows groups (agent-desktop-draft §4.1).
+- **The account's own session, unlocked or reconnected** – done in 0.22, §12.1.
+- **RBAC server:** issues `AutoSignIn` in its signed rights token instead of the Windows groups (agent-desktop-draft §4.1). Not done.
 
 (Privacy mode, phase 2 in v2, is done and used in §9.1.)
+
+### 12.1 The account's own session: unlocked or reconnected (0.22)
+
+An admin's own session on the console is often locked – they locked it, or Windows did after a while – or disconnected: the end action Lock (§9.2) leaves it that way, on client Windows and Server alike. Automatic sign-in continues it instead of refusing:
+
+- **Locked on the console.** The console session is `Locked` and its user's SID is the authenticated account's – by SID only, never by name, since it is unlocked with that account's password. The same request, rights, policy, rate limit and ticket as a sign-in (§6.2); the checks run again at `Claim`. The provider takes `CPUS_UNLOCK_WORKSTATION` as well as `CPUS_LOGON` and packs the ticket as `KerbWorkstationUnlockLogon` there (§8.2). The pipe, the wire format and the peer checks are unchanged: LogonUI on the lock screen runs in the console session, which is the ticket's session. Statuses: "Ready to unlock as …", "Unlocking as …", "Unlocked as …".
+- **Disconnected.** The console shows the sign-in screen and the account's session is disconnected – nobody uses it. Check 5 (§6.2) refuses only a session of the account that is in use; signing in on the console reconnects a disconnected one, as Windows does for that account. A sign-in that lands in one of the account's disconnected sessions (listed before the ticket goes out) counts as reconnected: "Signed in to your session as …". On a Server that allows several sessions per user, Windows makes a new session instead, which is an ordinary automatic sign-in.
+- **Never signed out.** The work in these sessions isn't this connection's. Their end action is **Lock**, whatever RemoteHub or the policy `AutoSignInEndAction` says; a dropped connection's 2 minutes (§9.2) end with a lock, not a sign-out; a record left by a crash (`autosignin.json`, `Existing`) is locked at the next start. `SignedIn` says so (`DesktopStatus.Existing`, end action Lock), so RemoteHub doesn't ask "Sign out on the device?".
+- **Covered as after a sign-in** (§9.1): the privacy screen with the device's input blocked from the moment the password arrives. The helper starts again on the unlocked desktop and continues without asking (the admin's own account).
+- **Confirmed** as a sign-in is (§6.3). An unlocked session belonged to the account before as well, so when Windows' answer is lost it counts only once its lock screen has gone (up to 30 s).
+- **RemoteHub** offers *Unlock automatically as …* in the start panel for the console session when it is locked under the account's name and the agent reports the feature `autoUnlock`; app tabs ask for it as for a sign-in (app-tabs-design §4.1). The connection's setting *Sign in automatically when nobody is signed in* covers both. Audit: 1106 "… unlocked console session *n* …" / "… signed in to console session *n*, their disconnected session, reconnected …"; RemoteHub's audit log "Unlocked automatically on the console (the account's own session)".
+- **Still refused:** a session of the account in use elsewhere (an RDP session someone works in, `existingSession`), and anyone else's locked session (`sessionState`).
+
+Lab: C-UNLOCK-01 to C-UNLOCK-05 ([test-lab-cases.md](test-lab-cases.md) §9.12).
 
 ## 13. Implementation checklist
 

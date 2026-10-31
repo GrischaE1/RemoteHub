@@ -295,7 +295,7 @@ namespace rhcp
         return has;
     }
 
-    HRESULT Channel::TakeSerialization(BYTE** serialization, ULONG* serializationBytes)
+    HRESULT Channel::TakeSerialization(bool unlock, BYTE** serialization, ULONG* serializationBytes)
     {
         AcquireSRWLockExclusive(&_s->Lock);
         HRESULT hr = E_UNEXPECTED;
@@ -304,7 +304,7 @@ namespace rhcp
             _s->Taken = true; // single use, whatever happens next
             if (CryptUnprotectMemory(_s->Password, static_cast<DWORD>(_s->PasswordBytes), CRYPTPROTECTMEMORY_SAME_PROCESS))
                 hr = PackInteractiveLogon(_s->Domain.c_str(), _s->Domain.size(), _s->User.c_str(), _s->User.size(),
-                    _s->Password, _s->PasswordChars, serialization, serializationBytes);
+                    _s->Password, _s->PasswordChars, unlock, serialization, serializationBytes);
             else
                 hr = HRESULT_FROM_WIN32(GetLastError());
             _s->FreePassword(); // zeroes the clear text before the pages go

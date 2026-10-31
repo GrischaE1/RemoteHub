@@ -8,6 +8,8 @@ namespace RemoteHub.Agent;
 /// ends on purpose, the 2 minutes after a dropped connection – the helper and its privacy screen stay, then the session
 /// is signed out – and crash safety: they are recorded in autosignin.json, and whatever is left there when the service
 /// starts is dealt with. Every action checks first that the session still belongs to the account (by SID).
+/// A session that was there before – the account's own, unlocked or reconnected (§12.1) – is never signed out: the work
+/// in it isn't this connection's. Wherever a made session would be signed out, it is locked.
 /// </summary>
 public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateFile = null)
 {
@@ -27,11 +29,15 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
     private readonly Dictionary<int, Parked> _parked = new();
 
     /// <summary>The sign-in was confirmed: from now on the session has its end action.</summary>
-    public void Signed(int session, string sid, string account, string endAction)
+    /// <param name="existing">The account's session was there before (unlocked or reconnected): locked at the end, whatever <paramref name="endAction"/> says.</param>
+    public void Signed(int session, string sid, string account, string endAction, bool existing = false)
     {
-        lock (_lock) _records[session] = new AutoSignInRecord(session, sid, account, endAction, false);
+        lock (_lock) _records[session] = new AutoSignInRecord(session, sid, account, existing ? AutoSignInEndActions.Lock : endAction, false, existing);
         Save();
     }
+
+    /// <summary>What a sign-out becomes for this session: a lock when it was there before.</summary>
+    private static string Safe(AutoSignInRecord r, string action) => r.Existing ? AutoSignInEndActions.Lock : action;
 
     /// <summary>
     /// The connection ended on purpose: the end action (lock or sign out). Returns what was done, for the audit, or null
@@ -45,7 +51,7 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
         if (r is null) return null;
         // The record goes only once the session is secured: a crash before, or a lock / sign-out Windows refused, leaves it
         // for Recover at the next start.
-        action ??= r.EndAction;
+        action = Safe(r, action ?? r.EndAction);
         var (done, secured) = Act(r, action, log, why);
         if (!secured && action == AutoSignInEndActions.SignOut) (done, secured) = Act(r, AutoSignInEndActions.Lock, log, why + "; sign-out refused");
         if (secured) Forget(session, r);
@@ -61,8 +67,9 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
 
     /// <summary>
     /// The connection dropped: <paramref name="helper"/> keeps covering the screen (privacy screen, local input blocked)
-    /// for <see cref="HoldAfterDrop"/> while RemoteHub may continue; then the session is signed out. If the helper ends
-    /// sooner – a crash, Disconnect on the device's banner – the session is signed out at once, unless it was locked.
+    /// for <see cref="HoldAfterDrop"/> while RemoteHub may continue; then the session is signed out (locked, if it was
+    /// there before). If the helper ends sooner – a crash, Disconnect on the device's banner – that happens at once,
+    /// unless the session was locked.
     /// </summary>
     public void Dropped(int session, IDesktopHelper helper, AgentLog log)
     {
@@ -75,7 +82,9 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
             _parked[session] = parked;
         }
         Save();
-        log.Write($"Automatic sign-in: the connection to session {session} dropped – the screen stays covered for {HoldAfterDrop.TotalSeconds:0} s, then the session is signed out");
+        var signOut = Safe(parked.Entry, AutoSignInEndActions.SignOut) == AutoSignInEndActions.SignOut;
+        log.Write($"Automatic sign-in: the connection to session {session} dropped – the screen stays covered for {HoldAfterDrop.TotalSeconds:0} s, " +
+            $"then the session is {(signOut ? "signed out" : "locked (it was there before)")}");
         var helperEnded = Drain(helper);
         _ = Task.Run(async () =>
         {
@@ -87,15 +96,15 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
             if (parked.Timer.IsCancellationRequested) return;
             if (!Unpark(session, parked)) return;
             var why = first == helperEnded ? "the screen cover ended after the connection dropped" : "connection lost and not continued in time";
-            // The cover stays until Windows has ended the session (sign-out runs asynchronously) or, if it refused, locked it.
-            var (_, secured) = Act(parked.Entry, AutoSignInEndActions.SignOut, log, why);
-            if (secured) await Ended(parked.Entry);
-            else
+            // The cover stays until Windows has ended the session (sign-out runs asynchronously) or locked it.
+            var (_, secured) = Act(parked.Entry, signOut ? AutoSignInEndActions.SignOut : AutoSignInEndActions.Lock, log, why);
+            if (secured && signOut) await Ended(parked.Entry);
+            else if (!secured)
             {
-                var (_, locked) = Act(parked.Entry, AutoSignInEndActions.Lock, log, why + "; sign-out refused");
+                var (_, locked) = signOut ? Act(parked.Entry, AutoSignInEndActions.Lock, log, why + "; sign-out refused") : (null, false);
                 if (!locked)
                 {
-                    log.Write($"Automatic sign-in: session {session} could be neither signed out nor locked – the screen stays covered, the next agent start tries again");
+                    log.Write($"Automatic sign-in: session {session} could {(signOut ? "be neither signed out nor locked" : "not be locked")} – the screen stays covered, the next agent start tries again");
                     return; // the helper keeps covering; the record stays for Recover
                 }
             }
@@ -152,8 +161,9 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
         var failed = new List<AutoSignInRecord>();
         foreach (var r in left)
         {
-            var (_, secured) = Act(r, r.Dropped ? AutoSignInEndActions.SignOut : r.EndAction, log, "the agent restarted while it was open");
-            if (!secured && r.Dropped) (_, secured) = Act(r, AutoSignInEndActions.Lock, log, "the agent restarted while it was open; sign-out refused");
+            var action = Safe(r, r.Dropped ? AutoSignInEndActions.SignOut : r.EndAction);
+            var (_, secured) = Act(r, action, log, "the agent restarted while it was open");
+            if (!secured && action == AutoSignInEndActions.SignOut) (_, secured) = Act(r, AutoSignInEndActions.Lock, log, "the agent restarted while it was open; sign-out refused");
             if (!secured) failed.Add(r);
         }
         lock (_lock) foreach (var r in failed) _records[r.Session] = r;
@@ -227,8 +237,8 @@ public sealed class AutoSignInSessions(IDesktopSessions sessions, string? stateF
     }
 }
 
-/// <summary>A session automatic sign-in created, as autosignin.json records it (no secrets).</summary>
-internal sealed record AutoSignInRecord(int Session, string Sid, string Account, string EndAction, bool Dropped);
+/// <summary>A session automatic sign-in created – or unlocked or reconnected (Existing) – as autosignin.json records it (no secrets).</summary>
+internal sealed record AutoSignInRecord(int Session, string Sid, string Account, string EndAction, bool Dropped, bool Existing = false);
 
 [JsonSerializable(typeof(List<AutoSignInRecord>))]
 internal partial class AutoSignInJson : JsonSerializerContext;

@@ -45,6 +45,10 @@ namespace rhcp
         // ICredentialProviderCredential2
         IFACEMETHODIMP GetUserSid(PWSTR* sid) override;
 
+        // The provider's scenario: the lock screen (an unlock) or the sign-in screen. Set by SetUsageScenario, which
+        // LogonUI calls on the thread that calls the tile.
+        void SetUnlock(bool unlock) { _unlock = unlock; }
+
     private:
         ~Credential();
 
@@ -52,6 +56,7 @@ namespace rhcp
         std::shared_ptr<Channel> _channel;
         const long _id;
         bool _failed = false;
+        bool _unlock = false;
     };
 
     // CoTaskMemAlloc'd copy (LogonUI frees what providers return).

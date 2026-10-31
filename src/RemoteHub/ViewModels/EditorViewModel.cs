@@ -381,7 +381,8 @@ public sealed partial class EditorViewModel : ObservableObject
         PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
             (o, v) => o.AgentAutoSignIn = (bool?)v,
             "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
-            "credentials. The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
+            "credentials. Your own session on the device is unlocked the same way when it is locked, and locked again when you disconnect. " +
+            "The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
             "policy) and have the credential provider installed (right-click → Install credential provider). Anyone at the device can see the " +
             "session while you work.", autoSignInOff));
         PsRows.Add(Row("When an automatic sign-in's connection ends", own.AgentAutoSignInEndAction, parent.AgentAutoSignInEndAction,
