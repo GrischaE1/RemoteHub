@@ -1323,6 +1323,14 @@
       </elements>
     </policy>
 
+    <policy name="Agent_ListenEnabled" class="Machine" displayName="$(string.Agent_ListenEnabled)" explainText="$(string.Agent_ListenEnabled_Help)"
+            key="Software\Policies\RemoteHub\Agent" valueName="ListenEnabled">
+      <parentCategory ref="Agent_Service" />
+      <supportedOn ref="SUPPORTED_Agent_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+
     <policy name="Agent_LogRetentionDays" class="Machine" displayName="$(string.Agent_LogRetentionDays)" explainText="$(string.Agent_LogRetentionDays_Help)"
             presentation="$(presentation.Agent_LogRetentionDays)" key="Software\Policies\RemoteHub\Agent">
       <parentCategory ref="Agent_Service" />
