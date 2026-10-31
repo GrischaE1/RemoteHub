@@ -56,7 +56,7 @@ The agent looks at the console session:
 | Console | App tab |
 |---|---|
 | The admin's own session (same account by SID), unlocked | Used, no question (the existing rule for one's own session, agent-desktop-draft §4.2 step 4) |
-| The admin's own session, locked | Refused for now: "Your session on FS01 is locked – unlock it in a desktop tab first". Unlocking through the credential provider is planned (credential-provider-design §12); then it unlocks the way automatic sign-in signs in. |
+| The admin's own session, locked | **Unlocked** through the credential provider the way automatic sign-in signs in (credential-provider-design §12.1), then used. A session that was there before is locked again when the last app tab ends – never signed out. The same for the admin's own disconnected session: the sign-in reconnects it. |
 | Nobody signed in | **Automatic sign-in** with the connection's credentials (the `AutoSignIn` right, the device's policy and the credential provider, as today). Without them the device offers no app tabs at all (§8.1), whoever is signed in. |
 | Someone else | Refused: "CONTOSO\jane is signed in on FS01 – app tabs need your own session". RemoteHub offers the desktop tab (with consent) or RDP instead. |
 
@@ -73,7 +73,7 @@ While any app tab is open, the physical monitors are covered by the privacy scre
 | The app closes (its last window and its processes are gone) | The tab shows "Event Viewer was closed" with [Start again] and [Close tab]. The connection stays until one is chosen. |
 | The admin closes the tab | The agent asks the app to close (`WM_CLOSE` to its top-level windows). If it shows a dialog ("Save changes?"), the tab stays open and shows it, with the heading "Closing…" and a [Leave it running] button. Closed or left: the tab goes, and its monitor becomes a spare (§5). The helper moves an app that was left running to the primary monitor. |
 | The connection drops | Resume as today (agent-desktop-draft §4.6): the app keeps running, and the monitor stays the tab's for the resume window (2 minutes), then becomes a spare. |
-| The last app tab ends | In a session automatic sign-in created: the end action – **SignOut** by default for app sessions (§12, Q1); `AutoSignInEndAction` from the policy wins. In a session that existed before: nothing, except the privacy screen comes down. |
+| The last app tab ends | In a session automatic sign-in created: the end action – **SignOut** by default for app sessions (§12, Q1); `AutoSignInEndAction` from the policy wins. In a session that existed before: nothing, except the privacy screen comes down – unless automatic sign-in unlocked or reconnected it for these tabs: then it is locked again (credential-provider-design §12.1). |
 
 ## 5. Virtual monitors
 

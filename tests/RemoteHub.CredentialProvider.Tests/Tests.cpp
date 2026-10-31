@@ -177,7 +177,7 @@ namespace
         const wchar_t domain[] = L"CONTOSO", user[] = L"admin", password[] = L"secret";
         BYTE* buffer = nullptr;
         ULONG bytes = 0;
-        CHECK(SUCCEEDED(PackInteractiveLogon(domain, 7, user, 5, password, 6, &buffer, &bytes)));
+        CHECK(SUCCEEDED(PackInteractiveLogon(domain, 7, user, 5, password, 6, false, &buffer, &bytes)));
         CHECK(bytes == sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + (7 + 5 + 6) * sizeof(wchar_t));
         if (buffer == nullptr) return;
 
@@ -195,11 +195,33 @@ namespace
         CHECK(logon->Logon.Password.MaximumLength == logon->Logon.Password.Length);
         CoTaskMemFree(buffer);
 
+        // On the lock screen the same account and password, packed as an unlock.
+        CHECK(SUCCEEDED(PackInteractiveLogon(domain, 7, user, 5, password, 6, true, &buffer, &bytes)));
+        if (buffer != nullptr)
+        {
+            const auto* unlock = reinterpret_cast<const KERB_INTERACTIVE_UNLOCK_LOGON*>(buffer);
+            CHECK(unlock->Logon.MessageType == KerbWorkstationUnlockLogon);
+            CHECK(text(unlock->Logon.UserName) == L"admin" && text(unlock->Logon.Password) == L"secret");
+            CoTaskMemFree(buffer);
+        }
+
         // A local account may come without a domain; a user name and the pointers are required.
-        CHECK(SUCCEEDED(PackInteractiveLogon(nullptr, 0, user, 5, password, 6, &buffer, &bytes)));
+        CHECK(SUCCEEDED(PackInteractiveLogon(nullptr, 0, user, 5, password, 6, false, &buffer, &bytes)));
         CoTaskMemFree(buffer);
-        CHECK(PackInteractiveLogon(domain, 7, user, 0, password, 6, &buffer, &bytes) == E_INVALIDARG && buffer == nullptr);
-        CHECK(PackInteractiveLogon(domain, 7, user, 5, password, 6, nullptr, &bytes) == E_POINTER);
+        CHECK(PackInteractiveLogon(domain, 7, user, 0, password, 6, false, &buffer, &bytes) == E_INVALIDARG && buffer == nullptr);
+        CHECK(PackInteractiveLogon(domain, 7, user, 5, password, 6, false, nullptr, &bytes) == E_POINTER);
+    }
+
+    // §8.2, §12.1: the sign-in and lock screens only – never CredUI, a password change or PLAP.
+    void TakesOnlySignInAndLockScreens()
+    {
+        g_test = "TakesOnlySignInAndLockScreens";
+        CHECK(TakesScenario(CPUS_LOGON));
+        CHECK(TakesScenario(CPUS_UNLOCK_WORKSTATION));
+        CHECK(!TakesScenario(CPUS_CREDUI));
+        CHECK(!TakesScenario(CPUS_CHANGE_PASSWORD));
+        CHECK(!TakesScenario(CPUS_PLAP));
+        CHECK(!TakesScenario(CPUS_INVALID));
     }
 
     // C-END-13: after a failed sign-in (or a ticket LogonUI didn't take) the tile goes - LogonUI is told to enumerate
@@ -418,6 +440,7 @@ int main(int argc, char** argv)
     RejectsEmptyAccount();
     WriterLimits();
     PacksInteractiveLogon();
+    TakesOnlySignInAndLockScreens();
     FindsNegotiate();
     ResultWinsOverStop();
     TileGoesAfterAFailedResult();

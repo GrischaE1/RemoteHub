@@ -441,12 +441,14 @@ public sealed partial class AgentDesktopSession : SessionBase
     }
 
     /// <summary>
-    /// The device offers automatic sign-in for this account, the session is its console showing the sign-in screen, and
-    /// this PC's policy doesn't forbid it.
+    /// The device offers automatic sign-in for this account, the session is its console showing the sign-in screen – or
+    /// this account's own session locked there, where the agent can unlock it – and this PC's policy doesn't forbid it.
+    /// The agent decides by SID; the name here only decides what is offered.
     /// </summary>
     public bool CanAutoSignIn(DesktopSessionInfo session) =>
-        !Services.AppPolicy.AgentAutoSignInDisabled && Supports(DesktopFeatures.AutoSignIn) && Hello?.Rights.AutoSignIn == true
-        && session.Console && session.State == DesktopSessionState.SignIn;
+        !Services.AppPolicy.AgentAutoSignInDisabled && Supports(DesktopFeatures.AutoSignIn) && Hello?.Rights.AutoSignIn == true && session.Console
+        && (session.State == DesktopSessionState.SignIn
+            || session.State == DesktopSessionState.Locked && Supports(DesktopFeatures.AutoUnlock) && string.Equals(session.User, Hello.Account, StringComparison.OrdinalIgnoreCase));
 
     public void SendPin(string pin) =>
         _client?.Send(DesktopWire.Json(DesktopMessage.Pin, new DesktopPin(pin), DesktopJson.Default.DesktopPin));
@@ -1269,7 +1271,8 @@ public sealed partial class AgentDesktopSession : SessionBase
                 _endAction = AutoSignInEndActions.Valid(s.EndAction) ?? AutoSignInEndActions.Lock;
                 ShowNotice(s.Message + (_endAction == AutoSignInEndActions.SignOut
                     ? " When you disconnect, the session is signed out." : " When you disconnect, the session is locked."));
-                Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, "Signed in automatically on the console");
+                Data.AuditLog.Write(Data.AuditEvents.AgentAutoSignIn, Connection, s.Existing
+                    ? "Unlocked automatically on the console (the account's own session)" : "Signed in automatically on the console");
                 break;
             case DesktopStatusState.SignInFailed:
                 ShowNotice("Automatic sign-in didn't work: " + s.Message);

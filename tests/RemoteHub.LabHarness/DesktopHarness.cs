@@ -57,7 +57,7 @@ internal static class DesktopHarness
         public volatile string? SignInPassword;
     }
 
-    private sealed record StatusRecord(long Ms, int Connection, string State, string Message, int PinAttemptsLeft, bool Resume);
+    private sealed record StatusRecord(long Ms, int Connection, string State, string Message, int PinAttemptsLeft, bool Resume, string? EndAction = null, bool Existing = false);
 
     private sealed class StepRecord
     {
@@ -734,7 +734,7 @@ internal static class DesktopHarness
                     case DesktopMessage.Status:
                     {
                         var s = Read<DesktopStatus>(m);
-                        lock (_gate) _statuses.Add(new StatusRecord(Ms, c.N, s.State, s.Message, s.PinAttemptsLeft, s.Resume is { Length: > 0 }));
+                        lock (_gate) _statuses.Add(new StatusRecord(Ms, c.N, s.State, s.Message, s.PinAttemptsLeft, s.Resume is { Length: > 0 }, s.EndAction, s.Existing));
                         if (s.Resume is { Length: > 0 }) _lastResume = s.Resume;
                         // mirrors AgentDesktopSession.SendSignIn: the password once, only when asked for in this connection
                         if (s.State == DesktopStatusState.SignInReady && c.AutoSignIn && c.SendSignIn && !c.SignInSent)

@@ -308,4 +308,29 @@ public class AppTabsViewTests
         Assert.Equal(DesktopProtocol.ValidScale((int)Math.Round(dpi.DpiScaleX * 100)), settings.Scale);
         Assert.NotEqual(0, settings.Scale);
     });
+
+    [Fact]
+    public void The_start_panel_offers_to_unlock_the_admins_own_locked_console_session() => Sta.Run(owner =>
+    {
+        var session = new AgentDesktopSession(new Connection { Name = "FS01", Host = "fs01.contoso.local" });
+        var view = new AgentDesktopView(session, () => { }, () => { }, () => { }, () => DesktopQualityPreset.Find(null), (_, _) => { },
+            () => DesktopResolution.Fit, _ => { }, autoSignInPreferred: () => true);
+        owner.Content = view;
+        Sta.Pump();
+        DesktopSessionInfo own = new(2, @"CONTOSO\admin", DesktopSessionState.Locked, true, "Console"),
+            other = new(4, @"CONTOSO\jane", DesktopSessionState.Locked, false, "RDP-Tcp#1");
+        session.Hello = new DesktopHello(DesktopProtocol.Version, "FS01", @"CONTOSO\admin", new DesktopRights(true, true, false, AutoSignIn: true),
+            [DesktopConsent.Ask], [own, other], 30, 90, 30, [DesktopFeatures.AutoSignIn, DesktopFeatures.AutoUnlock]);
+        session.Phase = DesktopPhase.Choose;
+        Sta.Pump();
+
+        CheckBox Offer() => Sta.All<CheckBox>(view).Single(c => c.Content is string s && s.EndsWith(@"automatically as CONTOSO\admin"));
+        Assert.True(Offer().IsVisible);
+        Assert.Equal(@"Unlock automatically as CONTOSO\admin", Offer().Content);
+        Assert.True(Offer().IsChecked); // as the connection's setting says
+        // someone else's session: nothing to offer
+        Sta.All<RadioButton>(view).Single(r => Equals(r.Tag, other)).IsChecked = true;
+        Sta.Pump();
+        Assert.False(Offer().IsVisible);
+    });
 }

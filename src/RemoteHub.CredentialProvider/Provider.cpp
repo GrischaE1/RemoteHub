@@ -2,6 +2,7 @@
 
 #include "Channel.h"
 #include "Credential.h"
+#include "Logon.h"
 #include "Trace.h"
 #include "UserList.h"
 
@@ -90,10 +91,10 @@ namespace rhcp
     {
         RHCP_GUARD_BEGIN
         Trace("provider %ld: SetUsageScenario %d, flags 0x%08lX%s", _id, static_cast<int>(cpus), flags,
-            cpus != CPUS_LOGON ? " - not taken" : _channel ? " - again" : "");
-        // §8.2: only the sign-in screen. Everything else (unlock, CredUI, change password, PLAP) is refused, so the
-        // provider never runs in a user's process through CredUI.
-        if (cpus != CPUS_LOGON) return E_NOTIMPL;
+            !TakesScenario(cpus) ? " - not taken" : _channel ? " - again" : "");
+        // §8.2, §12.1: the sign-in screen and the lock screen only (Logon.h). Everything else is refused, so the provider
+        // never runs in a user's process through CredUI.
+        if (!TakesScenario(cpus)) return E_NOTIMPL;
         if (!_channel)
         {
             _channel = Channel::Start(_id); // null: stays inert, LogonUI and the other providers work as before
@@ -107,6 +108,7 @@ namespace rhcp
                 }
             }
         }
+        if (_credential) _credential->SetUnlock(cpus == CPUS_UNLOCK_WORKSTATION);
         return S_OK;
         RHCP_GUARD_END
     }

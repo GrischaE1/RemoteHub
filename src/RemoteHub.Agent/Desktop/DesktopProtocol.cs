@@ -88,6 +88,11 @@ public static class DesktopFeatures
     /// <see cref="DesktopStatusState.SignInReady"/> and <see cref="DesktopMessage.SignInRequest"/>).
     /// </summary>
     public const string AutoSignIn = "autoSignIn";
+    /// <summary>
+    /// With <see cref="AutoSignIn"/>: the account's own session is also unlocked when it is locked on the console, or
+    /// reconnected when it is disconnected (credential-provider-design §12.1) – the same request and password.
+    /// </summary>
+    public const string AutoUnlock = "autoUnlock";
     /// <summary>Files dropped on the tab are saved on the device's Desktop (<see cref="DesktopTransferKind.Drop"/>).</summary>
     public const string DropFiles = "dropFiles";
     /// <summary>
@@ -320,7 +325,9 @@ public sealed record DesktopAppList(DesktopListedApp[] Apps, bool Truncated, boo
 
 /// <param name="Resume">With Connected: a single-use token to continue after a dropped connection (see <see cref="DesktopStart.Resume"/>).</param>
 /// <param name="EndAction">With SignedIn: what happens to the session when the connection ends on purpose (Lock or SignOut).</param>
-public sealed record DesktopStatus(string State, string Message, int PinAttemptsLeft = 0, string? Resume = null, string? EndAction = null);
+/// <param name="Existing">With SignedIn: the account's own session that was there before – unlocked or reconnected, not
+/// made – so it is locked again at the end, never signed out (credential-provider-design §12.1).</param>
+public sealed record DesktopStatus(string State, string Message, int PinAttemptsLeft = 0, string? Resume = null, string? EndAction = null, bool Existing = false);
 
 /// <summary>What the device sends: frames in the last 2 s per second, the encoder's current quality, how it captures.</summary>
 /// <param name="Fit">The last resolution change for the window: asked and what the monitor runs at now ("" when none).</param>
