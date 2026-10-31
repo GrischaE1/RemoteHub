@@ -7364,7 +7364,8 @@ P2 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 P1 · How: H S · Needs: – · Status: ✅ Automated – `C-AUTO2.Tests.ps1`
 
 **Expected:**
-- someone signed in on the console → "Someone is signed in on the console now"; the account has a disconnected session → "already has a session on the device"
+- someone signed in on the console → "Someone is signed in on the console now"
+- (the account's own disconnected session is reconnected since 0.22 – C-UNLOCK-05; one in use elsewhere is refused "already has a session on the device", covered by the unit tests)
 - Steps: see the test (`lab/tests/C-AUTO2.Tests.ps1`).
 
 #### C-AUTO-11 · Rate limit
@@ -7435,6 +7436,48 @@ P3 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO3.Tests.ps1`
 
 **Expected:**
 - trusted, but not signed by the agent's certificate → "… isn't signed by the same certificate as the agent", Hello `autoSignIn` false
+
+#### C-UNLOCK-01 · App tab unlocks the own session
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
+
+**Steps:** 1. The console account signed in at the console, its session locked (LockWorkStation). 2. An app tab of the test app, signed in to the agent as that account.
+**Expected:**
+- "SignedIn: Unlocked as …", the status marks the session as one that was there before (`existing`)
+- the app runs; the session is the one that was locked – the same id, its explorer.exe kept, no second session
+- event 1106 "… unlocked console session N …"
+
+#### C-UNLOCK-02 · Locked again after the app tab
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
+
+**Steps:** 1. The tab of C-UNLOCK-01 is closed.
+**Expected:**
+- event 1107 "… locked (…)", never "signed out"
+- the session is still there, off the console's desktop, with its explorer.exe
+
+#### C-UNLOCK-03 · Desktop tab unlocks the own session
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
+
+**Steps:** 1. The console account's session locked. 2. A desktop tab of the console with automatic sign-in, RemoteHub's end action SignOut.
+**Expected:**
+- "SignInReady: Ready to unlock as …", then "SignedIn: Unlocked as …" with end action Lock (`existing`)
+- the same session on the console's desktop, its explorer.exe kept
+- the device's screen says "… signed in remotely" (the privacy screen); 1106 "… unlocked console session N (… privacy screen on)"
+
+#### C-UNLOCK-04 · Locked again, never signed out
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
+
+**Steps:** 1. The tab of C-UNLOCK-03 is closed.
+**Expected:**
+- event 1107 "… locked (…)", never "signed out" – although RemoteHub asked for a sign-out
+- the session is still there with its explorer.exe
+
+#### C-UNLOCK-05 · Disconnected session reconnected
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
+
+**Steps:** 1. After C-UNLOCK-04 the session is disconnected and the console shows the sign-in screen. 2. A desktop tab with automatic sign-in. 3. The tab is closed.
+**Expected:**
+- "SignedIn: Signed in to your session as …" (`existing`); the same session back on the console with its explorer.exe, no second one
+- 1106 "… their disconnected session, reconnected …"; at the end 1107 "… locked (…)"
 
 ### 9.13 Jump hosts (J)
 

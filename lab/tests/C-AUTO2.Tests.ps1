@@ -120,20 +120,13 @@ Describe 'C-AUTO2 <VmName>' -Tag Agent, 'C-AUTO' {
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'None'; autoSignIn = $true }
                 @{ do = 'wait'; anyOf = @('SignInFailed', 'SignedIn', 'Failed'); timeout = 60 }, @{ do = 'close' })
             $signedIn = [pscustomobject]@{ statuses = @($signedIn.statuses | ForEach-Object { "$($_.state): $($_.message)" }); error = $null }
-            # the console account's session disconnected: the console shows the sign-in screen, the account still has a session
-            $null = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { tsdiscon.exe }
-            $user = [regex]::Escape(($vm.ConsoleAccount -split '\\')[-1])
-            $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -Because "the console account's session was not disconnected with the sign-in screen at the console" -Until {
-                $s = @(Get-LabSessions -Name $VmName)
-                @($s | Where-Object { $_.State -eq 'Disconnected' -and $_.User -match "\\$user$" }).Count -gt 0 -and @($s | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0
-            }
-            $existing = Run
-            Save 'session' @{ SignedIn = $signedIn; Existing = $existing }
+            # (the account's own disconnected session is reconnected since 0.22 - C-UNLOCK-05; one in use elsewhere is
+            # refused, which the unit tests cover: the lab has no second RDP client to keep one in use)
+            Save 'session' @{ SignedIn = $signedIn }
         }
 
-        It 'C-AUTO-10 someone signed in on the console, or the account already has a session: refused before Windows is asked' -Tag 'C-AUTO-10' {
+        It 'C-AUTO-10 someone signed in on the console: refused before Windows is asked' -Tag 'C-AUTO-10' {
             Text $signedIn | Should -Match 'Someone is signed in on the console now'
-            Text $existing | Should -Match 'already has a session on the device'
         }
     }
 

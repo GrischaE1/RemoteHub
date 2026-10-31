@@ -108,7 +108,7 @@ namespace rhcp
             if (_channel && _channel->Account(account, sid))
                 // The ellipsis is an escape, not the character itself: the sources are UTF-8 without a BOM, which MSVC
                 // reads in the ANSI code page – the tile showed three wrong characters (lab run 20261019-193627).
-                return DuplicateString((L"Signing in " + account + L"\u2026").c_str(), value);
+                return DuplicateString(((_unlock ? L"Unlocking " : L"Signing in ") + account + L"\u2026").c_str(), value);
             return DuplicateString(L"", value);
         }
         return E_INVALIDARG;
@@ -164,7 +164,7 @@ namespace rhcp
         }
         BYTE* buffer = nullptr;
         ULONG bytes = 0;
-        hr = _channel->TakeSerialization(&buffer, &bytes);
+        hr = _channel->TakeSerialization(_unlock, &buffer, &bytes);
         if (FAILED(hr))
         {
             Trace("provider %ld: GetSerialization, packing failed: 0x%08lX", _id, static_cast<unsigned long>(hr));
@@ -172,7 +172,7 @@ namespace rhcp
             _channel->ReportResult(StatusUnsuccessful, 0); // tell the service; the ticket is used up anyway
             return hr;
         }
-        Trace("provider %ld: GetSerialization, ticket handed to LogonUI", _id);
+        Trace("provider %ld: GetSerialization, ticket handed to LogonUI%s", _id, _unlock ? " to unlock" : "");
         _failed = false;
         serialization->ulAuthenticationPackage = package;
         serialization->clsidCredentialProvider = ProviderClsid;

@@ -37,8 +37,9 @@ namespace rhcp
         // The account of the ticket, for the tile. False when there is none.
         bool Account(std::wstring& qualifiedName, std::wstring& sid);
 
-        // Takes the ticket (single use) and packs it for LogonUI. Fails without a ticket.
-        HRESULT TakeSerialization(BYTE** serialization, ULONG* serializationBytes);
+        // Takes the ticket (single use) and packs it for LogonUI – as an unlock on the lock screen (Logon.h). Fails
+        // without a ticket.
+        HRESULT TakeSerialization(bool unlock, BYTE** serialization, ULONG* serializationBytes);
 
         // LogonUI's verdict on the last ticket taken; the thread sends it to the service. False when no taken ticket
         // waits for one: the result is then dropped.

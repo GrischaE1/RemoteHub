@@ -700,10 +700,15 @@ public sealed class AgentDesktopView : Border, IRecordableView
         UpdateAutoSignIn();
     }
 
-    /// <summary>Offered for the console's sign-in screen when the device allows it for this account; not in view-only.</summary>
+    /// <summary>
+    /// Offered for the console's sign-in screen, and for the admin's own locked session there, when the device allows it
+    /// for this account; not in view-only.
+    /// </summary>
     private void UpdateAutoSignIn()
     {
         var offered = ChosenSession is { } s && _session.CanAutoSignIn(s);
+        if (offered && _session.Hello is { } hello)
+            _autoSignIn.Content = ChosenSession!.State == DesktopSessionState.Locked ? $"Unlock automatically as {hello.Account}" : $"Sign in automatically as {hello.Account}";
         _autoSignIn.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
         _autoSignIn.IsEnabled = _viewOnly.IsChecked != true;
     }

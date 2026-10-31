@@ -29,6 +29,7 @@ namespace rhcp
         const wchar_t* domain, size_t domainChars,
         const wchar_t* user, size_t userChars,
         const wchar_t* password, size_t passwordChars,
+        bool unlock,
         BYTE** serialization, ULONG* serializationBytes)
     {
         if (serialization == nullptr || serializationBytes == nullptr) return E_POINTER;
@@ -43,7 +44,7 @@ namespace rhcp
         memset(buffer, 0, total);
 
         auto* logon = reinterpret_cast<KERB_INTERACTIVE_UNLOCK_LOGON*>(buffer);
-        logon->Logon.MessageType = KerbInteractiveLogon;
+        logon->Logon.MessageType = unlock ? KerbWorkstationUnlockLogon : KerbInteractiveLogon;
         size_t offset = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON);
         Place(logon->Logon.LogonDomainName, buffer, offset, domain, domainChars);
         Place(logon->Logon.UserName, buffer, offset, user, userChars);
