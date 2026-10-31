@@ -1384,6 +1384,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             }
             Step 'provider-install' {
                 CloseTabs
+                # the device runs the previous release until UI-AG-06's update, and RemoteHub refuses to install the
+                # provider from another build: a run with -Tag UI-AG-07/08 alone skips that context (run 20261031-115221)
+                if (-not $R.Contains('versionBefore')) { throw 'the agent was not updated to the build under test: UI-AG-06, which updates it, did not run - select it with UI-AG-07 / UI-AG-08' }
                 $R.provInstall = Provider 'Install credential provider' 'Install'
             }
             Step 'autosignin' {

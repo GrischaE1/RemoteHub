@@ -3513,7 +3513,9 @@ function Get-LabHostDiagLog {
     foreach ($line in @($files | ForEach-Object { Get-Content $_ -Encoding UTF8 })) {
         # a line without a date (the rest of a message with a line break) goes with the line before it
         if ($line -match '^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') { $keep = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null) -ge $Since.AddSeconds(-1) }
-        if ($keep) { $line }
+        # a plain string: Get-Content's lines carry PSProvider and the rest, and ConvertTo-Json -Depth 10 of one never
+        # finished (S-SSH-07 on Server hit the 60 min limit in every run since 20261030-004321)
+        if ($keep) { "$line" }
     }
 }
 

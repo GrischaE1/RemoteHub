@@ -461,7 +461,11 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $null = Ui 'Allow connections from' -Title $t -Value 'setnext:192.0.2.10'
                 # offered only when PowerShell remoting works for the connection (UI-TL-08 trusted its HTTPS certificate)
                 $silent = Ui 'Install silently over PowerShell remoting*' -Title $t -Value exists -TimeoutSec 10
-                if (-not $silent.enabled) { throw 'the silent install over PowerShell remoting is not offered (remoting does not work for Device - see UI-TL-08)' }
+                if (-not $silent.enabled) {
+                    # a run with -Tag UI-AG-15 alone skips the context that trusts the certificate (run 20261031-115221)
+                    if (-not ($R.Contains('tl08Ask') -or $R.Contains('tl08-error'))) { throw 'the silent install over PowerShell remoting is not offered: UI-TL-08, which trusts the device''s WinRM certificate, did not run - select it with UI-AG-15' }
+                    throw 'the silent install over PowerShell remoting is not offered (remoting does not work for Device - see UI-TL-08)'
+                }
                 $null = Ui 'Install silently over PowerShell remoting*' -Title $t -Value check
                 $R.ag15AutoSignIn = Ui 'Allow automatic sign-in*' -Title $t -Value check -Optional -TimeoutSec 5
                 $null = Ui 'Use the agent for this connection afterwards' -Title $t -Value check -Optional -TimeoutSec 5

@@ -933,6 +933,9 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             $d = $R.del = [ordered]@{}
             Step $d all {
                 Close-Tabs
+                # Lonely and Orphan come from the tree built for J-15 to J-17: a run with -Tag J-19 alone skips that
+                # context (run 20261031-115221)
+                if (-not @(Items | Where-Object { $_ -like '*|Lonely|*' }).Count) { throw 'Lonely is not in the tree: the context that builds it (J-15 to J-17) did not run - select J-17 with J-19' }
                 $null = Menu 'Delete' -Node 'Lonely'
                 $d.all = Box '*Delete connection "Lonely"*' -Button 'Delete all'
                 $null = Wait-LabCondition -Until { $d.afterAll = Items; -not @($d.afterAll | Where-Object { $_ -like '*|Orphan|*' -or $_ -like '*|Lonely|*' }).Count } -Because 'Lonely or Orphan still in the tree after Delete all' -TimeoutSec 15 -NoThrow
