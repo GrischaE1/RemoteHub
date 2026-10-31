@@ -117,8 +117,14 @@ Describe 'T2 <VmName>' -Tag Tools, 'T' {
             ($up | ConvertTo-Json -Depth 6) | Should -Match 'used by another process|being used|locked|access'
             $now = Invoke-LabGuest -Name $VmName -ArgumentList $target -ScriptBlock {
                 param($t)
-                Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -like '*f001.txt*' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-                Start-Sleep -Seconds 1
+                $holders = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object CommandLine -like '*f001.txt*' | ForEach-Object { [int]$_.ProcessId })
+                foreach ($h in $holders) { Stop-Process -Id $h -Force -ErrorAction SilentlyContinue }
+                # the file's handle goes with the process: until the holders have ended
+                $until = (Get-Date).AddSeconds(15)
+                do {
+                    if (-not @($holders | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count) { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
                 [pscustomobject]@{ Hash = (Get-FileHash "$t\f001.txt" -Algorithm SHA256).Hash; Parts = @(Get-ChildItem $t -Filter '*.remotehub-part').Count }
             }
             $now.Hash | Should -Be $orig

@@ -138,8 +138,14 @@ Describe 'C-MSI <VmName>' -Tag Client, 'C-MSI' -Skip:(-not $isClient) {
             Set-LabAutoLogon -Name $VmName -Account User
             $task = Start-LabInSession -Name $VmName -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' "$env:USERPROFILE\Desktop\lab-device.rdp" }
             $u.prevWindow = Invoke-LabPerson -Name $VmName -Do uia -Title 'RemoteHub*' -Text '*lab-device*' -Value exists -TimeoutSec 90
-            Start-Sleep -Seconds 5
-            Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }; Start-Sleep 5; Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force }
+            Start-Sleep -Seconds 5   # time for the previous version to store the connection the .rdp file made (nothing shows when it has)
+            # closed like a person would, so it saves; killed only when it hasn't ended within 15 s
+            Invoke-LabGuest -Name $VmName -ScriptBlock {
+                Get-Process RemoteHub -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+                $until = (Get-Date).AddSeconds(15)
+                do { if (-not (Get-Process RemoteHub -ErrorAction SilentlyContinue)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
+                Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force
+            }
             Stop-LabInSession -Name $VmName -Task $task
             $u.upgrade = Install-Client $msi
             $u.state = Get-ClientState

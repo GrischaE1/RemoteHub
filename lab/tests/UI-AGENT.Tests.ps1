@@ -55,7 +55,8 @@ BeforeAll {
         ($m.items -join "`n")
     }
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-agent-$name.png") }
-    # Esc on the console keyboard (a menu left open after a missed entry: RhPerson closes only the submenu)
+    # Esc on the console keyboard (a menu left open after a missed entry: RhPerson closes only the submenu); the pause
+    # lets the menu close before the next right-click
     function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 500 }
     # the entries of the connection's RemoteHub Agent submenu (an entry that isn't there answers them; tried again when the
     # menu didn't open in time and answered none); the menu is closed again with Esc by the caller
@@ -222,16 +223,19 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # the tab: its icon buttons are found by their tooltip, the input line and the output by type (no names)
             $null = Ui 'Stop the running command (Ctrl+C)' -Value exists -TimeoutSec 60
             $null = Ui 'type:Document' -Value exists -TimeoutSec 60
-            Start-Sleep -Seconds 5
+            # connected: PsSession writes "... Tab completes, ..." (a line typed before that is dropped)
+            $null = Wait-LabCondition -TimeoutSec 60 -NoThrow -Because 'the PowerShell tab did not connect' -Until { "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 5).value)" -match 'Tab completes' }
             $t.typed = Ui 'type:Edit' -Value 'keys:Get-Service Spooler | Format-List Name,Status{ENTER}' -Optional
-            Start-Sleep -Seconds 5
+            # the command's output (the echoed line has no "Status :")
+            $null = Wait-LabCondition -TimeoutSec 30 -NoThrow -Because 'Get-Service gave no output' -Until { "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 5).value)" -match 'Status\s*:\s*\w' }
             $t.output = (Ui 'type:Document' -Value read -Optional).value
             $t.complete = Ui 'type:Edit' -Value 'keys:Get-Ser{TAB}' -Optional
-            Start-Sleep -Seconds 3
+            # completed in the line, or the matches listed
+            $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'Tab did not complete Get-Ser' -Until { "$((Ui 'type:Edit' -Value read -Optional -TimeoutSec 5).value)`n$((Ui '*' -Value list).items -join "`n")" -match 'Get-Service' }
             $t.list = Ui '*' -Value list
             $t.input = (Ui 'type:Edit' -Value read -Optional).value
             $null = Ui 'type:Edit' -Value 'keys:{ESC}^a{DEL}exit{ENTER}' -Optional
-            Start-Sleep -Seconds 4
+            $null = Wait-LabCondition -TimeoutSec 20 -NoThrow -Because 'the PowerShell tab did not close after exit' -Until { -not (Ui 'Stop the running command (Ctrl+C)' -Value exists -Optional -TimeoutSec 1).found }
             $t.afterExit = Ui 'Stop the running command (Ctrl+C)' -Value exists -Optional -TimeoutSec 5
             Shot 'ps-winrm'
             Save 'ps-winrm' $t
@@ -281,6 +285,7 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
                     $r["$Tool-error"] = "$_"
                     Shot "fail-$Tool"
                     $r["$Tool-dialogs"] = @((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60)
+                    # (the pause lets each menu or dialog close before the next Esc)
                     foreach ($i in 1..2) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 500 }
                 }
             }
@@ -292,24 +297,29 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # the address boxes by name: "Path This PC" and "Path <connection>  (<host>)" (each side has a filter box too)
             $null = Ui 'Path This PC' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
             $null = Ui 'Path Device*' -Value 'keys:^aC:\{ENTER}'
-            Start-Sleep -Seconds 3
+            # the device's side shows C:\ (the upload goes into the folder it shows)
+            $null = Wait-LabCondition -TimeoutSec 30 -NoThrow -Because 'the device side did not show C:\' -Until { (Ui 'Program Files (x86)' -Value exists -Optional -TimeoutSec 2).found }
             $null = Ui 'UpFolder' -Value realclick
             $null = Ui 'Upload selected files'
-            Start-Sleep -Seconds 15
-            $r.uploaded = Invoke-LabGuest -Name $device.Name -ScriptBlock { @(Get-ChildItem 'C:\Users\*\Documents\UpFolder', 'C:\Users\*\UpFolder', 'C:\UpFolder' -File -ErrorAction SilentlyContinue | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
+            # read on the device until the five files are there
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'the uploaded files did not all arrive on the device' -Until {
+                $r.uploaded = Invoke-LabGuest -Name $device.Name -ScriptBlock { @(Get-ChildItem 'C:\Users\*\Documents\UpFolder', 'C:\Users\*\UpFolder', 'C:\UpFolder' -File -ErrorAction SilentlyContinue | ForEach-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } | Sort-Object) }
+                @($r.uploaded).Count -ge 5
+            }
             Shot 'files'
             # this PC's filter: "UpFol" leaves UpFolder and selects it, Enter opens it
             $null = Ui 'Filter This PC' -Value 'set:UpFol'
             $r.filterRows = @((Ui '*' -Value list).items | Where-Object { $_ -match '\|(f\d\.txt|UpFolder|Public|Documents)\|' })
             $null = Ui 'Filter This PC' -Value 'keys:{ENTER}'
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'Enter in the filter did not open UpFolder' -Until { (Ui 'Path This PC' -Value read).value -eq 'C:\Users\Public\UpFolder' }
             $r.filterOpened = (Ui 'Path This PC' -Value read).value
             $r.filterCleared = (Ui 'Filter This PC' -Value read).value
             # Ctrl+F with the focus on the device's side goes to that side's filter, not to the navigation search;
             # typed on the console keyboard (W, I, N), which writes into whatever has the focus
             $null = Ui 'Path Device*' -Value 'keys:^f'
+            # (paced like typing)
             foreach ($k in '57', '49', '4E') { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value $k; Start-Sleep -Milliseconds 150 }
-            Start-Sleep -Milliseconds 500
+            $null = Wait-LabCondition -TimeoutSec 10 -NoThrow -Because 'the typed "win" did not reach the device side''s filter' -Until { (Ui 'Filter Device*' -Value read).value -eq 'win' }
             $r.ctrlFDevice = (Ui 'Filter Device*' -Value read).value
             $r.ctrlFThisPc = (Ui 'Filter This PC' -Value read).value
             $r.ctrlFSearch = (Ui 'SearchBox' -Value read -Optional).value
@@ -326,18 +336,19 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui '* keys, * values*' -Value exists -TimeoutSec 90
             $null = Ui 'Registry key' -Value 'set:HKLM\SOFTWARE\RemoteHubLab' -TimeoutSec 60
             $null = Ui 'Registry key' -Value 'keys:{ENTER}'
+            # kept: the key opens over the agent in the background and the tab shows nothing that tells it apart from
+            # the start key - a value made before it would land there
             Start-Sleep -Seconds 3
             # WPF drops the '_' of REG_SZ in menu headers (access key): the entry shows 'String value (REGSZ)...'
             $null = Ui 'New key or value' -Value 'pick:String value (REG*SZ)*'
-            Start-Sleep -Seconds 2
+            $null = Ui 'Value name' -Title 'New REG*' -Value exists -TimeoutSec 15
             Shot 'reg-new'
             # the value dialog: "New REG_SZ"
             $null = Ui 'Value name' -Title 'New REG*' -Value 'setnext:FromUi'
             $null = Ui 'Value data' -Title 'New REG*' -Value 'setnext:set in the registry tab'
             $null = Ui 'Create' -Title 'New REG*'
-            Start-Sleep -Seconds 3
-            # read on the device until the value is there (the tab writes it in the background), for up to 20 s
-            $until = (Get-Date).AddSeconds(20)
+            # read on the device until the value is there (the tab writes it in the background), for up to 30 s
+            $until = (Get-Date).AddSeconds(30)
             do { $r.reg = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-ItemProperty HKLM:\SOFTWARE\RemoteHubLab -ErrorAction SilentlyContinue).FromUi }; if ($r.reg) { break }; Start-Sleep -Seconds 2 } while ((Get-Date) -lt $until)
             # the value filter: "FromUi" selects the value, Enter opens it for editing ("Edit REG_SZ"; value data = 2nd Edit)
             $null = Ui 'Filter values' -Value 'set:FromUi'
@@ -360,12 +371,14 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'Print Spooler' -Value realclick
             $null = Ui 'Stop the service'
             $null = Ui 'Stop' -Title '?*' -Optional -TimeoutSec 10
-            Start-Sleep -Seconds 5
-            $r.stopped = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-Service Spooler).Status.ToString() }
+            $null = Wait-LabCondition -TimeoutSec 30 -IntervalMs 1000 -NoThrow -Because 'Spooler did not stop on the device' -Until {
+                ($r.stopped = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-Service Spooler).Status.ToString() }) -eq 'Stopped'
+            }
             $null = Ui 'Start the service'
             $null = Ui 'Start' -Title '?*' -Optional -TimeoutSec 5
-            Start-Sleep -Seconds 5
-            $r.started = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-Service Spooler).Status.ToString() }
+            $null = Wait-LabCondition -TimeoutSec 30 -IntervalMs 1000 -NoThrow -Because 'Spooler did not start on the device' -Until {
+                ($r.started = Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-Service Spooler).Status.ToString() }) -eq 'Running'
+            }
             }
             # processes
             Step processes {
@@ -375,15 +388,16 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             $null = Ui 'notepad*' -Value realclick
             $null = Ui 'End process (Del)'
             $null = Ui 'End process' -Title '?*'
-            Start-Sleep -Seconds 3
-            $r.notepadGone = -not (Invoke-LabGuest -Name $device.Name -ArgumentList $notepad -ScriptBlock { param($p) [bool](Get-Process -Id $p -ErrorAction SilentlyContinue) })
+            $null = Wait-LabCondition -TimeoutSec 20 -IntervalMs 1000 -NoThrow -Because 'notepad did not end on the device' -Until {
+                ($r.notepadGone = -not (Invoke-LabGuest -Name $device.Name -ArgumentList $notepad -ScriptBlock { param($p) [bool](Get-Process -Id $p -ErrorAction SilentlyContinue) }))
+            }
             $null = Ui 'Filter' -Value 'set:lsass'
             # a critical process: End is switched off for it, and Del says why
             $null = Ui 'lsass*' -Value realclick
             $r.lsassEnd = (Ui 'End process (Del)' -Value exists).enabled
             # Del on the console keyboard (the selected row has the focus)
             $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 2E
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'Del on lsass showed no message' -Until { ((Ui '*' -Value list).items -join "`n") -match 'critical Windows process' }
             $r.lsassMessage = (Ui '*' -Value list).items -join "`n"
             }
             # agent desktop
@@ -521,12 +535,20 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # the tab's own text (the output) and whatever dialog shows
             function TabText { "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 20).value)`n$((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 5).items -join "`n")" }
             Menu 'Tools>PowerShell'
-            Start-Sleep -Seconds 40
+            # the attempt has ended: the tab's last line is no longer "Connecting to ..." (within 60 s: no hang)
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'the PowerShell tab was still connecting to the stopped agent' -Until {
+                $d = "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 5).value)".Trim()
+                $d -and @($d -split "`r?`n")[-1] -notlike 'Connecting to *'
+            }
             $f.stoppedMessage = TabText
             $null = Invoke-LabGuest -Name $device.Name -ScriptBlock { Start-Service RemoteHubAgent }
-            Start-Sleep -Seconds 10
+            # the agent listens again before Reconnect
+            $null = Wait-LabCondition -TimeoutSec 60 -NoThrow -Because "the agent on $($device.Name) didn't listen on port 58732 after its start" -Until {
+                Invoke-LabGuest -Name $device.Name -ScriptBlock { [bool](Get-NetTCPConnection -LocalPort 58732 -State Listen -ErrorAction SilentlyContinue) }
+            }
             $null = Ui 'Reconnect' -Optional -TimeoutSec 5
-            Start-Sleep -Seconds 15
+            # connected again: PsSession writes "... Tab completes, ..."
+            $null = Wait-LabCondition -TimeoutSec 45 -IntervalMs 2000 -NoThrow -Because 'the PowerShell tab did not connect again' -Until { "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 5).value)" -match 'Tab completes' }
             $f.afterStart = TabText
             Shot 'reconnected'
             # a new device certificate made by "another RemoteHub": the pin doesn't match
@@ -541,7 +563,10 @@ Describe 'UI-AGENT <VmName>' -Tag Client, UI, 'UI-AG', 'UI-TL', 'R-AGENT', 'W-TR
             # the tab while Tools offers PowerShell; when it doesn't (the reconnect above failed, so the connection's last
             # result is a failure) the test from the menu, whose answer names the certificate as well - closed with Cancel
             $m = Ui 'Device' -Value 'menu:Tools>PowerShell' -Optional
-            if ($m.found -and -not ($m.PSObject.Properties['error'] -and $m.error)) { Start-Sleep -Seconds 15; $f.pinMessage = TabText }
+            if ($m.found -and -not ($m.PSObject.Properties['error'] -and $m.error)) {
+                $f.pinMessage = Wait-LabCondition -TimeoutSec 45 -NoThrow -Because 'the tab named no certificate' -Until { $x = TabText; if ($x -match 'certificate|fingerprint') { $x } }
+                if (-not $f.pinMessage) { $f.pinMessage = TabText }
+            }
             else {
                 if ($m.found) { Esc }
                 $null = Ui 'Device' -Value 'menu:Tools>Test RemoteHub Agent*' -TimeoutSec 15

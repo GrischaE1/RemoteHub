@@ -33,6 +33,14 @@ public class SshKeyTests : IDisposable
 
     private static Secret RsaPem() { using var rsa = RSA.Create(2048); return Secret.From(rsa.ExportRSAPrivateKeyPem())!; }
 
+    [Theory]
+    [InlineData("SSH-2.0-OpenSSH_for_Windows_9.5", "OpenSSH_for_Windows_9.5")]
+    [InlineData("SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13", "OpenSSH_9.6p1 Ubuntu-3ubuntu13")]
+    [InlineData("OpenSSH_9.5", "OpenSSH_9.5")]
+    [InlineData(null, "")]
+    public void The_tab_and_the_share_name_the_server_software_without_the_protocol_part(string? identification, string shown) =>
+        Assert.Equal(shown, RemoteHub.Remoting.SshShell.Software(identification));
+
     private string File(string name, string text)
     {
         var path = Path.Combine(_dir, name);

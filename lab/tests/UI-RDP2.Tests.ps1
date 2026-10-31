@@ -50,6 +50,7 @@ BeforeAll {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # Esc twice, a moment apart: a menu and the dialog under it close one per press
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
         }
     }
@@ -93,9 +94,10 @@ BeforeAll {
     function ClickIntoSession {
         $fit = Ui 'Reconnect' -Value fit
         $rect = @("$($fit.value)" -split '[,;]' | ForEach-Object { [double]$_ })
+        # the window moved and resized: its layout settles before the real click lands
         Start-Sleep -Seconds 2
         Send-LabMouse -Name $VmName -X ([int]($rect[0] + $rect[2] * 0.65)) -Y ([int]($rect[1] + $rect[3] * 0.6))
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -Until { @(@((Ui '*' -Value list -Optional -TimeoutSec 5).items) | Where-Object { $_ -match 'Keyboard\W+remote session' }).Count } -Because 'the tab header did not change to "Keyboard -> remote session" after the click' -TimeoutSec 10 -NoThrow
     }
     # PSAdmin's RDP sessions on the device (quser)
     function DeviceRdp {
@@ -140,12 +142,19 @@ BeforeAll {
     # are too many users signed in. Select a user to disconnect" and was dropped after 30 s (run 20261022-124318,
     # R-RDP-12/13 - the console's Admin and PSAdmin's first session were the two).
     function Clear-DeviceSessions {
-        $null = Invoke-LabGuest -Name $device.Name -ScriptBlock {
-            foreach ($l in @(quser 2>$null | Select-Object -Skip 1)) {
-                if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)') { logoff $Matches.id }
-            }
-        }
-        Start-Sleep -Seconds 5
+        $ids = @(Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                foreach ($l in @(quser 2>$null | Select-Object -Skip 1)) {
+                    if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)') { logoff $Matches.id; [int]$Matches.id }
+                }
+            })
+        # those sessions gone (the console may sign in again as a new one); no throw: a session left over shows in the
+        # context's own checks
+        $null = Wait-LabCondition -Until {
+            $left = @(Invoke-LabGuest -Name $device.Name -ScriptBlock {
+                    @(quser 2>$null | Select-Object -Skip 1 | ForEach-Object { if ($_ -match '\s(?<id>\d+)\s+(?:Active|Disc)') { [int]$Matches.id } })
+                })
+            -not @($left | Where-Object { $ids -contains $_ }).Count
+        } -Because "the device's sessions $($ids -join ', ') were not signed out" -TimeoutSec 30 -NoThrow
     }
     function CloseAll { foreach ($i in 1..6) { $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3; if (-not $c.found) { break }; Start-Sleep -Seconds 2 } }
     function Allow-NtlmDelegation {
@@ -166,7 +175,9 @@ BeforeAll {
         $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
             param($user)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            # its files are free once the process is gone
+            $until = (Get-Date).AddSeconds(15)
+            do { if (-not @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
             $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
                 "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
             foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
@@ -186,7 +197,8 @@ BeforeAll {
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
         & $Do
         $null = Ui 'Save' -Title 'Edit connection'
-        Start-Sleep -Seconds 2
+        # the editor closes once the connection is saved
+        $null = Wait-LabCondition -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Edit connection dialog stayed open after Save' -TimeoutSec 15 -NoThrow
     }
     function PasswordPrompt([string]$Choice) {
         EditConnection {
@@ -268,12 +280,13 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $p.marker
                 Menu 'Connect'
                 $p.nothingDialog = CredDialog
+                # no toast and no clipboard change may come in this time
                 Start-Sleep -Seconds 6
                 $p.nothingToast = Toast 5
                 $p.nothingClip = Clip
                 Shot 'nothing'
                 Key 1B
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (CredDialog 1) } -Because 'Windows'' credential dialog stayed open after Esc' -TimeoutSec 15 -NoThrow
                 CloseAll
                 $p.nothingAuditAfter = PasswordCopiedCount
             }
@@ -281,7 +294,6 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 PasswordPrompt 'Copy to clipboard*'
                 Menu 'Connect'
                 $p.clearDialog = CredDialog
-                Start-Sleep -Seconds 2
                 $p.clearToast = Toast 10
                 $p.clearTitle = (Ui 'Stored password for*' -Title '*' -Value read -Optional -TimeoutSec 5).name
                 $p.clearHint = Ui 'Press Ctrl+V in the password field, then OK.' -Title '*' -Value exists -Optional -TimeoutSec 5
@@ -289,19 +301,18 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $p.clipBefore = Clip
                 Shot 'toast'
                 $null = Ui 'Clear now' -Title '*' -TimeoutSec 10
-                Start-Sleep -Seconds 1
-                $p.clipAfter = Clip
+                $null = Wait-LabCondition -Until { $p.clipAfter = Clip; $p.clipAfter.length -eq 0 } -Because 'the clipboard still held the password after Clear now' -TimeoutSec 10 -NoThrow
                 $p.toastAfterClear = Toast 2
             }
             Step $p dialogcloses {
                 # the toast goes when Windows' dialog closes
                 Key 1B
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (CredDialog 1) } -Because 'Windows'' credential dialog stayed open after Esc' -TimeoutSec 15 -NoThrow
                 $null = Ui 'Reconnect'
                 $p.dlg2 = CredDialog
                 $p.toast2 = Toast 10
                 Key 1B
-                Start-Sleep -Seconds 4
+                $null = Wait-LabCondition -Until { -not (Toast 1).found } -Because 'the toast stayed after Windows'' dialog closed' -TimeoutSec 15 -NoThrow
                 $p.toast2After = Toast 2
             }
             Step $p clipchanges {
@@ -310,10 +321,10 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $p.dlg3 = CredDialog
                 $p.toast3 = Toast 10
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value 'something else'
-                Start-Sleep -Seconds 4
+                $null = Wait-LabCondition -Until { -not (Toast 1).found } -Because 'the toast stayed after the clipboard changed' -TimeoutSec 15 -NoThrow
                 $p.toast3After = Toast 2
                 Key 1B
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (CredDialog 1) } -Because 'Windows'' credential dialog stayed open after Esc' -TimeoutSec 15 -NoThrow
                 CloseAll
             }
             Invoke-LabGuest -Name $device.Name -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name fPromptForPassword -ErrorAction SilentlyContinue }
@@ -368,11 +379,12 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Connect' -Node 'Device2'
                 $s.device2 = Wait-RdpTab 90
                 # what the second session shows before Windows drops it: its arbitration waited 32 s and the session
-                # went (run 20261022-112607, LSM 41 then 40 reason 12) - a question on its screen nobody answered?
+                # went (run 20261022-112607, LSM 41 then 40 reason 12) - a question on its screen nobody answered? A fixed
+                # moment: the screenshot is of what the session shows a few seconds in
                 Start-Sleep -Seconds 5
                 Shot 'device2-connected'
                 Menu 'Connect' -Node 'Ghost'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { (SelectedTab) -eq 'Ghost' } -Because 'Ghost''s tab was not selected after Connect' -TimeoutSec 15 -NoThrow
                 $s.sessions = Wait-DeviceRdp 2; $s.quser = $script:quser
                 if (@($s.sessions).Count -lt 2) { Shot 'switch-one-session' }   # PSAdmin's active RDP session ids
             }
@@ -385,8 +397,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 $s.before = SelectedTab
                 ClickIntoSession
                 Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
-                Start-Sleep -Seconds 3
-                $s.afterNext = SelectedTab
+                $null = Wait-LabCondition -Until { $s.afterNext = SelectedTab; $s.afterNext -ne $s.before } -Because 'Ctrl+Alt+< selected no other tab' -TimeoutSec 15 -NoThrow
                 Shot 'switch-next'
                 # held for 300 ms as a person would (run 20261022-132024: all keys down and up in one burst, no switch);
                 # RemoteHub's log says whether the RDP control reported the hotkey at all
@@ -398,23 +409,20 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 # in Device2's session: Ctrl+Alt+Shift+< goes back to Device (next would be Ghost)
                 ClickIntoSession
                 Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x2A, 0x56 -HoldMs 300
-                Start-Sleep -Seconds 3
-                $s.afterPrevious = SelectedTab
+                $null = Wait-LabCondition -Until { $s.afterPrevious = SelectedTab; $s.afterPrevious -ne $s.afterNext } -Because 'Ctrl+Alt+Shift+< selected no other tab' -TimeoutSec 15 -NoThrow
                 Shot 'switch-previous'
             }
             Step $s fullscreen {
                 # from full screen: it is left first, the next RDP tab goes full screen
                 $null = Ui 'Full screen'
-                Start-Sleep -Seconds 3
-                $s.fsBefore = TopWindows
+                $null = Wait-LabCondition -Until { $s.fsBefore = TopWindows; @($s.fsBefore | Where-Object { $_ -eq 'Device' }).Count } -Because 'no full-screen window "Device"' -TimeoutSec 15 -NoThrow
                 Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0x56 -HoldMs 300
-                Start-Sleep -Seconds 4
-                $s.fsAfter = TopWindows
+                $null = Wait-LabCondition -Until { $s.fsAfter = TopWindows; @($s.fsAfter | Where-Object { $_ -eq 'Device2' }).Count } -Because 'no full-screen window "Device2" after Ctrl+Alt+<' -TimeoutSec 20 -NoThrow
                 $s.fsSelected = SelectedTab
                 Shot 'switch-fullscreen'
                 # Ctrl+Alt+Break leaves full screen (Pause with Ctrl held sends the extended scan code E0 46 = Break)
                 Send-LabScancodes -Name $VmName -Codes 0x1D, 0x38, 0xE046
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not @(TopWindows | Where-Object { $_ -eq 'Device2' }).Count } -Because 'the full-screen window "Device2" stayed after Ctrl+Alt+Break' -TimeoutSec 15 -NoThrow
             }
             Save 'switch' $s
         }
@@ -449,6 +457,7 @@ Describe 'UI-RDP2 <VmName>' -Tag Client, UI, 'R-RDP' -Skip:(-not $isClient) {
                 Menu 'Open additional session'
                 $a.tabs2 = Wait-RdpTabCount 2 60
                 $a.second = Wait-RdpTab 90
+                # a fixed moment, as for 'device2-connected' above
                 Start-Sleep -Seconds 5
                 Shot 'additional-second-connected'   # as 'device2-connected' above
                 $a.sessions2 = Wait-DeviceRdp 2; $a.quser2 = $script:quser

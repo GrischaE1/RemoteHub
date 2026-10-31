@@ -149,7 +149,9 @@ while ($true) {
             $null = New-NetFirewallRule -DisplayName 'RemoteHub lab DAV mock' -Protocol TCP -LocalPort 8085 -Direction Inbound -Action Allow
             $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\mock.ps1`" -Port 8085 -Log `"$root\requests.jsonl`""
             $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
-            Start-Sleep -Seconds 3
+            # the mock listens, for up to 30 s
+            $until = (Get-Date).AddSeconds(30)
+            do { if (Get-NetTCPConnection -LocalPort 8085 -State Listen -ErrorAction SilentlyContinue) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
             [pscustomobject]@{
                 FtpPlain = (Get-Website -Name RHFtpPlain).State; FtpImplicit = (Get-Website -Name RHFtpImplicit).State
                 ImplicitCert = $(if ($cert) { $cert.Thumbprint } else { $null })
@@ -206,6 +208,8 @@ while ($true) {
             $c = Ui 'Cancel' -Title '*network share*' -Optional -TimeoutSec 2
             if (-not $c.found) { break }
             $closed += $c.window
+            # kept: lets the editor close before the next look - a second editor can have the same title, so its
+            # being gone can't be waited for
             Start-Sleep -Milliseconds 500
         }
         if ($closed -and $Where) { $null = $script:strays.Add("${Where}: $($closed -join ', ')") }
@@ -218,6 +222,7 @@ while ($true) {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # (the pause lets each menu or dialog close before the next Esc)
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
             try { $R["$Name-closed"] = @(Close-Editors "after the failed step $Name") } catch { }
         }
@@ -294,7 +299,8 @@ $out
         $h = @(Hits (Probe @($Label) -Sibling 'Close this tab') $Label | Where-Object { $_.sibling }) | Select-Object -First 1
         if (-not $h) { return $false }
         Send-LabMouse -Name $VmName -X ([int]($h.sibling.x + $h.sibling.w / 2)) -Y ([int]($h.sibling.y + $h.sibling.h / 2))
-        Start-Sleep -Seconds 2
+        # gone before the next step, which may open a tab with the same label
+        $null = Wait-LabCondition -TimeoutSec 15 -IntervalMs 1000 -NoThrow -Because "the tab '$Label' did not close" -Until { -not @(Hits (Probe @($Label) -Sibling 'Close this tab') $Label | Where-Object { $_.sibling }).Count }
         $true
     }
     # the names of everything in the main window ("Type|Name|Id")
@@ -343,7 +349,8 @@ $out
     # action) is closed and written down
     function Submit([string]$Title = 'New network share', [string]$Button = 'Add') {
         $null = Ui $Button -Title $Title
-        Start-Sleep -Seconds 1
+        # the editor closes (a second one with the same title, or one that stays open, is closed below after the timeout)
+        $null = Wait-LabCondition -TimeoutSec 10 -NoThrow -Because "'$Title' did not close after $Button" -Until { -not (Ui 'Cancel' -Title $Title -Value exists -Optional -TimeoutSec 1).found }
         $null = Close-Editors "still open after $Button in '$Title'"
     }
 
@@ -685,7 +692,7 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
             Step $n remove {
                 $null = Menu 'Remove' -Node 'OwnShare'
                 $n.removeText = Box '*Nothing on the share itself is deleted*' -Button 'Remove'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'OwnShare was still listed after Remove' -Until { @(Items | Where-Object { $_ -like '*|OwnShare|*' }).Count -eq 0 }
                 $n.after = Items
                 $n.kept = Invoke-LabGuest -Name $device.Name -ScriptBlock { Test-Path C:\rhshare\keep.txt }
             }
@@ -769,8 +776,8 @@ Describe 'S-SHARE2 UI <VmName>' -Tag Client, UI, Share, 'S-SHARE', 'S-SMB', 'S-S
             }
             Step $p reconnect {
                 $null = Ui 'Reconnect'
+                # (the 10 s in which no question may come also let the old connection's text go)
                 $p.askedAgain = (Ui 'No password is stored for*' -Title 'Network share' -Value exists -Optional -TimeoutSec 10).found
-                Start-Sleep -Seconds 3
                 $p.reconnected = (Ui 'SMB ? Windows*' -Value exists -Optional -TimeoutSec 60).found
             }
             Step $p restart {

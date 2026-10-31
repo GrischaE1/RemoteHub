@@ -109,7 +109,13 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             $r.desktop = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Join-Path $EvidenceDir 'j-desktop') -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }
                 @{ do = 'wait'; state = 'Connected'; timeout = 60 }, @{ do = 'frame'; out = 'through-jump.png'; timeout = 30 }, @{ do = 'close' })
-            Start-Sleep -Seconds 5
+            # the audit events of the jump connections and the sessions behind them are written as they end
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the jump host''s 1200/1201 or the device''s session events from the jump host did not arrive' -Until {
+                $j = @(Get-LabAgentEvent -Name 'JumpHost' -Since $jumpSince -Id 1200, 1201, 1202)
+                $t = @(Get-LabAgentEvent -Name $VmName -Since $targetSince -Id 1000, 1100)
+                @($j | Where-Object Id -eq 1200).Count -gt 0 -and
+                @($j | Where-Object { $_.Id -eq 1201 -and $_.Message -match "$([regex]::Escape($target)).*58732|58732.*$([regex]::Escape($target))" }).Count -gt 0 -and
+                @($t | Where-Object { $_.Message -match "from (::ffff:)?$([regex]::Escape($jump.Inner))\b" }).Count -gt 0 }
             $r.device = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 [pscustomobject]@{ Files = @(Get-ChildItem 'C:\LabJump' -Recurse -File).Count; Reg = (Get-ItemProperty HKLM:\SOFTWARE).RemoteHubLabJump }
             }
@@ -175,8 +181,9 @@ Describe 'J <VmName>' -Tag Jump, 'J' {
             Set-LabAgentPolicy -Name 'JumpHost' -Clear -Values @{ TunnelTargets = @('127.0.0.0/8') }
             $p.loopbackListed = Open '127.0.0.1' 58732
             Set-LabAgentPolicy -Name 'JumpHost' -Clear
-            Start-Sleep -Seconds 3
-            $refusedEvents = @(Get-LabAgentEvent -Name 'JumpHost' -Since $jumpSince -Id 2200)
+            $refusedEvents = @(Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the jump host did not log 5 refusals (2200) with one for TunnelPorts' -Until {
+                    $e = @(Get-LabAgentEvent -Name 'JumpHost' -Since $jumpSince -Id 2200)
+                    if ($e.Count -ge 5 -and @($e | Where-Object { $_.Message -match 'TunnelPorts' }).Count -gt 0) { , $e } } | Where-Object { $_ })
             Save 'policy' @{ P = $p; Events = $refusedEvents }
         }
 

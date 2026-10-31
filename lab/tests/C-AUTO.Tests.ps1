@@ -78,6 +78,7 @@ BeforeAll {
 
     # ---- 4. The right password - after closing the failed attempt's message, as the operator does through the picture
     Send-LabKey -Name $VmName -Key Enter
+    # the message closes and the sign-in screen comes back before the next attempt
     Start-Sleep -Seconds 3
     $right = Run
     # signed in = the console account's explorer runs. Not "an unlocked desktop": the probe's connection has ended by

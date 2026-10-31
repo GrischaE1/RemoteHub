@@ -165,7 +165,9 @@ while (-not $p.HasExited) {
             $fitted = Wait-LabResolution -Name $VmName -Not $resBefore -TimeoutSec 15 -NoThrow
             $uninstall = Uninstall-LabAgent -Name $VmName
             $un = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the helper or its banner was still there after the uninstall' -Until {
+                -not @(Helper).Count -and -not @(Invoke-LabPerson -Name $VmName -Account Console -Do windows).Count
+            }
             $afterUninstall = [ordered]@{ Helpers = Helper; Banner = @(Invoke-LabPerson -Name $VmName -Account Console -Do windows)
                 Resolution = Wait-LabResolution -Name $VmName -Is $resBefore -TimeoutSec 20 -NoThrow }
             Save 'during-session' @{ Update = $update; Upd = $upd; Before = $before; AfterUpdate = $afterUpdate; Banner = $banner; Again = $again; Uninstall = $uninstall; Un = $un; After = $afterUninstall; ResBefore = $resBefore; Fitted = $fitted }
@@ -194,7 +196,8 @@ while (-not $p.HasExited) {
         BeforeAll {
             Reset-LabVm -Name $VmName
             $install = Install-LabAgent -Name $VmName
-            # takes the port the moment the old agent lets go of it - the new one (and a rollback) can't listen
+            # takes the port the moment the old agent lets go of it - the new one (and a rollback) can't listen; it tries
+            # every 50 ms and then holds the port for 15 minutes
             $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 $code = 'while ($true) { try { $s = [Net.Sockets.Socket]::new([Net.Sockets.AddressFamily]::InterNetworkV6, [Net.Sockets.SocketType]::Stream, [Net.Sockets.ProtocolType]::Tcp); ' +
                     '$s.DualMode = $true; $s.ExclusiveAddressUse = $true; $s.Bind([Net.IPEndPoint]::new([Net.IPAddress]::IPv6Any, 58732)); $s.Listen(5); Start-Sleep 900; break } catch { Start-Sleep -Milliseconds 50 } }'

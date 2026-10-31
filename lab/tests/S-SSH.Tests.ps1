@@ -36,6 +36,9 @@ BeforeAll {
     $keyDir = Join-Path ([IO.Path]::GetTempPath()) "rh-lab-ssh-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
 
     function Save($name, $data) { $data | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $EvidenceDir "s-ssh-$name.json") -Encoding UTF8 }
+    # Where the file is, line by line as it goes: on Server it ran into its 60 min limit after S-SSH-05 in every run
+    # since 20261030-004321, and the console log (written in blocks) stops at the context's name, so it doesn't say where
+    function Mark([string]$What) { Add-Content -LiteralPath (Join-Path $EvidenceDir 's-ssh-progress.txt') -Value "$((Get-Date).ToString('HH:mm:ss')) $What" -Encoding UTF8 }
     function Shot([string]$name) { try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "s-ssh-$name.png") } catch { } }
     # harness commands without a module wrapper (Invoke-LabHarness is internal to the module, so it is called in its scope)
     function Harness([string[]]$Arguments, [int]$TimeoutSec = 300) {
@@ -94,6 +97,7 @@ BeforeAll {
 }
 
 AfterAll {
+    Mark 'AfterAll'
     if (Test-Path $keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction SilentlyContinue }
     if ($isClient) {
         Shot 'end'
@@ -103,6 +107,7 @@ AfterAll {
     }
     # OpenSSH, its authorized keys and the share servers set up in the guest
     if ($isServer -or $isClient) { Set-LabVmDirty -Name $VmName }
+    Mark 'AfterAll done'
 }
 
 Describe 'S-SSH harness <VmName>' -Tag Share, Ssh, 'S-SSH' {
@@ -188,7 +193,9 @@ Describe 'S-SSH harness <VmName>' -Tag Share, Ssh, 'S-SSH' {
     Context 'the diagnostic log' {
         It 'S-SSH-07 the SSH sessions are logged without the device, its address or the account' -Tag 'S-SSH-07' {
             if (-not $isServer) { Set-ItResult -Skipped -Because $notServer; return }
+            Mark 'S-SSH-07: reading the diagnostic log'
             $lines = @(Get-LabHostDiagLog -Since $logSince)
+            Mark "S-SSH-07: $($lines.Count) lines read"
             Save 'diaglog' @{ Count = $lines.Count; Ssh = @($lines | Where-Object { $_ -match 'SSH' } | Select-Object -First 40) }
             @($lines | Where-Object { $_ -match 'SSH: connected' }).Count | Should -BeGreaterThan 0 -Because 'the sessions are logged'
             $user = ($admin -split '\\')[-1]
@@ -220,7 +227,11 @@ Describe 'S-SSH UI <VmName>' -Tag Client, UI, Ssh, 'S-SSH' {
                 $null = Ui 'Add' -Title $t
                 $script:u.inTree = (Ui 'Lab SSH' -Value exists -TimeoutSec 20).found
                 $null = Menu 'Open' 'Lab SSH'
-                $script:u.trust = (Ui 'Trust and connect' -Title 'Trust this server?' -TimeoutSec 60 -Optional).found
+                # by the button in any window, as S-SHARE2 does: the dialog was on screen in run 20261030-194701 but not
+                # found under the title 'Trust this server?'
+                $trust = Ui 'Trust and connect' -Title '?*' -TimeoutSec 60 -Optional
+                $script:u.trust = $trust.found
+                $script:u.trustWindow = $trust.window
                 $script:u.prompt = Wait-Terminal '>\s*$|\$\s*$' 'a prompt'
                 $null = Ui 'Terminal' -Value 'keys:hostname{ENTER}'
                 $script:u.output = Wait-Terminal (NameLine $deviceComputer) "the device's name"
@@ -228,6 +239,10 @@ Describe 'S-SSH UI <VmName>' -Tag Client, UI, Ssh, 'S-SSH' {
                 # Ctrl+W is the shell's (delete a word): the tab stays open
                 $null = Ui 'Terminal' -Value 'keys:^w'
                 $script:u.tabAfterCtrlW = (Ui 'Terminal' -Value exists -Optional -TimeoutSec 5).found
+                # Enter first: the device's shell is cmd, where Ctrl+W isn't "delete a word" but a character left on the
+                # line - "exit" after it was no command (run 20261031-075755: the session never ended)
+                $null = Ui 'Terminal' -Value 'keys:{ENTER}'
+                $null = Wait-Terminal '>\s*$|\$\s*$' 'a prompt after Ctrl+W' 15
                 $null = Ui 'Terminal' -Value 'keys:exit{ENTER}'
                 $script:u.ended = (Ui 'The session ended.' -Value exists -Optional -TimeoutSec 30).found
             }

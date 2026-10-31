@@ -76,6 +76,8 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path (Out 'control') 'console.png')
             $b.consoleOcr = Get-LabOcr -Path (Join-Path (Out 'control') 'console.png')
             $b.frameOcr = Get-LabOcr -Path (Join-Path (Out 'control') 'frame.png')
+            # the banner collapses by its own 8 s timer; nothing on the guest says "collapsed" without the pill's width,
+            # which is what D-BAN-04 measures
             Start-Sleep -Seconds 12
             $b.collapsed = @(Invoke-LabPerson -Name $VmName -Do windows)
             $b.hover = Invoke-LabPerson -Name $VmName -Do hover -Title 'RemoteHub'
@@ -88,9 +90,11 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $closeMarker = Start-LabMarker -Name $VmName
             if (-not $closeMarker.Shown) { throw "the marker window didn't show, so Alt+F4 would reach the shell ($($closeMarker.Why))" }
             Send-LabMouse -Name $VmName -X 200 -Y 400
+            # the click makes the marker the foreground window before the keys
             Start-Sleep -Seconds 1
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Controlled' -Title 'RemoteHub'
             Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x73
+            # the banner must not close in this time (and the marker has the key by then)
             Start-Sleep -Seconds 2
             $b.close = [pscustomobject]@{ left = @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object Title -eq 'RemoteHub').Count
                 altF4 = @(Get-LabMarker -Name $VmName -Marker $closeMarker | Where-Object { $_.e -eq 'down' -and $_.vk -eq 115 }).Count }
@@ -100,12 +104,11 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $b.afterTries = @(Invoke-LabPerson -Name $VmName -Do windows)
             # then Disconnect: the session ends, the resume token is void (asked again)
             Go 'control'
-            Start-Sleep -Seconds 4
             # Disconnect is on the open banner only: by now it has collapsed to the pill (the pointer left it for the
             # marker), and lab run 20261019-193627 (W11) found no "Disconnect" at all - neither the session's OCR (the
             # banner is kept out of captures) nor the console's (no words read in its area). Invoke-LabBannerClick opens
             # it with a hover first, finds the whole label in the console picture and keeps that picture.
-            $b.disconnect = Invoke-LabBannerClick -Name $VmName -Label 'Disconnect' -TimeoutSec 20 -EvidencePath (Join-Path (Out 'control') 'disconnect-console.png')
+            $b.disconnect = Invoke-LabBannerClick -Name $VmName -Label 'Disconnect' -TimeoutSec 30 -EvidencePath (Join-Path (Out 'control') 'disconnect-console.png')
             $b.again = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 60
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny'
             $b.r = Receive-LabDesktop $job
@@ -246,6 +249,8 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             $r = Receive-LabDesktop $job
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process consent -ErrorAction SilentlyContinue | Stop-Process -Force }
             Stop-LabInSession -Name $VmName -Task $task
+            # the secure desktop goes with consent.exe: the key state is read on the user's desktop again (no condition
+            # from here says which desktop has the input)
             Start-Sleep -Seconds 3
             $stuck = Invoke-LabInSession -Name $VmName -ScriptBlock {
                 Add-Type -Namespace RhLab -Name Keys -MemberDefinition '[DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);'
@@ -285,11 +290,14 @@ Describe 'D-BANNER <VmName>' -Tag Desktop, 'D-BAN', 'D-VIEW', 'D-RIGHT' {
             # locked: Start is refused
             $since = Get-LabGuestTime -Name $VmName
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 5
+            # locked: the lock screen (LogonUI) shows in the console session
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the console session did not show the lock screen' -Until {
+                @(Get-LabSessions -Name $VmName | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0
+            }
             $locked = Invoke-LabDesktop -Name $VmName -Pin $pin -Out (Out 'locked') -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'auto' }, @{ do = 'wait'; anyOf = @('Failed', 'Connected', 'WaitingForUser'); timeout = 60 })
-            Start-Sleep -Seconds 2
-            $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
+            # (Where-Object: a timeout hands back $null, which @() would count as one event)
+            $events = @(Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 2100 was not written' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100) } | Where-Object { $_ })
             Unlock-LabSession -Name $VmName
             Set-LabAgentPolicy -Name $VmName -Clear
             Save 'secure' @{ Uac = $uac; StillOpen = $stillOpen; Locked = $locked; Events = $events }

@@ -50,7 +50,8 @@ BeforeAll {
     }
     function Shot([string]$name) { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir "ui-desktop-$name.png") }
     function DevShot([string]$name) { $p = Join-Path $EvidenceDir "ui-desktop-$name-device.png"; $null = Get-LabScreenshot -Name $dn -Path $p; $p }
-    # Esc on the client's console keyboard (closes a menu; with the tab focused it goes to the device)
+    # Esc on the client's console keyboard (closes a menu; with the tab focused it goes to the device). The pause lets the
+    # menu close before the next step looks at the window.
     function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 400 }
     # one independent UI section: a failure is written down (error, screenshot, open dialogs), the next section runs
     function Step([string]$Name, [scriptblock]$Do) {
@@ -131,7 +132,7 @@ foreach ($w in @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Childre
         # an Alt tap lets this process set the foreground window
         [RhLab.Fg]::keybd_event(0x12, 0, 0, [IntPtr]::Zero); [RhLab.Fg]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
         $null = [RhLab.Fg]::SetForegroundWindow($h)
-        Start-Sleep -Milliseconds 400
+        Start-Sleep -Milliseconds 400   # the window comes to the front and is drawn there before its picture is measured
     }
     foreach ($i in @($w.FindAll([Windows.Automation.TreeScope]::Descendants, $isImg))) {
         if ($i.Current.IsOffscreen) { continue }
@@ -227,7 +228,7 @@ function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($
     function FocusTab([double]$X = 0.5, [double]$Y = 0.5) {
         $p = PictureRect
         Send-LabMouse -Name $VmName -X ([int]($p.X + $p.W * $X)) -Y ([int]($p.Y + $p.H * $Y))
-        Start-Sleep -Seconds 1
+        Start-Sleep -Seconds 1   # the click reaches the tab and moves the keyboard focus before keys are sent
     }
     function TabPicture([string]$name) {
         $p = PictureRect
@@ -245,7 +246,8 @@ function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($
         finally { $src.Dispose() }
         $out
     }
-    # keys on the client's console keyboard (real input: RemoteHub's key hook sends them to the device)
+    # keys on the client's console keyboard (real input: RemoteHub's key hook sends them to the device); the pause after
+    # them lets the tab pass them on before the next input or look
     function Combo([int[]]$Codes) { Send-LabKeyCombo -Name $VmName -Codes $Codes; Start-Sleep -Milliseconds 600 }
     # Text typed key by key (press / release of US-layout virtual keys, Shift where needed) - the way Combo presses keys,
     # which reached the device in every case. Hyper-V's TypeText through the tab didn't (the run of 16.10.2026 13:55: the
@@ -265,7 +267,7 @@ function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($
             else { throw "TypeText: no US key for '$c'" }
             Send-LabKeyCombo -Name $VmName -Codes $(if ($shift) { @(0x10, $vk) } else { @($vk) })
         }
-        Start-Sleep -Milliseconds 600
+        Start-Sleep -Milliseconds 600   # the last keys reach the device before the next input
     }
     function Key([string]$Key) { Send-LabKey -Name $VmName -Key $Key; Start-Sleep -Milliseconds 600 }
 
@@ -273,13 +275,18 @@ function PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; if ($
     function DeviceNotepad([string]$File, [string]$Content = '', [switch]$Keep) {
         Invoke-LabGuest -Name $dn -ArgumentList $File, $Content, $Keep.IsPresent -ScriptBlock {
             param($f, $c, $keep)
-            if (-not $keep) { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 500 }
+            if (-not $keep) {
+                Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+                # gone before the file is written and a new one opens (the old window must not be the one found)
+                $until = (Get-Date).AddSeconds(10)
+                do { if (-not (Get-Process notepad -ErrorAction SilentlyContinue)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
+            }
             [IO.File]::WriteAllText($f, $c, [Text.Encoding]::Unicode)
         }
         $null = Start-LabInSession -Name $dn -ScriptBlock ([scriptblock]::Create("Start-Process notepad.exe -ArgumentList '`"$File`"' -WindowStyle Maximized"))
         $leaf = [IO.Path]::GetFileName($File)
         $null = Invoke-LabPerson -Name $dn -Do uia -Title "$leaf*" -Text '*' -Value exists -TimeoutSec 30
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 2   # the new window maximized and its text box ready for keys (no state shows that)
     }
     # the screen rectangle of the first visible window whose title starts with @@T@@ (the person's click at the device)
     $rectOfCode = @'
@@ -297,11 +304,13 @@ Add-Type -TypeDefinition 'using System; using System.Text; using System.Runtime.
         $fg = (Windows $dn 'User').Fg
         if ($fg -like "$Leaf*") { return 'tab' }
         $o = "$(InSession $dn 'User' $rectOfCode.Replace('@@T@@', $Leaf))"
+        $fg2 = $null
         if ($o -match 'WR=(-?\d+),(-?\d+),(\d+),(\d+)') {
             Send-LabMouse -Name $dn -X ([int]([int]$Matches[1] + [int]$Matches[3] / 2)) -Y ([int]([int]$Matches[2] + [int]$Matches[4] / 2))
-            Start-Sleep -Seconds 1
+            $fg2 = Wait-LabCondition -NoThrow -TimeoutSec 10 -IntervalMs 250 -Because "the device's click did not bring '$Leaf' to the front" -Until {
+                $f = (Windows $dn 'User').Fg; if ($f -like "$Leaf*") { $f } }
         }
-        $fg2 = (Windows $dn 'User').Fg
+        if (-not $fg2) { $fg2 = (Windows $dn 'User').Fg }
         # the keyboard focus in the tab again (the keys go from there)
         FocusTab
         if ($fg2 -like "$Leaf*") { "device (the tab's click left '$fg' in front)" } else { "none ('$fg2' in front after the device's click; window: $o)" }
@@ -345,7 +354,7 @@ public static class RhRes {
 '@
     function ClientRes([int]$W, [int]$H) {
         $o = "$(InSession $VmName 'Console' $clientResCode.Replace('@@W@@', "$W").Replace('@@H@@', "$H"))"
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 3   # RemoteHub's window lays itself out at the new screen size (no state shows when it is done)
         if ($o -match 'CRES=(-?\d+);(\S+)') { [pscustomobject]@{ Result = [int]$Matches[1]; Was = $Matches[2] } } else { [pscustomobject]@{ Result = $null; Was = $null; Output = $o } }
     }
     function DeviceRes { "$(InSession $dn 'User' "Add-Type -AssemblyName System.Windows.Forms; `$b = [Windows.Forms.Screen]::PrimaryScreen.Bounds; 'RES=' + `$b.Width + 'x' + `$b.Height")" -replace '(?s).*RES=(\d+x\d+).*', '$1' }
@@ -361,10 +370,14 @@ public static class RhRes {
             $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3
             if (-not $c.found) { $c = Ui 'Close this tab' -Optional -TimeoutSec 2 }
             if (-not $c.found) { break }
-            Start-Sleep -Seconds 2
+            Start-Sleep -Seconds 2   # time for the sign-out question to come up (it may not come at all)
             foreach ($t in 'RemoteHub signed in on *automatically*', 'Sign out on the device?') {
                 $m = Ui 'Disconnect' -Title $t -Optional -TimeoutSec 1
-                if ($m.found) { Start-Sleep -Seconds 2; break }
+                if ($m.found) {
+                    # the question gone before the next close button is looked for
+                    $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "the question '$t' did not close" -Until { -not (Ui 'Disconnect' -Title $t -Value exists -Optional -TimeoutSec 1).found }
+                    break
+                }
             }
         }
     }
@@ -383,7 +396,15 @@ public static class RhRes {
         $until = (Get-Date).AddSeconds($TimeoutSec)
         do {
             $r = try { Invoke-LabPerson -Name $dn -Do click -Text $Answer -TimeoutSec 20 } catch { [pscustomobject]@{ clicked = $false; error = "$_" } }
-            if ($r.PSObject.Properties['clicked'] -and $r.clicked) { return $r }
+            if ($r.PSObject.Properties['clicked'] -and $r.clicked) {
+                # a click reported but not taken (UI-AD-07, run 20261030-194701: the dialog ran out its time after it):
+                # the request window is clicked again while it is still there
+                $gone = Wait-LabCondition -NoThrow -TimeoutSec 5 -IntervalMs 1000 -Because 'the request window stayed after the click' -Until {
+                    $w = try { Invoke-LabPerson -Name $dn -Do windows -TimeoutSec 10 } catch { $null }
+                    -not @($w | Where-Object { $_ -and "$($_.Title)" -like '*Remote access request*' }).Count
+                }
+                if ($gone) { return $r }
+            }
             Start-Sleep -Seconds 2
         } while ((Get-Date) -lt $until)
         $r
@@ -401,6 +422,8 @@ public static class RhRes {
             if ($d.found) { return $d }
             $rows = @((Ui '*' -Title $Title -Value list -Optional -TimeoutSec 5).items)
             if (-not $rows.Count) { return $d }
+            # the confirmation before it has the same title: still asking means nothing is in progress to wait for
+            if (@($rows | Where-Object { $_ -match '(?s)^Text\|.*(Install|Remove|Uninstall) it\?' }).Count) { return $d }
             if (@($rows | Where-Object { $_ -match "^Text\|(Failed|Cancelled|The update didn.t install|The agent didn.t answer again|The device.s agent uses a certificate|Installed, but this PC can.t reach)" }).Count) { return $d }
         } while ((Get-Date) -lt $until)
         $d
@@ -412,9 +435,23 @@ public static class RhRes {
     function EditConnection([scriptblock]$Do) {
         Menu 'Edit*'
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
-        & $Do
+        # The window closed by itself halfway in run 20261030-194701 (UI-AG-04, UI-AG-08), with no error box: what
+        # RemoteHub logged, the session's windows and whether a crash was written go into the results to tell why.
+        try { & $Do }
+        catch {
+            if (-not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 2).found) {
+                $R['editorGone'] = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
+                        param($u)
+                        $d = "C:\Users\$u\AppData\Roaming\RemoteHub"
+                        Get-Content "$d\logs\remotehub.log" -Tail 30 -ErrorAction SilentlyContinue
+                        Get-ChildItem "$d\logs" -Filter '*crash*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1 | ForEach-Object { "crash file: $($_.Name) $($_.LastWriteTime)" }
+                    })
+                $R['editorGoneWindows'] = try { (Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'zz-no-such-window' -Text 'zz' -Value exists -TimeoutSec 1).windows -join ', ' } catch { "$_" }
+            }
+            throw
+        }
         $null = Ui 'Save' -Title 'Edit connection'
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the Edit connection window did not close after Save' -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found }
     }
     # the newest agent update log on the device: its msiexec command line and its end. Read shared (msiexec may still write it) and
     # as UTF-16 when it is one; without a command line: the log's path, size and last lines instead.
@@ -622,30 +659,30 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 ConnectChosen
                 $R.allow = Allow
                 $R.live = Live 90
-                Start-Sleep -Seconds 5
-                $dev = DevShot 'open'
-                $tab = TabPicture 'open'
-                $R.openSimilarity = Compare-LabImage -A $dev -B $tab
+                # the tab's picture catches up with the device's screen a moment after it is live
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the tab's picture did not match the device's screen" -Until {
+                    $dev = DevShot 'open'
+                    $tab = TabPicture 'open'
+                    $R.openSimilarity = Compare-LabImage -A $dev -B $tab
+                    $R.openSimilarity -ge 0.9 }
                 $R.allowEvents = @(Get-LabAgentEvent -Name $dn -Since $since)
             }
             Step 'control' {
                 $R.typedFocus = DeviceFocus 'ad02.txt'
                 TypeText 'RemoteHub lab 123 !@#'
-                Start-Sleep -Seconds 3
-                $R.typed = NotepadText
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "the device's Notepad did not get the typed text" -Until { $R.typed = NotepadText; (Norm $R.typed) -eq 'RemoteHub lab 123 !@#' }
                 if ("$($R.typed)" -ne 'RemoteHub lab 123 !@#') { $R.typedFg = (Windows $dn 'User').Fg; $null = DevShot 'typed' }
             }
             Step 'cp01' {
                 DeviceNotepad 'C:\Users\Public\cp01.txt'
                 $R.cp01Set = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $uni
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "the copied text did not reach the device's clipboard" -Until { (Invoke-LabPerson -Name $dn -Do clip-get).sha256 -eq (Sha $uni) }
                 $R.cp01Focus = DeviceFocus 'cp01.txt'
                 # what the device's clipboard holds before the Ctrl+V: tells a copy that didn't arrive from a key that didn't
                 # (text comes at once, nothing is fetched by reading it)
                 $R.cp01DeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
                 Combo 0x11, 0x56
-                Start-Sleep -Seconds 3
-                $R.cp01 = NotepadText
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "Ctrl+V did not put the text into the device's Notepad" -Until { $R.cp01 = NotepadText; (Norm $R.cp01) -eq (Norm $uni) }
                 if ((Norm $R.cp01) -ne (Norm $uni)) { $R.cp01Fg = (Windows $dn 'User').Fg; $null = DevShot 'cp01' }
             }
             Step 'cp02' {
@@ -653,19 +690,20 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 FocusTab
                 Combo 0x11, 0x41
                 Combo 0x11, 0x43
-                Start-Sleep -Seconds 4
-                $R.cp02 = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because "the device's copy did not reach this PC's clipboard" -Until { $R.cp02 = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get; $R.cp02.sha256 -eq (Sha $uni2) }
             }
             Step 'cp03' {
                 $mark = NoticeMark
                 $null = InSession $VmName 'Console' $setImageCode.Replace('@@K@@', '7') -TimeoutSec 240
-                Start-Sleep -Seconds 4
-                $R.cp03ToDevice = "$(InSession $dn 'User' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                # read until the picture has arrived (before that the clipboard holds the earlier text: "no image")
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the picture did not reach the device's clipboard" -Until {
+                    $R.cp03ToDevice = "$(InSession $dn 'User' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                    $R.cp03ToDevice -eq '0' }
                 $null = InSession $dn 'User' $setImageCode.Replace('@@K@@', '11') -TimeoutSec 240
-                Start-Sleep -Seconds 4
-                $R.cp03ToAdmin = "$(InSession $VmName 'Console' $getImageCode.Replace('@@K@@', '11') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
-                Start-Sleep -Seconds 1
-                $R.cp03Notices = @(Notices $mark)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the device's picture did not reach this PC's clipboard" -Until {
+                    $R.cp03ToAdmin = "$(InSession $VmName 'Console' $getImageCode.Replace('@@K@@', '11') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                    $R.cp03ToAdmin -eq '0' }
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 10 -Because 'the tab did not say it copied the image from the device' -Until { $R.cp03Notices = @(Notices $mark); ($R.cp03Notices -join "`n") -match '(Copied|Pasted) the image from the device' }
             }
             Step 'cp04' {
                 # 3 files and a folder with 2 files (4 MB each) on the admin's PC
@@ -678,9 +716,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                     })
                 $mark = NoticeMark
                 $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin', 'C:\lab\clip\f2.bin', 'C:\lab\clip\f3.bin', 'C:\lab\clip\folder')
-                Start-Sleep -Seconds 4
-                # what the device's clipboard offers before the paste (no file reached either way in the run of 16.10.2026 13:55)
-                $R.cp04DeviceClip = ClipFormats $dn 'User'
+                # what the device's clipboard offers before the paste (no file reached either way in the run of 16.10.2026 13:55),
+                # read until the offer of the files is there
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -IntervalMs 1000 -Because "the device's clipboard did not offer the files" -Until { $R.cp04DeviceClip = ClipFormats $dn 'User'; ($R.cp04DeviceClip -join '|') -match 'FileGroupDescriptor|FileDrop' }
                 # This PC's adapter limited to 20 Mbit/s while the 20 MB go (about 8 s): unlimited they were across in well
                 # under a second and the notice watcher (every 400 ms) never saw "Copying ...". Hyper-V's MaximumBandwidth
                 # limits only what a VM sends - the device's adapter limited (lab run 20261019-193627) left this copy to the
@@ -688,8 +726,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 20000000
                 try { $R.cp04Arrived = @(PasteAt $dn 'User' 'cp04' 5) }
                 finally { Set-VMNetworkAdapter -VMName $VmName -MaximumBandwidth 0 }
-                Start-Sleep -Seconds 3
-                $R.cp04Notices = @(Notices $mark)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the tab did not say the 5 files were copied' -Until { $R.cp04Notices = @(Notices $mark); ($R.cp04Notices -join "`n") -match 'Copied 5 files to the device' }
             }
             Step 'cp05' {
                 $R.cp05Source = @(Invoke-LabGuest -Name $dn -ScriptBlock {
@@ -699,11 +736,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                     })
                 $mark = NoticeMark
                 $null = SetFileList $dn 'User' @('C:\Users\Public\cp05\a.txt', 'C:\Users\Public\cp05\b.txt', 'C:\Users\Public\cp05\c.txt', 'C:\Users\Public\cp05\folder')
-                Start-Sleep -Seconds 4
-                $R.cp05ClientClip = ClipFormats $VmName 'Console'
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -IntervalMs 1000 -Because "this PC's clipboard did not offer the device's files" -Until { $R.cp05ClientClip = ClipFormats $VmName 'Console'; ($R.cp05ClientClip -join '|') -match 'FileGroupDescriptor|FileDrop' }
                 $R.cp05Arrived = @(PasteAt $VmName 'Console' 'cp05' 4)
-                Start-Sleep -Seconds 2
-                $R.cp05Notices = @(Notices $mark)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the tab did not say the 4 files came from the device' -Until { $R.cp05Notices = @(Notices $mark); ($R.cp05Notices -join "`n") -match '(Copied|Pasted) 4 files from the device' }
             }
             Step 'cp06' {
                 $null = Invoke-LabGuest -Name $VmName -ScriptBlock { $null = New-Item -ItemType Directory -Path 'C:\lab\big' -Force; $fs = [IO.File]::Create('C:\lab\big\big101.bin'); $fs.SetLength(101MB); $fs.Dispose() }
@@ -711,7 +746,8 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Invoke-LabPerson -Name $dn -Do clip-set -Value 'cp06 guard'
                 $mark = NoticeMark
                 $null = SetFileList $VmName 'Console' @('C:\lab\big\big101.bin')
-                Start-Sleep -Seconds 4
+                # the refusal is said before the paste is tried (the paste itself then shows that nothing arrives)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the tab did not say the 101 MB were too much' -Until { (@(Notices $mark) -join "`n") -match 'Too much to copy' }
                 $R.cp06Arrived = @(PasteAt $dn 'User' 'cp06' 1 20)
                 $R.cp06Notices = @(Notices $mark)
                 $R.cp06Partial = @(Invoke-LabGuest -Name $dn -ScriptBlock { @(Get-ChildItem 'C:\Users\*\AppData\Local\Temp' -Recurse -File -ErrorAction SilentlyContinue | Where-Object Length -gt 1MB | Where-Object { $_.FullName -match 'RemoteHub' } | ForEach-Object FullName) })
@@ -723,47 +759,47 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 FocusTab
                 $R.keysFgBefore = (Windows $dn 'User').Fg
                 Combo 0x12, 0x09
-                Start-Sleep -Seconds 2
-                $R.keysFgAfter = (Windows $dn 'User').Fg
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'Alt+Tab did not bring the other Notepad to the front on the device' -Until {
+                    $R.keysFgAfter = (Windows $dn 'User').Fg; $R.keysFgAfter -like 'keys-?.txt*' -and $R.keysFgAfter -ne $R.keysFgBefore }
                 $R.keysClientFg = (Windows $VmName 'Console').Fg
                 Combo 0x5B, 0x52
-                Start-Sleep -Seconds 3
-                $R.keysRunDevice = @((Windows $dn 'User').All | Where-Object { $_ -eq 'Run' }).Count
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'Win+R did not open Run on the device' -Until { $R.keysRunDevice = @((Windows $dn 'User').All | Where-Object { $_ -eq 'Run' }).Count; $R.keysRunDevice -gt 0 }
                 $R.keysRunClient = @((Windows $VmName 'Console').All | Where-Object { $_ -eq 'Run' }).Count
                 Esc
                 # Win+L stays with this PC: it locks the client, not the device
                 Combo 0x5B, 0x4C
-                Start-Sleep -Seconds 6
-                $R.keysClientLocked = LockedCount $VmName
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'Win+L did not lock this PC' -Until { $R.keysClientLocked = LockedCount $VmName; $R.keysClientLocked -gt 0 }
                 $R.keysDeviceLocked = LockedCount $dn
                 Unlock-LabSession -Name $VmName -Account Console
-                Start-Sleep -Seconds 3
+                Start-Sleep -Seconds 3   # RemoteHub's window drawn again on the unlocked desktop before the next click into the tab
             }
             Step 'physical-cad' {
                 FocusTab
                 Send-LabCtrlAltDel -Name $VmName
-                Start-Sleep -Seconds 5
                 $p = Join-Path $EvidenceDir 'ui-desktop-physical-cad-client.png'
-                $null = Get-LabScreenshot -Name $VmName -Path $p
-                $R.cadClientOcr = Ocr $p
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -IntervalMs 1000 -Because "this PC's security screen did not show" -Until {
+                    $null = Get-LabScreenshot -Name $VmName -Path $p
+                    $R.cadClientOcr = Ocr $p
+                    $R.cadClientOcr -match 'Task Manager|Sign out' }
                 $R.cadDeviceLogonUi = LockedCount $dn
                 $null = DevShot 'physical-cad'
                 Key 'Escape'
-                Start-Sleep -Seconds 3
+                # this PC's security screen (LogonUI) gone before the tab is used again
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "this PC's security screen did not close after Esc" -Until { (LockedCount $VmName) -eq 0 }
             }
             Step 'sas01' {
                 Invoke-LabGuest -Name $dn -ScriptBlock { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
                 FocusTab 0.5 0.01
                 $null = Ui 'Send Ctrl+Alt+Del'
-                Start-Sleep -Seconds 5
-                $R.sasOptions = Ocr (TabPicture 'sas-options')
+                # the security options in the tab's picture (read until they are; "Lock" alone is read poorly, see below)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -IntervalMs 1000 -Because 'the security options did not show in the tab' -Until { $R.sasOptions = Ocr (TabPicture 'sas-options'); $R.sasOptions -match 'Sign out|Task Manager' }
                 # Windows frames the first option ("Lock") with the keyboard focus, and OCR reads framed text poorly: in
                 # lab run 20261019-193627 it read every option but "Lock" although the picture shows it. Then the focus is
                 # moved one down (Down arrow through the tab) and the picture read again - both readings count.
                 if ($R.sasOptions -notmatch 'Lock') {
                     FocusTab 0.5 0.01
                     Key 'Down'
-                    Start-Sleep -Seconds 2
+                    Start-Sleep -Seconds 2   # the moved focus frame reaches the tab's picture (nothing but the picture shows it)
                     $R.sasOptionsFirst = $R.sasOptions
                     $R.sasOptions = "$($R.sasOptions) $(Ocr (TabPicture 'sas-options-moved'))"
                 }
@@ -777,7 +813,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 # security options stayed on the device through the Fit to window step)
                 FocusTab 0.5 0.01
                 Esc
-                Start-Sleep -Seconds 4
+                # the device's security options (LogonUI) gone, then the picture read
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because "the device's security options did not close after Esc" -Until { (LockedCount $dn) -eq 0 }
+                Start-Sleep -Seconds 1   # the desktop's picture reaches the tab
                 $R.sasBack = Ocr (TabPicture 'sas-back')
             }
             Step 'fit' {
@@ -787,12 +825,10 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 # the resolution button opens a menu (a popup window of its own, hence -Title '*')
                 $null = Ui '*follows this window*'
                 $null = Ui '*own resolution' -Title '*'
-                Start-Sleep -Seconds 8
-                $R.fitOff = DeviceRes
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the device did not go back to its own resolution ($($R.resBefore))" -Until { $R.fitOff = DeviceRes; $R.fitOff -eq $R.resBefore }
                 $null = Ui 'Change the device*resolution*'
                 $null = Ui 'Fit to this window' -Title '*'
-                Start-Sleep -Seconds 8
-                $R.fitOnAgain = DeviceRes
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the device did not take the tab's size again ($($R.fitOn))" -Until { $R.fitOnAgain = DeviceRes; $R.fitOnAgain -eq $R.fitOn }
                 # larger than the tab: the device gets the size (or the nearest it offers), the picture is scaled down
                 $null = Ui '*follows this window*'
                 $null = Ui '3840*2160' -Title '*'
@@ -800,7 +836,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 Shot 'fit-large'
                 $null = Ui 'The device runs at *'
                 $null = Ui 'Fit to this window' -Title '*'
-                Start-Sleep -Seconds 8
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the device did not take the tab's size again after 3840x2160" -Until { (DeviceRes) -eq $R.fitOnAgain }
                 # A larger tab: this PC's screen made larger (1600x900), RemoteHub maximized, the navigation hidden. At
                 # 1024x768 even the tab without navigation (868x496 asked) holds no listed mode of the device but 640x480 -
                 # the agent takes the largest listed mode that fits (ScreenCapture.cs DisplayModes.Choose), so "wider" could
@@ -808,24 +844,24 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.fitClientRes = ClientRes 1600 900
                 $max = Ui 'TitleBarMaximizeButton' -Optional -TimeoutSec 10
                 $null = Ui 'Hide navigation'
-                Start-Sleep -Seconds 8
-                $R.fitWide = DeviceRes
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because 'the device did not get wider with the wider tab' -Until {
+                    $R.fitWide = DeviceRes; [int]($R.fitWide -split 'x')[0] -gt [int]($R.fitOnAgain -split 'x')[0] }
                 Shot 'fit-wide'
                 $null = Ui '*navigation' -Optional
                 # back: the window restored, this PC's own resolution
                 if ($max.found) { $null = Ui 'TitleBarMaximizeButton' -Optional -TimeoutSec 10 }
                 if ($R.fitClientRes.Was -match '^\d+x\d+$') { $wh = $R.fitClientRes.Was -split 'x'; $null = ClientRes ([int]$wh[0]) ([int]$wh[1]) }
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do uia -Title 'RemoteHub*' -Text 'NewButton' -Value fit -TimeoutSec 10
-                Start-Sleep -Seconds 4
+                Start-Sleep -Seconds 4   # the window and the device's resolution settle at the restored size before the monitors are switched
                 if ($R.fitMonitors.enabled) {
                     # more than one monitor: each one, then all of them (the combo box by its tooltip)
                     $null = Ui 'Monitor of the device' -Value click
                     $R.fitMonitor2 = Ui 'Monitor 2*' -Value click -Optional
-                    Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 5   # the other monitor's picture reaches the tab (nothing but the picture shows it)
                     $R.fitMonitor2Shot = TabPicture 'monitor-2'
                     $null = Ui 'Monitor of the device' -Value click
                     $R.fitAll = Ui 'All monitors*' -Value click -Optional
-                    Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 5   # the picture of all monitors reaches the tab
                     $R.fitAllShot = TabPicture 'monitor-all'
                 }
             }
@@ -839,6 +875,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 # Every check is written down (seconds since the cut, live, reconnecting).
                 $switches = Disconnect-LabNetwork -Name $dn
                 $cut = Get-Date
+                # the cut itself: 10 s without network
                 try { Start-Sleep -Seconds 10 } finally { Connect-LabNetwork -Name $dn -Switches $switches; $R.netRestored = [math]::Round(((Get-Date) - $cut).TotalSeconds, 1) }
                 $R.netBack = $null
                 $R.netPolls = New-Object System.Collections.Generic.List[string]
@@ -850,7 +887,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                     if ($live.found -and -not $rec.found) { $R.netBack = $at; return $true }
                     $false
                 }
-                Start-Sleep -Seconds 3
+                Start-Sleep -Seconds 3   # no question may come up at the device in this time (UI-NET-01)
                 $R.netNotices = @(Notices $mark)
                 $R.netConsent = @(Invoke-LabPerson -Name $dn -Do windows | Where-Object { $_.Title -ne 'RemoteHub' } | ForEach-Object Title)
                 $R.netEvents = @(Get-LabAgentEvent -Name $dn -Since $since -Id 1103)
@@ -859,23 +896,23 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 FocusTab
                 $mark = NoticeMark
                 Lock-LabSession -Name $dn
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -TimeoutSec 30 -Because 'the device did not show its lock screen' -Until { (LockedCount $dn) -gt 0 }
                 $null = Ui 'Send Ctrl+Alt+Del'
-                Start-Sleep -Seconds 5
-                $R.lockOcr = Ocr (TabPicture 'lock-password')
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the tab did not show the device's password screen for $($device.UserAccount)" -Until {
+                    $R.lockOcr = Ocr (TabPicture 'lock-password'); $R.lockOcr -match [regex]::Escape($device.UserAccount) }
                 # copy on the admin's PC and Ctrl+V into the password field: nothing reaches the device's clipboard
                 $R.lockText = "while locked $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $R.lockText
-                Start-Sleep -Seconds 3
+                Start-Sleep -Seconds 3   # the copy must not reach the locked device in this time
                 # the picture gets the keyboard focus back from the Send Ctrl+Alt+Del button, so Ctrl+V reaches the field
                 FocusTab 0.5 0.01
                 Combo 0x11, 0x56
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 2   # nothing may reach the device's clipboard in this time
                 $R.lockDeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
                 # copied on the device while locked: nothing comes back
                 $R.lockDevText = "device locked $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $dn -Do clip-set -Value $R.lockDevText
-                Start-Sleep -Seconds 4
+                Start-Sleep -Seconds 4   # nothing may come back to this PC's clipboard in this time
                 $R.lockClientClip = Invoke-LabPerson -Name $VmName -Account Console -Do clip-get
                 # the password typed in the tab unlocks; then the tab waits for normaluser's answer. The field is emptied
                 # first with Backspace as well: if the Ctrl+V above did paste, Ctrl+A + one Backspace left most of it in
@@ -892,7 +929,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 # unlocking or signing in is asked - D-LOCK-02 and UI-SAS-03 cover that. A dialog that comes anyway is
                 # written down and answered, so the next steps can go on.
                 $R.lockUnlocked = (WaitFor -TimeoutSec 60 { (LockedCount $dn) -eq 0 })
-                Start-Sleep -Seconds 8
+                Start-Sleep -Seconds 8   # no question may come up at the device in this time
                 $R.lockAsked = @(Invoke-LabPerson -Name $dn -Do windows | Where-Object { $_.Title -and $_.Title -ne 'RemoteHub' } | ForEach-Object { "$($_.Title)" })
                 if ($R.lockAsked.Count) { $R.lockAllow = Allow }
                 $R.lockLive = Live 90
@@ -900,8 +937,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 # unlocked and allowed: copy and paste work again
                 $R.lockAfterText = "after unlock $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $R.lockAfterText
-                Start-Sleep -Seconds 4
-                $R.lockAfterClip = Invoke-LabPerson -Name $dn -Do clip-get
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because "the copy after the unlock did not reach the device's clipboard" -Until { $R.lockAfterClip = Invoke-LabPerson -Name $dn -Do clip-get; $R.lockAfterClip.sha256 -eq (Sha $R.lockAfterText) }
             }
             # whatever happened above: the device unlocked for the next cases (a locked session changes the connect page's
             # choices - "When someone unlocks or signs in: ask them" - and every later step failed on it), the tab live again
@@ -918,18 +954,19 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 FocusTab 0.5 0.01
                 $uac = Start-LabInSession -Name $dn -ScriptBlock { Start-Process cmd.exe -ArgumentList '/k title RHLAB-ELEVATED' -Verb RunAs }
                 $null = WaitFor -TimeoutSec 60 -Every 2 { Invoke-LabGuest -Name $dn -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) } }
-                Start-Sleep -Seconds 4
-                $R.uacOcr = Ocr (TabPicture 'uac')
+                # the prompt drawn in the tab's picture (then its password field takes the keys)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because 'the UAC prompt did not show in the tab' -Until { $R.uacOcr = Ocr (TabPicture 'uac'); $R.uacOcr -match 'User Account Control|Do you want to allow' }
                 # normaluser isn't an administrator: the prompt offers the device's administrators with the first one (the
                 # console account, "Admin") chosen and its password field focused - so only the password is typed (as in
                 # D-SECURE's D-UAC-01). The run of 16.10.2026 21:25 typed "PSAdmin<Tab>password" into that field and
                 # nothing was elevated (ui-desktop-uac-tab.png: "Admin", Password).
                 TypeText $password
                 Key 'Enter'
-                Start-Sleep -Seconds 10
-                $R.uacElevated = @(Invoke-LabGuest -Name $dn -ScriptBlock {
-                        @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object CommandLine -match 'RHLAB-ELEVATED' | ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User })
-                    })
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because 'no elevated cmd.exe started after the password' -Until {
+                    $R.uacElevated = @(Invoke-LabGuest -Name $dn -ScriptBlock {
+                            @(Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object CommandLine -match 'RHLAB-ELEVATED' | ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User })
+                        })
+                    @($R.uacElevated | Where-Object { $_ }).Count -gt 0 }
                 Invoke-LabGuest -Name $dn -ScriptBlock { Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object CommandLine -match 'RHLAB-ELEVATED' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
                 Stop-LabInSession -Name $dn -Task $uac
             }
@@ -940,8 +977,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             catch { $R.uacLeftOpen = "not checked: $_" }
             Step 'end' {
                 $null = Ui 'Disconnect'
-                Start-Sleep -Seconds 10
-                $R.resAfter = DeviceRes
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because "the device's resolution did not go back to $($R.resBefore) after Disconnect" -Until { $R.resAfter = DeviceRes; $R.resAfter -eq $R.resBefore }
                 CloseTabs
             }
             Save 'desktop' $R
@@ -1086,10 +1122,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 ConnectChosen
                 $R.denyClick = Allow 'Deny'
                 $null = Ui 'Use RDP instead' -Value exists -TimeoutSec 60
-                Start-Sleep -Seconds 2
-                $R.denyText = TabTexts
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the tab did not show the refusal' -Until { $R.denyText = TabTexts; $R.denyText -match 'refused|didn.t allow' }
                 Shot 'deny'
-                $R.denyEvents = @(Get-LabAgentEvent -Name $dn -Since $since -Id 2100, 2101)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the device did not log event 2100 or 2101' -Until { $R.denyEvents = @(Get-LabAgentEvent -Name $dn -Since $since -Id 2100, 2101); $R.denyEvents.Count -gt 0 }
             }
             Step 'pin' {
                 $null = OpenChoose
@@ -1103,12 +1138,16 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = OpenChoose
                 $mark = NoticeMark
                 ConnectChosen -Consent 'Show them a code*'
-                $real = (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin
+                # once more when the person server took the request but never answered (run 20261030-194701: the whole
+                # process stuck; the agent's code window stays up 3 min, time for a second read)
+                $real = try { (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin }
+                catch { if ("$_" -notlike "*took the request but didn't answer*") { throw }; $R.pinRetried = $true; (Invoke-LabPerson -Name $dn -Do pin -TimeoutSec 60).pin }
                 $wrong = if ($real -eq '135792') { '246801' } else { '135792' }
                 $R.pinLeft = @()
                 foreach ($i in 1..3) {
                     $null = Ui 'type:Edit' -Value "set:$wrong" -TimeoutSec 30
                     $null = Ui 'Connect'
+                    # the answer replaces the previous attempt's text in the same place: read once it can have come
                     Start-Sleep -Seconds 4
                     $R.pinLeft += "$((Ui '*attempt* left*' -Value read -Optional -TimeoutSec 3).name)"
                 }
@@ -1127,11 +1166,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $R.voCad = Live 3
                 FocusTab
                 TypeText 'view only typed'
-                Start-Sleep -Seconds 3
+                Start-Sleep -Seconds 3   # nothing may reach the device's Notepad in this time
                 $R.voTyped = NotepadText
                 $R.voText = "view only $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $R.voText
-                Start-Sleep -Seconds 4
+                Start-Sleep -Seconds 4   # the copy must not reach the device in this time (the clipboard is off)
                 $R.voDeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
                 Invoke-LabGuest -Name $dn -ScriptBlock { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
             }
@@ -1141,15 +1180,13 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 ConnectChosen
                 $R.policyAllow = Allow
                 $null = Live 60
-                Start-Sleep -Seconds 3
+                Start-Sleep -Seconds 3   # the new connection's clipboard link set up before the copy (nothing shows when it is)
                 $R.policyText = "text only $([guid]::NewGuid().ToString('N').Substring(0, 8))"
                 $null = Invoke-LabPerson -Name $VmName -Account Console -Do clip-set -Value $R.policyText
-                Start-Sleep -Seconds 4
-                $R.policyDeviceClip = Invoke-LabPerson -Name $dn -Do clip-get
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because "the text did not reach the device's clipboard" -Until { $R.policyDeviceClip = Invoke-LabPerson -Name $dn -Do clip-get; $R.policyDeviceClip.sha256 -eq (Sha $R.policyText) }
                 $mark = NoticeMark
                 $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin')
-                Start-Sleep -Seconds 5
-                $R.policyNotices = @(Notices $mark)
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the tab did not say that files are not allowed' -Until { $R.policyNotices = @(Notices $mark); ($R.policyNotices -join "`n") -match 'Copying images and files isn.t allowed' }
                 Invoke-LabGuest -Name $dn -ScriptBlock { Remove-ItemProperty 'HKLM:\SOFTWARE\Policies\RemoteHub\Agent' -Name DesktopClipboard -ErrorAction SilentlyContinue }
             }
             Step 'rdp' {
@@ -1165,8 +1202,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Signed in as *' -Value exists -TimeoutSec 90
                 $R.ownSessions = @((Ui '*' -Value list).items | Where-Object { $_ -like 'RadioButton|*' })
                 $null = Ui 'Remote session*' -Value check
-                Start-Sleep -Seconds 2
-                $R.ownWarning = (Ui 'This session is connected by RDP from this PC*' -Value read -Optional -TimeoutSec 10).name
+                $R.ownWarning = (Ui 'This session is connected by RDP from this PC*' -Value read -Optional -TimeoutSec 15).name
                 Shot 'own-rdp'
                 CloseTabs
             }
@@ -1241,11 +1277,10 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 ConnectChosen -Session 'Console*sign-in screen*' -Consent ''
                 $R.signinLive = Live 90
                 FocusTab 0.5 0.01
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 2   # the click's effect on the device's screen reaches the tab's picture (evidence only)
                 $R.signinScreen = Ocr (TabPicture 'signin-screen')
                 $null = Ui 'Send Ctrl+Alt+Del'
-                Start-Sleep -Seconds 5
-                $R.signinFields = Ocr (TabPicture 'signin-fields')
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -IntervalMs 1000 -Because 'the sign-in fields did not show in the tab' -Until { $R.signinFields = Ocr (TabPicture 'signin-fields'); $R.signinFields -match 'User name|Password' }
                 # The keys go to the device only while the picture has the keyboard focus: after the toolbar's Send
                 # Ctrl+Alt+Del button it stays on the toolbar. In lab run 20261019-193627 "PSAdmin", Tab, password, Enter
                 # went to RemoteHub's toolbar (Tab to the privacy screen button, Enter opened its menu -
@@ -1256,6 +1291,7 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 TypeText $password
                 Key 'Enter'
                 $R.signinDesktop = WaitFor -TimeoutSec 180 -Every 5 { (ExplorerOwners $dn) -contains $device.AdminAccount }
+                # the tab must still be live after the session changed: time for it to drop (or ask) if it would
                 Start-Sleep -Seconds 10
                 $R.signinAfterLive = Live 30
                 $null = TabPicture 'signin-desktop'
@@ -1287,8 +1323,11 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             function PsMessage {
                 $m = Ui 'Device' -Value 'menu:Tools>PowerShell' -Optional
                 if (-not ($m.PSObject.Properties['error'] -and $m.error)) {
-                    Start-Sleep -Seconds 20
-                    $t = "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 20).value)`n$(TabTexts)"
+                    # the tab's refusal, read until it is there
+                    $t = Wait-LabCondition -NoThrow -TimeoutSec 60 -IntervalMs 1000 -Because 'the PowerShell tab did not show the refusal' -Until {
+                        $x = "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 10).value)`n$(TabTexts)"
+                        if ($x -match 'rejected the sign-in|not allowed to use the RemoteHub Agent') { $x } }
+                    if (-not $t) { $t = "$((Ui 'type:Document' -Value read -Optional -TimeoutSec 20).value)`n$(TabTexts)" }
                     CloseTabs
                     return $t
                 }
@@ -1332,7 +1371,12 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
         BeforeAll {
             function Provider([string]$Header, [string]$Button) {
                 Menu "RemoteHub Agent>$Header"
-                $confirm = Message -Button $Button -TimeoutSec 60
+                # the confirmation by its question and button, in any window: Message's list took the first window with
+                # any element - Program Manager, before the question showed - and Install was never clicked (UI-AG-07,
+                # run 20261030-194701); and RemoteHub's message boxes aren't found under their title (run 20261031-075755)
+                $q = Ui "*$Button it?" -Title '?*' -Value exists -TimeoutSec 60 -Optional
+                $confirm = if ($q.found) { "$($q.name)" } else { '' }
+                $null = Ui $Button -Title '?*' -TimeoutSec 10
                 $done = WaitDone $Header
                 $rows = (Ui '*' -Title $Header -Value list -Optional).items
                 CloseProgress $Header
@@ -1340,6 +1384,9 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
             }
             Step 'provider-install' {
                 CloseTabs
+                # the device runs the previous release until UI-AG-06's update, and RemoteHub refuses to install the
+                # provider from another build: a run with -Tag UI-AG-07/08 alone skips that context (run 20261031-115221)
+                if (-not $R.Contains('versionBefore')) { throw 'the agent was not updated to the build under test: UI-AG-06, which updates it, did not run - select it with UI-AG-07 / UI-AG-08' }
                 $R.provInstall = Provider 'Install credential provider' 'Install'
             }
             Step 'autosignin' {
@@ -1355,13 +1402,13 @@ Describe 'UI-DESKTOP <VmName>' -Tag Client, UI, 'UI-AD', 'UI-CP', 'UI-SAS', 'UI-
                 $null = Ui 'Sign in automatically as *' -Value check -Optional -TimeoutSec 5
                 ConnectChosen -Session 'Console*sign-in screen*' -Consent ''
                 $R.autoDesktop = WaitFor -TimeoutSec 180 -Every 5 { (ExplorerOwners $dn) -contains $device.AdminAccount }
-                Start-Sleep -Seconds 5
+                Start-Sleep -Seconds 5   # the tab must still be live after the sign-in: time for it to drop if it would
                 $R.autoLive = Live 30
                 $R.autoNotices = @(Notices $mark)
                 $R.autoEvents = @(Get-LabAgentEvent -Name $dn -Since $since)
                 Shot 'auto-sign-in'
                 $null = Ui 'Disconnect' -Optional
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the tab was still live after Disconnect' -Until { -not (Live 1).found }
                 CloseTabs
             }
             Step 'provider-remove' {

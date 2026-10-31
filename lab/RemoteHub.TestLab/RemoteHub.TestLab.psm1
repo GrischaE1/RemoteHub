@@ -1318,6 +1318,7 @@ function Send-LabText {
             & $flush
             Start-Sleep -Milliseconds $wait
         }
+        # input pacing: 50 ms between Shift, the key and their release, so the guest sees them in order
         Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = 0x10 }) "${Name}: press Shift"
         try {
             Start-Sleep -Milliseconds 50
@@ -1363,6 +1364,7 @@ function Send-LabMouse {
     $mouse = Get-LabMouse $Name
     Assert-CimResult (Invoke-CimMethod -InputObject $mouse -MethodName SetAbsolutePosition -Arguments @{ HorizontalPosition = [int32]$X; VerticalPosition = [int32]$Y }) "${Name}: mouse position"
     if ($Action -eq 'Move') { return }
+    # input pacing: the guest sees the pointer at its new place before the button, and each press as down then up
     Start-Sleep -Milliseconds 150
     # Msvm_SyntheticMouse buttons: 1 left, 2 right, 3 middle
     $button = switch ($Action) { 'Right' { 2 } 'Middle' { 3 } default { 1 } }
@@ -1385,6 +1387,7 @@ function Send-LabKeyCombo {
             Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = $c }) "${Name}: press $c"
             $down.Add($c)
         }
+        # input pacing: the combination held a moment, as a hand would
         Start-Sleep -Milliseconds 100
     }
     catch {
@@ -1826,8 +1829,17 @@ function Invoke-LabPerson {
             return $found
         }
         $w = @($found | Where-Object { $_.Title -like $Title -or $_.Title -like "RemoteHub*$Title" }) | Select-Object -First 1
-        if ($w) { Send-LabMouse -Name $Name -X ($w.X + [int]($w.Width / 2)) -Y ($w.Y + [int]($w.Height / 2)) -Action Move; Start-Sleep -Seconds 2 }
-        return [pscustomobject]@{ before = $w; after = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title) | Select-Object -First 1 }
+        if (-not $w) { return [pscustomobject]@{ before = $null; after = $null } }
+        Send-LabMouse -Name $Name -X ($w.X + [int]($w.Width / 2)) -Y ($w.Y + [int]($w.Height / 2)) -Action Move
+        # until the window has changed its size (the pill opens to the banner); an open banner stays as it is, so a
+        # timeout here is no failure - then the window as it is
+        $read = { @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title) | Select-Object -First 1 }
+        $after = Wait-LabCondition -NoThrow -TimeoutSec 4 -IntervalMs 300 -Because 'the window did not change its size under the pointer' -Until {
+            $a = & $read
+            if ($a -and ($a.Width -ne $w.Width -or $a.Height -ne $w.Height)) { $a }
+        }
+        if (-not $after) { $after = & $read }
+        return [pscustomobject]@{ before = $w; after = $after }
     }
     if ($Do -eq 'locate') { $Do = 'click'; $Value = 'locate' }
     $answer = "C:\ProgramData\RemoteHubLab\session\person-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
@@ -2445,7 +2457,6 @@ function Invoke-LabPersonServer {
                 if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) { $ended = $true; break }
             }
             if (Test-Path $req.out) {
-                Start-Sleep -Milliseconds 50
                 # the renamed answer can still be held for a moment (lab run 20261019-193627, C-REC: "being used by
                 # another process" - a scanner opening the new file): read again for up to 5 s
                 $answer = $null
@@ -2833,6 +2844,7 @@ function Disconnect-LabConsole {
             "explorer in: $(@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | ForEach-Object SessionId) -join ', ')"
         throw "the console didn't reach the sign-in screen ($state)"
     }
+    # LogonUI loading its credential providers shows nowhere outside it (and not every build has RemoteHub's): a pause
     Start-Sleep -Seconds 5
 }
 
@@ -2938,6 +2950,32 @@ function Wait-LabHostFile {
         if ((Get-Date) -gt $until) { throw "No $Path after $TimeoutSec s." }
         Start-Sleep -Milliseconds 500
     }
+}
+
+# Waits until -Until answers something true (not $null, $false, 0, '' or an empty list) and returns that answer - the
+# condition a fixed Start-Sleep margin only hoped for. An error inside -Until counts as "not yet". After -TimeoutSec it
+# throws "Timed out after N s: <Because>", or with -NoThrow returns the last answer (so a test can assert on it with its
+# own message). -Because says what didn't happen, e.g. "the RDP tab didn't close".
+function Wait-LabCondition {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][scriptblock]$Until,
+        [Parameter(Mandatory)][string]$Because,
+        [int]$TimeoutSec = 30,
+        [int]$IntervalMs = 500,
+        [switch]$NoThrow
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $last = $null
+    $lastError = $null
+    while ($true) {
+        try { $last = & $Until; $lastError = $null } catch { $last = $null; $lastError = "$_" }
+        if ($last) { return $last }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds $IntervalMs
+    }
+    if ($NoThrow) { return $last }
+    throw "Timed out after $TimeoutSec s: $Because$(if ($lastError) { " (last error: $lastError)" })"
 }
 
 # How alike two pictures are (0..1): both scaled to 64x36 grey, 1 - mean absolute difference. A decoded frame and a
@@ -3622,7 +3660,9 @@ function Get-LabHostDiagLog {
     foreach ($line in @($files | ForEach-Object { Get-Content $_ -Encoding UTF8 })) {
         # a line without a date (the rest of a message with a line break) goes with the line before it
         if ($line -match '^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') { $keep = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null) -ge $Since.AddSeconds(-1) }
-        if ($keep) { $line }
+        # a plain string: Get-Content's lines carry PSProvider and the rest, and ConvertTo-Json -Depth 10 of one never
+        # finished (S-SSH-07 on Server hit the 60 min limit in every run since 20261030-004321)
+        if ($keep) { "$line" }
     }
 }
 
@@ -3954,6 +3994,10 @@ function Wait-LabCredentialDialog {
     $titles = 'Windows Security', 'Credential Dialog Xaml Host'
     $until = (Get-Date).AddSeconds($TimeoutSec)
     do {
+        # by window class first, as RemoteHub itself finds it: in run 20261030-194701 (R-RDP-04) the dialog was on the
+        # screen for the whole minute while neither UI Automation check below saw it
+        $c = try { Invoke-LabPerson -Name $Name -Account $Account -Do windows -Value 'Credential Dialog Xaml Host' -TimeoutSec 10 } catch { $null }
+        if (@($c | Where-Object { $_ -and $_.PSObject.Properties['Handle'] }).Count -gt 0) { return $true }
         $l = Invoke-LabUi -Name $Name -Account $Account -Text '*' -Value list -Optional -TimeoutSec 5
         $items = if ($l -and $l.PSObject.Properties['items']) { @($l.items) } else { @() }
         if (@($items | Where-Object { "$_" -match '^Window\|(Windows Security|Credential Dialog Xaml Host)\|' }).Count -gt 0) { return $true }
@@ -4018,7 +4062,12 @@ function Start-LabMockServer {
         }
         $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\RhMockServer.ps1`" -Root `"$root`""
         $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
-        Start-Sleep -Seconds 3
+        # until its listener has registered https://+:443/ with http.sys (then requests reach it); at most 20 s
+        $until = (Get-Date).AddSeconds(20)
+        do {
+            if ((@(netsh.exe http show servicestate view=requestq) -join "`n") -match 'https://\+:443/') { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $until)
     }
     if ($Files) { Copy-LabFile -Name $Name -Path $Files -Destination 'C:\ProgramData\RemoteHubLab\mock\download' }
 }

@@ -47,8 +47,9 @@ Describe 'S-THR <VmName>' -Tag Agent, Security, 'S-THR', 'S-LIM', 'S-POL' {
             $since = Get-LabGuestTime -Name $VmName
             $five = Ws 'rhwrong' $wrong @{ count = 5 }
             $sixth = Ws 'rhwrong' $password
-            Start-Sleep -Seconds 3
-            $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
+            $events = @(Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'event 2000 "too many failed sign-ins" did not arrive' -Until {
+                    $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
+                    if (@($e | Where-Object { $_.Message -match 'too many failed sign-ins' }).Count -gt 0) { , $e } } | Where-Object { $_ })
             $null = Restart-LabAgent -Name $VmName -Pin $pin
             $afterRestart = Ws 'rhwrong' $password
             Save 'blocked' @{ Five = $five; Sixth = $sixth; Events = $events; AfterRestart = $afterRestart }
@@ -70,7 +71,7 @@ Describe 'S-THR <VmName>' -Tag Agent, Security, 'S-THR', 'S-LIM', 'S-POL' {
             $null = Restart-LabAgent -Name $VmName -Pin $pin
             $since = Get-LabGuestTime -Name $VmName
             $parallel = Ws 'rhwrong' $wrong @{ count = 6; parallel = 1 }
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 3   # time for a 6th 4625 to show up if one got through: at most 5 may
             $failed = @(Get-LabFailedLogon -Name $VmName -Since $since -Account 'rhwrong')
             Save 'parallel' @{ Results = $parallel; Failed = $failed }
         }

@@ -76,7 +76,7 @@ BeforeAll {
     }
     # msiexec in the guest as PSAdmin (elevated): exit code
     function Invoke-GuestMsi([string[]]$Arguments, [string]$Log) {
-        Invoke-LabGuest -Name $VmName -ArgumentList (, $Arguments), $Log -ScriptBlock {
+        Invoke-LabGuest -Name $VmName -ArgumentList $Arguments, $Log -ScriptBlock {
             param($a, $log)
             $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\msiexec.exe') -ArgumentList ((@($a | ForEach-Object { [string]$_ }) + @('/qn', '/norestart', '/l*v', "`"$log`"")) -join ' ') -Wait -PassThru -WindowStyle Hidden
             $p.ExitCode
@@ -498,10 +498,13 @@ Describe 'A-MORE2 <VmName>' -Tag Agent, 'A-INST', 'A-HAND', 'A-UNINST', 'S-THR',
                 $null = New-Item "HKLM:\$ifeo" -Force
                 $null = New-ItemProperty "HKLM:\$ifeo" -Name Debugger -Value 'C:\RemoteHubLab\no-such-debugger.exe' -PropertyType String -Force
             }
+            $ifeoSet = [Diagnostics.Stopwatch]::StartNew()
             $p = [ordered]@{}
             $p.first = Hold
             $p.second = Hold
-            Start-Sleep -Seconds 130
+            # PowerShell Direct may need powershell.exe, so the guest isn't touched until the value has removed itself
+            # (~120 s after it was set); nothing on the host can see that sooner
+            Start-Sleep -Seconds ([math]::Max(0, 130 - [int]$ifeoSet.Elapsed.TotalSeconds))
             $p.ifeoLeft = Invoke-LabGuest -Name $VmName -ArgumentList $ifeo -ScriptBlock {
                 param($ifeo)
                 $left = (Get-ItemProperty "HKLM:\$ifeo" -ErrorAction SilentlyContinue).Debugger

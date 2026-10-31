@@ -139,7 +139,10 @@ Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {
                 $m.R = Invoke-LabDesktop -Name $VmName -Pin $pin -Account Console -Out (Out 'mismatch') -Steps @(
                     @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'None'; autoSignIn = $true }
                     @{ do = 'wait'; anyOf = @('Ended', 'SignedIn', 'SignInFailed', 'Failed'); timeout = 150 }, @{ do = 'sleep'; seconds = 10 }, @{ do = 'close' })
-                Start-Sleep -Seconds 10
+                # the mismatch logged (3101) and the other account signed out again
+                $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -Because 'event 3101 was not written or the other account was still signed in' -Until {
+                    @(Get-LabAgentEvent -Name $VmName -Since $since -Id 3101).Count -gt 0 -and -not @(Desktops | Where-Object { $_.User -match '\\rhother$' }).Count
+                }
                 $m.Mismatch = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 3101)
                 $m.SignedInEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1106)
                 $m.Desktops = Desktops
@@ -172,6 +175,7 @@ Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {
             # Someone at the device signs in by hand (the console account, the tile the sign-in screen offers) - within
             # the 30 s the agent waits for RemoteHub's password after SignInReady.
             Send-LabCtrlAltDel -Name $VmName
+            # let the credential screen take the focus before typing
             Start-Sleep -Seconds 2
             Send-LabText -Name $VmName -Text $cfg.Password
             Send-LabKey -Name $VmName -Key Enter
@@ -179,7 +183,7 @@ Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {
             do { Start-Sleep -Seconds 1; $c.ByHand = @(Desktops) } while ($c.ByHand.Count -eq 0 -and (Get-Date) -lt $until)
             Release $o 'go'
             $c.R = Receive-LabDesktop $job
-            Start-Sleep -Seconds 3
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 2104 was not written' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2104).Count -gt 0 }
             $c.Refused = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2104)
             $c.Ticketed = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1106, 2105, 3101)
             $c.Desktops = Desktops
@@ -272,6 +276,7 @@ Describe 'C-AUTO3 <VmName>' -Tag Agent, 'C-AUTO' {
             $squat = @"
 `$p = New-Object System.IO.Pipes.NamedPipeServerStream('RemoteHubAgent.AutoSignIn', [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Message)
 Set-Content -Encoding ASCII '$labDir\squat.txt' 'up'
+# holds the pipe until the test stops the task
 Start-Sleep -Seconds 1800
 "@
             Invoke-LabGuest -Name $VmName -ScriptBlock { Stop-Service RemoteHubAgent -Force }
@@ -357,7 +362,11 @@ Set-Content -Encoding UTF8 '$labDir\launch-console.txt' ([RhLabLaunch]::Start('p
             $f.Launch = Wait-GuestFile "$labDir\launch-console.txt" 90
             $f.Console = Wait-GuestFile "$labDir\pipe-console.txt" 60
             Stop-SystemTask 'RHLab-PipeLaunch'
-            Start-Sleep -Seconds 3
+            # both refusals logged: the session 0 client and the console's powershell.exe
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the refused pipe clients were not both logged' -Until {
+                $l = (@(Get-LabAgentLog -Name $VmName -Since $since) | ForEach-Object { "$_" }) -join "`n"
+                $l -match "pipe client refused \(session 0 isn't the console\)" -and $l -match "pipe client refused \(.*\\powershell\.exe isn't LogonUI\)"
+            }
             $f.Log = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'Automatic sign-in: pipe client refused' })
             # 3. the console's own LogonUI still gets the next automatic sign-in
             Disconnect-LabConsole -Name $VmName
@@ -433,6 +442,7 @@ Set-Content -Encoding UTF8 '$labDir\launch-console.txt' ([RhLabLaunch]::Start('p
                 Shot "refused-$u"
                 # Windows' message on the sign-in screen: OK (the expired password, last, leaves the change-password screen)
                 Send-LabKey -Name $VmName -Key Enter
+                # the message closes and the sign-in screen comes back before the next account's attempt
                 Start-Sleep -Seconds 3
                 $w[$u] = $x
             }

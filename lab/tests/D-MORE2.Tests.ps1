@@ -97,7 +97,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             $v.rdpBefore = & $rdpRead
             # a notepad that is typed into while connected (the screen changes - D-VID-12 watches the capture)
             $task = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
-            Start-Sleep -Seconds 4
+            $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process notepad -ErrorAction SilentlyContinue).Count -gt 0 } } -Because 'notepad did not start in normaluser''s session' -TimeoutSec 30 -NoThrow
             $since = Get-LabGuestTime -Name $VmName
             $o = Out 'drawing'
             $job = Begin 'drawing' @(
@@ -107,7 +107,8 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             $v.rdpDuring = & $rdpRead
             Release $o 'read'
             $v.drawing = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
+            # the helper puts the value back as it ends (asserted below)
+            $null = Wait-LabCondition -Until { $x = & $rdpRead; $x.Value -eq 0 -and -not $x.Record } -Because 'RemoteDesktop_SuppressWhenMinimized was not put back after the connection' -TimeoutSec 20 -NoThrow
             $v.rdpAfter = & $rdpRead
             $v.log = @(Get-LabAgentLog -Name $VmName -Since $since)
             Stop-LabInSession -Name $VmName -Task $task
@@ -131,7 +132,8 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             $v.shot = Get-LabScreenshot -Name $VmName -Path (Join-Path $o 'console.png')
             Release $o 'checked'
             $v.display = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
+            # the display request ends with the connection (asserted below)
+            $null = Wait-LabCondition -Until { (@(& $displayRequests) -join ' ') -notmatch 'RemoteHubAgent' } -Because 'the agent''s display request stayed after the connection' -TimeoutSec 20 -NoThrow
             $v.displayAfter = @(& $displayRequests)
             Invoke-LabGuest -Name $VmName -ScriptBlock { powercfg.exe /change monitor-timeout-ac 0; powercfg.exe /change monitor-timeout-dc 0 }
 
@@ -225,11 +227,19 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             # the service killed (nothing switched off on the way out), then started again
             Invoke-LabGuest -Name $VmName -ScriptBlock { Stop-Process -Id (Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'").ProcessId -Force }
             Invoke-LabGuest -Name $VmName -ScriptBlock {
-                Start-Sleep -Seconds 5
+                # the service's recovery may start it again by itself; started here when it hasn't in that time. Running
+                # counts only with a live process: right after the kill the SCM may still list the dead one
+                $until = (Get-Date).AddSeconds(15)
+                do {
+                    $svc = Get-CimInstance Win32_Service -Filter "Name='RemoteHubAgent'"
+                    if ($svc.State -eq 'Running' -and $svc.ProcessId -and (Get-Process -Id $svc.ProcessId -ErrorAction SilentlyContinue)) { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
                 if ((Get-Service RemoteHubAgent).Status -ne 'Running') { try { Start-Service RemoteHubAgent -ErrorAction Stop } catch { } }
             }
             $null = Wait-LabAgent -Name $VmName -Pin $pin
-            Start-Sleep -Seconds 10
+            # the started service switches the virtual monitor off (asserted below)
+            $null = Wait-LabCondition -Until { (Get-Vdd) -ne 'OK' } -Because 'the virtual monitor was still on after the service started again' -TimeoutSec 30 -NoThrow
             $d.afterRestart = Get-Vdd
             Release $o 'end'
             $d.r = Receive-LabDesktop $job
@@ -362,7 +372,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             Reached $o 'asked'
             try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 30 } catch { }
             $r.invalid = Receive-LabDesktop $job
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101 | Where-Object { $_.Message -match '\(invalid message from RemoteHub: ' }).Count -gt 0 } -Because 'no event 1101 for the invalid message' -TimeoutSec 20 -NoThrow
             $r.invalidEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101)
 
             # a service restart: the tokens are gone with it
@@ -405,6 +415,7 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
                 @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, (Mark $o 'second'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 60 }
                 @{ do = 'sleep'; seconds = 3 }, @{ do = 'close' })
             Reached $o 'connected'
+            # connected for a moment before the cut (nothing shows when the session's resume token is in place)
             Start-Sleep -Seconds 3
             $cutAt = Get-LabGuestTime -Name $VmName
             $lost = @()
@@ -424,11 +435,10 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             Release $o 'restored'
             Reached $o 'second'
             $r.resumedAfterEndSec = [math]::Round(((Get-LabGuestTime -Name $VmName) - [datetime]$lost[0].Time).TotalSeconds)
-            Start-Sleep -Seconds 3
             # asked again (the token was revoked or had expired): deny so the run goes on
-            try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 10 } catch { }
+            try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 15 } catch { }
             $r.cut = Receive-LabDesktop $job
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1103).Count -gt 0 } -Because 'no event 1103 for the resumed connection' -TimeoutSec 20 -NoThrow
             $r.cutEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101, 1103)
             Save 'resume-long-cut' $r
         }
@@ -458,7 +468,11 @@ Describe 'D-MORE2 <VmName>' -Tag Desktop, 'D-VID', 'D-FIT', 'D-VD', 'D-CLIP', 'D
             $m.large = Receive-LabDesktop (Begin 'rob-signin-large' @(@{ do = 'sleep'; seconds = 2 }, @{ do = 'raw'; hex = ('1F' + ('AA' * 700)) }, @{ do = 'sleep'; seconds = 4 }))
             # a message over 16 MiB (clipboard text of 17,000,000 ASCII characters)
             $m.huge = Receive-LabDesktop (Begin 'rob-huge' @(@{ do = 'sleep'; seconds = 2 }, @{ do = 'clipboardText'; lengthChars = 17000000 }, @{ do = 'sleep'; seconds = 8 }))
-            Start-Sleep -Seconds 2
+            # the three events written (asserted below)
+            $null = Wait-LabCondition -Until {
+                $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101 | ForEach-Object Message)
+                @($e -match "A sign-in request the agent didn't ask for").Count -gt 0 -and @($e -match 'Sign-in request too large').Count -gt 0 -and @($e -match 'Message too large').Count -gt 0
+            } -Because 'not all three invalid-message events 1101 were written' -TimeoutSec 20 -NoThrow
             $m.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101)
             $m.health = Get-LabAgentHealth -Name $VmName -Pin $pin
             Save 'invalid' $m

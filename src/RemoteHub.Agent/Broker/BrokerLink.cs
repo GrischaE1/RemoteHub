@@ -50,6 +50,14 @@ internal sealed class BrokerLink(
     private volatile TaskCompletionSource _networkChanged = new(TaskCreationOptions.RunContinuationsAsynchronously);
     /// <summary>How long the addresses must stay the same after a change before they are sent (Windows reports one change in bursts).</summary>
     internal static TimeSpan AddressSettle { get; set; } = TimeSpan.FromSeconds(2);
+    /// <summary>
+    /// How often a connected link reads the policy and agent.json again. Neither a Group Policy or Intune change nor
+    /// <c>broker leave</c> restarts the service, so BrokerEnabled turned off or the broker removed from agent.json has to
+    /// end a connection that is already open, not only the next one.
+    /// </summary>
+    internal static TimeSpan SettingsCheck { get; set; } = IdleRetry;
+    /// <summary>How long the broker has to answer the close a settings change sends.</summary>
+    private static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(5);
     /// <summary>How many addresses the hello carries at most (the broker refuses more).</summary>
     internal const int MaxAddresses = 16;
 
@@ -82,7 +90,7 @@ internal sealed class BrokerLink(
             try { config = currentConfig(); }
             catch (Exception ex) { Problem($"agent.json can't be read: {ex.Message}"); await Delay(IdleRetry, stop); continue; }
             var p = policy();
-            if (config.Broker is not { } broker || broker.Problem() is not null || !p.BrokerEnabled || p.LoadError is not null)
+            if (config.Broker is not { } broker || broker.Problem() is not null || BrokerOff(p))
             {
                 State = "idle";
                 if (config.Broker?.Problem() is { } bad) Problem("broker: " + bad);
@@ -191,7 +199,11 @@ internal sealed class BrokerLink(
         _live = live;
         // "ping" is answered at the broker's edge without waking anything.
         var keepAlive = live.KeepAliveAsync(ws, c => SendLocked(ws, "ping"u8.ToArray(), c), alive.Token);
-        try { return await ReceiveLoop(ws, live, config, broker, baseUri, stop); }
+        using var receiving = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        var turnedOff = WatchSettingsAsync(ws, broker, receiving, alive.Token);
+        try { return await ReceiveLoop(ws, live, config, broker, baseUri, receiving.Token); }
+        // The loop then finds the policy off or no broker in agent.json, and goes idle.
+        catch (Exception) when (receiving.IsCancellationRequested && !stop.IsCancellationRequested) { return Outcome.Ended; }
         finally
         {
             alive.Cancel();
@@ -200,6 +212,44 @@ internal sealed class BrokerLink(
             try { gaveUp = await keepAlive; } catch { /* ended with the connection */ }
             if (gaveUp is not null) log.Write($"RemoteHub Broker {host}: the connection was given up – {gaveUp}");
             try { await addresses; } catch { /* ended with the connection */ }
+            try { await turnedOff; } catch { /* ended with the connection */ }
+        }
+    }
+
+    private static bool BrokerOff(AgentPolicy p) => !p.BrokerEnabled || p.LoadError is not null;
+
+    /// <summary>Why this connection may not stay open; null while it may.</summary>
+    private string? NoLongerWanted(BrokerSettings broker)
+    {
+        if (BrokerOff(policy())) return "turned off by policy";
+        AgentConfig now;
+        try { now = currentConfig(); }
+        catch { return null; } // agent.json being written: read again next time
+        return now.Broker is { } b && b.Org == broker.Org && b.Url == broker.Url ? null : "left the broker";
+    }
+
+    /// <summary>
+    /// Closes the connection once the device's policy turns the broker off or <c>broker leave</c> took it out of
+    /// agent.json. The close is sent, so the broker shows the device offline at once – a dropped socket shows only when
+    /// the broker's keep-alive gives up, minutes later. The reader ends with the broker's answer; without one within
+    /// <see cref="CloseWait"/> it is cancelled.
+    /// </summary>
+    private async Task WatchSettingsAsync(ClientWebSocket ws, BrokerSettings broker, CancellationTokenSource receiving, CancellationToken ct)
+    {
+        while (true)
+        {
+            await Task.Delay(SettingsCheck, ct);
+            if (NoLongerWanted(broker) is not { } why) continue;
+            try
+            {
+                await _sendLock.WaitAsync(ct);
+                try { await ws.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, why, ct).WaitAsync(CloseWait, ct); }
+                finally { _sendLock.Release(); }
+                await Task.Delay(CloseWait, ct);
+            }
+            catch (Exception) when (!ct.IsCancellationRequested) { /* not sent or no answer: the reader is cancelled below */ }
+            receiving.Cancel();
+            return;
         }
     }
 
@@ -281,7 +331,7 @@ internal sealed class BrokerLink(
         if (why is null && !BrokerProtocol.IsRelayPath(relay, broker.Org, session)) why = ("offer", "The broker named a relay that isn't its own.");
         var p = policy();
         var consoleId = offer["consoleId"]?.GetValue<string>() ?? "";
-        if (why is null && (!p.BrokerEnabled || p.LoadError is not null)) why = ("policy", "The device's policy turns the RemoteHub Broker off (BrokerEnabled).");
+        if (why is null && BrokerOff(p)) why = ("policy", "The device's policy turns the RemoteHub Broker off (BrokerEnabled).");
         if (why is null && p.BrokerConsoles.Count > 0 && !p.BrokerConsoles.Contains(consoleId))
             why = ("policy", "The device's policy doesn't allow this PC through the RemoteHub Broker (BrokerConsoles).");
         if (why is null && _sessions.Count >= p.MaxSessions) why = ("limit", $"Too many sessions on the device (MaxSessions = {p.MaxSessions}).");

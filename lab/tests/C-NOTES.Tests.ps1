@@ -173,13 +173,16 @@ End of C4.
     # name box (focused when the dialog opens) and Enter pressed - as C-DATA does for its backups.
     function FileDialog([string]$Path, [string]$Title = 'Save As') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20
+        # the dialog is there before its file name box is ready for a click and keys (no UIA pattern shows when)
         Start-Sleep -Seconds 2
         $null = Ui 'File name:' -Title $Title -Value realclick -Optional -TimeoutSec 5
         Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x41
         Send-LabText -Name $VmName -Text $Path
+        # pacing: the typed path reaches the box before Enter does
         Start-Sleep -Milliseconds 500
         Send-LabKey -Name $VmName -Key Enter
-        Start-Sleep -Seconds 2
+        # the dialog gone, so the next step doesn't find it still open
+        $null = Wait-LabCondition -Until { -not (Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 1).found } -Because "the $Title dialog did not close after Enter" -TimeoutSec 15 -NoThrow
     }
 
     # ---- the clipboard of the console account's session (what a paste in RemoteHub reads)
@@ -489,6 +492,7 @@ Describe 'C-NOTES <VmName>' -Tag Client, UI, 'C-NOTE' -Skip:(-not $isClient) {
                 # (1 s), then another page is opened, which saves a changed page at once
                 Start-Sleep -Seconds 3
                 $null = Ui $pageC2
+                # the same: the time a save of C3 (which must not happen) would take to reach the database
                 Start-Sleep -Seconds 3
             }
             $v.after = Snapshot

@@ -58,6 +58,7 @@ BeforeAll {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # Esc twice, a moment apart: a menu and the dialog under it close one per press
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
         }
     }
@@ -83,6 +84,11 @@ BeforeAll {
             Start-Sleep -Seconds 3
         } while ((Get-Date) -lt $until)
         $false
+    }
+    # whether the RDP tab's header says it is connected right now (one look, as Wait-RdpTab's)
+    function RdpConnected([string]$Account = 'Console') {
+        $l = Invoke-LabUi -Name $VmName -Account $Account -Text '*' -Value list -Optional -TimeoutSec 5
+        @(@($l.items) | Where-Object { $_ -match '\|(Click into the session to type|Keyboard\W+remote session)\|' }).Count -gt 0
     }
     # the device: sessions (quser), PSAdmin's active ones, the sessions showing LogonUI (lock / security screen) and
     # those with PSAdmin's explorer
@@ -110,7 +116,8 @@ BeforeAll {
                 if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)' -and $Matches.u -eq $u) { logoff $Matches.id }
             }
         }
-        Start-Sleep -Seconds 5
+        # (no throw: a session left over shows in the context's own checks)
+        $null = Wait-LabCondition -Until { -not @(@((DeviceState).Sessions) | Where-Object { $_.User -eq $device.AdminAccount }).Count } -Because "PSAdmin's sessions on the device were not signed out" -TimeoutSec 30 -NoThrow
     }
     # "Allow delegating saved / fresh credentials with NTLM-only server authentication" for TERMSRV/* on this PC (the lab
     # isn't a domain). RemoteHub's tabs sign in without it too (R-RDP-03); the later contexts keep it so that a change in
@@ -170,7 +177,8 @@ BeforeAll {
             ClientState "$tag-fail"
             throw $err
         }
-        Start-Sleep -Seconds 2
+        # the editor closes once the connection is saved
+        $null = Wait-LabCondition -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Edit connection dialog stayed open after Save' -TimeoutSec 15 -NoThrow
     }
     # Windows' credential dialog of the RDP client, shown within -TimeoutSec (Wait-LabCredentialDialog: UI Automation
     # lists it inside RemoteHub's window with nothing in it, so an element search in it never matches)
@@ -273,7 +281,8 @@ BeforeAll {
             $msi = Get-ChildItem 'C:\LabAgentByHand' -Filter 'RemoteHub-Agent*.msi' | Select-Object -First 1
             (Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', 'C:\LabAgentByHand\install.log' -Wait -PassThru).ExitCode
         }
-        # RemoteHub asks the agent every 10 s
+        # RemoteHub asks the agent every 10 s: two of its rounds and a margin, as nothing in the tree says it has claimed
+        # the agent (the audit log entry does, but reading it opens a window over the next step)
         Start-Sleep -Seconds 25
         $o
     }
@@ -556,6 +565,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Shot 'ntlm'
                 $n.device = DeviceState
             }
+            # Esc twice, a moment apart: Windows' prompt and the overlay close one per press
             foreach ($i in 1..2) { Key 1B; Start-Sleep -Seconds 1 }
             $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
             Save 'ntlm' $n
@@ -579,7 +589,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Step $c connect {
                 Menu 'Connect'
                 $c.connected = Wait-RdpTab 90
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -Until { @((DeviceState).Rdp).Count } -Because 'no active RDP session for PSAdmin on the device' -TimeoutSec 30 -NoThrow
                 $c.device = DeviceState
                 $c.session = @($c.device.Rdp)[0]
                 $c.whoami = InSession $device.Name Admin 'whoami'
@@ -595,53 +605,57 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 }
                 $c.res1 = Resolution res1
                 $c.resize = InSession $VmName Console $code.resize @{ W = 860; H = 640 }
-                Start-Sleep -Seconds 8
-                $c.res2 = Resolution res2
+                # the session follows the window a few seconds later
+                $null = Wait-LabCondition -Until { $c.res2 = Resolution res2; "$($c.res2.w)x$($c.res2.h)" -ne "$($c.res1.w)x$($c.res1.h)" } -Because "the device session kept $($c.res1.w)x$($c.res1.h) after the window was resized" -TimeoutSec 60 -IntervalMs 2000
                 Shot 'resized'
             }
             Step $c focus {
                 # back into the screen (and its size), then a click into the session with the console mouse
                 $fit = Ui 'Reconnect' -Value fit
                 $rect = @("$($fit.value)" -split '[,;]' | ForEach-Object { [double]$_ })
+                # the window moved and resized: its layout and the session's picture settle before the real click lands
                 Start-Sleep -Seconds 4
                 Send-LabMouse -Name $VmName -X ([int]($rect[0] + $rect[2] * 0.65)) -Y ([int]($rect[1] + $rect[3] * 0.6))
-                Start-Sleep -Seconds 2
+                $null = Wait-LabCondition -Until { @(@((Ui '*' -Value list).items) | Where-Object { $_ -match 'Keyboard\W+remote session' }).Count } -Because 'the tab header did not change to "Keyboard -> remote session" after the click' -TimeoutSec 15 -NoThrow
                 $c.focus = @(@((Ui '*' -Value list).items) | Where-Object { $_ -match 'Keyboard\W+remote session|Click into the session to type' })
                 Shot 'focus'
             }
             Step $c sas {
                 $null = Ui 'Send Ctrl+Alt+Del to the session'
-                Start-Sleep -Seconds 4
+                $null = Wait-LabCondition -Until { @((DeviceState).LogonUi) -contains $c.session } -Because "no LogonUI in the RDP session $($c.session) after Ctrl+Alt+Del" -TimeoutSec 20 -NoThrow
                 $c.sasState = DeviceState
-                $c.sasScreen = Screen
+                # LogonUI runs before its screen is drawn
+                $null = Wait-LabCondition -Until { $c.sasScreen = Screen; $c.sasScreen -match 'Task Manager|Sign out|Lock|Change a password|Switch user' } -Because 'the security screen did not show in the tab' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
                 Shot 'sas'
                 Key 1B
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { @((DeviceState).LogonUi) -notcontains $c.session } -Because "LogonUI stayed in the RDP session $($c.session) after Esc" -TimeoutSec 15 -NoThrow
                 $c.sasAfter = DeviceState
             }
             Step $c lock {
                 Lock-LabSession -Name $device.Name -Account Admin
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -Until { @((DeviceState).LogonUi) -contains $c.session } -Because "the RDP session $($c.session) showed no lock screen (LogonUI)" -TimeoutSec 20 -NoThrow
                 $c.locked = DeviceState
                 $null = Ui 'Send Ctrl+Alt+Del to the session'
+                # the lock screen's password box must be up to take the keys; nothing in the RDP picture is visible to
+                # UI Automation
                 Start-Sleep -Seconds 4
                 Shot 'lock-password'
                 # typed at the client's keyboard: the RDP control has the focus after Ctrl+Alt+Del
                 Send-LabText -Name $VmName -Text $password
                 Send-LabKey -Name $VmName -Key Enter
-                Start-Sleep -Seconds 10
+                $null = Wait-LabCondition -Until { @((DeviceState).LogonUi) -notcontains $c.session } -Because "the RDP session $($c.session) stayed locked after the password" -TimeoutSec 30 -IntervalMs 1000 -NoThrow
                 $c.unlocked = DeviceState
                 Shot 'unlocked'
             }
             Step $c fullscreen {
                 $null = Ui 'Full screen'
-                Start-Sleep -Seconds 2
+                $null = Wait-LabCondition -Until { @(TopWindows | Where-Object { $_ -eq 'Device' }).Count } -Because 'no full-screen window "Device"' -TimeoutSec 15 -NoThrow
                 $c.fsWindows = TopWindows
                 $c.fsScreen = Screen
                 Shot 'fullscreen'
                 # Ctrl+Alt+Break (Break = VK_CANCEL with Ctrl held)
                 Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x12, 0x03
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not @(TopWindows | Where-Object { $_ -eq 'Device' }).Count } -Because 'the full-screen window stayed after Ctrl+Alt+Break' -TimeoutSec 15 -NoThrow
                 $c.fsAfter = TopWindows
                 $c.fsConnected = Wait-RdpTab 20
             }
@@ -649,19 +663,19 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 # (lab run 20261017-054704: right after full screen the button's Invoke opened no window, and nothing
                 # said why - the click's answer and RemoteHub's state are kept, then a real click is tried)
                 $c.detClick = Ui 'Detach into its own window / dock back'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { @(TopWindows | Where-Object { $_ -eq 'Device' }).Count } -Because 'no detached window "Device"' -TimeoutSec 10 -NoThrow
                 $c.detWindows = TopWindows
                 if (@($c.detWindows | Where-Object { $_ -eq 'Device' }).Count -eq 0) {
                     ClientState 'detach-invoke'
                     $c.detRealClick = Ui 'Detach into its own window / dock back' -Value realclick
-                    Start-Sleep -Seconds 3
+                    $null = Wait-LabCondition -Until { @(TopWindows | Where-Object { $_ -eq 'Device' }).Count } -Because 'no detached window "Device" after a real click' -TimeoutSec 10 -NoThrow
                     $c.detWindows = TopWindows
                 }
                 $c.detHint = (Ui 'This session runs in its own window.' -Value exists -Optional -TimeoutSec 5).found
                 $c.detTools = @((Ui '*' -Title 'Device' -Value list -Optional -TimeoutSec 10).items)
                 Shot 'detached'
                 $null = Ui 'Dock' -Title 'Device'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not @(TopWindows | Where-Object { $_ -eq 'Device' }).Count } -Because 'the detached window "Device" stayed after Dock' -TimeoutSec 15 -NoThrow
                 $c.dockWindows = TopWindows
                 $c.dockHint = (Ui 'This session runs in its own window.' -Value exists -Optional -TimeoutSec 3).found
                 $c.dockConnected = Wait-RdpTab 20
@@ -732,32 +746,41 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             Step $p prompt {
                 Menu 'Connect'
                 $p.dialog = CredDialog 60
-                Start-Sleep -Seconds 2
                 # read first: the helper clears it after 30 s
-                $p.clip1 = InSession $VmName Console $code.clipInfo
+                $null = Wait-LabCondition -Until { $p.clip1 = InSession $VmName Console $code.clipInfo; $p.clip1.sha256 -eq $p.passwordSha } -Because 'the password prompt helper put no password on the clipboard' -TimeoutSec 15 -IntervalMs 1000 -NoThrow
                 # the notice at the bottom of RemoteHub's window (ClipboardToast: 'Stored password for "Device" copied')
                 $p.toast = (Ui 'Stored password for*' -Title '*' -Value exists -Optional -TimeoutSec 10).found
                 Shot 'prompt'
+                # the helper's 30 s and a margin: the time the test checks it keeps to
                 Start-Sleep -Seconds 35
                 $p.clip2 = InSession $VmName Console $code.clipInfo
             }
             Step $p paste {
                 # cancel this prompt, connect again, paste into Windows' dialog, OK
                 Key 1B
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (CredDialog 1) } -Because 'Windows'' credential dialog stayed open after Esc' -TimeoutSec 15 -NoThrow
                 $null = Ui 'Reconnect'
                 $p.dialog2 = CredDialog 60
+                # the dialog takes the keyboard focus a moment after it shows (UI Automation sees nothing inside it)
                 Start-Sleep -Seconds 3
                 Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x56
+                # the paste lands in the box before Enter sends it
                 Start-Sleep -Milliseconds 500
                 Send-LabKey -Name $VmName -Key Enter
                 $p.connected = Wait-RdpTab 60
-                $p.clip3 = InSession $VmName Console $code.clipInfo
+                # the tab's text shows on connect, a moment before the sign-in that clears the clipboard (the retry of
+                # run 20261030-194701 read it in between); waited for up to 10 s - the helper's own timer is 30 s
+                $cleared = Get-Date
+                $null = Wait-LabCondition -Until { $p.clip3 = InSession $VmName Console $code.clipInfo; -not $p.clip3.length } -Because 'the clipboard still held the password after the sign-in' -TimeoutSec 10 -IntervalMs 1000 -NoThrow
+                $p.clip3ClearedSec = [int]((Get-Date) - $cleared).TotalSeconds
                 Shot 'prompt-pasted'
             }
             Step $p audit {
                 # a dialog still open is modal: RemoteHub's context menu stays empty behind it
-                if (CredDialog 2) { $p.dialogLeft = $true; Key 1B; Start-Sleep -Seconds 2 }
+                if (CredDialog 2) {
+                    $p.dialogLeft = $true; Key 1B
+                    $null = Wait-LabCondition -Until { -not (CredDialog 1) } -Because 'Windows'' credential dialog stayed open after Esc' -TimeoutSec 15 -NoThrow
+                }
                 $p.audit = AuditText
             }
             # the policy off again and Remote Desktop Services restarted, so the next contexts connect without a prompt;
@@ -837,7 +860,9 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $null = Ui 'Local drives' -Title 'Edit connection' -Value 'choose:On'
                 $null = Ui 'Save' -Title 'Edit connection'
                 $null = Ui 'Reconnect'
-                Start-Sleep -Seconds 8
+                # the old connection goes first, or Wait-RdpTab finds its header still there (a reconnect quicker than
+                # one look is missed - then this wait just runs out)
+                $null = Wait-LabCondition -Until { -not (RdpConnected) } -Because 'the tab did not disconnect for Reconnect' -TimeoutSec 15 -NoThrow
                 $x.reconnected = Wait-RdpTab 60
                 $x.drivesOn = (InSession $device.Name Admin $code.tsclient @{ WAIT = 30 }).present
             }
@@ -887,29 +912,33 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
             }
             Step $e export {
                 Menu 'More>Save as .rdp file*'
-                Start-Sleep -Seconds 4
+                $null = Wait-LabCondition -Until { @(@((Ui '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items) | Where-Object { "$_" -match '^Window\|Save As\|' }).Count -or @(TopWindows | Where-Object { $_ -eq 'Save As' }).Count } -Because 'Windows'' Save As dialog did not open' -TimeoutSec 20 -NoThrow
+                # its file name box takes the focus a moment after it shows
+                Start-Sleep -Seconds 1
                 Shot 'save-as'
                 # Windows' Save As dialog has no usable UIA patterns here: its file name box has the focus with the
                 # proposed name selected - typed over at the console keyboard
                 Send-LabText -Name $VmName -Text 'C:\lab\device.rdp'
                 Send-LabKey -Name $VmName -Key Enter
                 $e.question = Message -Title 'Include saved passwords*' -Button 'Include passwords' -TimeoutSec 30
-                Start-Sleep -Seconds 3
-                $e.file = Invoke-LabGuest -Name $VmName -ScriptBlock { if (Test-Path 'C:\lab\device.rdp') { Get-Content 'C:\lab\device.rdp' -Raw } }
+                $e.file = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { if (Test-Path 'C:\lab\device.rdp') { Get-Content 'C:\lab\device.rdp' -Raw } } } -Because 'C:\lab\device.rdp was not written' -TimeoutSec 15 -NoThrow
                 # for R-RDP-08 (the file opened as normaluser, further down)
                 $script:rdpFile = $e.file
             }
             Step $e single {
                 $null = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 5
-                Start-Sleep -Seconds 3
+                # the tab's connection ends before PSAdmin is signed out
+                $null = Wait-LabCondition -Until { -not (RdpConnected) } -Because 'the RDP tab stayed connected after Close all tabs' -TimeoutSec 15 -NoThrow
                 Clear-DeviceSessions
                 $second = Start-LabInSession -Name $VmName -Account Console -ScriptBlock { & 'C:\Program Files\RemoteHub\RemoteHub.exe' 'C:\lab\device.rdp' }
-                Start-Sleep -Seconds 15
+                # the second start hands the file to the running RemoteHub, which connects it, and ends: counted once the
+                # tab is there (a count before could miss a second process not started yet)
+                $e.connected = Wait-RdpTab 75
+                $null = Wait-LabCondition -Until { (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }) -le 1 } -Because 'the second RemoteHub.exe did not end' -TimeoutSec 30 -NoThrow
                 $e.processes = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }
                 $e.windows = @(TopWindows | Where-Object { $_ -like 'RemoteHub*' -or $_ -like '* RemoteHub' })
                 $e.tree = @((Ui '*' -Value list).items)
-                $e.connected = Wait-RdpTab 60
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { @((DeviceState).Rdp).Count } -Because 'no active RDP session for PSAdmin on the device' -TimeoutSec 30 -NoThrow
                 $e.device = DeviceState
                 Shot 'single-instance'
                 Stop-LabInSession -Name $VmName -Task $second
@@ -977,7 +1006,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $a.afterKill = Staged
                 $script:task = Start-LabClient -Name $VmName
                 # the start cleans in the background (App.OnStartup: AgentInstaller.CleanTemp(TimeSpan.Zero))
-                Start-Sleep -Seconds 15
+                $null = Wait-LabCondition -Until { $s = Staged; @($s).Count -eq 0 } -Because 'the staging folders were still there after the restart' -TimeoutSec 45 -IntervalMs 1000 -NoThrow
                 $a.afterRestart = Staged
             }
             Shot 'agent-clip'
@@ -1023,8 +1052,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $null = Ui 'Install' -Title 'Install RemoteHub Agent'
                 # Dialogs.Confirm "Copy the enrollment secret?" - its window name is the message
                 $k.question = Message -Title 'The remote desktop tab of*' -Button 'Cancel' -TimeoutSec 60
-                Start-Sleep -Seconds 2
-                $k.report = (@((Ui '*' -Title 'Install RemoteHub Agent' -Value list -TimeoutSec 20).items) -join "`n")
+                # the install dialog writes the outcome once the question is closed
+                $null = Wait-LabCondition -Until { $k.report = (@((Ui '*' -Title 'Install RemoteHub Agent' -Value list -TimeoutSec 20).items) -join "`n"); $k.report -match 'Cancelled' } -Because 'the install dialog reported no "Cancelled"' -TimeoutSec 20 -NoThrow
                 $null = Ui 'Close' -Title 'Install RemoteHub Agent' -Optional -TimeoutSec 5
                 $k.clipboard = @(InSession $VmName Console $code.clipFiles)
             }
@@ -1057,6 +1086,8 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 Menu 'Remote desktop via RDP'
                 $u.connected = Wait-RdpTab 90
                 $null = InSession $device.Name Admin $code.textSet @{ B64 = (B64 $u.text) }
+                # the RDP tab announces the copy on this PC's clipboard before the agent tab is selected; reading it here
+                # would fetch it as a paste does, which the test leaves to RemoteHub
                 Start-Sleep -Seconds 3
                 $null = Ui 'Desktop (agent)' -Value realclick -Optional -TimeoutSec 10
                 $until = (Get-Date).AddSeconds(40)
@@ -1096,6 +1127,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $skip = @(DiagLines).Count
                 $map = Disconnect-LabNetwork -Name $device.Name
                 try {
+                    # the cut lasts 10 s (UI-NET-02): the tab's reconnecting state is read in the middle of it
                     Start-Sleep -Seconds 5
                     $w.screenDuring = Screen
                     Shot 'net-cut'
@@ -1143,12 +1175,13 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $null = Invoke-LabUi -Name $VmName -Account User -Text 'Connect' -Title 'Connect to*'
                 # the password in the file is DPAPI-protected for Admin: Windows asks normaluser for it
                 $o.prompt = CredDialog 60 User
+                # the dialog takes the keyboard focus a moment after it shows (UI Automation sees nothing inside it)
                 Start-Sleep -Seconds 3
                 Shot 'user-prompt'
                 Send-LabText -Name $VmName -Text $password
                 Send-LabKey -Name $VmName -Key Enter
                 $o.connected = Wait-RdpTab 90 -Account User
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { @((DeviceState).Rdp).Count } -Because 'no active RDP session for PSAdmin on the device' -TimeoutSec 30 -NoThrow
                 $o.device = DeviceState
                 Shot 'user-connected'
                 Stop-LabClient -Name $VmName -Task $userTask
@@ -1203,7 +1236,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 $j.target = Move-LabVmBehindJump -Name $device.Name
                 New-LabClientConnection -Name $VmName -Display 'Behind' -TargetHost $j.target -User $device.AdminAccount -Password $password
                 $null = Ui 'Behind' -Value 'menu:Move under>JumpHost'
-                Start-Sleep -Seconds 2
+                $null = Wait-LabCondition -Until { (Hints).Jump -gt 0 } -Because 'Behind shows no "via JumpHost" after the move' -TimeoutSec 15 -NoThrow
             }
             Step $j rdp {
                 Clear-DeviceSessions
@@ -1212,7 +1245,7 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 # RemoteHub checks the certificate itself (RdpRouteAsync): "Trust this RDP certificate?"
                 $j.trust = Message -Title 'Behind is reached through*' -Button 'Trust and connect' -TimeoutSec 120
                 $j.connected = Wait-RdpTab 120
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { @((DeviceState).Rdp).Count } -Because 'no active RDP session for PSAdmin on the device' -TimeoutSec 30 -NoThrow
                 $j.device = DeviceState
                 $j.logons = @(Invoke-LabGuest -Name $device.Name -ArgumentList $since, $device.AdminAccount -ScriptBlock {
                         param($since, $u)
@@ -1231,23 +1264,21 @@ Describe 'UI-RDP <VmName>' -Tag Client, UI, 'R-RDP', 'UI-CP', 'UI-SAS', 'UI-NET'
                 New-LabClientConnection -Name $VmName -Display 'Movable' -TargetHost 'movable.lab.test'
                 $j.h0 = Hints
                 $null = Ui 'Movable' -Value 'menu:Move under>JumpHost'
-                Start-Sleep -Seconds 2
-                $j.h1 = Hints
+                $null = Wait-LabCondition -Until { $j.h1 = Hints; $j.h1.Jump -ne $j.h0.Jump } -Because 'the route hints did not change after Move under > JumpHost' -TimeoutSec 15 -NoThrow
                 # below a jump host nothing can be a jump host: Behind isn't offered as a target
                 $j.offer = Ui 'Movable' -Value 'menu:Move under>Behind' -Optional
                 Key 1B
                 $null = Ui 'Movable' -Value 'menu:Move under>Device'
-                Start-Sleep -Seconds 2
-                $j.h2 = Hints
+                $null = Wait-LabCondition -Until { $j.h2 = Hints; $j.h2.Device -ne $j.h1.Device } -Because 'the route hints did not change after Move under > Device' -TimeoutSec 15 -NoThrow
                 # a jump host can't go below another one: its "Move under" is switched off
                 try { $j.jumpUnder = Ui 'JumpHost' -Value 'menu:Move under>Device' -Optional -TimeoutSec 10 }
                 catch { $j.jumpUnder = [pscustomobject]@{ error = "$_" } }
                 Key 1B
+                # the menu closes; nothing in the tree changes (what h3 checks), so there is no condition to wait for
                 Start-Sleep -Seconds 2
                 $j.h3 = Hints
                 $null = Ui 'Movable' -Value 'menu:Move under>Out of Device*'
-                Start-Sleep -Seconds 2
-                $j.h4 = Hints
+                $null = Wait-LabCondition -Until { $j.h4 = Hints; $j.h4.Device -ne $j.h3.Device } -Because 'the route hints did not change after Move under > Out of Device' -TimeoutSec 15 -NoThrow
                 Shot 'jump-tree'
             }
             Save 'jump' $j

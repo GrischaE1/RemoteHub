@@ -46,6 +46,36 @@ public static class RhNative
     // the like) ends the process; the handler first writes it there as a serveError, so the lab host reads why.
     public static string CrashOut;
     private static bool _watching;
+
+    // -Do serve: a deadline kept on a thread of its own. The server's PowerShell thread answers a stuck action itself at
+    // its deadline, but in run 20261031-075755 (UI-AD-07) and 20261030-194701 (UI-AD-06) no answer came at all - that
+    // thread was stuck too. Unless Done() is called first, this writes a serveError into -Out at -Seconds and ends the
+    // process, so the host gets its answer and its next request starts a new server.
+    private static System.Threading.ManualResetEvent _done;
+    public static void Deadline(string outPath, int seconds)
+    {
+        var done = new System.Threading.ManualResetEvent(false);
+        _done = done;
+        var t = new System.Threading.Thread(() =>
+        {
+            if (done.WaitOne(seconds * 1000)) return;
+            try
+            {
+                if (!File.Exists(outPath))
+                {
+                    var part = outPath + ".deadline.part";
+                    File.WriteAllText(part, "{\"serveError\":\"the person server didn't answer by its deadline of " + seconds +
+                        " s - its own thread was stuck as well\"}");
+                    File.Move(part, outPath);
+                }
+            }
+            catch { }
+            System.Diagnostics.Process.GetCurrentProcess().Kill();
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+    public static void Done() { var d = _done; if (d != null) d.Set(); }
     public static void WatchCrash()
     {
         if (_watching) return;
@@ -235,10 +265,42 @@ function Get-Ocr([Drawing.Bitmap]$Bitmap) {
 # of view answers an empty rectangle (infinite X, minus infinite width): its middle was NaN and the step ended with
 # 'Cannot convert value "NaN" to type "System.Int32"' (run 20261026-144106, UI-AG-07 / UI-AG-08). It is scrolled into
 # view first; one that still has no place on the screen fails with a message that says so.
+function Test-RhHung($p) {
+    # Not answering window messages - but a Store app that Windows suspended in the background (Settings) doesn't answer
+    # either and isn't in the way: it counts as not hung (run 20261028-161817 named "SystemSettings" in every failure on
+    # the console VMs while only RemoteHub had hung).
+    if ($p.Responding) { return $false }
+    try { $t = @($p.Threads); return -not ($t.Count -gt 0 -and -not @($t | Where-Object { $_.ThreadState -ne 'Wait' -or $_.WaitReason -ne 'Suspended' }).Count) }
+    catch { return $true }
+}
+
 function Get-RhMid($el) {
     $r = $el.Current.BoundingRectangle
-    if ($r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
+    # A tree or list row scrolled above or below its list still has a place on the screen for UI Automation, so its
+    # centre lands on whatever is there (the search box above the tree - J-19 in run 20261030-194701 got the text
+    # box's Copy/Cut/Paste menu). Such a row is scrolled into view first.
+    $outside = $false
+    if (-not $r.IsEmpty -and $r.Width -gt 0) {
+        try {
+            $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
+            $p = $walker.GetParent($el)
+            $box = $null
+            for ($i = 0; $p -and $i -lt 12; $i++) {
+                $type = $p.Current.ControlType
+                if ($type -eq [Windows.Automation.ControlType]::Tree -or $type -eq [Windows.Automation.ControlType]::List -or
+                    $type -eq [Windows.Automation.ControlType]::DataGrid) { $box = $p.Current.BoundingRectangle; break }
+                $p = $walker.GetParent($p)
+            }
+            if ($box -and -not $box.IsEmpty) {
+                $midY = $r.Y + $r.Height / 2
+                $outside = $midY -lt $box.Top -or $midY -gt $box.Bottom
+            }
+        }
+        catch { }
+    }
+    if ($outside -or $r.IsEmpty -or $r.Width -le 0 -or $r.Height -le 0) {
         $sp = $null
+        # (the pause: the list lays itself out again after the scroll before the new place is read)
         if ($el.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); Start-Sleep -Milliseconds 300 } catch { } }
         $r = $el.Current.BoundingRectangle
     }
@@ -379,10 +441,13 @@ switch ($Do) {
                 foreach ($k in $a.Keys) { $null = $ps.AddParameter($k, $a[$k]) }
                 $limit = [Math]::Max(5, $a.TimeoutSec) + 50
                 [RhNative]::CrashOut = $req.out
+                # 10 s after the PowerShell thread's own deadline and its window check (15 s), 5 s before the host gives up
+                [RhNative]::Deadline($req.out, $limit + 25)
                 $h = $ps.BeginInvoke()
             }
             catch {
                 [RhNative]::CrashOut = $null
+                [RhNative]::Done()
                 $why = "the action couldn't start: $($_.Exception.Message)"
                 try { [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $why } -Compress)) } catch { }
                 if ($worker) { try { $worker.Dispose() } catch { }; $worker = $null }
@@ -404,6 +469,7 @@ switch ($Do) {
                     [IO.File]::WriteAllText($req.out, (ConvertTo-Json -InputObject @{ serveError = $ex.Message } -Compress))
                 }
                 $ps.Dispose()
+                [RhNative]::Done()
             }
             else {
                 [RhNative]::CrashOut = $null
@@ -414,7 +480,7 @@ switch ($Do) {
                 $checkUntil = (Get-Date).AddSeconds(15)
                 $hung = @(foreach ($p in $wins) {
                         if ((Get-Date) -ge $checkUntil) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle) - not checked"; continue }
-                        if (-not $p.Responding) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle)" }
+                        if (Test-RhHung $p) { "$($p.ProcessName) ($($p.Id)): $($p.MainWindowTitle)" }
                     })
                 $why = "the action didn't finish within $limit s (a call that doesn't return$(if ($hung) { ' - not responding: ' + ($hung -join ', ') }))"
                 $late = if ($a.Do -eq 'uia') {
@@ -432,7 +498,12 @@ switch ($Do) {
         }
         Remove-Item (Join-Path $q 'alive.txt') -ErrorAction SilentlyContinue
     }
-    'windows' { Out-Json @(Get-AgentWindows) }
+    # -Value <window class>: the visible top-level windows of that class (owned ones too), e.g. Windows' credential
+    # dialog, which UI Automation can miss (R-RDP-04, run 20261030-194701)
+    'windows' {
+        if ($Value) { Out-Json @([RhNative]::Windows($Value) | ForEach-Object { [pscustomobject]@{ Handle = $_[0]; Title = $_[1] } }) }
+        else { Out-Json @(Get-AgentWindows) }
+    }
     'read' {
         $r = Read-AgentWindow
         if (-not $r) { Out-Json @{ found = $false }; break }
@@ -542,14 +613,28 @@ switch ($Do) {
     'close-window' {
         $w = @(Get-AgentWindows)
         foreach ($x in $w) { [void][RhNative]::PostMessageW([IntPtr]$x.Handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }   # WM_CLOSE
-        Start-Sleep -Seconds 2
+        # until the windows sent WM_CLOSE are gone, at most 5 s (one that refuses to close stays and is counted)
+        $handles = @($w | ForEach-Object { "$($_.Handle)" })
+        $until = (Get-Date).AddSeconds(5)
+        do {
+            if (-not @(Get-AgentWindows | Where-Object { $handles -contains "$($_.Handle)" }).Count) { break }
+            Start-Sleep -Milliseconds 250
+        } while ($handles.Count -and (Get-Date) -lt $until)
         Out-Json @{ closed = $w.Count; left = @(Get-AgentWindows).Count }
     }
     'hover' {
         $w = Get-AgentWindows | Select-Object -First 1
         $before = $w
         if ($w) { [void][RhNative]::SetCursorPos($w.X + [int]($w.Width / 2), $w.Y + [int]($w.Height / 2)) }
-        Start-Sleep -Seconds 2
+        # until the window has changed its size (the pill opens to the banner), at most 3 s - an open banner stays as it
+        # is; then a moment for it to draw its buttons
+        $after = $null
+        $until = (Get-Date).AddSeconds(3)
+        do {
+            Start-Sleep -Milliseconds 200
+            $after = Get-AgentWindows | Select-Object -First 1
+        } while ($w -and $after -and $after.Width -eq $w.Width -and $after.Height -eq $w.Height -and (Get-Date) -lt $until)
+        Start-Sleep -Milliseconds 300
         Out-Json @{ before = $before; after = (Get-AgentWindows | Select-Object -First 1) }
     }
     'ocr-file' {
@@ -616,6 +701,7 @@ switch ($Do) {
                         if ($e.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$sp)) { try { $sp.ScrollIntoView(); $moved = $true } catch { }; break }
                         $e = $walker.GetParent($e)
                     }
+                    # scrolled: the list lays itself out again before the next search pass
                     if ($moved) { Start-Sleep -Milliseconds 400; break }
                 }
                 # "type:Edit#2": the second one in tree order (the file transfer tab's remote address box)
@@ -635,7 +721,7 @@ switch ($Do) {
         # a hung program's window has no name for UI Automation and drops out of the list: named here as not responding
         # (UI-JUMP, run 20261026-032740: RemoteHub's UI thread hung, the list showed only "Program Manager")
         if (-not $found) {
-            $hung = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and -not $_.Responding } | ForEach-Object { "$($_.ProcessName) ($($_.Id))" })
+            $hung = @(Get-Process | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero -and (Test-RhHung $_) } | ForEach-Object { "$($_.ProcessName) ($($_.Id))" })
             Out-Json @{ found = $false; title = $Title; text = $Text; searchError = $searchError; notResponding = $hung; windows = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition) | ForEach-Object { $_.Current.Name } | Where-Object { $_ }) }
             break
         }
@@ -658,6 +744,7 @@ switch ($Do) {
                     $wr0 = $win.Current.BoundingRectangle
                     if ($tp.Current.CanResize) { $tp.Resize([math]::Min($wr0.Width, $wa.Width - 40), [math]::Min($wr0.Height, $wa.Height - 60)) }
                     if ($tp.Current.CanMove) { $tp.Move($wa.X, $wa.Y) }
+                    # the window takes its new place and lays out before the element's centre is read again
                     Start-Sleep -Milliseconds 300
                     $result.movedOnScreen = "$wr0"
                     $pt = Get-RhMid $found
@@ -690,6 +777,7 @@ switch ($Do) {
             catch {
                 $result.selectError = "$($_.Exception.Message)"
                 $m = Get-RhMid $el; [RhNative]::Click($m[0], $m[1])
+                # input pacing: the click is handled before the caller's next step
                 Start-Sleep -Milliseconds 300
             }
             $true
@@ -709,6 +797,8 @@ switch ($Do) {
                 }
                 $result.value = "$($win.Current.BoundingRectangle)"
             }
+            # input pacing in the real clicks here and below: 150 ms after the pointer moved (the window sees it there
+            # before the button), 60 ms between button down and up
             'rightclick' { $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150; [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero) }
             { $_ -like 'menu:*' -or $_ -like 'pick:*' } {
                 # menu: right-click, pick: left-click (a drop-down button) - then the menu's entry in the same process (a new
@@ -729,6 +819,24 @@ switch ($Do) {
                         $result.rightClickAgain = $true
                         $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
                         [RhNative]::mouse_event(0x0008, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60; [RhNative]::mouse_event(0x0010, 0, 0, 0, [IntPtr]::Zero)
+                        $retryAt = (Get-Date).AddSeconds(2)
+                        do {
+                            Start-Sleep -Milliseconds 300
+                            $menuSeen = [bool]($A::RootElement.FindFirst([Windows.Automation.TreeScope]::Descendants, $isItem))
+                        } while (-not $menuSeen -and (Get-Date) -lt $retryAt)
+                    }
+                    # Still no menu: the element selected and focused through UI Automation, then Shift+F10 - the keyboard's
+                    # way to the same menu, which no pointer position can miss (POL-15, UI-AG-10/16, R-RDP-12: two
+                    # right-clicks on a tree item, no menu at all)
+                    if (-not $menuSeen) {
+                        $result.menuByKeyboard = $true
+                        $result.foreground = [RhNative]::ForegroundName()
+                        $sp = & $pat ([Windows.Automation.SelectionItemPattern]::Pattern)
+                        try { if ($sp) { $sp.Select() }; $found.SetFocus() } catch { $result.focusError = "$($_.Exception.Message)" }
+                        # the focus moves before the keys
+                        Start-Sleep -Milliseconds 200
+                        [RhNative]::keybd_event(0x10, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x79, 0, 0, [IntPtr]::Zero)
+                        [RhNative]::keybd_event(0x79, 0, 2, [IntPtr]::Zero); [RhNative]::keybd_event(0x10, 0, 2, [IntPtr]::Zero)
                     }
                 }
                 $path = @($action.Substring(5) -split '>')
@@ -774,6 +882,7 @@ switch ($Do) {
                     $wr = $win.Current.BoundingRectangle
                     $er = $found.Current.BoundingRectangle
                     $tp.Move($wr.Left, $wr.Top + ($wa.Bottom - 150) - ($er.Top + $er.Height / 2))
+                    # the window takes its new place before the element's centre is read
                     Start-Sleep -Milliseconds 500
                 }
                 $c = & $center; [void][RhNative]::SetCursorPos($c[0], $c[1]); Start-Sleep -Milliseconds 150
@@ -792,6 +901,7 @@ switch ($Do) {
                     $o.Expand()
                 }
                 if (-not $result.error) {
+                    # the last submenu slides open (an animation): its entries' places are read once it stands still
                     Start-Sleep -Milliseconds 700
                     $box = { param($r) [ordered]@{ left = [int]$r.Left; top = [int]$r.Top; right = [int]$r.Right; bottom = [int]$r.Bottom } }
                     $result.item = & $box $item.Current.BoundingRectangle
@@ -808,6 +918,7 @@ switch ($Do) {
                     }
                     $result.workArea = & $box ([Windows.Forms.Screen]::PrimaryScreen.WorkingArea)
                 }
+                # Esc by Esc, each closing one menu level (input pacing)
                 foreach ($i in 1..4) { [RhNative]::keybd_event(0x1B, 0, 0, [IntPtr]::Zero); [RhNative]::keybd_event(0x1B, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 100 }
             }
             'row:*' {
@@ -836,6 +947,7 @@ switch ($Do) {
                 if ($btn.TryGetCurrentPattern([Windows.Automation.InvokePattern]::Pattern, [ref]$ip)) { $ip.Invoke() }
                 else { $m = Get-RhMid $btn; [RhNative]::Click($m[0], $m[1]) }
             }
+            # (the two clicks well within the double-click time; the pause before keys lets the focus move)
             'doubleclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]); Start-Sleep -Milliseconds 80; [RhNative]::Click($c[0], $c[1]) }
             'realclick' { $c = & $center; [RhNative]::Click($c[0], $c[1]) }
             'keys:*' { $found.SetFocus(); Start-Sleep -Milliseconds 200; [Windows.Forms.SendKeys]::SendWait($action.Substring(5)) }
@@ -875,6 +987,7 @@ switch ($Do) {
                 }
                 else {
                     $item = $action.Substring(7)
+                    # (the pause: the drop-down opens and fills its items before they are searched)
                     $ec = $null; if ($field.TryGetCurrentPattern([Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$ec)) { $ec.Expand(); Start-Sleep -Milliseconds 400 }
                     $li = @($field.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1
                     if (-not $li) { $li = @($A::RootElement.FindAll([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::ListItem))) | Where-Object { $_.Current.Name -like $item }) | Select-Object -First 1 }
@@ -954,7 +1067,8 @@ switch ($Do) {
         Out-Json $result
     }
     'key' {
-        # a key pressed at the device's own keyboard (virtual-key code in -Value, e.g. 0x1B Esc, 0x0D Enter)
+        # a key pressed at the device's own keyboard (virtual-key code in -Value, e.g. 0x1B Esc, 0x0D Enter); held
+        # 50 ms like a real key press
         $vk = [byte][Convert]::ToInt32($Value, 16)
         [RhNative]::keybd_event($vk, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 50; [RhNative]::keybd_event($vk, 0, 2, [IntPtr]::Zero)
         Out-Json @{ key = $Value }

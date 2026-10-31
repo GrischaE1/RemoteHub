@@ -92,13 +92,16 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
             if (-not $old) {
                 # two windows in normaluser's session: a notepad, and the marker (topmost, in front) that records keys
                 $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
-                Start-Sleep -Seconds 3
                 $marker = Start-LabMarker -Name $VmName
-                # the notepad minimized (still in Alt+Tab's list): else it stays in front of the marker and gets the keys
+                # the notepad minimized (still in Alt+Tab's list): else it stays in front of the marker and gets the keys.
+                # Its window waited for first (up to 30 s): it may not be up yet
                 $null = Invoke-LabInSession -Name $VmName -ScriptBlock {
                     Add-Type -Namespace RhLab -Name Win -MemberDefinition '[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int c);'
+                    $until = (Get-Date).AddSeconds(30)
+                    do { if (@(Get-Process notepad -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0).Count) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
                     Get-Process notepad -ErrorAction SilentlyContinue | Where-Object MainWindowHandle -ne 0 | ForEach-Object { [void][RhLab.Win]::ShowWindow($_.MainWindowHandle, 6) }
                 }
+                # the minimize animation over before the marker is clicked into the foreground
                 Start-Sleep -Seconds 1
                 $null = Invoke-LabPerson -Name $VmName -Do clip-set -Value 'before the snips'
                 $o = Out 'snip'
@@ -115,33 +118,42 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                     @{ do = 'key'; scan = '0x01' }, @{ do = 'key'; scan = '0x01'; flags = @('Up') }, @{ do = 'sleep'; seconds = 1 }
                     (Mark $o 'admin-done'), (Park $o 'off'), @{ do = 'privacy'; style = 'Off' }, @{ do = 'sleep'; seconds = 3 }, (Mark $o 'is-off'), (Park $o 'end'))
                 Reached $o 'on'
-                Start-Sleep -Seconds 2
-                $p.consoleLuma = Console-Luma (Join-Path $o 'console-on.png')
+                # the overlay up (asserted below; the last picture kept when it doesn't darken)
+                $lum = @{}
+                $null = Wait-LabCondition -Until { $lum.v = Console-Luma (Join-Path $o 'console-on.png'); $lum.v -lt 20 } -Because 'the console did not go dark under the privacy screen' -TimeoutSec 15 -NoThrow
+                $p.consoleLuma = $lum.v
 
                 # at the device (console keyboard)
                 $since = Get-LabGuestTime -Name $VmName
                 # the marker in front with the keyboard (a click at the device; the overlay lets clicks through)
                 Send-LabMouse -Name $VmName -X 200 -Y 400
-                Start-Sleep -Seconds 1
+                $null = Wait-LabCondition -Until { (Foreground).Title -eq $markerTitle } -Because 'the marker did not come to the front after the click' -TimeoutSec 10 -NoThrow
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 $p.dStart = Foreground
                 Send-LabKeyCombo -Name $VmName -Codes 0x10, 0x09            # Shift+Tab: works
+                # each combo handled before the next one is sent
                 Start-Sleep -Seconds 2
                 Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x09            # Alt+Tab
+                # dropped: no other window may come to the front in this time
                 Start-Sleep -Seconds 2
                 $p.dAltTab = Foreground
                 Send-LabKeyCombo -Name $VmName -Codes 0x2C                  # Print Screen
+                # dropped: the clipboard must not change in this time
                 Start-Sleep -Seconds 2
                 $p.dPrint = Invoke-LabPerson -Name $VmName -Do clip-get
                 Send-LabKeyCombo -Name $VmName -Codes 0x5B, 0x09            # Win+Tab
+                # dropped: Task View must not come up in this time
                 Start-Sleep -Seconds 3
                 $p.dWinTab = Foreground
                 $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
+                # Esc handled before the next combo
                 Start-Sleep -Seconds 1
                 Send-LabKeyCombo -Name $VmName -Codes 0x5B, 0x10, 0x53      # Win+Shift+S
+                # dropped: no snipping tool may start in this time
                 Start-Sleep -Seconds 4
                 $p.dSnippers = Snippers
                 $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
+                # Esc handled before the marker's keys are read
                 Start-Sleep -Seconds 1
                 $p.dSeen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
                 $p.dSnipLog = SnipLog $since
@@ -149,7 +161,7 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 # from the admin (the harness)
                 $since = Get-LabGuestTime -Name $VmName
                 Send-LabMouse -Name $VmName -X 200 -Y 400
-                Start-Sleep -Seconds 1
+                $null = Wait-LabCondition -Until { (Foreground).Title -eq $markerTitle } -Because 'the marker did not come to the front after the click' -TimeoutSec 10 -NoThrow
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 $p.aStart = Foreground
                 Release $o 'admin'
@@ -170,19 +182,23 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 # Win+S at the device: works (Search comes up)
                 $p.sBefore = Foreground
                 Send-LabKeyCombo -Name $VmName -Codes 0x5B, 0x53
-                Start-Sleep -Seconds 4
+                $sBefore = "$($p.sBefore.Title)|$($p.sBefore.Process)"
+                $null = Wait-LabCondition -Until { $f = Foreground; "$($f.Title)|$($f.Process)" -ne $sBefore } -Because 'Search did not come to the front after Win+S' -TimeoutSec 15 -NoThrow
                 $p.sAfter = Foreground
                 $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
-                Start-Sleep -Seconds 2
+                # Search closed again before the next steps
+                $sAfter = "$($p.sAfter.Title)|$($p.sAfter.Process)"
+                if ($sAfter -ne $sBefore) { $null = Wait-LabCondition -Until { $f = Foreground; "$($f.Title)|$($f.Process)" -ne $sAfter } -Because 'Search did not close after Esc' -TimeoutSec 10 -NoThrow }
 
                 # privacy screen off: Alt+Tab switches again
                 Release $o 'off'
                 Reached $o 'is-off'
                 Send-LabMouse -Name $VmName -X 200 -Y 400
-                Start-Sleep -Seconds 1
+                $null = Wait-LabCondition -Until { (Foreground).Title -eq $markerTitle } -Because 'the marker did not come to the front after the click' -TimeoutSec 10 -NoThrow
                 $p.offBefore = Foreground
                 Send-LabKeyCombo -Name $VmName -Codes 0x12, 0x09
-                Start-Sleep -Seconds 2
+                $offBefore = "$($p.offBefore.Title)|$($p.offBefore.Process)"
+                $null = Wait-LabCondition -Until { $f = Foreground; "$($f.Title)|$($f.Process)" -ne $offBefore } -Because 'Alt+Tab did not switch windows with the privacy screen off' -TimeoutSec 10 -NoThrow
                 $p.offAfter = Foreground
                 Release $o 'end'
                 $p.r = Receive-LabDesktop $job
@@ -231,20 +247,22 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                         $exe = Join-Path $env:WINDIR 'System32\SnippingTool.exe'
                         if (Test-Path $exe) { Start-Process $exe } else { try { Start-Process 'ms-screensketch:' } catch { Start-Process 'ms-screenclip:' } }
                     }
-                    Start-Sleep -Seconds 6
                 }
                 # control, no connection: the tool stays open
                 & $launch
-                $t.control = Snippers
+                $t.control = Wait-LabCondition -Until { Snippers } -Because 'no snipping tool started' -TimeoutSec 20 -NoThrow
                 Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process SnippingTool, ScreenClippingHost, ScreenSketch -ErrorAction SilentlyContinue | Stop-Process -Force }
                 $since = Get-LabGuestTime -Name $VmName
                 $o = Out 'snippers'
                 $job = Begin 'snippers' @(@{ do = 'privacy'; style = 'Black'; blockLocalInput = $false }, @{ do = 'sleep'; seconds = 4 }, (Mark $o 'on'), (Park $o 'end'))
                 Reached $o 'on'
                 & $launch
+                # started and closed by the agent: its log line says so (asserted below); the processes read after it
+                $null = Wait-LabCondition -Until { @(SnipLog $since).Count -gt 0 } -Because 'the agent logged no snipping tool closed' -TimeoutSec 20 -NoThrow
                 $t.during = Snippers
                 Release $o 'end'
                 $t.r = Receive-LabDesktop $job
+                # no event may come for it in this time
                 Start-Sleep -Seconds 2
                 $t.log = SnipLog $since
                 $t.events = @(Get-LabAgentEvent -Name $VmName -Since $since | Where-Object { $_.Message -match 'SnippingTool|ScreenClippingHost|ScreenSketch|snip' })
@@ -273,6 +291,7 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 $v.consoleLuma = Console-Luma (Join-Path $o 'console.png')
                 Release $o 'end'
                 $v.r = Receive-LabDesktop $job
+                # neither event 1104 nor 2103 may come in this time
                 Start-Sleep -Seconds 2
                 $v.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1104, 2103)
                 Save 'view-only' $v
@@ -308,7 +327,10 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
                 $m.lumaAfter = Console-Luma (Join-Path $o 'console-after.png')
                 Release $o 'end'
                 $m.r = Receive-LabDesktop $job
-                Start-Sleep -Seconds 2
+                # the event is only looked for when the privacy screen was turned off for the change
+                if (@($m.r.privacy | Where-Object { $_.privacy.reason -match "turned off because the device's monitors changed" }).Count -gt 0) {
+                    $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2103 | Where-Object { $_.Message -match "turned off because the device's monitors changed" }).Count -gt 0 } -Because 'no event 2103 for the privacy screen turned off' -TimeoutSec 20 -NoThrow
+                }
                 $m.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2103)
                 Save 'monitors' $m
             }
@@ -353,6 +375,7 @@ Describe 'D-PRIVACY2 <VmName>' -Tag Desktop, 'D-PRIV', 'D-HIDE' {
             Release $o 'end'
             $h.r = Receive-LabDesktop $job
             Set-LabAgentPolicy -Name $VmName -Clear
+            # no event 1105 may come in this time
             Start-Sleep -Seconds 2
             $h.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1105)
             Stop-LabInSession -Name $VmName -Task $task

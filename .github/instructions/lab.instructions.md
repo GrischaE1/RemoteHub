@@ -16,9 +16,10 @@ The lab runs Pester tests against provided Hyper-V VMs, as the standard user `la
   between test files. The module uses `Set-StrictMode -Version Latest` and `$ErrorActionPreference = 'Stop'`.
 - Tests must not need elevation or an interactive sign-in on the host, and must not depend on state from an earlier
   test file – every file starts from the VM's checkpoint.
-- Wait for conditions with a timeout (the module's `Wait-Lab*` helpers, e.g. `Wait-LabVm`, `Wait-LabDesktop`, or a
-  helper's `-TimeoutSec`) instead of fixed
-  `Start-Sleep` margins; a timeout should fail with a message saying what didn't happen.
+- Wait for conditions with a timeout (the module's `Wait-Lab*` helpers, e.g. `Wait-LabVm`, `Wait-LabDesktop`,
+  `Wait-LabCondition -Until { ... } -Because '...'` for anything else, or a helper's `-TimeoutSec`) instead of fixed
+  `Start-Sleep` margins; a timeout should fail with a message saying what didn't happen. A fixed sleep stays only for a
+  check that nothing happens within a time, a duration the test needs, or input pacing – with a comment saying which.
 - Evidence (JSON, screenshots, logs) goes to `$EvidenceDir` with the test's ID as a lower-case prefix.
 - The lab password comes from `lab/lab.local.json` (git-ignored). It must never be hard-coded, logged, written to
   evidence or committed; `lab.local.example.json` holds only a placeholder.

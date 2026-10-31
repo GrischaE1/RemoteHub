@@ -64,7 +64,7 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
             $i.view = Receive-LabDesktop $job
             Set-LabAgentPolicy -Name $VmName -Clear
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 2102 was not written' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2102).Count -gt 0 }
             $i.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2102)
             Save 'idle' $i
         }
@@ -107,9 +107,11 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
                 @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'Failed'); timeout = 60 }, (Mark $o 'second'), @{ do = 'wait'; anyOf = @('Connected', 'Denied'); timeout = 60 }, @{ do = 'close' })
             Reached $o 'connected'
             $cut = Disconnect-LabNetwork -Name $VmName
+            # the cut lasts 10 s (what the resume covers)
             Start-Sleep -Seconds 10
             Connect-LabNetwork -Name $VmName -Switches $cut
-            Start-Sleep -Seconds 5
+            # the harness reconnects only once the agent answers over the network again
+            $null = Wait-LabAgent -Name $VmName -Pin $pin -TimeoutSec 60
             Release $o 'back'
             Reached $o 'second'
             $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 30
@@ -256,6 +258,7 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             # six kills within a minute
             Release $o 'flood'
             for ($k = 0; $k -lt 6; $k++) {
+                # the rate the test needs: six kills within a minute
                 Start-Sleep -Seconds 5
                 Invoke-LabGuest -Name $VmName -ScriptBlock { Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$' | ForEach-Object { Stop-Process -Id $_.ProcessId -Force } }
             }
@@ -270,7 +273,7 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
             $f.fitted = Wait-LabResolution -Name $VmName -Not $before -TimeoutSec 15 -NoThrow
             Invoke-LabGuest -Name $VmName -ScriptBlock { Restart-Service RemoteHubAgent -Force }
             $f.service = Receive-LabDesktop $job
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'a desktop helper was still running after the service restart' -Until { -not @(Helper).Count }
             $f.helpersAfter = Helper
             $f.resAfter = Wait-LabResolution -Name $VmName -Is $before -TimeoutSec 20 -NoThrow
             $f.before = $before
@@ -309,6 +312,7 @@ Describe 'D-ROB <VmName>' -Tag Desktop, 'D-IDLE', 'D-RES', 'D-ROB' {
                 @{ do = 'raw'; hex = (($b | ForEach-Object { $_.ToString('X2') }) -join '') }
             }
             $z.fuzz = Receive-LabDesktop (Begin 'fuzz' (@($junk) + @(@{ do = 'rawJson'; type = 6; json = '{"monitor": "x", ' }, @{ do = 'rawJson'; type = 7; json = 'not json' }, @{ do = 'sleep'; seconds = 5 })))
+            # a crash the junk caused has this time to show (event 3100, no health answer)
             Start-Sleep -Seconds 3
             $z.health = Get-LabAgentHealth -Name $VmName -Pin $pin
             $z.crashes = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 3100)

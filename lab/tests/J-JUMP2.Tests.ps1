@@ -92,8 +92,10 @@ Describe 'J2 <VmName>' -Tag Jump, 'J' {
             Set-LabAgentPolicy -Name 'JumpHost' -Clear -Values @{ TunnelTargets = @("$($jump.Inner)/32") }
             $o.innerNamed32 = Open $jump.Inner 58732
             Set-LabAgentPolicy -Name 'JumpHost' -Clear
-            Start-Sleep -Seconds 3
-            $o.events = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 2200)
+            # the refusals' events reach the Application log a moment after the answers
+            $ev = @{}
+            $null = Wait-LabCondition -Until { $ev.v = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 2200); @($ev.v | Where-Object { $_.Message -match '\(own or special address\)' }).Count -ge 3 } -Because 'three 2200 events "(own or special address)" were not logged' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+            $o.events = $ev.v
             Save 'own-address' $o
         }
 
@@ -148,7 +150,8 @@ Describe 'J2 <VmName>' -Tag Jump, 'J' {
                 $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($code))
                 $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "powershell.exe -NoProfile -EncodedCommand $enc" }
             }
-            Start-Sleep -Seconds 5
+            # the sink starts in a process of its own
+            $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-NetTCPConnection -LocalPort 5999 -State Listen -ErrorAction SilentlyContinue) } } -Because 'the sink on port 5999 did not start listening on the device' -TimeoutSec 30 -IntervalMs 1000 -NoThrow
             $since = Get-LabGuestTime -Name 'JumpHost'
             $b = [ordered]@{}
             # Data frames of 64 KB on one stream without waiting for credit, the target not reading: more than 256 KB
@@ -161,8 +164,15 @@ Describe 'J2 <VmName>' -Tag Jump, 'J' {
             $b.duplicate = Raw 'duplicate' $target 5999
             # Close from RemoteHub's side, the target never closes: reset after 60 s (DrainTimeout)
             $b.drain = Raw 'drain' $target 5999 @{ wait = 90 }
-            Start-Sleep -Seconds 3
-            $b.events = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 1202)
+            # the protocol errors J-29 counts: two "not a tunnel frame", one "unexpected frame 99", one "already open"
+            $ev = @{}
+            $null = Wait-LabCondition -Until {
+                $ev.v = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 1202)
+                @($ev.v | Where-Object { $_.Message -match 'not a tunnel frame' }).Count -ge 2 -and
+                    @($ev.v | Where-Object { $_.Message -match 'unexpected frame 99' }).Count -ge 1 -and
+                    @($ev.v | Where-Object { $_.Message -match 'stream \d+ is already open' }).Count -ge 1
+            } -Because 'the 1202 protocol error events were not all logged' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+            $b.events = $ev.v
             Save 'bad-traffic' $b
         }
 
@@ -208,8 +218,10 @@ Describe 'J2 <VmName>' -Tag Jump, 'J' {
             Set-LabAgentPolicy -Name 'JumpHost' -Clear -Values @{ TunnelTargets = @('192.0.2.1/32') }
             $n.neither = Open $name 58732
             Set-LabAgentPolicy -Name 'JumpHost' -Clear
-            Start-Sleep -Seconds 3
-            $n.events = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 1201)
+            # the stream's audit event reaches the Application log a moment after the answer
+            $ev = @{}
+            $null = Wait-LabCondition -Until { $ev.v = @(Get-LabAgentEvent -Name 'JumpHost' -Since $since -Id 1201); @($ev.v | Where-Object { $_.Message -match "to $([regex]::Escape($name)):58732 \($([regex]::Escape($target))\)" }).Count -gt 0 } -Because "no 1201 event for the stream to $name ($target)" -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+            $n.events = $ev.v
             Save 'dual-name' $n
         }
 

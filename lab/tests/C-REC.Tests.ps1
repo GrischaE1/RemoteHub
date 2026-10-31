@@ -40,6 +40,7 @@ BeforeAll {
         $bad = { param($m) -not $m.found -or ($m.PSObject.Properties['error'] -and $m.error) }
         $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
         if ((& $bad $m) -and $m.found -and $m.PSObject.Properties['entries'] -and @($m.entries).Count -eq 0) {
+            # a pause before the second right-click: the menu that didn't open shows nothing to wait for
             Start-Sleep -Seconds 2
             $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
         }
@@ -61,6 +62,7 @@ BeforeAll {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # two Escapes, apart, close a menu and then a dialog left open
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
             # a recording the failed step started is stopped and saved: else the next steps find "Stop recording" where
             # they want "Record this tab", and the file stays open (Services ran on into C-REC-02..05)
@@ -114,7 +116,9 @@ BeforeAll {
         $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
             param($user)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            # its files are locked until the process has gone
+            $until = (Get-Date).AddSeconds(15)
+            do { if (-not (Get-Process RemoteHub -ErrorAction SilentlyContinue)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
             $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
                 "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
             foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
@@ -134,6 +138,7 @@ BeforeAll {
         $m = Ui 'Device' -Value "menu:Tools>$Entry" -Optional
         if (-not $m.found -or ($m.PSObject.Properties['error'] -and $m.error)) {
             Key 1B
+            # the menu Escape closes has to be gone before the next right-click opens a new one
             Start-Sleep -Seconds 1
             if (@(@($m.entries) | Where-Object { $_ -like 'Test RemoteHub Agent*' }).Count) {
                 Menu 'Tools>Test RemoteHub Agent*'
@@ -165,6 +170,7 @@ BeforeAll {
         $t0 = Get-Date
         if ($During) { . $During }
         $left = $Seconds - ((Get-Date) - $t0).TotalSeconds
+        # the rest of the recording's length
         if ($left -gt 0) { Start-Sleep -Seconds ([int][math]::Ceiling($left)) }
         RecButton 'Stop recording and save the video'
         $R["$Key-saved"] = Message -Button 'Close' -TimeoutSec 60
@@ -390,7 +396,7 @@ $out = @(foreach ($p in @(__FILES__)) {
         $null = Ui 'Security & session' -Title 'Edit connection'
         $null = Ui 'Server authentication' -Title 'Edit connection' -Value 'choose:Connect without warning'
         $null = Ui 'Save' -Title 'Edit connection'
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } -Because "'Edit connection' did not close after Save" -TimeoutSec 15
         $script:pair = [ordered]@{}
         Step $script:pair pair {
             $script:pair.install = Install-AgentByHand 'Device' $device.Name
@@ -515,6 +521,7 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 $null = Get-LabScreenshot -Name $VmName -Path $before
                 $r2.yellowBefore = YellowShare $before
                 Record $r2 'gpu' -Seconds 10 -During {
+                    # two screenshots taken a few seconds into the recording, apart, while the capture runs
                     Start-Sleep -Seconds 3
                     $d1 = Join-Path $EvidenceDir 'c-rec-gpu-during1.png'
                     $null = Get-LabScreenshot -Name $VmName -Path $d1
@@ -553,10 +560,12 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             Step $r4 kill {
                 RecButton 'Record this tab to a video file'
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 5
+                # the length of the recording before RemoteHub is killed
                 Start-Sleep -Seconds 20
                 Stop-LabClient -Name $VmName -Task $script:task
                 $script:task = $null
-                Start-Sleep -Seconds 3
+                # the killed process gone, so its file is no longer held open when it is read
+                $null = Wait-LabCondition -Until { (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }) -eq 0 } -Because 'RemoteHub still ran after Stop-Process -Force' -TimeoutSec 20
                 $r4.file = @(Videos)[-1]
                 $r4.video = @(VideoInfo @($r4.file.Path))[0]
             }
@@ -582,14 +591,17 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
             Step $r5 clock {
                 Open-Tool 'PowerShell'
                 $null = Ui 'Stop the running command (Ctrl+C)' -Value exists -TimeoutSec 60
+                # the tab's remote session starts after its toolbar is shown; nothing in the UI tells when it takes input
                 Start-Sleep -Seconds 5
                 # a clock in the PowerShell tab (the device's time)
                 $null = Ui 'type:Edit' -Value 'set:while ($true) { Get-Date -Format HH:mm:ss; Start-Sleep -Seconds 1 }'
                 $null = Ui 'type:Edit' -Value 'keys:{ENTER}'
+                # the clock running for a few lines before the recording starts
                 Start-Sleep -Seconds 5
                 $t0 = Get-Date
                 RecButton 'Record this tab to a video file'
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 5
+                # the length of the recording
                 Start-Sleep -Seconds 12
                 RecButton 'Stop recording and save the video'
                 $r5.span = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
@@ -656,6 +668,7 @@ Describe 'C-REC <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient) {
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 10
                 # Dialogs.Info "Recording stopped": "The recording of Device . Remote desktop stopped: ..."
                 $r6.message = Message -Title 'The recording of*' -TimeoutSec 60
+                # RemoteHub must not exit in this time (the check is that it keeps running)
                 Start-Sleep -Seconds 3
                 $r6.running = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }
                 $r6.videos = Videos

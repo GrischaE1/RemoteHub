@@ -72,6 +72,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Start-LabMockServer -Name $VmName
             Set-LabMockLatest -Name $VmName -Version '99.0.0' -Url 'https://update.remotehub.dev/download/none.msi'
             Restart-Client
+            # nothing may be requested in this time
             Start-Sleep -Seconds 15
             $p.offLatest = Requests '/latest'
             $p.offTelemetry = Requests '/telemetry'
@@ -82,7 +83,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Policy @{ DisableUpdateCheck = $null; UpdateChannel = 'stable' }
             Clear-Requests
             Restart-Client
-            Start-Sleep -Seconds 15
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'no request for /latest' -Until { @(Requests '/latest').Count -gt 0 }
             $p.stable = Requests '/latest'
             # recording off, and the HKCU / HKLM order. The update check is off again: its bar appears about 3 s after the
             # start and moves the list down, so a double-click on 'Local' could land beside it and open no tab.
@@ -104,9 +105,11 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             Policy @{ DisableRecording = $null; RecordingFolder = '%USERPROFILE%\LabRecordings' }
             Restart-Client
             $null = Ui 'Local' -Value doubleclick
-            Start-Sleep -Seconds 5
+            # the tab is open once the main window is named after it
+            $null = Ui '*' -Title 'Local*' -Value exists -Optional -TimeoutSec 30
             $null = Ui 'Record this tab to a video file' -TimeoutSec 20
             $null = Ui 'Start recording' -Title '*' -Optional
+            # the recording's length
             Start-Sleep -Seconds 8
             $null = Ui 'Stop recording and save the video'
             $null = Ui 'Close' -Title '*' -Optional -TimeoutSec 20
@@ -214,6 +217,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             # lower / equal: nothing
             Set-LabMockLatest -Name $VmName -Version '0.0.1' -File (Split-Path $current -Leaf)
             Restart-Client
+            # no bar may appear in this time (it comes about 3 s after the start)
             Start-Sleep -Seconds 12
             $u.lower = Ui 'Details?' -Optional -TimeoutSec 5
             # higher: the bar
@@ -252,6 +256,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $left = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue; @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count }
             if ($left) { throw "RemoteHub didn't exit within 20 s of closing its window after 'Skip this version'" }
             Restart-Client
+            # no bar may appear in this time (it comes about 3 s after the start)
             Start-Sleep -Seconds 12
             $u.skipped = Ui 'Details?' -Optional -TimeoutSec 5
             Set-LabMockLatest -Name $VmName -Version '98.0.1' -File (Split-Path $current -Leaf) -Mandatory
@@ -266,6 +271,7 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $until = (Get-Date).AddSeconds(120)
             while (-not (Invoke-LabGuest -Name $VmName -ScriptBlock { [bool](Get-Process consent -ErrorAction SilentlyContinue) }) -and (Get-Date) -lt $until) { Start-Sleep -Seconds 2 }
             $u.uacShown = (Get-Date) -lt $until
+            # the secure desktop takes the keyboard a moment after consent.exe starts (a key sent before is lost)
             Start-Sleep -Seconds 2
             try { $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'c-polupd-uac.png') } catch { }
             # Yes is Alt+Y
@@ -330,22 +336,25 @@ Describe 'C-POLUPD <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH' -
             $null = Ui 'Display name' -Title 'New folder' -Value 'setnext:Lab folder' -Optional
             $null = Ui 'Save' -Title 'New folder' -Optional
             # app_session only follows a session with run time on record (written every minute; Restart-Client kills)
-            Start-Sleep -Seconds 75
+            $null = Wait-LabCondition -TimeoutSec 150 -IntervalMs 5000 -NoThrow -Because 'RemoteHub wrote no run-time.json' -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\run-time.json' } }
             Restart-Client
-            Start-Sleep -Seconds 15
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'no app_start and app_session arrived' -Until {
+                $e = @((Requests '/telemetry') | ForEach-Object json | ForEach-Object event)
+                ($e -contains 'app_start') -and ($e -contains 'app_session')
+            }
             $t.events = @((Requests '/telemetry') | ForEach-Object json)
             # killed as Task Manager would: UnexpectedExit at the next start (the earlier kill's report cleared first)
             Clear-Requests
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub | Stop-Process -Force }
             $script:task = Start-LabClient -Name $VmName
-            Start-Sleep -Seconds 15
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'no app_crash UnexpectedExit arrived' -Until { @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' -and $_.errorType -eq 'UnexpectedExit' }).Count -gt 0 }
             $t.afterKill = @((Requests '/telemetry') | ForEach-Object json)
             # off: the install ID goes
             $t.idBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }
             Settings-Page 'Updates & privacy'
             $null = Ui 'Send anonymous usage data and crash reports' -Title 'Settings' -Value uncheck
             $null = Ui 'Save' -Title 'Settings'
-            Start-Sleep -Seconds 3
+            $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'the install ID was not deleted' -Until { -not (Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }) }
             $t.idAfter = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }
             $t.os = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-CimInstance Win32_OperatingSystem).Caption }
             Save 'telemetry' $t

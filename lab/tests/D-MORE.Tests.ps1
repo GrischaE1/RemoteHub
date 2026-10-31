@@ -86,7 +86,9 @@ BeforeAll {
     function Ready([string]$name) {
         if (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 }) {
             $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
-            Start-Sleep -Seconds 3
+            # the security screen gone before the person's steps capture the screen (not thrown: a lock screen keeps
+            # LogonUI, and the wait below says what is still up)
+            $null = Wait-LabCondition -Until { -not (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 }) } -Because 'the security screen did not close after Esc' -TimeoutSec 15 -NoThrow
         }
         # no session of an earlier context left: its banner or dialog (an app picker in the middle of the screen) would
         # take the clicks and keys meant for this context's marker
@@ -151,7 +153,8 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             Reached $o 'asked'
             try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 30 } catch { }
             $c.session = Receive-LabDesktop $job
-            Start-Sleep -Seconds 2
+            # the agent's event written (asserted below)
+            $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101 | Where-Object { $_.Message -match 'invalid message from RemoteHub' }).Count -gt 0 } -Because 'no event 1101 for the invalid message' -TimeoutSec 20 -NoThrow
             $c.events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1101)
             Save 'signin-unasked' $c
         }
@@ -181,14 +184,18 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'Ask' }, @{ do = 'wait'; state = 'WaitingForUser'; timeout = 60 }
                 @{ do = 'sleep'; seconds = 3 }, @{ do = 'close' })
             $a.closed = Receive-LabDesktop $job
-            Start-Sleep -Seconds 3
+            # the event written and the question's dialog closed (both asserted or recorded below)
+            $null = Wait-LabCondition -Until {
+                @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100 | Where-Object { $_.Message -match 'The connection ended before access was granted' }).Count -gt 0 -and
+                @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object { $_.Title -ne 'RemoteHub' }).Count -eq 0
+            } -Because 'no event 2100 for the closed connection, or the question still up' -TimeoutSec 20 -NoThrow
             $a.closedEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
             $a.dialogLeft = @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object { $_.Title -ne 'RemoteHub' })
 
             # "Allow and hide apps...": a notepad with a secret text, 60 s to answer (time for the person's steps)
             $secret = 'RHLABHIDEFROMSTART'
             $task = Start-LabInSession -Name $VmName -ScriptBlock ([scriptblock]::Create("Set-Content -Encoding ASCII `$env:TEMP\rhlab-hide.txt '$secret'; notepad.exe `$env:TEMP\rhlab-hide.txt"))
-            Start-Sleep -Seconds 5
+            $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process notepad -ErrorAction SilentlyContinue).Count -gt 0 } } -Because 'notepad did not start in normaluser''s session' -TimeoutSec 30 -NoThrow
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ ConsentTimeoutSeconds = 60 }
             $o = Out 'ask-hide'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
@@ -196,11 +203,14 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Failed'); timeout = 180 }, @{ do = 'sleep'; seconds = 3 }, @{ do = 'frame'; out = 'first.png' }
                 @{ do = 'sleep'; seconds = 2 }, @{ do = 'close' })
             $a.question = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 60
+            # the question's countdown runs down for a while: the picker's, started again, must show more seconds
             Start-Sleep -Seconds 10
             # 'hide' is only in the button "Allow and hide apps..." (the click answers the OCR lines read just before it)
             $a.hideClick = Invoke-LabPerson -Name $VmName -Do click -Text 'hide' -TimeoutSec 30
-            Start-Sleep -Seconds 2
-            $a.picker = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 30
+            # the picker in place of the question (the last read kept when it doesn't come: the test says what was seen)
+            $pick = @{}
+            $null = Wait-LabCondition -Until { $pick.r = Invoke-LabPerson -Name $VmName -Do read -TimeoutSec 30; "$($pick.r.text)" -match 'Hide apps from' } -Because 'the app picker did not open' -TimeoutSec 20 -NoThrow
+            $a.picker = $pick.r
             $a.tick = Invoke-LabPerson -Name $VmName -Do click -Text 'Notepad' -TimeoutSec 30
             $a.allow = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 30
             $a.hide = Receive-LabDesktop $job
@@ -225,20 +235,23 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             $a.none = Invoke-LabDesktop -Name $VmName -Pin $pin -Out (Out 'no-mode') -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'Ask' }
                 @{ do = 'wait'; anyOf = @('Failed', 'WaitingForUser', 'Connected'); timeout = 60 }, @{ do = 'close' })
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100 | Where-Object { $_.Message -match 'No way to connect is allowed on this device' }).Count -gt 0 } -Because 'no event 2100 for "No way to connect"' -TimeoutSec 20 -NoThrow
             $a.noneEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2100)
 
             # a mode the policy doesn't allow, on a locked session: runs as None; the follow-up mode (Pin) at the unlock
             $since = Get-LabGuestTime -Name $VmName
             Set-LabAgentPolicy -Name $VmName -Clear -Values @{ AllowedConsentModes = @('Pin') }
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 5
+            # the lock screen up before the agent is asked for the session
+            $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count -gt 0 } } -Because 'the session did not lock (no LogonUI)' -TimeoutSec 20 -NoThrow
             $o = Out 'locked-mode'
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; session = 'console'; consent = 'Ask' }, @{ do = 'wait'; anyOf = @('Connected', 'WaitingForUser', 'EnterPin', 'Failed'); timeout = 60 }
                 (Mark $o 'connected'), @{ do = 'wait'; anyOf = @('EnterPin', 'WaitingForUser', 'Denied', 'Ended', 'Failed'); timeout = 240 }, (Mark $o 'asked')
                 @{ do = 'wait'; anyOf = @('Connected', 'Denied', 'Ended'); timeout = 120 }, @{ do = 'close' })
             Reached $o 'connected'
+            # connected to the locked session for a moment before the unlock (nothing tells when the agent has
+            # settled on the follow-up mode)
             Start-Sleep -Seconds 3
             Unlock-LabSession -Name $VmName -TimeoutSec 120
             Reached $o 'asked' 240
@@ -246,7 +259,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             try { $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Deny' -TimeoutSec 30 } catch { }
             $a.locked = Receive-LabDesktop $job
             Set-LabAgentPolicy -Name $VmName -Clear
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100 | Where-Object { $_.Message -match 'consent None \(on unlock or sign-in: Pin\)' }).Count -gt 0 } -Because 'no event 1100 for consent None with Pin on unlock' -TimeoutSec 20 -NoThrow
             $a.lockedEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1100)
             Save 'consent' $a
         }
@@ -317,7 +330,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             $b.x = $b.banner.X + [int]($b.banner.Width / 2); $b.y = $b.banner.Y + [int]($b.banner.Height / 2)
             Set-Content -Encoding ASCII (Join-Path $o 'xy.txt') "$($b.x),$($b.y)"
             Reached $o 'clicked'
-            Start-Sleep -Seconds 1
+            $null = Wait-LabCondition -Until { @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object { $_.e -eq 'mdown' -and [math]::Abs($_.x - $b.x) -le 4 -and [math]::Abs($_.y - $b.y) -le 4 }).Count -gt 0 } -Because 'the marker got no click below the banner' -TimeoutSec 10 -NoThrow
             $b.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
             $b.after = Banner
             Release $o 'end'
@@ -335,6 +348,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             Release $o 'measured'
             Reached $o 'on'
             $b.blockedOpen = Banner
+            # longer than the banner takes to collapse to the pill: it must not
             Start-Sleep -Seconds 12
             $b.blockedLater = Banner
             $b.blockedRead = Invoke-LabPerson -Name $VmName -Do read -Title 'RemoteHub' -TimeoutSec 30
@@ -368,11 +382,12 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 Reached $o 'over'
                 Set-Mover $mover 'go' "$($m.x),$($m.y),$($m.banner.Handle)"
                 $m.moving = Wait-Mover $mover { $s = $args[0]; $s.phase -eq 'moving' -and $s.phases[1].samples -gt 0 } 30 'moving and reading the banner'
+                # the 5 s of moves the test counts before the admin's next click
                 Start-Sleep -Seconds 5
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 Release $o 'moving'
                 Reached $o 'clicked' 60
-                Start-Sleep -Seconds 1
+                $null = Wait-LabCondition -Until { @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count | Where-Object { $_.e -eq 'mdown' -and [math]::Abs($_.x - $m.x) -le 4 -and [math]::Abs($_.y - $m.y) -le 4 }).Count -gt 0 } -Because 'the marker got no click below the banner during the moves' -TimeoutSec 10 -NoThrow
                 $m.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
                 # the moves stop; the banner still lets the admin's clicks through (nothing of the user's has moved)
                 Set-Mover $mover 'halt'
@@ -452,6 +467,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             try {
                 Reached $o 'held'
                 $h.heldBefore = KeyDown 0x41
+                # the banner collapses to the pill after a while: its width then is the one compared with the opened one
                 Start-Sleep -Seconds 10
                 $h.pill = Banner
                 $since = Get-LabGuestTime -Name $VmName
@@ -471,9 +487,11 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 Release $o 'hidden'
                 Reached $o 'sent'
+                # nothing of the admin's input may reach the marker, and no security screen come up, in this time
                 Start-Sleep -Seconds 2
                 $h.seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
                 $h.logonUi = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-Process LogonUI -ErrorAction SilentlyContinue).Count }
+                # the banner must stay open this long (no pill)
                 Start-Sleep -Seconds 8
                 $h.later = Banner
                 # the banner is read from the console picture; the session's screen capture fails on the secure desktop
@@ -530,7 +548,8 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 $o = Out "hidden-input-$run"
                 $job = Begin "hidden-input-$run" (@((Mark $o 'connected'), (Park $o 'go')) + $inputSteps + @(@{ do = 'close' }))
                 Reached $o 'connected'
-                Start-Sleep -Seconds 2
+                # the consent dialog gone, so the person's click lands on the marker
+                $null = Wait-LabCondition -Until { @(Invoke-LabPerson -Name $VmName -Do windows | Where-Object { $_.Title -ne 'RemoteHub' }).Count -eq 0 } -Because 'the consent dialog was still up after Allow' -TimeoutSec 15 -NoThrow
                 # The keyboard focus to the marker first: the consent dialog took the foreground and Windows needn't give
                 # it back when it closes (D-INPUT). A click of the person at the device (console mouse) - not the admin's,
                 # which the hidden run drops - and it must have arrived before the admin's input is counted.
@@ -545,7 +564,14 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
                 $count = @(Get-LabMarker -Name $VmName -Marker $marker).Count
                 Release $o 'go'
                 $i[$run] = Receive-LabDesktop $job
-                Start-Sleep -Seconds 2
+                if ($run -eq 'visible') {
+                    # the control run: the click and the keys arrive (asserted below)
+                    $null = Wait-LabCondition -Until { $e = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count); @($e | Where-Object e -eq 'mdown').Count -gt 0 -and @($e | Where-Object e -eq 'char').Count -gt 0 } -Because 'the admin''s click and keys did not reach the visible marker' -TimeoutSec 15 -NoThrow
+                }
+                else {
+                    # the hidden run: no click, wheel or key may arrive in this time
+                    Start-Sleep -Seconds 2
+                }
                 $i["$run-seen"] = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $count)
                 Stop-LabInSession -Name $VmName -Task $marker.Task
             }
@@ -654,6 +680,7 @@ Describe 'D-MORE <VmName>' -Tag Desktop, 'D-CON', 'D-ASK', 'D-PIN', 'D-NONE', 'D
             Reached $o 'signed' 300
             $t.windows = @(Invoke-LabPerson -Name $VmName -Account Console -Do windows)
             $t.console = [string](Get-LabOcr -Path (Shot 'auto-signed-console')).text
+            # no banner may appear later either, in this time
             Start-Sleep -Seconds 15
             $t.windowsLater = @(Invoke-LabPerson -Name $VmName -Account Console -Do windows)
             Release $o 'checked'

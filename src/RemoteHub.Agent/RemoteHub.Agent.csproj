@@ -48,6 +48,16 @@
     <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
+  <!-- msquic.dll is marked DropFromSingleFile in the runtime pack, so a single-file publish left it out and QUIC – the
+       direct path through the RemoteHub Broker – wasn't supported on any device. It goes next to the exe like the other
+       native files ("RemoteHubAgent.exe selftest" checks it). -->
+  <Target Name="PublishMsQuic" AfterTargets="ComputeResolvedFilesToPublishList" Condition="'$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="@(RuntimePackAsset)" Condition="'%(Filename)%(Extension)' == 'msquic.dll'"
+                             RelativePath="msquic.dll" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    </ItemGroup>
+  </Target>
+
   <!-- Optional virtual monitor for devices without one (third-party, MIT, signed â€“ see third-party\...\README.md).
        Installed next to the exe in "VirtualDisplay"; the agent checks the files' hashes before it installs the driver. -->
   <ItemGroup>
