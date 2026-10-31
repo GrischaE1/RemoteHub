@@ -173,6 +173,12 @@ public partial class AgentDesktopFlowTests
         public readonly ConcurrentQueue<(int, int)> Fits = new();
         public int Restores;
         public void FitResolution(A.DesktopMonitor monitor, int width, int height) => Fits.Enqueue((width, height));
+        public readonly ConcurrentQueue<int> Scales = new();
+        public string SetScale(A.DesktopMonitor monitor, int percent)
+        {
+            Scales.Enqueue(percent);
+            return $"{percent} %";
+        }
         public void RestoreResolution() => Interlocked.Increment(ref Restores);
         /// <summary>Set to false to simulate the user's desktop appearing (unlock or sign-in).</summary>
         public volatile bool Secure = secure;
@@ -1884,11 +1890,36 @@ otepad.exe", "--secret-argument", "", false, "Notepad"));
             v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, int.MaxValue, 99999), DesktopJson.Default.DesktopSettings));
             WaitFor(() => d.Helpers.Screens[0].Fits.Contains((DesktopProtocol.MaxFitWidth, DesktopProtocol.MaxFitHeight)), "the largest resolution");
             Assert.DoesNotContain(d.Helpers.Screens[0].Fits, f => f.Item1 > DesktopProtocol.MaxFitWidth || f.Item2 > DesktopProtocol.MaxFitHeight || f.Item1 <= 0 || f.Item2 <= 0);
+            // A display scale is for an app tab's own monitor: a desktop's monitors are the user's and keep theirs
+            v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, 1600, 900, 150), DesktopJson.Default.DesktopSettings));
+            WaitFor(() => d.Helpers.Screens[0].Fits.Contains((1600, 900)), "the size with a scale asked for");
+            Assert.Empty(d.Helpers.Screens[0].Scales);
             restores = d.Helpers.Screens[0].Restores; // a size is set: nothing restores it until the end
         }
         finally { v.Dispose(); }
         WaitFor(() => d.Helpers.Screens[0].Restores > restores, "the device's own resolution back after disconnecting");
     }
+
+    [Theory]
+    [InlineData(150, 0, 0, 0, 0, 100)]     // the recommended scale is 100 % and nothing more is allowed: 100 %
+    [InlineData(150, 0, 2, 2, 2, 150)]     // allowed: two steps up
+    [InlineData(150, 0, 1, 1, 1, 125)]     // only 125 % allowed at this resolution: the most allowed
+    [InlineData(100, -1, 1, -1, 0, 100)]   // recommended 125 %: 100 % is a step down
+    [InlineData(175, -2, 2, 1, 3, 175)]    // recommended 150 %
+    [InlineData(500, 0, 20, 11, 11, 500)]  // a range past the last step is cut to it
+    public void The_scale_is_set_in_steps_from_the_recommended_one_within_what_Windows_allows(int percent, int minRel, int maxRel, int rel, int index, int expected)
+    {
+        Assert.Equal(expected, DesktopProtocol.ScaleSteps[index]);
+        Assert.Equal((rel, expected), A.DisplayModes.ScaleFor(percent, minRel, maxRel));
+    }
+
+    [Theory]
+    [InlineData(130, 0, 2)]   // not one of the steps
+    [InlineData(150, 1, 2)]   // the smallest scale above 100 %: not a range Windows reports
+    [InlineData(150, -12, 0)] // the recommended scale past the last step
+    [InlineData(150, 0, -1)]  // the largest below the smallest
+    public void A_scale_range_that_does_not_fit_the_steps_is_left_alone(int percent, int minRel, int maxRel) =>
+        Assert.Null(A.DisplayModes.ScaleFor(percent, minRel, maxRel));
 
     [Theory]
     [InlineData(1600, 900, 1600, 900)]   // listed: exact

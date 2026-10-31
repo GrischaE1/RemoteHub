@@ -291,4 +291,21 @@ public class AppTabsViewTests
         // nothing a desktop has that an app doesn't need
         Assert.DoesNotContain(Sta.All<Button>(view), b => b.IsVisible && (Equals(b.ToolTip, "Send Ctrl+Alt+Del") || Equals(b.ToolTip, "Press the Windows key (Start menu)")));
     });
+
+    [Fact]
+    public void A_live_app_tab_asks_for_its_size_and_the_scale_of_the_monitor_it_is_on() => Sta.Run(owner =>
+    {
+        var session = new AgentDesktopSession(new Connection { Name = "FS01", Host = "fs01.contoso.local" }, new ConnectionApp("Event Viewer", @"%SystemRoot%\system32\mmc.exe", "eventvwr.msc"));
+        var view = new AgentDesktopView(session, () => { }, () => { }, () => { }, () => DesktopQualityPreset.Find(null), (_, _) => { },
+            () => DesktopResolution.Fit, _ => { });
+        owner.Content = view;
+        Sta.Pump();
+        session.Phase = DesktopPhase.Live;
+        Sta.Pump();
+        var settings = session.CurrentSettings();
+        Assert.True(settings.FitWidth > 0 && settings.FitHeight > 0, $"the tab's size: {settings}");
+        var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(view);
+        Assert.Equal(DesktopProtocol.ValidScale((int)Math.Round(dpi.DpiScaleX * 100)), settings.Scale);
+        Assert.NotEqual(0, settings.Scale);
+    });
 }

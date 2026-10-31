@@ -467,6 +467,7 @@ public sealed partial class AgentDesktopSession : SessionBase
     }
 
     private (int Width, int Height) _window;
+    private int _windowScale;
 
     /// <summary>
     /// The device's resolution: its own, following the tab (like RDP's dynamic resolution) or a fixed size; the device
@@ -485,19 +486,27 @@ public sealed partial class AgentDesktopSession : SessionBase
         SendSettings();
     }
 
-    /// <summary>Size of the picture area in device pixels (the view reports it, debounced).</summary>
-    public void WindowSizeChanged(int width, int height)
+    /// <summary>
+    /// Size of the picture area in device pixels and the display scale of the monitor it is on, in percent (the view
+    /// reports them, debounced).
+    /// </summary>
+    public void WindowSizeChanged(int width, int height, int scale = 100)
     {
-        if (_window == (width, height)) return;
+        if (_window == (width, height) && _windowScale == scale) return;
         _window = (width, height);
+        _windowScale = scale;
         if (Resolution.Kind == DesktopResolutionKind.Fit) SendSettings();
     }
 
-    /// <summary>The Settings message for now; view-only and the picture of all monitors keep the device's resolution (the agent checks too).</summary>
+    /// <summary>
+    /// The Settings message for now; view-only and the picture of all monitors keep the device's resolution (the agent
+    /// checks too). An app tab asks for this PC's display scale as well, so its app looks as large as one of this PC's own.
+    /// </summary>
     internal DesktopSettings CurrentSettings()
     {
         var (w, h) = !ViewOnly && Layout?.Monitor != DesktopProtocol.AllMonitors ? Resolution.Request(_window.Width, _window.Height) : (0, 0);
-        return new DesktopSettings(Layout?.Monitor ?? 0, Quality.FramesPerSecond, Quality.Quality, w, h);
+        var scale = App is not null && !ViewOnly ? DesktopProtocol.ValidScale(_windowScale) : 0;
+        return new DesktopSettings(Layout?.Monitor ?? 0, Quality.FramesPerSecond, Quality.Quality, w, h, scale);
     }
 
     private void SendSettings()

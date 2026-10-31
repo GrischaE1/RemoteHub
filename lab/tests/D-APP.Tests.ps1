@@ -23,6 +23,12 @@
 #   D-APP-17  a Store app (Settings, a UWP app drawn by ApplicationFrameHost) in a tab: its frame window is maximised on
 #             the tab's monitor, not the primary one; the start is audited as shell:AppsFolder\<AppUserModelID>
 #   D-APP-18  closing the Store app's tab closes the app
+#   D-APP-19  the tab's monitor runs at the admin's display scale (150 %: 144 dpi), the primary monitor keeps its own,
+#             and the connection info says so
+#   D-APP-20  at a size where Windows allows less, the most it allows (said in the connection info); back to 100 % when
+#             the admin's window moves to a monitor at 100 %
+#   D-APP-21  the scale Windows keeps in the account's profile for the virtual monitors is put back when the last tab
+#             ends (the tab ends at 150 %)
 # Every case is skipped while the agent doesn't offer app tabs (Hello without the "apps" feature). The harness steps
 # for app tabs come with the feature (DesktopHarness.cs): start {app: {program, arguments, workingFolder, elevated,
 # name}}, appList (answers appLists), appClose {force}, appRestart.
@@ -48,11 +54,11 @@ BeforeAll {
         @{ program = $script:exe; arguments = "/colour:$Colour /title:RH-$n /log:$(Log $n)$(if ($Ask) { ' /ask' })"; workingFolder = ''; elevated = $Elevated.IsPresent; name = "RH $n" }
     }
     # the first steps of an app tab: connect, start the app (signing in when nobody is), the tab's size
-    function Tab($App, [switch]$SignIn, [int]$Width = 1280, [int]$Height = 720) {
+    function Tab($App, [switch]$SignIn, [int]$Width = 1280, [int]$Height = 720, [int]$Scale = 0) {
         # the app's own start, then its outcome - a "Connected" before it is the sign-in screen's
         @(@{ do = 'connect' }, @{ do = 'start'; app = $App; autoSignIn = $SignIn.IsPresent }, @{ do = 'wait'; state = 'StartingApp'; anyOf = @('Failed', 'Denied', 'Ended'); timeout = 300 }
             @{ do = 'wait'; state = 'Connected'; anyOf = @('Failed', 'Ended'); timeout = 150 }
-            @{ do = 'settings'; fitWidth = $Width; fitHeight = $Height }, @{ do = 'sleep'; seconds = 5 })
+            @{ do = 'settings'; fitWidth = $Width; fitHeight = $Height; scale = $Scale }, @{ do = 'sleep'; seconds = 5 })
     }
     function States($r) { @($r.statuses | ForEach-Object { "$($_.state): $($_.message)" }) -join ' / ' }
     # Settings: a UWP app on every lab device (W11 and Server), whose window ApplicationFrameHost draws
@@ -477,6 +483,95 @@ $me = (Get-Process -Id $PID).SessionId
             Skip; if ($script:noApps) { return }
             (States $st.tab) | Should -Match 'AppClosed|Ended'
             $st.running | Should -Be 0 -Because 'Settings ended within 30 s of the close'
+        }
+    }
+
+    Context 'scaling' {
+        BeforeAll {
+            if ($script:noApps) { return }
+            Restart-LabAgent -Name $VmName -Pin $pin | Out-Null
+            $null = Wait-SignedOut 180
+            $sc = [ordered]@{}
+            $o = Out 'scale'
+            # as from an admin PC at 150 %: 1920x1080 at 150 %, then 1280x720 (where Windows may allow less), then the
+            # admin's window on a monitor at 100 %
+            $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out $o -TimeoutSec 1200 -Steps ((Tab (App 'scale' '255,0,255') -SignIn -Width 1920 -Height 1080 -Scale 150) + @(
+                @{ do = 'frame'; out = 'scale-150.png'; width = 1920; height = 1080; timeout = 30 }, (Mark $o 'at-150'), (Park $o 'small')
+                @{ do = 'settings'; fitWidth = 1280; fitHeight = 720; scale = 150 }, @{ do = 'frame'; out = 'scale-small.png'; width = 1280; height = 720; timeout = 30 }
+                @{ do = 'sleep'; seconds = 3 }, (Mark $o 'small'), (Park $o 'back')
+                @{ do = 'settings'; fitWidth = 1920; fitHeight = 1080; scale = 100 }, @{ do = 'frame'; out = 'scale-100.png'; width = 1920; height = 1080; timeout = 30 }
+                @{ do = 'sleep'; seconds = 3 }, (Mark $o 'back'), (Park $o 'again')
+                @{ do = 'settings'; fitWidth = 1920; fitHeight = 1080; scale = 150 }, @{ do = 'sleep'; seconds = 5 }, (Mark $o 'again'), (Park $o 'close')
+                @{ do = 'appClose'; force = $true }, @{ do = 'wait'; anyOf = @('Ended'); timeout = 60 }))
+            Reached $o 'at-150' 600
+            $sc.pid = @(Started 'scale')[0].pid
+            $sc.at150 = Get-LabScreenLayout -Name $VmName -Pids @($sc.pid)
+            Release $o 'small'; Reached $o 'small'
+            $sc.small = Get-LabScreenLayout -Name $VmName -Pids @($sc.pid)
+            Release $o 'back'; Reached $o 'back'
+            $sc.back = Get-LabScreenLayout -Name $VmName -Pids @($sc.pid)
+            # D-APP-21: the tab ends at 150 %; the account's profile keeps no scale for the virtual monitors afterwards
+            Release $o 'again'; Reached $o 'again'
+            $sc.again = Get-LabScreenLayout -Name $VmName -Pids @($sc.pid)
+            $sc.sid = Invoke-LabInSessionJson -Name $VmName -Account Console -Code '[Security.Principal.WindowsIdentity]::GetCurrent().User.Value'
+            Release $o 'close'
+            $sc.tab = Receive-LabDesktop $job
+            $sc.scales = @($sc.tab.stats | ForEach-Object { "$($_.stats.fit)" } | Where-Object { $_ -match 'scale' } | Select-Object -Unique)
+            $sc.signedOut = Wait-SignedOut 180
+            # the hive as the profile keeps it: still loaded for a moment after the sign-out, else loaded from NTUSER.DAT
+            $sc.afterEnd = @(Invoke-LabGuest -Name $VmName -ArgumentList $sc.sid -ScriptBlock {
+                param($s)
+                $root = "Registry::HKEY_USERS\$s"
+                $loaded = $false
+                if (-not (Test-Path $root)) {
+                    $p = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$s").ProfileImagePath
+                    reg.exe load 'HKU\RhLabScale' "$p\NTUSER.DAT" | Out-Null
+                    if ($LASTEXITCODE -ne 0) { return "hive not loaded ($LASTEXITCODE)" }
+                    $root = 'Registry::HKEY_USERS\RhLabScale'
+                    $loaded = $true
+                }
+                try {
+                    @(Get-ChildItem "$root\Control Panel\Desktop\PerMonitorSettings" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'MTT1337*' |
+                        ForEach-Object { "$($_.PSChildName)=$($_.GetValue('DpiValue'))"; $_.Close() })
+                }
+                finally { if ($loaded) { [GC]::Collect(); [GC]::WaitForPendingFinalizers(); reg.exe unload 'HKU\RhLabScale' | Out-Null } }
+            })
+            Save 'scale' $sc
+            # the dpi of the monitor the app's window is on
+            function TabDpi($layout) {
+                $w = @($layout.windows | Where-Object { -not $_.minimized })[0]
+                if (-not $w) { return 0 }
+                [int]@($layout.monitors | Where-Object device -eq $w.monitor)[0].dpi
+            }
+            function Monitors($layout) { @($layout.monitors | ForEach-Object { "$($_.device) $($_.right - $_.left)x$($_.bottom - $_.top) dpi $($_.dpi)$(if ($_.primary) { ' primary' })" }) -join '; ' }
+        }
+
+        It 'D-APP-19 the tab''s monitor runs at the admin''s scale; the primary monitor keeps its own' -Tag 'D-APP-19' {
+            Skip; if ($script:noApps) { return }
+            (States $sc.tab) | Should -Match 'Connected' -Because (States $sc.tab)
+            TabDpi $sc.at150 | Should -Be 144 -Because "150 % is 144 dpi (monitors: $(Monitors $sc.at150); connection info: $($sc.scales -join ' / '))"
+            @($sc.at150.monitors | Where-Object primary)[0].dpi | Should -Be 96 -Because 'the primary monitor keeps the account''s own scale (100 % on the lab devices)'
+            @($sc.scales | Where-Object { $_ -match 'scale 150 %' }).Count | Should -BeGreaterThan 0 -Because 'the connection info says what the monitor runs at'
+        }
+
+        It 'D-APP-20 at a size where Windows allows less, the most it allows; back to 100 % when asked' -Tag 'D-APP-20' {
+            Skip; if ($script:noApps) { return }
+            $small = TabDpi $sc.small
+            $small | Should -BeGreaterThan 0 -Because "the app's window is on its monitor (monitors: $(Monitors $sc.small))"
+            $small | Should -BeLessOrEqual 144
+            $percent = [int][math]::Round($small / 0.96)
+            @($sc.scales | Where-Object { $_ -match "scale $percent %" }).Count | Should -BeGreaterThan 0 -Because "the connection info names the $percent % the monitor runs at ($($sc.scales -join ' / '))"
+            if ($percent -lt 150) { @($sc.scales | Where-Object { $_ -match '150 % asked' }).Count | Should -BeGreaterThan 0 -Because 'and that 150 % was asked' }
+            TabDpi $sc.back | Should -Be 96 -Because "the admin's window moved to a monitor at 100 % (monitors: $(Monitors $sc.back))"
+        }
+
+        It 'D-APP-21 the scale Windows keeps for the virtual monitors is put back when the last tab ends' -Tag 'D-APP-21' {
+            Skip; if ($script:noApps) { return }
+            TabDpi $sc.again | Should -Be 144 -Because 'the tab ran at 150 % again before it ended'
+            @($sc.again.perMonitor | Where-Object { $_ -match '^MTT1337.*=2$' }).Count | Should -BeGreaterThan 0 -Because "Windows keeps the scale in the account's profile ($($sc.again.perMonitor -join ', '))"
+            $sc.signedOut | Should -BeTrue
+            @($sc.afterEnd | Where-Object { $_ -match '^hive not loaded' }) | Should -BeNullOrEmpty
+            @($sc.afterEnd | Where-Object { $_ -match '=-?[1-9]' }) | Should -BeNullOrEmpty -Because "no scale is left on the virtual monitors after the last tab ($($sc.afterEnd -join ', '))"
         }
     }
 

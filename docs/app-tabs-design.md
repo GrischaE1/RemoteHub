@@ -101,9 +101,28 @@ D-APPSPIKE ([test-lab-cases.md](test-lab-cases.md) §9.15) ran on 29 October 202
 | Foreground between apps (06) | A process that sent the last input (a click into app A) can call `SetForegroundWindow(B)`, and typed text then reaches B, not A. A new process that sent no input is refused. Only a stand-in running as the user was tested; the LocalSystem helper is checked by D-APP-04. |
 | Two connections to one session (07) | Both get pictures. One ending leaves the other running. |
 
-Not covered: scaling per monitor (Q3), and how long a tab's picture stops during a reload. D-APP measures the second.
+Not covered: scaling per monitor (Q3, §5.2), and how long a tab's picture stops during a reload. D-APP measures the second.
 
 Without the driver (an agent installed without it, or a Windows build it doesn't support), app tabs aren't offered: Hello leaves out the `apps` feature and RemoteHub says why in the tooltip. A fallback on the physical monitor – bringing the active tab's app to the front and freezing the other tabs – was considered and dropped: other apps would show whenever they overlap.
+
+### 5.2 Scaling
+
+On an admin PC at 150 %, a tab of 1800 × 1000 pixels on a monitor at 100 % shows the app at two thirds of the size of the admin's own apps. So the tab's monitor runs at the admin's scale (Q3):
+
+- **RemoteHub sends its scale** – that of the monitor its window is on, in percent – with the tab's size (`DesktopSettings.Scale`), and again when the window moves to a monitor with another scale. Only app tabs send it. A desktop connection's monitors are the user's and keep their scale; the service drops it there.
+- **The agent takes Windows' steps**: 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450 and 500 %, the nearest one (`ValidScale`). Anything outside them means the monitor's own.
+- **The helper sets it after the size**, as the Settings app does: `DisplayConfigSetDeviceInfo` with the undocumented DPI scale type (-4), counted in steps from the monitor's recommended scale, which it reads first (type -3). It takes effect at once – per-monitor aware apps redraw at the new DPI (`WM_DPICHANGED`), Windows scales the others – with no sign-out, so the zoom in the tab that Q3 kept in reserve isn't needed.
+- **Small sizes allow less.** Windows limits the scale by the monitor's resolution. The helper then sets the most it allows, and RemoteHub's connection info says so ("100 % (150 % asked – the most Windows allows at this resolution)").
+- **After the driver re-creates the monitors** (a change of the count, §5) the helper sets size and scale again.
+- **Put back at the end.** Windows keeps the scale in the account's profile (`HKCU\Control Panel\Desktop\PerMonitorSettings\<monitor>\DpiValue`, steps from the recommended scale), even when the LocalSystem helper sets it. All of the driver's monitors share one entry there (`MTT1337…`), so a scale left behind would come back on every monitor the driver makes – the one desktop connections use too. So the record that keeps the account's taskbar setting (§5) also keeps the virtual monitors' entries as they were, and they are put back with it: by the last tab's helper, by the next helper, or by the service after one ended abruptly. A scale is set only once that record exists.
+
+What D-APP-19 to D-APP-21 ([test-lab-cases.md](test-lab-cases.md) §9.15) found on 31 October 2026, the same on W11 26H2 and Server 2025 (agent 0.21.25):
+
+| Question | Answer |
+|---|---|
+| Can the LocalSystem helper set a monitor's scale, without a sign-out? | Yes. The tab's monitor ran at 144 dpi right after the call; the other monitors kept 96. |
+| What do small sizes allow? | At 1280 × 720 only 100 %; at 1920 × 1080 150 % was allowed. |
+| Where does Windows keep it? | In the account's profile, one entry for all the driver's monitors (`DpiValue` 2 for 150 %); 0 after 100 % again. |
 
 ## 6. The app
 
@@ -309,6 +328,7 @@ Built into RemoteHub, editable after adding – for devices whose Start menu doe
 |---|---|---|
 | Spike (lab, before building) | Done – §5.1. The driver: adding and removing monitors one at a time while others are in use, a different mode per monitor, the most monitors it takes, and how windows on other monitors behave on each change. `MMTaskbarEnabled` taking effect without restarting Explorer. `SetForegroundWindow` from one helper while another tab's app has the foreground. Several connections to one session in the service. | 2 days |
 | Phase 1 | Monitor leases in `VirtualDisplay`, as places in the row: the count grows in steps of 4, the device is checked after every change and restarted when it failed, and windows are put back after every change. `Start.App` in `DesktopEndpoint` (session rules, auto sign-in queue, start, job, audit); the Start menu list (§6.5, `AppList`); window placement and input in the helper; taskbar setting with record and put-back; policy and ADMX. RemoteHub: apps on the connection, the Start menu picker, presets, *Open app* and *More apps…*, the app tab. | 3–4 weeks |
+| Scaling (Q3) | Done – §5.2. The admin's scale with the tab's size; the helper sets it on the tab's monitor (the most Windows allows at small sizes) and again after the driver re-creates the monitors. | 2 days |
 | Phase 2 spike | Done – §6.6. Starting by AUMID from the user's process, the process in the tab's job, which windows are the app's, closing, the time to list `shell:AppsFolder`. | 1 day |
 | Phase 2 | Store apps by AppUserModelID (§6.6) – `shell:AppsFolder\<AUMID>` on the connection, checked on the agent, started and listed by `RemoteHubAgent.exe store-apps` as the admin, their windows found by AUMID; icons for Store apps and shortcuts. | 1 week |
 
@@ -323,6 +343,6 @@ Built into RemoteHub, editable after adding – for devices whose Start menu doe
 |---|---|---|
 | Q1 | End action when the last app tab of an automatically signed-in session ends? | SignOut (the apps were started for these tabs). `AutoSignInEndAction` from the policy wins, and RemoteHub's per-connection setting can choose Lock. |
 | Q2 | Does closing a tab close the app? | Yes, politely (§4.3), with *Leave it running*. |
-| Q3 | Scaling: the virtual monitor runs at 100 %; on an admin PC at 150 % the app looks small. | Spike: set the virtual monitor's scale to the admin's (sent with `Start`). If Windows doesn't allow that per monitor without a sign-out, offer a zoom in the tab instead. |
+| Q3 | Scaling: the virtual monitor runs at 100 %; on an admin PC at 150 % the app looks small. | Answered – §5.2: the tab's monitor runs at the admin's scale, set per monitor without a sign-out. |
 | Q4 | Extra sessions on Windows Server when someone else is on the console? | Later, through RDS where it is installed; not in this design. |
 | Q5 | Should IT also publish apps through the device's policy, next to the ones on the connection? | Not in phase 1. A policy list `DesktopPublishedApps` that RemoteHub shows under *Open app* would suit IT-managed fleets – phase 2 if asked for. |

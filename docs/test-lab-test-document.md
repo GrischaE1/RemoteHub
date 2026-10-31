@@ -7937,6 +7937,31 @@ P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
 - `appClose` on the Settings tab: the tab ends (AppClosed or Ended)
 - SystemSettings is no longer running within 30 s
 
+#### D-APP-19 · The admin's scale
+P1 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. An app tab of 1920×1080 at 150 % (as from an admin PC at 150 %) with nobody signed in.
+**Expected:**
+- the monitor the app's window is on has 144 dpi (`GetDpiForMonitor`, read per-monitor aware in the account's session)
+- the primary monitor keeps 96 dpi
+- the connection info (stats) says *scale 150 %*
+
+#### D-APP-20 · Scale limits
+P2 · How: H S · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. The tab of D-APP-19 resized to 1280×720, still at 150 %. 2. Back to 1920×1080 at 100 % (the admin's window on a monitor at 100 %).
+**Expected:**
+- at 1280×720 the monitor runs at no more than 150 %; the connection info names the scale it runs at, and *150 % asked* when Windows allows less
+- at 100 % the monitor has 96 dpi again
+
+#### D-APP-21 · Scale put back
+P1 · How: H PS · Needs: – · Status: ◐ Written – `D-APP.Tests.ps1`
+
+**Steps:** 1. The tab of D-APP-19 at 150 % again. 2. The tab ends; the session signs out.
+**Expected:**
+- while it runs, the account's `Control Panel\Desktop\PerMonitorSettings` has the virtual monitors' entry (`MTT1337…`) with `DpiValue` 2
+- after the sign-out no `MTT1337…` entry in the profile has a scale (`DpiValue` absent or 0)
+
 #### D-APPSTORE-01 · Store apps listed
 P1 · How: S · Needs: – · Status: ✅ Automated – `D-APPSTORE.Tests.ps1`
 

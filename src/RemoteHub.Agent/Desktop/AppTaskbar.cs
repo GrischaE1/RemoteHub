@@ -9,10 +9,19 @@ namespace RemoteHub.Agent;
 /// (WM_SETTINGCHANGE "TraySettings", §5.1). It is put back exactly as it was – the value, or none – by the last helper
 /// that turned it off, by the next helper in that session after one ended abruptly, or by the service when it starts.
 /// Done the way <see cref="SasActions"/> does it: one owner file per helper, the original in a record next to agent.json.
+/// The record also holds the user's display scale for the virtual display's monitors, which Windows keeps per user and
+/// monitor and which app tabs change (§5.2): all of the driver's monitors share one entry, so a scale left there would
+/// come back on every monitor the driver makes – the desktop connections' one too. It is put back with the taskbar.
 /// </summary>
 internal sealed class AppTaskbar
 {
     internal const string Key = @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", Name = "MMTaskbarEnabled";
+
+    /// <summary>The user's display scale per monitor (steps from the recommended one).</summary>
+    internal const string ScaleKey = @"Control Panel\Desktop\PerMonitorSettings", ScaleName = "DpiValue";
+
+    /// <summary>The entries of the virtual display's monitors: named after its monitors' EDID maker and product (MTT, 1337).</summary>
+    internal const string VirtualMonitorPrefix = "MTT1337";
     private readonly string _folder;
     private readonly Func<string, RegistryKey?> _userHive;
     private readonly string _instance = Guid.NewGuid().ToString("N")[..8];
@@ -25,7 +34,7 @@ internal sealed class AppTaskbar
         _userHive = userHive ?? (sid => Registry.Users.OpenSubKey(sid, writable: true));
     }
 
-    /// <summary>Turned off by this helper now.</summary>
+    /// <summary>Turned off by this helper now – and the virtual monitors' scales recorded, so they may be changed.</summary>
     public bool Off => _sid is not null;
 
     /// <summary>Turns it off for <paramref name="sid"/> (the session's user). False when their hive isn't loaded yet – try again.</summary>
@@ -42,7 +51,7 @@ internal sealed class AppTaskbar
         if (!File.Exists(record))
         {
             using var read = hive.OpenSubKey(Key);
-            DurableFile.WriteAllLines(record, [read?.GetValue(Name) is int v ? v.ToString(System.Globalization.CultureInfo.InvariantCulture) : "absent"]);
+            DurableFile.WriteAllLines(record, [read?.GetValue(Name) is int v ? v.ToString(System.Globalization.CultureInfo.InvariantCulture) : "absent", .. Scales(hive)]);
         }
         using (var key = hive.CreateSubKey(Key, writable: true)) key.SetValue(Name, 0, RegistryValueKind.DWord);
         return true;
@@ -113,15 +122,48 @@ internal sealed class AppTaskbar
     private static bool Restore(RegistryKey hive, string record)
     {
         if (!File.Exists(record)) return false;
-        var was = File.ReadAllLines(record).FirstOrDefault() ?? "absent";
+        var lines = File.ReadAllLines(record);
+        var was = lines.FirstOrDefault() ?? "absent";
         using (var key = hive.CreateSubKey(Key, writable: true))
         {
-            if (int.TryParse(was, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v)) key.SetValue(Name, v, RegistryValueKind.DWord);
+            if (Number(was) is { } v) key.SetValue(Name, v, RegistryValueKind.DWord);
             else key.DeleteValue(Name, throwOnMissingValue: false);
+        }
+        // The virtual monitors' scales as they were; an entry Windows made for one since then loses the scale app tabs set.
+        var scales = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var parts in lines.Skip(1).Select(l => l.Split('\t')))
+            if (parts is ["scale", var name, var value]) scales[name] = value;
+        using (var settings = hive.OpenSubKey(ScaleKey, writable: true))
+        {
+            foreach (var name in settings?.GetSubKeyNames().Where(VirtualMonitor) ?? [])
+            {
+                using var monitor = settings!.OpenSubKey(name, writable: true);
+                if (monitor is null) continue;
+                if (scales.TryGetValue(name, out var s) && Number(s) is { } scale) monitor.SetValue(ScaleName, scale, RegistryValueKind.DWord);
+                else monitor.DeleteValue(ScaleName, throwOnMissingValue: false);
+            }
         }
         File.Delete(record);
         return true;
     }
+
+    /// <summary>The record's lines for the virtual monitors' scales: "scale", the entry's name and its value or "absent".</summary>
+    private static List<string> Scales(RegistryKey hive)
+    {
+        using var settings = hive.OpenSubKey(ScaleKey);
+        var lines = new List<string>();
+        foreach (var name in settings?.GetSubKeyNames().Where(VirtualMonitor) ?? [])
+        {
+            using var monitor = settings!.OpenSubKey(name);
+            lines.Add($"scale\t{name}\t{(monitor?.GetValue(ScaleName) is int v ? v.ToString(System.Globalization.CultureInfo.InvariantCulture) : "absent")}");
+        }
+        return lines;
+    }
+
+    private static bool VirtualMonitor(string entry) => entry.StartsWith(VirtualMonitorPrefix, StringComparison.OrdinalIgnoreCase) && !entry.Contains('\t');
+
+    private static int? Number(string text) =>
+        int.TryParse(text, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
 
     /// <summary>One helper (or the service) at a time; nothing is changed without it.</summary>
     private sealed class NamedGate : IDisposable

@@ -158,6 +158,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
     private (int Width, int Height) _fit; // written with _settingsChanged (volatile) after it
     private volatile DesktopMonitor? _shown;
     private string _loggedFit = "";
+    private volatile int _appScale;
+    private string _loggedScale = "";
     private volatile bool _held; // a user's desktop appeared while HoldUserDesktop: no picture, no input
     private volatile int _scale = 1; // the picture of all monitors is scaled down by this when it is too large for H.264
     private int _sent;               // frames sent since the last stats
@@ -250,6 +252,7 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                         var s = DesktopWire.ReadJson(m, DesktopJson.Default.DesktopSettings);
                         (_monitor, _fps, _quality) = (s.Monitor, Math.Clamp(s.FramesPerSecond, 1, 60), Math.Clamp(s.Quality, 1, 100));
                         _fit = _init?.ViewOnly != false ? (0, 0) : DesktopProtocol.ValidFitSize(s.FitWidth, s.FitHeight); // the service checked it too
+                        _appScale = _init is { App: not null, ViewOnly: false } ? DesktopProtocol.ValidScale(s.Scale) : 0;
                         _settingsChanged = true;
                         break;
                     case (byte)HelperMessage.App when _init?.App is not null:
@@ -860,7 +863,11 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
         {
             if (SessionUser.Sid() is not { } sid) return;
             _taskbar.Reconcile(sid); // a helper that ended abruptly may have left it off – the record is the original
-            if (_taskbar.TurnOff(sid)) AppTaskbar.Announce();
+            if (_taskbar.TurnOff(sid))
+            {
+                AppTaskbar.Announce();
+                _refit = true; // the scale, which waited for the record
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or TimeoutException or System.Security.SecurityException)
         {
@@ -995,6 +1002,10 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                             AskForVirtualDisplay(m0, fw, fh);
                             screen.FitResolution(m0, fw, fh);
                             if (screen.FitInfo is { Length: > 0 } fit && fit != _loggedFit) SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "resolution: " + (_loggedFit = fit)));
+                            // An app tab's monitor at the admin's scale – after its size, which limits the scales Windows allows
+                            // Not before the user's scales are recorded (with the taskbar): Windows keeps the scale in their profile (§5.2)
+                            if (_init!.App is not null && _appScale > 0 && _taskbar.Off && screen.SetScale(m0, _appScale) is { Length: > 0 } appScale && appScale != _loggedScale)
+                                SendSync(DesktopWire.Text((DesktopMessage)HelperMessage.Log, "scale: " + (_loggedScale = appScale)));
                         }
                         else screen.RestoreResolution();
                     }
@@ -1016,6 +1027,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     VirtualDisplayPrimary();
                     if (switched || screen.SecureDesktop != secure || _settingsChanged || MonitorsChanged())
                     {
+                        // An app tab's monitor that the driver made anew (a change of its count, §5) gets its size and scale again
+                        if (_init!.App is not null) _refit = true;
                         _settingsChanged = false;
                         secure = screen.SecureDesktop;
                         SendLayout(out _);
@@ -1201,7 +1214,8 @@ internal sealed class DesktopHelperSession(Stream fromService, Stream toService,
                     var seconds = lastStats.Elapsed.TotalSeconds;
                     lastStats.Restart();
                     SendSync(DesktopWire.Json(DesktopMessage.Stats, new DesktopStats((int)Math.Round(_sent / seconds), encoder?.Quality ?? _quality,
-                        screen.CaptureMethod + (encoder?.Kind == "hardware" ? ", GPU encoder" : ""), encoder?.Width ?? 0, encoder?.Height ?? 0, screen.FitInfo,
+                        screen.CaptureMethod + (encoder?.Kind == "hardware" ? ", GPU encoder" : ""), encoder?.Width ?? 0, encoder?.Height ?? 0,
+                        _loggedScale.Length > 0 && _init?.App is not null ? $"{screen.FitInfo}, scale {_loggedScale}" : screen.FitInfo,
                         FrameRateLimit: frameRate < askedRate ? frameRate : 0),
                         DesktopJson.Default.DesktopStats));
                     _sent = 0;
