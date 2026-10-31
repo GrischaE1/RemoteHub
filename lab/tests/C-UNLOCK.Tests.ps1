@@ -93,7 +93,7 @@ Describe 'C-UNLOCK <VmName>' -Tag Agent, 'C-UNLOCK' {
             $a = [ordered]@{}
             $a.Before = Lock-Mine
             $o = Out 'app'
-            $app = @{ program = $exe; arguments = "/colour:Green /title:RH-unlock /log:$appLog"; workingFolder = ''; elevated = $false; name = 'RH unlock' }
+            $app = @{ program = $exe; arguments = "/colour:0,255,0 /title:RH-unlock /log:$appLog"; workingFolder = ''; elevated = $false; name = 'RH unlock' }
             $job = Start-LabDesktop -Name $VmName -Pin $pin -Account Console -Out $o -Steps @(
                 @{ do = 'connect' }, @{ do = 'start'; app = $app; autoSignIn = $true }
                 @{ do = 'wait'; state = 'StartingApp'; anyOf = @('Failed', 'Denied', 'Ended'); timeout = 300 }

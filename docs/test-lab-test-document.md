@@ -7438,7 +7438,7 @@ P3 · How: PS H · Needs: – · Status: ✅ Automated – `C-AUTO3.Tests.ps1`
 - trusted, but not signed by the agent's certificate → "… isn't signed by the same certificate as the agent", Hello `autoSignIn` false
 
 #### C-UNLOCK-01 · App tab unlocks the own session
-P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
 
 **Steps:** 1. The console account signed in at the console, its session locked (LockWorkStation). 2. An app tab of the test app, signed in to the agent as that account.
 **Expected:**
@@ -7447,7 +7447,7 @@ P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
 - event 1106 "… unlocked console session N …"
 
 #### C-UNLOCK-02 · Locked again after the app tab
-P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
 
 **Steps:** 1. The tab of C-UNLOCK-01 is closed.
 **Expected:**
@@ -7455,7 +7455,7 @@ P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
 - the session is still there, off the console's desktop, with its explorer.exe
 
 #### C-UNLOCK-03 · Desktop tab unlocks the own session
-P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
 
 **Steps:** 1. The console account's session locked. 2. A desktop tab of the console with automatic sign-in, RemoteHub's end action SignOut.
 **Expected:**
@@ -7464,7 +7464,7 @@ P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
 - the device's screen says "… signed in remotely" (the privacy screen); 1106 "… unlocked console session N (… privacy screen on)"
 
 #### C-UNLOCK-04 · Locked again, never signed out
-P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
 
 **Steps:** 1. The tab of C-UNLOCK-03 is closed.
 **Expected:**
@@ -7472,7 +7472,7 @@ P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
 - the session is still there with its explorer.exe
 
 #### C-UNLOCK-05 · Disconnected session reconnected
-P1 · How: H S E · Needs: – · Status: ◐ Written – `C-UNLOCK.Tests.ps1`
+P1 · How: H S E · Needs: – · Status: ✅ Automated – `C-UNLOCK.Tests.ps1`
 
 **Steps:** 1. After C-UNLOCK-04 the session is disconnected and the console shows the sign-in screen. 2. A desktop tab with automatic sign-in. 3. The tab is closed.
 **Expected:**
