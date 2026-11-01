@@ -28,7 +28,7 @@ using RemoteHub.Services;
 ///   complete --line .. [--cursor n]          TabExpansion2 in the remote session (what Tab shows)
 ///   fs-list --path ..                        RemoteFs.ListRemote
 ///   fs-upload --files a|b --remote .. [--overwrite 1] [--cancel-after-mb n]   FileUploader.UploadAsync
-///   fs-download --remote a|b --local ..      RemoteFs.ExpandRemote + FileDownloader.DownloadAsync
+///   fs-download --remote a|b --local .. [--overwrite 0] [--cancel-after-mb n]   RemoteFs.ExpandRemote + FileDownloader.DownloadAsync
 ///   fs-mkdir --path .. | fs-rename --path .. --name .. | fs-delete --paths a|b
 ///   reg-list --path .. | reg-set --key .. --name .. --kind .. --data .. [--hex 1] | reg-rename-value --key .. --name .. --new ..
 ///   reg-delete-value --key .. --name .. | reg-create-key --parent .. --name .. | reg-rename-key --key .. --new ..
@@ -414,15 +414,35 @@ internal static class LabTools
         List<(long Size, string FullPath, string Relative)> found;
         using (var rs = Open(t)) found = RemoteFs.ExpandRemote(rs, o["remote"].Split('|'));
         var items = found.Select(f => TransferItem.Download(f.FullPath, Path.Combine(local, f.Relative), f.Relative, "lab", f.Size)).ToList();
-        await FileDownloader.DownloadAsync(() => Open(t), ex => PsRemoting.Explain(ex, t), true, items, a => a());
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var task = FileDownloader.DownloadAsync(() => Open(t), ex => PsRemoting.Explain(ex, t), o.GetValueOrDefault("overwrite", "1") == "1", items, a => a());
+        if (int.TryParse(o.GetValueOrDefault("cancel-after-mb"), out var mb))
+        {
+            while (!task.IsCompleted && items.Sum(i => i.SentBytes) < mb * 1024L * 1024) await Task.Delay(50);
+            foreach (var i in items) i.Cancel();
+        }
+        await task;
+        var seconds = Math.Round(clock.Elapsed.TotalSeconds, 1);
         var report = items.Select(i => new
         {
             i.RelativePath,
             state = i.State.ToString(),
             i.StatusText,
+            i.TotalBytes,
+            i.SentBytes,
             sha256 = File.Exists(i.LocalPath) && i.State == TransferState.Done ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(i.LocalPath))) : null,
         }).ToList();
-        return new { items = report };
+        return new
+        {
+            items = report,
+            done = items.Count(i => i.State == TransferState.Done),
+            skipped = items.Count(i => i.State == TransferState.Skipped),
+            failed = items.Count(i => i.State == TransferState.Failed),
+            cancelled = items.Count(i => i.State == TransferState.Cancelled),
+            seconds,
+            // part files left on this PC (a cancelled or failed download must leave none)
+            parts = Directory.Exists(local) ? Directory.GetFiles(local, "*.remotehub-part", SearchOption.AllDirectories).Length : 0,
+        };
     }
 
     private static object Report(List<TransferItem> items) => new

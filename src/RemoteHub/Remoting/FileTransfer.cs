@@ -142,8 +142,8 @@ public static class FileUploader
     internal static int WindowBytes = 8 * 1024 * 1024;
 
     /// <summary>A new pipeline after this many files or bytes, so one failure can't take down a huge batch.</summary>
-    private const int BatchFiles = 1000;
-    private const long BatchBytes = 512L * 1024 * 1024;
+    internal const int BatchFiles = 1000;
+    internal const long BatchBytes = 512L * 1024 * 1024;
 
     /// <summary>
     /// Data per remote command. WinRM refuses more than 50 MB of input per command (MaxReceivedDataSizePerCommandMB,
@@ -505,7 +505,7 @@ public static class FileUploader
         return ms.Length < chunk.Length * 0.9 ? (ms.ToArray(), true) : (chunk, false);
     }
 
-    private static int ReadFull(Stream s, byte[] buffer)
+    internal static int ReadFull(Stream s, byte[] buffer)
     {
         int total = 0, n;
         while (total < buffer.Length && (n = s.Read(buffer, total, buffer.Length - total)) > 0) total += n;
@@ -555,59 +555,108 @@ public static class FileUploader
 }
 
 /// <summary>
-/// Gets files from a remote computer in 1 MB chunks into "&lt;name&gt;.remotehub-part", compares the SHA-256 with the
-/// remote file and only then renames it to the final name.
+/// Gets files from a remote computer the way <see cref="FileUploader"/> sends them, in the other direction: one remote
+/// pipeline per batch streams every file in 1 MB chunks, gzip-compressed where that helps, without waiting for an
+/// answer per chunk. This PC writes "&lt;name&gt;.remotehub-part", checks the SHA-256 of what it wrote against the
+/// device's hash of what it read, and only then renames it. Nothing is written on the device, so a cancelled or broken
+/// download needs no clean-up there; here, its part file is deleted.
 /// </summary>
 public static class FileDownloader
 {
-    private const string ReadScript = """
-        param([string]$Path, [long]$Offset, [int]$Count)
-        $s = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-        try {
-            [void]$s.Seek($Offset, [IO.SeekOrigin]::Begin)
-            $b = New-Object byte[] $Count
-            $n = 0
-            while ($n -lt $Count) { $r = $s.Read($b, $n, $Count - $n); if ($r -le 0) { break }; $n += $r }
-            if ($n -lt $Count) { $c = New-Object byte[] $n; [Array]::Copy($b, $c, $n); $b = $c }
+    /// <summary>
+    /// Output messages, one array each: file|i|data|gzip|sha256 for a file that fits in one chunk; begin|i|length,
+    /// data|i|bytes|gzip …, end|i|sha256 for a larger one; fail|i|reason. A failing file never stops the others. Every
+    /// chunk is a new array: the output is serialised after the script has moved on. Compression follows the upload's
+    /// rule – kept when it saves 10 %, given up for a file after two misses.
+    /// </summary>
+    private const string StreamScript = """
+        param([string[]]$Paths, [bool[]]$Zip, [int]$Chunk)
+        function Hex([byte[]]$h) { [BitConverter]::ToString($h).Replace('-', '') }
+        function ReadUp($s, [int]$n) {
+            $b = New-Object byte[] $n; $got = 0
+            while ($got -lt $n) { $r = $s.Read($b, $got, $n - $got); if ($r -le 0) { break }; $got += $r }
+            if ($got -lt $n) { $c = New-Object byte[] $got; [Array]::Copy($b, $c, $got); $b = $c }
             ,$b
-        } finally { $s.Dispose() }
+        }
+        function Pack([byte[]]$d) {
+            $ms = New-Object IO.MemoryStream
+            $z = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionLevel]::Fastest, $true)
+            $z.Write($d, 0, $d.Length); $z.Dispose()
+            if ($ms.Length -lt $d.Length * 0.9) { ,$ms.ToArray() }
+        }
+        for ($i = 0; $i -lt $Paths.Count; $i++) {
+            $s = $null
+            try {
+                $s = [IO.File]::Open($Paths[$i], [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]'ReadWrite, Delete')
+                $gz = $Zip[$i]
+                $d = ReadUp $s $Chunk
+                if ($s.Position -ge $s.Length) {
+                    $h = Hex ([Security.Cryptography.SHA256]::Create().ComputeHash($d))
+                    $p = $null; if ($gz) { $p = Pack $d }
+                    if ($null -ne $p) { ,@('file', $i, $p, $true, $h) } else { ,@('file', $i, $d, $false, $h) }
+                    continue
+                }
+                ,@('begin', $i, $s.Length)
+                $sha = [Security.Cryptography.SHA256]::Create(); $misses = 0
+                while ($d.Length -gt 0) {
+                    [void]$sha.TransformBlock($d, 0, $d.Length, $null, 0)
+                    $p = $null
+                    if ($gz) { $p = Pack $d; if ($null -eq $p -and ++$misses -ge 2) { $gz = $false } }
+                    if ($null -ne $p) { ,@('data', $i, $p, $true) } else { ,@('data', $i, $d, $false) }
+                    if ($d.Length -lt $Chunk) { break }
+                    $d = ReadUp $s $Chunk
+                }
+                [void]$sha.TransformFinalBlock([byte[]]@(), 0, 0)
+                ,@('end', $i, (Hex $sha.Hash))
+            } catch {
+                ,@('fail', $i, $_.Exception.Message)
+            } finally {
+                if ($s) { $s.Dispose() }
+            }
+        }
         """;
 
-    private const string HashScript = """
-        param([string]$Path)
-        $s = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
-        try { [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($s)).Replace('-', '') } finally { $s.Dispose() }
-        """;
+    /// <summary>What runs on the device; tests stand in for one that sends a damaged file or a compressed bomb.</summary>
+    internal static string Script = StreamScript;
 
-    /// <summary>Downloads the items (RemotePath → LocalPath) one after another. Never throws.</summary>
+    /// <summary>
+    /// Downloads the items (RemotePath → LocalPath). <paramref name="post"/> runs UI updates on the UI thread.
+    /// Never throws: failures end up in the items' state.
+    /// </summary>
     public static Task DownloadAsync(Func<Runspace> openRunspace, Func<Exception, string> explain, bool overwrite,
                                      IReadOnlyList<TransferItem> items, Action<Action> post) => Task.Run(() =>
     {
         Runspace? rs = null;
         try
         {
+            foreach (var i in items) post(() => { if (i.State == TransferState.Queued) i.StatusText = "Connecting…"; });
             try { rs = openRunspace(); }
             catch (Exception ex)
             {
                 var why = explain(ex);
-                foreach (var i in items) post(() => { if (i.IsActive) { i.State = TransferState.Failed; i.StatusText = "Failed – " + why; } });
+                foreach (var i in items) post(() => { if (i.IsActive) Fail(i, why); });
                 return;
             }
+
+            // Without overwrite, files that are already here aren't requested at all.
+            var work = new List<TransferItem>();
             foreach (var item in items)
             {
-                if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); continue; }
-                post(() => { item.State = TransferState.Running; item.StatusText = "Starting…"; });
-                var part = item.LocalPath + ".remotehub-part";
-                try { GetOne(rs, item, part, overwrite, post); }
+                if (!overwrite && File.Exists(item.LocalPath))
+                    post(() => { item.State = TransferState.Skipped; item.StatusText = "Skipped – the file already exists"; });
+                else { work.Add(item); post(() => { if (item.State == TransferState.Queued) item.StatusText = "Waiting…"; }); }
+            }
+
+            foreach (var batch in Batches(work))
+            {
+                try { GetBatch(rs, batch, overwrite, post); }
                 catch (Exception ex)
                 {
-                    TryDelete(part);
-                    var why = ex is RemoteCommandException or IOException or UnauthorizedAccessException ? ex.Message : explain(ex);
-                    post(() => { item.State = TransferState.Failed; item.StatusText = "Failed – " + why; });
+                    var why = ex is RemoteCommandException ? ex.Message : explain(ex);
+                    foreach (var item in batch) post(() => { if (item.IsActive) Fail(item, why); });
                     if (rs.RunspaceStateInfo.State != RunspaceState.Opened)
                     {
-                        foreach (var rest in items.Where(x => x != item))
-                            post(() => { if (rest.IsActive) { rest.State = TransferState.Failed; rest.StatusText = "Failed – " + why; } });
+                        foreach (var item in work) post(() => { if (item.IsActive) Fail(item, why); });
                         return;
                     }
                 }
@@ -616,65 +665,259 @@ public static class FileDownloader
         finally { try { rs?.Dispose(); } catch { /* connection already gone */ } }
     });
 
-    private static void GetOne(Runspace rs, TransferItem item, string part, bool overwrite, Action<Action> post)
+    private static IEnumerable<List<TransferItem>> Batches(List<TransferItem> work)
     {
-        if (File.Exists(item.LocalPath) && !overwrite)
+        var batch = new List<TransferItem>();
+        long bytes = 0;
+        foreach (var item in work)
         {
-            post(() => { item.State = TransferState.Skipped; item.StatusText = "Skipped – the file already exists"; });
-            return;
+            if (batch.Count > 0 && (batch.Count >= FileUploader.BatchFiles || bytes + item.TotalBytes > FileUploader.BatchBytes)) { yield return batch; batch = []; bytes = 0; }
+            batch.Add(item);
+            bytes += item.TotalBytes;
         }
-        Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
-        using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var sw = Stopwatch.StartNew();
-        long got = 0;
-        using (var file = new FileStream(part, FileMode.Create, FileAccess.Write, FileShare.None))
+        if (batch.Count > 0) yield return batch;
+    }
+
+    /// <summary>One file of a batch while its chunks arrive.</summary>
+    private sealed class Receiving(TransferItem item)
+    {
+        public readonly TransferItem Item = item;
+        public FileStream? Part;
+        public IncrementalHash? Sha;
+        public long Got, Wire;
+        public bool Finished;
+        public readonly Stopwatch Clock = new();
+        public string PartPath => Item.LocalPath + ".remotehub-part";
+    }
+
+    /// <summary>
+    /// Gets one batch. A file cancelled while its chunks arrive stops the pipeline (the device only reads, so nothing
+    /// is left there), and the rest of the batch follows in a new one.
+    /// </summary>
+    private static void GetBatch(Runspace rs, List<TransferItem> batch, bool overwrite, Action<Action> post)
+    {
+        var from = 0;
+        while (from < batch.Count)
         {
-            while (true)
+            var files = batch.Skip(from).Where(i => !i.CancelRequested || Cancelled(i, post)).Select(i => new Receiving(i)).ToArray();
+            if (files.Length == 0) return;
+            var stoppedAt = GetFiles(rs, files, overwrite, post);
+            if (stoppedAt is not { } stopped) return;
+            from = batch.IndexOf(files[stopped].Item) + 1;
+        }
+    }
+
+    /// <summary>Marks a file cancelled before its turn; false, so it isn't requested.</summary>
+    private static bool Cancelled(TransferItem item, Action<Action> post)
+    {
+        post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; });
+        return false;
+    }
+
+    /// <summary>Runs one pipeline for <paramref name="files"/>; the index of the file a cancel stopped it at, else null.</summary>
+    private static int? GetFiles(Runspace rs, Receiving[] files, bool overwrite, Action<Action> post)
+    {
+        var gate = new object();
+        var stopping = false;
+        int? current = null, stopAt = null;
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = rs;
+        ps.AddScript(Script)
+            .AddParameter("Paths", files.Select(f => f.Item.RemotePath!).ToArray())
+            .AddParameter("Zip", files.Select(f => !FileUploader.LikelyCompressed(f.Item.RemotePath!)).ToArray())
+            .AddParameter("Chunk", FileUploader.ChunkSize);
+        var input = new PSDataCollection<PSObject>();
+        input.Complete();
+        var output = new PSDataCollection<PSObject>();
+        // Written as it arrives, on the thread that receives it: nothing piles up here, and a slow disk slows the
+        // sender rather than filling memory.
+        output.DataAdded += (_, _) =>
+        {
+            lock (gate)
             {
-                if (item.CancelRequested)
-                {
-                    file.Dispose();
-                    TryDelete(part);
-                    post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; });
-                    return;
-                }
-                var data = RemoteFs.Invoke(rs, ReadScript, ("Path", item.RemotePath!), ("Offset", got), ("Count", FileUploader.ChunkSize))
-                    .FirstOrDefault()?.BaseObject as byte[] ?? [];
-                if (data.Length == 0) break;
-                file.Write(data);
-                sha.AppendData(data);
-                got += data.Length;
-                var g = got;
-                var total = Math.Max(item.TotalBytes, g);
-                post(() =>
-                {
-                    item.SentBytes = g;
-                    item.Percent = total == 0 ? 100 : g * 100.0 / total;
-                    item.StatusText = $"{TransferItem.Size(g)} of {TransferItem.Size(total)}";
-                });
-                if (data.Length < FileUploader.ChunkSize) break;
+                // After the file a cancel stops at, nothing is written: the next pipeline gets those files again.
+                foreach (var o in output.ReadAll())
+                    if (!stopping && stopAt is null) Handle(Message(o));
+            }
+        };
+
+        var run = ps.BeginInvoke(input, output);
+        while (!run.AsyncWaitHandle.WaitOne(100))
+        {
+            lock (gate)
+            {
+                if (stopAt is null && current is { } c && files[c].Item.CancelRequested) stopAt = c;
+                if (stopAt is null) continue;
+                stopping = true;
+            }
+            try { ps.Stop(); } catch { /* ended meanwhile */ }
+            break;
+        }
+        try { ps.EndInvoke(run); }
+        // The cancel above: a local pipeline reports it as PipelineStoppedException, a remote one as its own error.
+        catch (Exception) when (stopping && stopAt is not null) { }
+        catch (RuntimeException ex) when (ex is not System.Management.Automation.Remoting.PSRemotingTransportException)
+        {
+            Abandon();
+            throw new RemoteCommandException(ex.ErrorRecord?.Exception?.Message ?? ex.Message);
+        }
+        catch { Abandon(); throw; }
+
+        lock (gate)
+        {
+            if (stopAt is { } s)
+            {
+                Drop(files[s]);
+                var item = files[s].Item;
+                post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; });
+                return s;
+            }
+            foreach (var f in files.Where(f => !f.Finished))
+            {
+                Drop(f);
+                post(() => { if (f.Item.IsActive) Fail(f.Item, "no answer from the remote computer for this file"); });
             }
         }
-        post(() => item.StatusText = "Verifying…");
-        var remoteHash = RemoteFs.Invoke(rs, HashScript, ("Path", item.RemotePath!)).FirstOrDefault()?.ToString();
-        if (!string.Equals(remoteHash, Convert.ToHexString(sha.GetHashAndReset()), StringComparison.OrdinalIgnoreCase))
+        return null;
+
+        // A broken pipeline: no part file stays behind; the caller marks the items failed.
+        void Abandon() { lock (gate) { stopping = true; foreach (var f in files) Drop(f); } }
+
+        void Handle(object?[]? m)
         {
-            TryDelete(part);
-            throw new IOException("Checksum mismatch – the file changed during the transfer or was damaged.");
+            if (m is not { Length: >= 2 } || m[1] is not int i || i < 0 || i >= files.Length) return;
+            var f = files[i];
+            if (f.Finished) return;
+            var item = f.Item;
+            try
+            {
+                switch (m[0] as string)
+                {
+                    case "file" when m.Length >= 5:
+                        f.Finished = true;
+                        if (item.CancelRequested) { post(() => { item.State = TransferState.Cancelled; item.StatusText = "Cancelled"; }); return; }
+                        f.Clock.Start();
+                        var whole = Unpack(m[2], m[3]);
+                        f.Wire = (m[2] as byte[])!.Length;
+                        if (!string.Equals(Convert.ToHexString(SHA256.HashData(whole)), m[4] as string, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Checksum mismatch – the file was damaged during the transfer.");
+                        Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
+                        File.WriteAllBytes(f.PartPath, whole);
+                        f.Got = whole.Length;
+                        Finish(f, overwrite, post);
+                        break;
+                    case "begin" when m.Length >= 3:
+                        if (item.CancelRequested) { stopAt ??= i; return; }
+                        current = i;
+                        f.Clock.Start();
+                        Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
+                        f.Part = new FileStream(f.PartPath, FileMode.Create, FileAccess.Write, FileShare.None, FileUploader.ChunkSize);
+                        f.Sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                        var length = Convert.ToInt64(m[2], System.Globalization.CultureInfo.InvariantCulture);
+                        post(() => { item.State = TransferState.Running; item.StatusText = $"0 B of {TransferItem.Size(Math.Max(item.TotalBytes, length))}"; });
+                        break;
+                    case "data" when m.Length >= 4 && f.Part is { } part:
+                        if (item.CancelRequested) { stopAt ??= i; return; } // stops at the next chunk, not the next check
+                        var chunk = Unpack(m[2], m[3]);
+                        part.Write(chunk);
+                        f.Sha!.AppendData(chunk);
+                        f.Got += chunk.Length;
+                        f.Wire += (m[2] as byte[])!.Length;
+                        var got = f.Got;
+                        post(() =>
+                        {
+                            var total = Math.Max(item.TotalBytes, got);
+                            item.SentBytes = got;
+                            item.Percent = total == 0 ? 100 : got * 100.0 / total;
+                            item.StatusText = $"{TransferItem.Size(got)} of {TransferItem.Size(total)}";
+                        });
+                        break;
+                    case "end" when m.Length >= 3 && f.Part is { } ended:
+                        f.Finished = true;
+                        current = null;
+                        ended.Dispose();
+                        f.Part = null;
+                        if (!string.Equals(Convert.ToHexString(f.Sha!.GetHashAndReset()), m[2] as string, StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidDataException("Checksum mismatch – the file was damaged during the transfer.");
+                        Finish(f, overwrite, post);
+                        break;
+                    case "fail":
+                        f.Finished = true;
+                        if (current == i) current = null;
+                        Drop(f);
+                        var why = m.Length >= 3 && m[2] is string reason ? reason : "the remote computer reported an error";
+                        post(() => Fail(item, why));
+                        break;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidCastException or FormatException or OverflowException)
+            {
+                // This file only: a full disk, a damaged chunk or a malformed message. The others carry on.
+                f.Finished = true;
+                if (current == i) current = null;
+                Drop(f);
+                var why = ex.Message;
+                post(() => Fail(item, why));
+            }
         }
-        File.Move(part, item.LocalPath, overwrite: true);
-        var secs = sw.Elapsed.TotalSeconds;
-        var size = got;
+    }
+
+    /// <summary>One output message as plain values: PowerShell wraps the array's items, and remoting deserialises them.</summary>
+    private static object?[]? Message(PSObject? o) =>
+        o?.BaseObject is System.Collections.IList list ? [.. list.Cast<object?>().Select(x => x is PSObject p ? p.BaseObject : x)] : null;
+
+    /// <summary>
+    /// A chunk as it was read on the device. A compressed one may unpack to at most one chunk: a device that sends
+    /// more (a compromised one could send a few KB that unpack to gigabytes) is refused.
+    /// </summary>
+    internal static byte[] Unpack(object? payload, object? gzip)
+    {
+        if (payload is not byte[] bytes) throw new InvalidDataException("The remote computer sent a chunk that isn't data.");
+        if (bytes.Length > FileUploader.ChunkSize)
+            throw new InvalidDataException("The remote computer sent a chunk larger than 1 MB – refused.");
+        if (gzip is not true) return bytes;
+        using var z = new System.IO.Compression.GZipStream(new MemoryStream(bytes), System.IO.Compression.CompressionMode.Decompress);
+        var buffer = new byte[FileUploader.ChunkSize + 1];
+        var n = FileUploader.ReadFull(z, buffer);
+        if (n > FileUploader.ChunkSize) throw new InvalidDataException("The remote computer sent a compressed chunk that unpacks to more than 1 MB – refused.");
+        return buffer[..n];
+    }
+
+    /// <summary>The part file is complete and verified: it becomes the file.</summary>
+    private static void Finish(Receiving f, bool overwrite, Action<Action> post)
+    {
+        File.Move(f.PartPath, f.Item.LocalPath, overwrite);
+        f.Sha?.Dispose();
+        f.Sha = null;
+        var item = f.Item;
+        var size = f.Got;
+        var secs = f.Clock.Elapsed.TotalSeconds;
+        var saved = size > 0 && f.Wire < size * 0.9 ? $" · sent compressed ({f.Wire * 100 / size}%)" : "";
         post(() =>
         {
             item.SentBytes = size;
             item.Percent = 100;
             item.State = TransferState.Done;
-            item.StatusText = $"Done · {TransferItem.Size(size)} in {secs:0.#} s · SHA-256 verified";
+            item.StatusText = $"Done · {TransferItem.Size(size)} in {secs:0.#} s{saved} · SHA-256 verified";
         });
     }
 
-    private static void TryDelete(string path) { try { File.Delete(path); } catch { /* best effort */ } }
+    /// <summary>A file that won't be finished: its part file goes.</summary>
+    private static void Drop(Receiving f)
+    {
+        try { f.Part?.Dispose(); } catch { /* already gone */ }
+        f.Part = null;
+        f.Sha?.Dispose();
+        f.Sha = null;
+        try { File.Delete(f.PartPath); } catch { /* best effort */ }
+    }
+
+    private static void Fail(TransferItem i, string why)
+    {
+        i.State = TransferState.Failed;
+        i.StatusText = "Failed – " + why;
+    }
 }
 
 /// <summary>A command in the remote session failed (message is shown to the user).</summary>

@@ -122,16 +122,49 @@ Describe 'T <VmName>' -Tag Tools, 'T' {
             @(Get-GuestFiles "$remote\cancel") | Should -BeNullOrEmpty
         }
 
-        It 'T-FS-07 [<Via>] downloads a file and a folder, hashes equal' -Tag 'T-FS-07' {
+        It 'T-FS-07 [<Via>] downloads files and a folder streamed, the text compressed, hashes equal' -Tag 'T-FS-07' {
             $local = Join-Path $data "down-$tag"
-            # the 200 MB file is put on the device over PowerShell Direct: the download must not depend on T-FS-03
-            $null = Invoke-LabGuest -Name $VmName -ArgumentList "$remote\seed" -ScriptBlock { param($p) New-Item -ItemType Directory -Path $p -Force }
-            Copy-LabFile -Name $VmName -Path $random -Destination "$remote\seed"
-            $down = T fs-download @{ remote = @("$remote\seed\random.bin", "$remote\small"); local = $local }
+            # the 200 MB files are put on the device over PowerShell Direct: the download must not depend on T-FS-03
+            Copy-LabFile -Name $VmName -Path @($random, $text) -Destination "$remote\seed"
+            $down = T fs-download @{ remote = @("$remote\seed\random.bin", "$remote\seed\compressible.txt", "$remote\small"); local = $local }
             Save "$tag-download" $down
             @($down.result.items | Where-Object state -ne 'Done') | Should -BeNullOrEmpty
-            ($down.result.items | Where-Object RelativePath -eq 'random.bin').sha256 | Should -Be $bigHashes['random.bin']
+            @($down.result.items | Where-Object StatusText -notmatch 'SHA-256 verified') | Should -BeNullOrEmpty
+            $random1 = $down.result.items | Where-Object RelativePath -eq 'random.bin'
+            $text1 = $down.result.items | Where-Object RelativePath -eq 'compressible.txt'
+            $random1.sha256 | Should -Be $bigHashes['random.bin']
+            $text1.sha256 | Should -Be $bigHashes['compressible.txt']
+            $text1.StatusText | Should -Match 'sent compressed' -Because 'text is gzipped on the way and written as it was'
+            $random1.StatusText | Should -Not -Match 'compressed' -Because 'random data is sent as it is after two misses'
             @(Get-ChildItem (Join-Path $local 'small') -File | ForEach-Object { Get-Sha $_.FullName } | Sort-Object) | Should -Be $smallHashes
+            $down.result.parts | Should -Be 0
+            (T fs-download @{ remote = 'C:\'; local = (Join-Path $data "drive-$tag") }).refused | Should -Match 'A whole drive cannot be downloaded'
+        }
+
+        It 'T-FS-11 [<Via>] a cancelled download leaves no partial file on this PC' -Tag 'T-FS-11' {
+            $seed = "$remote\seed"
+            $there = Invoke-LabGuest -Name $VmName -ArgumentList "$seed\random.bin" -ScriptBlock { param($p) Test-Path -LiteralPath $p }
+            if (-not $there) { Copy-LabFile -Name $VmName -Path $random -Destination $seed }
+            $local = Join-Path $data "cancel-$tag"
+            $down = T fs-download @{ remote = "$seed\random.bin"; local = $local; 'cancel-after-mb' = 20 }
+            Save "$tag-download-cancel" $down
+            $down.result.cancelled | Should -Be 1
+            $down.result.parts | Should -Be 0 -Because 'the part file of a cancelled download is deleted'
+            Test-Path -LiteralPath (Join-Path $local 'random.bin') | Should -BeFalse
+        }
+
+        It 'T-FS-12 [<Via>] a download skips files already on this PC, replaces them with overwrite' -Tag 'T-FS-12' {
+            $local = Join-Path $data "again-$tag"
+            (T fs-download @{ remote = "$remote\small"; local = $local }).result.done | Should -Be 300
+            $skip = T fs-download @{ remote = "$remote\small"; local = $local; overwrite = 0 }
+            Save "$tag-download-skip" $skip
+            $skip.result.skipped | Should -Be 300
+            $skip.result.done | Should -Be 0
+            $victim = Join-Path $local 'small\file001.txt'
+            Set-Content -LiteralPath $victim -Value 'changed on this PC' -Encoding ASCII
+            $over = T fs-download @{ remote = "$remote\small"; local = $local; overwrite = 1 }
+            $over.result.done | Should -Be 300
+            Get-Sha $victim | Should -Be (Get-Sha (Join-Path $small 'file001.txt'))
         }
 
         It 'T-FS-08 [<Via>] new folder, rename, delete; deleting a drive root is refused' -Tag 'T-FS-08' {

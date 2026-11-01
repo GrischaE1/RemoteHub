@@ -7,6 +7,7 @@ using RemoteHub.Remoting;
 namespace RemoteHub.Tests;
 
 /// <summary>The remote file scripts, run against a local runspace (same scripts as over WinRM).</summary>
+[Collection("FileDownloader")] // FileDownloaderTests stand in other device scripts
 public class RemoteFsTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "rdpm-fs-" + Guid.NewGuid().ToString("N"));
