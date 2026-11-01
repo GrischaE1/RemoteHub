@@ -1,5 +1,6 @@
-# T - RemoteHub's remote tools (file transfer, registry, services, processes) through the same code the tabs use
-# (RemoteFs, FileUploader/FileDownloader, RemoteRegistry, RemoteServices, RemoteProcesses), once over the RemoteHub
+# T - RemoteHub's remote tools (file transfer, registry, services, processes, event logs, scheduled tasks) through the
+# same code the tabs use (RemoteFs, FileUploader/FileDownloader, RemoteRegistry, RemoteServices, RemoteProcesses,
+# RemoteEventLog, RemoteTasks), once over the RemoteHub
 # Agent and once over WinRM HTTPS set up with RemoteHub's script. Results are checked on the device over PowerShell
 # Direct. Each It name carries the transport in brackets. See docs/test-lab-cases.md section 7.
 # LabRole: device
@@ -304,6 +305,114 @@ Describe 'T <VmName>' -Tag Tools, 'T' {
                 (T proc-stop @{ ids = $c.Id; names = $c.Name }).refused | Should -Not -BeNullOrEmpty -Because $c.Name
             }
             Invoke-LabGuest -Name $VmName -ArgumentList (, @($critical | ForEach-Object Id)) -ScriptBlock { param($ids) @(Get-Process -Id $ids -ErrorAction SilentlyContinue).Count } | Should -Be @($critical).Count
+        }
+
+        It 'T-EVT-01 [<Via>] lists the logs and reads an event with its whole message' -Tag 'T-EVT-01' {
+            $message = "RemoteHub lab $tag | a pipe`tand a tab`r`nsecond line"
+            Invoke-LabGuest -Name $VmName -ArgumentList $message -ScriptBlock {
+                param($m)
+                if (-not [Diagnostics.EventLog]::SourceExists('RemoteHubLab')) { New-EventLog -LogName Application -Source RemoteHubLab }
+                Write-EventLog -LogName Application -Source RemoteHubLab -EventId 4242 -EntryType Error -Message $m
+            }
+            $logs = T evt-logs
+            @($logs.result.logs | ForEach-Object Name) | Should -Contain 'Application'
+            @($logs.result.logs | ForEach-Object Name)[0] | Should -Be 'Application' -Because 'the main logs come first'
+            $r = T evt-list @{ log = 'Application'; source = 'RemoteHubLab'; levels = 'Error'; hours = 24 }
+            Save "$tag-events" $r
+            $hit = @($r.result.events | Where-Object { $_.EventId -eq 4242 -and $_.Message -match [regex]::Escape("RemoteHub lab $tag") }) | Select-Object -First 1
+            $hit | Should -Not -BeNullOrEmpty -Because 'the event written over PowerShell Direct is read through the tab''s code'
+            $hit.level | Should -Be 'Error'
+            $hit.Message | Should -Be $message -Because 'tabs, pipes and new lines arrive as written'
+        }
+
+        It 'T-EVT-02 [<Via>] reads newest first and continues below the last record' -Tag 'T-EVT-02' {
+            Invoke-LabGuest -Name $VmName -ScriptBlock {
+                if (-not [Diagnostics.EventLog]::SourceExists('RemoteHubLab')) { New-EventLog -LogName Application -Source RemoteHubLab }
+                1..7 | ForEach-Object { Write-EventLog -LogName Application -Source RemoteHubLab -EventId (5000 + $_) -EntryType Information -Message "page $_" }
+            }
+            $first = T evt-list @{ log = 'Application'; source = 'RemoteHubLab'; hours = 24; max = 5 }
+            $first.result.More | Should -BeTrue
+            $ids = @($first.result.events | ForEach-Object RecordId)
+            $ids.Count | Should -Be 5
+            ($ids -join ',') | Should -Be (($ids | Sort-Object -Descending) -join ',') -Because 'newest first'
+            $next = T evt-list @{ log = 'Application'; source = 'RemoteHubLab'; hours = 24; max = 5; before = ($ids | Measure-Object -Minimum).Minimum }
+            Save "$tag-events-pages" @{ First = $first; Next = $next }
+            @($next.result.events).Count | Should -BeGreaterThan 0
+            @($next.result.events | Where-Object { $ids -contains $_.RecordId }) | Should -BeNullOrEmpty -Because 'no event comes twice'
+            @($next.result.events | Where-Object { $_.RecordId -ge ($ids | Measure-Object -Minimum).Minimum }) | Should -BeNullOrEmpty
+        }
+
+        It 'T-EVT-03 [<Via>] exports the filtered events to an .evtx file and leaves nothing on the device' -Tag 'T-EVT-03' {
+            $out = Join-Path $data "events-$tag.evtx"
+            $x = T evt-export @{ log = 'Application'; source = 'RemoteHubLab'; hours = 24; out = $out }
+            Save "$tag-events-export" $x
+            $x.refused | Should -BeNullOrEmpty
+            $x.result.state | Should -Be 'Done'
+            $x.result.bytes | Should -BeGreaterThan 0
+            "$($x.result.leftOnDevice)" | Should -Be 'False' -Because 'the copy in the account''s temp folder is deleted'
+            $read = @(Get-WinEvent -Path $out -ErrorAction Stop)
+            @($read | Where-Object { $_.ProviderName -ne 'RemoteHubLab' }) | Should -BeNullOrEmpty -Because 'the export has the tab''s filter'
+            @($read | Where-Object Id -eq 4242).Count | Should -BeGreaterThan 0
+        }
+
+        It 'T-TASK-01 [<Via>] lists folders and tasks and describes a task' -Tag 'T-TASK-01' {
+            $name = "LabTask-$tag"
+            Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock {
+                param($n)
+                $a = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c ping -n 90 127.0.0.1 > nul'
+                $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount
+                $null = Register-ScheduledTask -TaskPath '\RemoteHubLab\' -TaskName $n -Action $a -Principal $p -Force
+            }
+            $l = T task-list
+            Save "$tag-tasks" @{ Folders = $l.result.Folders; Count = @($l.result.tasks).Count }
+            @($l.result.Folders) | Should -Contain '\RemoteHubLab\'
+            $task = @($l.result.tasks | Where-Object { $_.Folder -eq '\RemoteHubLab\' -and $_.Name -eq $name }) | Select-Object -First 1
+            $task | Should -Not -BeNullOrEmpty
+            $task.state | Should -Be 'Ready'
+            @($l.result.tasks | Where-Object { $_.Folder -like '\Microsoft\Windows\*' }).Count | Should -BeGreaterThan 20
+            $d = T task-details @{ folder = '\RemoteHubLab\'; name = $name }
+            $d.result.text | Should -Match 'Start cmd\.exe /c ping -n 90 127\.0\.0\.1'
+            $d.result.text | Should -Match 'Run as:  SYSTEM'
+        }
+
+        It 'T-TASK-02 [<Via>] runs a task and ends it' -Tag 'T-TASK-02' {
+            $name = "LabTask-$tag"
+            function State { Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock { param($n) "$((Get-ScheduledTask -TaskPath '\RemoteHubLab\' -TaskName $n).State)" } }
+            (T task-do @{ folder = '\RemoteHubLab\'; name = $name; action = 'Run' }).refused | Should -BeNullOrEmpty
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the task did not start' -Until { (State) -eq 'Running' }
+            State | Should -Be 'Running'
+            (T task-do @{ folder = '\RemoteHubLab\'; name = $name; action = 'End' }).refused | Should -BeNullOrEmpty
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the ended task is still running' -Until { (State) -eq 'Ready' }
+            State | Should -Be 'Ready'
+        }
+
+        It 'T-TASK-03 [<Via>] disables a task and enables it again' -Tag 'T-TASK-03' {
+            $name = "LabTask-$tag"
+            function State { Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock { param($n) "$((Get-ScheduledTask -TaskPath '\RemoteHubLab\' -TaskName $n).State)" } }
+            (T task-do @{ folder = '\RemoteHubLab\'; name = $name; action = 'Disable' }).refused | Should -BeNullOrEmpty
+            State | Should -Be 'Disabled'
+            (T task-do @{ folder = '\RemoteHubLab\'; name = $name; action = 'Run' }).refused | Should -Not -BeNullOrEmpty -Because 'a disabled task does not run'
+            (T task-do @{ folder = '\RemoteHubLab\'; name = $name; action = 'Enable' }).refused | Should -BeNullOrEmpty
+            State | Should -Be 'Ready'
+        }
+
+        It 'T-TASK-04 [<Via>] refuses to end or disable RemoteHub''s own tasks' -Tag 'T-TASK-04' {
+            $name = "RemoteHub-Run-Lab-$tag"
+            Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock {
+                param($n)
+                $a = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c exit 0'
+                $p = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount
+                $null = Register-ScheduledTask -TaskPath '\RemoteHub\' -TaskName $n -Action $a -Principal $p -Force
+            }
+            try {
+                foreach ($action in 'End', 'Disable') {
+                    (T task-do @{ folder = '\RemoteHub\'; name = $name; action = $action }).refused | Should -Match 'belongs to RemoteHub' -Because $action
+                }
+                Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock { param($n) "$((Get-ScheduledTask -TaskPath '\RemoteHub\' -TaskName $n).State)" } | Should -Be 'Ready'
+            }
+            finally {
+                Invoke-LabGuest -Name $VmName -ArgumentList $name -ScriptBlock { param($n) Unregister-ScheduledTask -TaskPath '\RemoteHub\' -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue }
+            }
         }
     }
 }

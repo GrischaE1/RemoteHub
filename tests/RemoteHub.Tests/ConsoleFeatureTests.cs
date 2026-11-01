@@ -75,7 +75,8 @@ public class ConsoleFeatureTests
     {
         var src = Set(("AllowAgent", 0), ("AllowAgentDesktop", 1), ("AllowAgentPowerShell", 1), ("AllowJumpHosts", 1));
         foreach (var f in new[] { Feature.AgentDesktop, Feature.AgentPowerShell, Feature.AgentFileTransfer, Feature.AgentRegistry, Feature.AgentServices,
-                     Feature.AgentProcesses, Feature.AgentInstall, Feature.CredentialProviderInstall, Feature.AgentAutoSignIn, Feature.JumpHosts })
+                     Feature.AgentProcesses, Feature.AgentEventLog, Feature.AgentScheduledTasks, Feature.AgentInstall, Feature.CredentialProviderInstall,
+                     Feature.AgentAutoSignIn, Feature.JumpHosts })
         {
             Assert.False(Features.IsAllowed(f, src), f.ToString());
             Assert.Equal("The RemoteHub Agent is turned off by your organisation – see Settings → Policies.", Features.WhyNot(f, src));
@@ -104,6 +105,27 @@ public class ConsoleFeatureTests
         Assert.True(Features.IsAllowed(RemoteTool.PowerShell, viaAgent: true, src));
         Assert.Equal("File transfer through the RemoteHub Agent is turned off by your organisation – see Settings → Policies.",
             Features.WhyNot(Features.For(RemoteTool.FileTransfer, viaAgent: true), src));
+    }
+
+    [Fact]
+    public void The_event_viewer_and_scheduled_tasks_have_a_switch_on_each_transport()
+    {
+        foreach (var (tool, agent, winrm) in new[] { (RemoteTool.EventLog, "AllowAgentEventLog", "AllowRemotingEventLog"), (RemoteTool.ScheduledTasks, "AllowAgentScheduledTasks", "AllowRemotingScheduledTasks") })
+        {
+            Assert.True(Features.IsAllowed(tool, viaAgent: true, Set()), $"{tool} is on by default");
+            Assert.True(Features.IsAllowed(tool, viaAgent: false, Set()));
+            Assert.False(Features.IsAllowed(tool, viaAgent: true, Set((agent, 0))));
+            Assert.True(Features.IsAllowed(tool, viaAgent: false, Set((agent, 0))), $"{agent} leaves WinRM alone");
+            Assert.False(Features.IsAllowed(tool, viaAgent: false, Set((winrm, 0))));
+            Assert.True(Features.IsAllowed(tool, viaAgent: true, Set((winrm, 0))), $"{winrm} leaves the agent alone");
+            // The main switches win, as for the other tools.
+            Assert.False(Features.IsAllowed(tool, viaAgent: true, Set(("AllowAgent", 0), (agent, 1))));
+            Assert.False(Features.IsAllowed(tool, viaAgent: false, Set(("AllowPowerShellRemoting", 0), (winrm, 1))));
+        }
+        Assert.Equal("The event viewer through the RemoteHub Agent is turned off by your organisation – see Settings → Policies.",
+            Features.WhyNot(Features.For(RemoteTool.EventLog, viaAgent: true), Set(("AllowAgentEventLog", 0))));
+        Assert.Equal("Scheduled tasks over WinRM are turned off by your organisation – see Settings → Policies.",
+            Features.WhyNot(Features.For(RemoteTool.ScheduledTasks, viaAgent: false), Set(("AllowRemotingScheduledTasks", 0))));
     }
 
     [Fact]

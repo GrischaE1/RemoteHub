@@ -105,6 +105,9 @@ public class RemoteToolsTests
         var old = SettingsStore.FromJson("{\"Version\":1,\"Items\":[]}"u8.ToArray());
         Assert.Equal(15, old.Tools.ProcessRefreshSeconds);
         Assert.Equal(60, old.Tools.ServiceRefreshSeconds);
+        Assert.Equal(60, old.Tools.TaskRefreshSeconds); // settings from before the scheduled tasks tab
+        var noTasks = SettingsStore.FromJson("{\"Version\":1,\"Items\":[],\"Tools\":{\"ProcessRefreshSeconds\":5,\"ServiceRefreshSeconds\":0}}"u8.ToArray());
+        Assert.Equal(60, noTasks.Tools.TaskRefreshSeconds);
     }
 
     [Fact]
@@ -112,14 +115,17 @@ public class RemoteToolsTests
     {
         var data = new AppData();
         var vm = new RemoteHub.ViewModels.EditorViewModel(null, data, isNew: false);
-        Assert.Equal(2, vm.ToolRows.Count);
+        Assert.Equal(3, vm.ToolRows.Count);
         Assert.Equal("15 s  (default)", vm.ToolRows[0].Selected.Label);
         Assert.Equal("1 min  (default)", vm.ToolRows[1].Selected.Label);
+        Assert.Equal("1 min  (default)", vm.ToolRows[2].Selected.Label); // scheduled tasks
         vm.ToolRows[0].Selected = vm.ToolRows[0].Choices.Single(c => Equals(c.Value, 30));
         vm.ToolRows[1].Selected = vm.ToolRows[1].Choices.Single(c => Equals(c.Value, 0));
+        vm.ToolRows[2].Selected = vm.ToolRows[2].Choices.Single(c => Equals(c.Value, 0));
         Assert.True(vm.Apply());
         Assert.Equal(30, data.Tools.ProcessRefreshSeconds);
         Assert.Equal(0, data.Tools.ServiceRefreshSeconds);
+        Assert.Equal(0, data.Tools.TaskRefreshSeconds);
         Assert.Empty(new RemoteHub.ViewModels.EditorViewModel(new Folder { Name = "F" }, data, isNew: false).ToolRows);
     }
 

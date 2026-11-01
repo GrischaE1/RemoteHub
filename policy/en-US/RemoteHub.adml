@@ -221,6 +221,24 @@ Disabled: RemoteHub on this PC never tries the direct path; every session throug
 On the device: RemoteHub Agent → RemoteHub Broker → "Direct connections through the broker" (BrokerDirect).
 
 Registry: BrokerDirect (REG_DWORD) = 1 or 0.</string>
+      <string id="Console_AllowAgentEventLog">Allow the event viewer through the agent</string>
+      <string id="Console_AllowAgentEventLog_Help">Enabled or Not configured: allowed.
+
+Disabled: The Event Viewer tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow the event viewer over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentEventLog (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowAgentScheduledTasks">Allow scheduled tasks through the agent</string>
+      <string id="Console_AllowAgentScheduledTasks_Help">Enabled or Not configured: allowed.
+
+Disabled: The Scheduled tasks tab isn't offered for connections that use the RemoteHub Agent, and opening it is refused. Over PowerShell remoting it depends on "Allow scheduled tasks over WinRM".
+
+This binds RemoteHub on this PC only. On the device: RemoteHub Agent → Features → "Allow PowerShell, files, registry, services and processes" (PowerShellEnabled). The agent can't block the tools one by one.
+
+Registry: AllowAgentScheduledTasks (REG_DWORD) = 1 or 0.</string>
+
       <string id="Console_AllowAgentDeviceActions">Allow device actions through the agent</string>
       <string id="Console_AllowAgentDeviceActions_Help">Enabled or Not configured: allowed.
 
@@ -301,6 +319,24 @@ Disabled: The processes tab isn't offered for connections that use PowerShell re
 This binds RemoteHub on this PC only.
 
 Registry: AllowRemotingProcesses (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingEventLog">Allow the event viewer over WinRM</string>
+      <string id="Console_AllowRemotingEventLog_Help">Enabled or Not configured: allowed.
+
+Disabled: The Event Viewer tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow the event viewer through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingEventLog (REG_DWORD) = 1 or 0.</string>
+
+      <string id="Console_AllowRemotingScheduledTasks">Allow scheduled tasks over WinRM</string>
+      <string id="Console_AllowRemotingScheduledTasks_Help">Enabled or Not configured: allowed.
+
+Disabled: The Scheduled tasks tab isn't offered for connections that use PowerShell remoting, and opening it is refused. Through the agent it depends on "Allow scheduled tasks through the agent".
+
+This binds RemoteHub on this PC only.
+
+Registry: AllowRemotingScheduledTasks (REG_DWORD) = 1 or 0.</string>
 
       <string id="Console_AllowRemotingDeviceActions">Allow device actions over WinRM</string>
       <string id="Console_AllowRemotingDeviceActions_Help">Enabled or Not configured: allowed.
@@ -588,6 +624,15 @@ Enabled: the value set here (seconds, 0 = only by hand).
 Disabled or Not configured: the user decides (default: 60 seconds).
 
 Registry: ServiceRefreshSeconds (REG_DWORD), 0–3600.</string>
+
+      <string id="Console_TaskRefreshSeconds">Refresh the scheduled tasks tab every</string>
+      <string id="Console_TaskRefreshSeconds_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in Global defaults → Remote tools and users can't change it.
+
+Enabled: the value set here (seconds, 0 = only by hand).
+
+Disabled or Not configured: the user decides (default: 60 seconds).
+
+Registry: TaskRefreshSeconds (REG_DWORD), 0–3600.</string>
 
       <string id="Console_AgentDesktopQuality">Picture</string>
       <string id="Console_AgentDesktopQuality_Help">Fixes this setting of RemoteHub on this PC. It is greyed out in the agent desktop's start panel and toolbar and users can't change it.
@@ -1605,6 +1650,9 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Console_ServiceRefreshSeconds">
         <decimalTextBox refId="ServiceRefreshSeconds" defaultValue="60" spinStep="5">Seconds (0 = only by hand):</decimalTextBox>
+      </presentation>
+      <presentation id="Console_TaskRefreshSeconds">
+        <decimalTextBox refId="TaskRefreshSeconds" defaultValue="60" spinStep="5">Seconds (0 = only by hand):</decimalTextBox>
       </presentation>
       <presentation id="Console_AgentDesktopQuality">
         <dropdownList refId="AgentDesktopQuality" noSort="true">Picture:</dropdownList>

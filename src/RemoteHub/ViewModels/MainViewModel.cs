@@ -592,6 +592,20 @@ public sealed partial class MainViewModel : ObservableObject
         return s;
     }
 
+    public EventLogSession OpenEventLog(Connection c)
+    {
+        var s = new EventLogSession(c);
+        Register(s);
+        return s;
+    }
+
+    public ScheduledTasksSession OpenScheduledTasks(Connection c)
+    {
+        var s = new ScheduledTasksSession(c);
+        Register(s);
+        return s;
+    }
+
     public PsSession OpenPsSession(Connection c)
     {
         var s = new PsSession(c);

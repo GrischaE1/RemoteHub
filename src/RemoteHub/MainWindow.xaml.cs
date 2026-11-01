@@ -502,6 +502,10 @@ public partial class MainWindow : FluentWindow
                     tools.Add((SymbolRegular.WrenchScrewdriver24, "Services", "Open the remote services in a new tab", () => OpenServices(p.Connection, p.Target)));
                 if (Features.IsAllowed(RemoteTool.Processes, viaAgent))
                     tools.Add((SymbolRegular.Pulse24, "Processes", "Open the remote processes in a new tab", () => OpenProcesses(p.Connection, p.Target)));
+                if (Features.IsAllowed(RemoteTool.EventLog, viaAgent))
+                    tools.Add((SymbolRegular.DocumentBulletList24, "Event Viewer", "Open the remote event logs in a new tab", () => OpenEventLog(p.Connection, p.Target)));
+                if (Features.IsAllowed(RemoteTool.ScheduledTasks, viaAgent))
+                    tools.Add((SymbolRegular.CalendarClock24, "Scheduled tasks", "Open the remote scheduled tasks in a new tab", () => OpenScheduledTasks(p.Connection, p.Target)));
             }
             var win = new DetachedWindow(s, view, tools)
             {
@@ -863,6 +867,8 @@ public partial class MainWindow : FluentWindow
         CmRegistry.Visibility = V(available && Features.IsAllowed(RemoteTool.Registry, viaAgent));
         CmServices.Visibility = V(available && Features.IsAllowed(RemoteTool.Services, viaAgent));
         CmProcesses.Visibility = V(available && Features.IsAllowed(RemoteTool.Processes, viaAgent));
+        CmEventLog.Visibility = V(available && Features.IsAllowed(RemoteTool.EventLog, viaAgent));
+        CmScheduledTasks.Visibility = V(available && Features.IsAllowed(RemoteTool.ScheduledTasks, viaAgent));
         FillDeviceActions(CmDevice, c, DeviceActions.Offered(available, viaAgent));
         CmPsTest.Visibility = V(psOn && !ToolsReady(c!, viaAgent, st));
         CmPsTest.Header = c?.PsChecking == true ? $"Testing {name}…"
@@ -901,7 +907,7 @@ public partial class MainWindow : FluentWindow
         }
         // A group shows only when something in it does.
         CmSharesSep.Visibility = V(CmAddShare.Visibility == Visibility.Visible &&
-                                   new[] { CmPs, CmRunScript, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
+                                   new[] { CmPs, CmRunScript, CmSendFiles, CmRegistry, CmServices, CmProcesses, CmEventLog, CmScheduledTasks, CmPsTest }.Any(i => i.Visibility == Visibility.Visible));
         CmTools.Visibility = V(GroupHasItems(CmTools));
         CmDevice.Visibility = V(GroupHasItems(CmDevice));
         CmManage.Visibility = V(GroupHasItems(CmManage));
@@ -936,6 +942,8 @@ public partial class MainWindow : FluentWindow
     private void CmRegistry_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenRegistry(c, null); }
     private void CmServices_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenServices(c, null); }
     private void CmProcesses_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenProcesses(c, null); }
+    private void CmEventLog_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenEventLog(c, null); }
+    private void CmScheduledTasks_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) OpenScheduledTasks(c, null); }
     private void CmPsTest_Click(object sender, RoutedEventArgs e) { if (_vm.SelectedNode is Connection c) _ = TestPsRemoting(c, interactive: true); }
 
     private static MenuItem MenuEntry(string header, SymbolRegular icon, Action action, bool enabled = true, string? tip = null)
@@ -1000,6 +1008,8 @@ public partial class MainWindow : FluentWindow
             Tool(RemoteTool.Registry, "Registry", SymbolRegular.CubeTree24, () => OpenRegistry(c, KnownTarget(c)));
             Tool(RemoteTool.Services, "Services", SymbolRegular.WrenchScrewdriver24, () => OpenServices(c, KnownTarget(c)));
             Tool(RemoteTool.Processes, "Processes", SymbolRegular.Pulse24, () => OpenProcesses(c, KnownTarget(c)));
+            Tool(RemoteTool.EventLog, "Event Viewer", SymbolRegular.DocumentBulletList24, () => OpenEventLog(c, KnownTarget(c)));
+            Tool(RemoteTool.ScheduledTasks, "Scheduled tasks", SymbolRegular.CalendarClock24, () => OpenScheduledTasks(c, KnownTarget(c)));
         }
         else if (Features.AnyTool(toolsViaAgent))
             tools.Items.Add(MenuEntry(c.PsChecking ? $"Testing {name}…" : st == PsRemotingState.Unavailable ? $"Test {name} again" : $"Test {name}",
@@ -1971,6 +1981,22 @@ public partial class MainWindow : FluentWindow
         if (Refused(RemoteTool.Processes, c) || ToolTarget(c, known) is not { } t) return;
         var s = _vm.OpenProcesses(c);
         ShowTool(s, new ProcessesView(s, () => AppPolicy.ProcessRefreshSeconds ?? _vm.Data.Tools.ProcessRefreshSeconds, () => ConnectTool(s), s.Close), t);
+    }
+
+    /// <summary>Opens the remote event logs in a new tab (read by hand: F5 or a changed filter).</summary>
+    private void OpenEventLog(Connection c, PsTarget? known)
+    {
+        if (Refused(RemoteTool.EventLog, c) || ToolTarget(c, known) is not { } t) return;
+        var s = _vm.OpenEventLog(c);
+        ShowTool(s, new EventLogView(s, () => ConnectTool(s), s.Close), t);
+    }
+
+    /// <summary>Opens the remote scheduled tasks in a new tab (refreshed regularly, see Global defaults → Remote tools).</summary>
+    private void OpenScheduledTasks(Connection c, PsTarget? known)
+    {
+        if (Refused(RemoteTool.ScheduledTasks, c) || ToolTarget(c, known) is not { } t) return;
+        var s = _vm.OpenScheduledTasks(c);
+        ShowTool(s, new ScheduledTasksView(s, () => AppPolicy.TaskRefreshSeconds ?? _vm.Data.Tools.TaskRefreshSeconds, () => ConnectTool(s), s.Close), t);
     }
 
     /// <summary>Asks what to do when some of the names already exist. Null = cancel.</summary>
