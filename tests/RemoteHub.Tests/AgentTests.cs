@@ -23,6 +23,7 @@ namespace RemoteHub.Tests;
 /// The agent and RemoteHub's transport against each other on this PC. Sign-in is a test double and PowerShell runs as
 /// the current user (the real Windows sign-in and start-as-user need LocalSystem).
 /// </summary>
+[Collection("FileDownloader")] // FileDownloaderTests stand in other device scripts
 public class AgentTests
 {
     private sealed class FakeAuth : A.IShellAuthenticator
@@ -574,6 +575,39 @@ public class AgentTests
             var again = FileUploader.Expand([src]).Select(x => new TransferItem(x.Local, x.Relative, "test")).ToList();
             await FileUploader.UploadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target), dst, false, again, x => x());
             Assert.All(again, i => Assert.Equal(TransferState.Skipped, i.State));
+        }
+        finally
+        {
+            Directory.Delete(src, true);
+            if (Directory.Exists(dst)) Directory.Delete(dst, true);
+        }
+    }
+
+    [Fact]
+    public async Task Folder_download_through_the_agent_streams_on_Windows_PowerShell_5_1()
+    {
+        await using var a = await StartAgent();
+        var src = Path.Combine(Path.GetTempPath(), "rh-agent-down-" + Guid.NewGuid().ToString("N"));
+        var dst = Path.Combine(Path.GetTempPath(), "rh-agent-got-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(src, "sub"));
+        File.WriteAllText(Path.Combine(src, "big.log"), string.Concat(Enumerable.Range(0, 80000).Select(i => $"line {i} INFO all good\r\n")));
+        var noise = new byte[FileUploader.ChunkSize * 2 + 5]; RandomNumberGenerator.Fill(noise);
+        File.WriteAllBytes(Path.Combine(src, "sub", "noise.bin"), noise);
+        File.WriteAllBytes(Path.Combine(src, "sub", "empty.txt"), []);
+        for (var i = 0; i < 40; i++) File.WriteAllText(Path.Combine(src, "sub", $"f{i}.txt"), $"file {i}");
+        try
+        {
+            var target = Target(a);
+            List<TransferItem> Items() => [.. Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories).Select(f =>
+                TransferItem.Download(f, Path.Combine(dst, Path.GetRelativePath(src, f)), Path.GetRelativePath(src, f), "test", new FileInfo(f).Length))];
+            // Serialised over the agent's PowerShell remoting, as on a device: arrays, byte[] chunks and the compression.
+            var items = Items();
+            await FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target), false, items, x => x());
+            Assert.All(items, i => Assert.True(i.State == TransferState.Done, $"{i.RelativePath}: {i.StatusText}"));
+            foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+                Assert.Equal(File.ReadAllBytes(f), File.ReadAllBytes(Path.Combine(dst, Path.GetRelativePath(src, f))));
+            Assert.Contains("sent compressed", items.Single(i => i.RelativePath == "big.log").StatusText);
+            Assert.Empty(Directory.GetFiles(dst, "*.remotehub-part", SearchOption.AllDirectories));
         }
         finally
         {

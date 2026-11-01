@@ -256,10 +256,12 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 | T-FS-04 | Upload folder tree | nested folders with Unicode names (`Ünïcödé 文件`), long paths (> 260) | H PS | 2 | ✅ |
 | T-FS-05 | Skip existing / overwrite | existing files not sent with skip; replaced with overwrite | H PS | 2 | ✅ |
 | T-FS-06 | Cancel upload | cancel mid-file → no partial file, no `.remotehub-part` | H PS | 1 | ✅ |
-| T-FS-07 | Download | file and folder download, hashes equal | H | 1 | ✅ |
+| T-FS-07 | Download | file and folder download, streamed: hashes equal, every item "SHA-256 verified", the 200 MB text "sent compressed", the 200 MB random file not; no `.remotehub-part` left; time in the evidence; a whole drive refused | H | 1 | ✅ |
 | T-FS-08 | Rename / delete / new folder | done remotely; drive root delete refused | H PS | 2 | ✅ |
 | T-FS-09 | Locked file | upload over a file opened exclusively → clear error, original untouched | H PS | 3 | ✅ |
 | T-FS-10 | Defender real-time on | large tree upload still verified (rename scanning) | H | 3 | ✅ |
+| T-FS-11 | Cancel download | cancel a 200 MB download after 20 MB → item `Cancelled`, no file and no `.remotehub-part` on this PC | H | 1 | ◐ |
+| T-FS-12 | Download: skip existing / overwrite | the 300 files again without overwrite → all skipped; with overwrite → a file changed on this PC is replaced | H | 2 | ◐ |
 | T-REG-01 | Browse | `HKLM\SOFTWARE`, all path spellings (`HKLM:\`, `Registry::`, `Computer\`) | H | 2 | ✅ |
 | T-REG-02 | Value types | create, read, modify, delete String, ExpandString (stays unexpanded), Multi, DWORD, QWORD, Binary; check with `reg query` | H PS | 2 | ✅ |
 | T-REG-03 | Key rename keeps ACL | rename a key with a custom ACL → ACL kept | H PS | 3 | ✅ |
