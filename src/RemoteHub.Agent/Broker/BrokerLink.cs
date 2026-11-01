@@ -37,6 +37,9 @@ internal sealed class BrokerLink(
     private readonly Func<DateTimeOffset> _now = clock ?? (() => DateTimeOffset.UtcNow);
     private readonly ConcurrentDictionary<string, long> _nonces = new();
     private readonly ConcurrentDictionary<string, Task> _sessions = new();
+    /// <summary>Whether the agent took a TCP port at service start (policy ListenEnabled); false: it offers no direct path.</summary>
+    internal bool Listening { get; init; } = true;
+
     private bool _register;
     private string? _lastProblem;
     private string? _connectedTo;
@@ -191,7 +194,7 @@ internal sealed class BrokerLink(
         _lastProblem = null;
         State = "connected";
 
-        var sent = Hello(p, config);
+        var sent = Hello(p, config, Listening);
         await Send(ws, sent, stop);
         using var alive = CancellationTokenSource.CreateLinkedTokenSource(stop);
         var addresses = HelloOnChangesAsync(ws, p, config, sent, alive.Token);
@@ -267,7 +270,7 @@ internal sealed class BrokerLink(
             // Settle: every further change within AddressSettle starts the wait again.
             while (await WaitChange(AddressSettle, ct)) { }
             if (ct.IsCancellationRequested) return;
-            var hello = Hello(p, config);
+            var hello = Hello(p, config, Listening);
             var now = hello["addresses"]?.ToJsonString();
             if (now == last) continue;
             await Send(ws, hello, ct);
@@ -430,26 +433,33 @@ internal sealed class BrokerLink(
     /// <summary>
     /// What the broker keeps about the device besides its sealed record: version, adapters (Wake-on-LAN), and the
     /// addresses and port a console tries before it uses the broker – <c>inbound</c> false when the agent's firewall rule
-    /// isn't there (MSI BROKER_ONLY=1), so a console doesn't wait for an answer that can't come.
+    /// isn't there (MSI BROKER_ONLY=1), so a console doesn't wait for an answer that can't come. An agent that doesn't
+    /// listen (<paramref name="listening"/> false, policy ListenEnabled = 0) names no addresses and no port either.
     /// </summary>
-    internal static JsonObject Hello(AgentPolicy p, AgentConfig config)
+    internal static JsonObject Hello(AgentPolicy p, AgentConfig config, bool listening = true)
     {
-        var hello = HelloFields(p, config);
+        var hello = HelloFields(p);
+        if (!listening)
+        {
+            hello["addresses"] = new JsonArray();
+            hello["inbound"] = false;
+            return hello;
+        }
+        // The addresses the direct path offers too – adapters with a gateway first, Hyper-V switches last.
+        hello["addresses"] = new JsonArray([.. PeerDirect.HostAddresses().Take(MaxAddresses).Select(a => JsonValue.Create(a.ToString()))]);
+        hello["inbound"] = Enrollment.HasFirewallRule();
         // Port 0 (any free port: tests) isn't a port the broker can pass on, and it refuses a hello that names one.
         if (config.ListenPort is >= 1 and <= 65535) hello["port"] = config.ListenPort;
         return hello;
     }
 
-    private static JsonObject HelloFields(AgentPolicy p, AgentConfig config) => new()
+    private static JsonObject HelloFields(AgentPolicy p) => new()
     {
         ["t"] = "hello",
         ["agentVersion"] = AgentHost.AgentVersion,
         ["os"] = Environment.OSVersion.VersionString,
         ["keepAlive"] = Math.Clamp(p.BrokerKeepAliveSeconds, BrokerProtocol.KeepAliveMin, BrokerProtocol.KeepAliveMax),
         ["macs"] = new JsonArray([.. Adapters().Take(16)]),
-        // The addresses the direct path offers too – adapters with a gateway first, Hyper-V switches last.
-        ["addresses"] = new JsonArray([.. PeerDirect.HostAddresses().Take(MaxAddresses).Select(a => JsonValue.Create(a.ToString()))]),
-        ["inbound"] = Enrollment.HasFirewallRule(),
     };
 
     /// <summary>MAC address, IPv4 address and prefix of each adapter that is up – for Wake-on-LAN later.</summary>

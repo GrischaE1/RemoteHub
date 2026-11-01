@@ -415,6 +415,7 @@ read, nothing is allowed (unchanged). **New** marks values the agent doesn't rea
 | `TunnelEnabled` | DWORD 0/1 | 1 | Use as a jump host. |
 | `BrokerEnabled` *(0.22.0)* | DWORD 0/1 | 1 | The RemoteHub Broker: no connection to it, no session through it. With it: `BrokerUrl` (the only broker), `BrokerConsoles` (the only consoles), `BrokerHttpProxy`, `BrokerKeepAliveSeconds` (30–90, 60), `BrokerDirect` (2 public and local addresses, 1 public only, 0 relayed only; 2), `BrokerStun` (name:port); category *RemoteHub Agent → RemoteHub Broker*. |
 | `TunnelOwnPorts` *(0.22.0)* | MULTI_SZ | `RDP` | Ports of the device itself a jump or broker session may open (`RDP` = its RDP port, or numbers). |
+| `ListenEnabled` *(0.22.0)* | DWORD 0/1 | 1 | Every connection over the network: the agent opens no TCP port and switches its firewall rule off (not deleted, so its scope stays), and is reachable only through the RemoteHub Broker. Read at service start, like `ListenPort`; a policy key that can't be read keeps the listener. Without a broker the device is then unreachable from the network. |
 | `AuditToEventLog` | DWORD 0/1 | 1 | Audit entries in the Windows Application log. |
 
 ### 9.2 Access rights (subkey `Rights`)

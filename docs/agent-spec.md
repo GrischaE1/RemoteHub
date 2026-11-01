@@ -286,6 +286,7 @@ The names, types and ranges are in `PolicyCatalog.cs`, which `policy\RemoteHub.a
 | `VirtualDisplay` | SZ | `auto`, `always`, `off` (agent.json) – since 0.18.12 |
 | `PrivacyScreenMessage` | SZ | heading of the privacy screen, at most 120 characters (built-in text) – since 0.18.12 |
 | `ListenPort` | DWORD | 1–65535, read at service start; the firewall rule moves with it (agent.json) – since 0.18.12 |
+| `ListenEnabled` | DWORD | 0: no TCP listener and the firewall rule switched off – reachable only through the RemoteHub Broker; read at service start (1) – since 0.22.0 |
 | `LogRetentionDays`, `MaxSessions` | DWORD | 1–3650 and 1–200 (agent.json) – since 0.18.12 |
 
 An invalid value is logged once per service run. `RemoteHubAgent.exe policy` prints every value with its source (policy,

@@ -22,7 +22,14 @@ namespace RemoteHub.Remoting;
 /// Automatic – the device's name and then every address its agent reported are tried before the broker
 /// (<see cref="Broker.DirectReach"/>), so in the same network it isn't used.
 /// </summary>
-public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null, Broker.BrokerRoute? Broker = null, bool DirectFirst = false);
+public sealed record AgentEndpoint(int Port, string Fingerprint, JumpRoute? Via = null, Broker.BrokerRoute? Broker = null, bool DirectFirst = false)
+{
+    /// <summary>
+    /// Reach Directly only for a device of a synced folder: its broker, asked before the try whether the device's agent
+    /// takes direct connections at all (policy ListenEnabled = 0 or BROKER_ONLY=1: refused with the reason, no wait).
+    /// </summary>
+    public Broker.BrokerRoute? DirectCheck { get; init; }
+}
 
 /// <summary>
 /// A PowerShell session through the RemoteHub Agent instead of WinRM. Everything above the transport – runspaces,
@@ -126,6 +133,9 @@ internal sealed class AgentClientTransport(Guid instanceId, AgentConnectionInfo 
             }
             catch (AgentTransportException) when (!ct.IsCancellationRequested) { Broker.DirectReach.Failed(e.Fingerprint, found); }
         }
+        if (info.Endpoint is { Broker: null, DirectCheck: { } check }
+            && Broker.DirectReach.TakesNoDirectAsync(check, ct).GetAwaiter().GetResult())
+            throw new PSRemotingTransportException(Broker.DirectReach.NoDirectMessage);
         var expected = AgentProtocol.NormalizeFingerprint(info.Endpoint.Fingerprint);
         if (expected.Length == 0) throw new PSRemotingTransportException("No device certificate fingerprint is stored for this connection's RemoteHub Agent.");
         string? seen = null;

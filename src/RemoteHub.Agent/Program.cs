@@ -46,11 +46,18 @@ try
     if (startPolicy.LoadError is null && startPolicy.ListenPort != config.ListenPort)
         log.Write($"Port {startPolicy.ListenPort} set by policy ListenPort (agent.json: {config.ListenPort})");
     if (startPolicy.LoadError is null) config.ListenPort = startPolicy.ListenPort; // not saved: without the policy agent.json's applies again
-    if (Enrollment.SetFirewallPort(config.ListenPort) is { } firewall) log.Write(firewall);
+    // Policy ListenEnabled = 0, also read only here: no TCP listener and the firewall rule switched off. A policy that
+    // can't be read keeps the listener (AgentPolicy.Refused), so a broken policy never cuts the device off.
+    var listen = startPolicy.ListenEnabled;
+    if (!listen)
+        log.Write("Listener off by policy (ListenEnabled = 0): the device is reachable only through the RemoteHub Broker" +
+                  (config.Broker is null ? " – and no broker is set up, so nothing can reach it from the network" : ""));
+    if (Enrollment.SetFirewallEnabled(listen) is { } switched) log.Write(switched);
+    if (listen && Enrollment.SetFirewallPort(config.ListenPort) is { } firewall) log.Write(firewall);
     // A port another program listens on, before the service reports running: Kestrel's bind (AgentHost) would refuse it
     // too, but only after Windows was told the service runs, so the MSI's start succeeded and the install with it
     // (A-INST-25). Ending here fails the service start, and the install rolls back.
-    if (AgentHost.PortInUse(config.ListenPort))
+    if (listen && AgentHost.PortInUse(config.ListenPort))
         throw new InvalidOperationException($"port {config.ListenPort} is in use by another program – the agent doesn't move to another port.");
     var certificate = FindCertificate(config.CertificateThumbprint);
 
@@ -72,13 +79,13 @@ try
     // Streams through the RemoteHub Broker reach the same HTTPS endpoint as the network does.
     var peers = new PeerTransport();
     var app = AgentHost.Build(new AgentHostOptions(config, certificate,
-        new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop) { Peers = peers }, []);
+        new WindowsAuthenticator(config.AllowedGroups), new WindowsShellLauncher(), log, Desktop: desktop) { Peers = peers, Listen = listen }, []);
     // The broker in agent.json is read again on every connect, so `broker join` and `broker leave` need no restart.
     Enrollment.DirectFirewall.CloseAll(); // direct paths a stopped agent had open
     var broker = new BrokerLink(() => config.SourcePath is { } source ? AgentConfig.Load(source) : config, certificate,
-        () => AgentPolicy.Load(config), log, peers, firewall: new Enrollment.DirectFirewall());
+        () => AgentPolicy.Load(config), log, peers, firewall: new Enrollment.DirectFirewall()) { Listening = listen };
     _ = Task.Run(() => broker.RunAsync(app.Lifetime.ApplicationStopping));
-    log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting on port {config.ListenPort} (device {config.DeviceId}, " +
+    log.Write($"RemoteHub Agent {AgentHost.AgentVersion} starting {(listen ? $"on port {config.ListenPort}" : "without a listener")} (device {config.DeviceId}, " +
               $"certificate {AgentProtocol.Fingerprint(certificate.RawData)})");
     if (SecureAttention.Ensure() is { } sas) log.Write(sas); // services may send Ctrl+Alt+Del (unless a policy says otherwise)
     // The virtual monitor is off until a connection needs it (a crash may have left it on) – in the background: the

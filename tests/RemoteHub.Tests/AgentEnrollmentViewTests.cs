@@ -44,6 +44,24 @@ public class AgentEnrollmentViewTests
     });
 
     [Fact]
+    public void The_install_dialog_says_when_the_devices_policy_decides_whether_the_agent_listens() => Sta.Run(owner =>
+    {
+        var c = new Connection { Name = "WKS-07", Host = "wks-07.contoso.test" };
+        var managed = Sta.Theme(new AgentInstallDialog(c, remotingAvailable: true, agentReachable: true, localAddress: null, managed: [RemoteHub.Agent.AgentManaged.Listen])
+            { Owner = owner, Left = -4000, WindowStartupLocation = WindowStartupLocation.Manual });
+        managed.Show();
+        Sta.Pump();
+        Assert.Contains(Texts(managed), t => t.Contains("The device's policy (ListenEnabled) decides whether the agent listens on the network at all."));
+        managed.Close();
+
+        var plain = Dialog(owner, c);
+        plain.Show();
+        Sta.Pump();
+        Assert.DoesNotContain(Texts(plain), t => t.Contains("ListenEnabled"));
+        plain.Close();
+    });
+
+    [Fact]
     public void The_settings_say_which_enrollment_secrets_are_accepted()
     {
         var keys = new AgentEnrollmentKeys();

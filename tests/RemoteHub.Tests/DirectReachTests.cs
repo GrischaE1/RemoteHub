@@ -1,6 +1,7 @@
 extern alias agent;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -107,6 +108,44 @@ public sealed class DirectReachTests : IDisposable
     }
 
     [Fact]
+    public async Task A_device_that_takes_no_direct_connections_ends_the_name_try_without_waiting_for_it()
+    {
+        DirectReach.NameWait = TimeSpan.FromSeconds(5);
+        DirectReach.NameHeadStart = TimeSpan.FromMilliseconds(50);
+        try
+        {
+            // Policy ListenEnabled = 0: the agent reports no addresses and inbound false.
+            var probes = new Probes();
+            var watch = Stopwatch.StartNew();
+            Assert.Null(await DirectReach.FindAsync(NewPin(), "pc-quiet.contoso.local", 58732,
+                _ => Task.FromResult<DeviceAddresses?>(Reported(DateTimeOffset.UtcNow, false, null)), probes.Probe, CancellationToken.None));
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(2), $"waited {watch.Elapsed} for a name that can't answer");
+            Assert.Equal(["pc-quiet.contoso.local"], probes.Hosts);
+
+            // A name that answers within the head start costs no broker request.
+            var answering = new Probes("pc-0815.contoso.local") { Delay = TimeSpan.FromMilliseconds(10) };
+            DirectReach.NameHeadStart = TimeSpan.FromMilliseconds(500);
+            var asked = 0;
+            Assert.NotNull(await DirectReach.FindAsync(NewPin(), "pc-0815.contoso.local", 58732,
+                _ => { Interlocked.Increment(ref asked); return Task.FromResult<DeviceAddresses?>(null); }, answering.Probe, CancellationToken.None));
+            await Task.Delay(700); // past the head start: a request that was only put off would have been made by now
+            Assert.Equal(0, asked);
+        }
+        finally { DirectReach.NameHeadStart = TimeSpan.FromMilliseconds(250); }
+    }
+
+    [Fact]
+    public async Task Reach_Directly_only_is_refused_for_a_device_whose_agent_doesnt_listen()
+    {
+        Assert.True(await DirectReach.TakesNoDirectAsync(_ => Task.FromResult<DeviceAddresses?>(Reported(DateTimeOffset.UtcNow, false, null)), CancellationToken.None));
+        Assert.False(await DirectReach.TakesNoDirectAsync(_ => Task.FromResult<DeviceAddresses?>(Reported(DateTimeOffset.UtcNow, true, 58732, "10.0.0.5")), CancellationToken.None));
+        Assert.False(await DirectReach.TakesNoDirectAsync(_ => Task.FromResult<DeviceAddresses?>(null), CancellationToken.None)); // an older broker
+        // The broker can't be asked now: the direct try shows what happens.
+        Assert.False(await DirectReach.TakesNoDirectAsync(_ => throw new BrokerException("not connected"), CancellationToken.None));
+        Assert.Contains("takes no direct connections", DirectReach.NoDirectMessage);
+    }
+
+    [Fact]
     public async Task What_answered_is_tried_first_next_time_and_what_didnt_isnt_tried_again_until_the_device_reports_new_addresses()
     {
         var pin = NewPin();
@@ -209,6 +248,17 @@ public sealed class DirectReachTests : IDisposable
         Assert.True(addresses.Count <= 16);
         Assert.All(addresses, a => Assert.False(A.PeerDirect.IsSpecial(a), $"{a} can't be another computer's way to the device"));
         Assert.All(addresses.Where(a => a.AddressFamily == AddressFamily.InterNetworkV6), a => Assert.Equal(0, a.ScopeId)); // no zone: useless on another computer
+    }
+
+    [Fact]
+    public void Hello_reports_inbound_false_and_no_addresses_when_the_listener_is_off()
+    {
+        var hello = A.BrokerLink.Hello(new A.AgentPolicy(), new A.AgentConfig { ListenPort = 58740 }, listening: false);
+        Assert.False(hello["inbound"]!.GetValue<bool>());
+        Assert.Empty(hello["addresses"]!.AsArray());
+        Assert.False(hello.ContainsKey("port"));
+        Assert.Equal("hello", hello["t"]!.GetValue<string>()); // the rest as always (version, adapters for Wake-on-LAN)
+        Assert.NotNull(hello["macs"]);
     }
 
     [Fact]

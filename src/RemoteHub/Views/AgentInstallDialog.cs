@@ -87,9 +87,11 @@ public sealed class AgentInstallDialog : FluentWindow
         var policyFirewall = (AppPolicy.AgentInstall("FirewallScope") as string)?.Replace(';', ','); // the policy may separate with ";"
         _label = Field("Device label", existing?.Label is { Length: > 0 } l ? l : c.Name, "Shown in the agent's log and the certificate.");
         _port = Field("Port", ((managed.Contains(AgentManaged.Port) ? null : policyPort) ?? existing?.Port ?? AgentProtocol.DefaultPort).ToString(),
-            managed.Contains(AgentManaged.Port)
-            ? "Set by the device's policy (ListenPort) – the agent listens on that port whatever is entered here."
-            : "TCP port the agent listens on (default 58732).");
+            (managed.Contains(AgentManaged.Port)
+                ? "Set by the device's policy (ListenPort) – the agent listens on that port whatever is entered here."
+                : "TCP port the agent listens on (default 58732).") +
+            // ListenEnabled = 0: no listener at all, the device is reached only through the RemoteHub Broker.
+            (managed.Contains(AgentManaged.Listen) ? " The device's policy (ListenEnabled) decides whether the agent listens on the network at all." : ""));
         _portByPolicy = managed.Contains(AgentManaged.Port) || policyPort is not null;
         if (_portByPolicy) PolicyLock.Apply(_port); // a setting the device or this PC's policy decides: greyed out, not hidden
         _groups = Field("Allowed accounts", policyGroups is { Length: > 0 } ? string.Join(", ", policyGroups) : "Administrators",

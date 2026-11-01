@@ -4,7 +4,8 @@
 # device's policy BrokerEnabled, broker leave and broker join with the secret on standard input (what Assign to
 # RemoteHub Broker runs), the direct path (QUIC on a punched port through the device firewall, relayed with the policy
 # BrokerDirect = 0 or with UDP blocked), the addresses the agent reports and RemoteHub trying them before the broker
-# path (B-BRK-09 to 11), a broker connection that silently stops carrying anything given up and made again (B-BRK-08),
+# path (B-BRK-09 to 11), the device policy ListenEnabled = 0 (no port, reached only through the broker, B-BRK-12), a
+# broker connection that silently stops carrying anything given up and made again (B-BRK-08),
 # and that the device secret is kept nowhere on the device (SEC-BRK).
 # Needs the lab's broker: "Broker" and "BrokerToken" in lab.local.json (docs/test-lab-spec.md); without them
 # every case is skipped with that reason. Each run makes its own organisation and deletes it again.
@@ -282,6 +283,59 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         $sw = [Diagnostics.Stopwatch]::StartNew()
         do { $now = @(Reported); if ($now -notcontains $extra) { break }; Start-Sleep -Seconds 3 } while ($sw.Elapsed.TotalSeconds -lt 60)
         $now | Should -Not -Contain $extra -Because 'an address the device no longer has is taken off'
+    }
+
+    It 'B-BRK-12 the device policy ListenEnabled = 0: no port, the firewall rule off, reached only through the broker; back with 1' -Tag 'B-BRK-12' {
+        if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
+        $script:device | Should -Not -BeNullOrEmpty -Because 'B-BRK-01 registered the device'
+        function Listener {
+            Invoke-LabGuest -Name $VmName -ScriptBlock {
+                $rule = Get-NetFirewallRule -DisplayName 'RemoteHub Agent' -ErrorAction SilentlyContinue
+                [pscustomobject]@{
+                    Listening = @(Get-NetTCPConnection -LocalPort 58732 -State Listen -ErrorAction SilentlyContinue).Count -gt 0
+                    Rule      = [bool]$rule
+                    Enabled   = if ($rule) { "$($rule.Enabled)" } else { '' }
+                }
+            }
+        }
+        function Restart-Agent {
+            Invoke-LabGuest -Name $VmName -ScriptBlock { Restart-Service RemoteHubAgent }
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
+        }
+        # the rule an install without BROKER_ONLY makes, so there is one to switch off
+        Invoke-LabGuest -Name $VmName -ScriptBlock {
+            $exe = Join-Path $env:ProgramFiles 'RemoteHub Agent\RemoteHubAgent.exe'
+            $null = New-NetFirewallRule -DisplayName 'RemoteHub Agent' -Direction Inbound -Protocol TCP -LocalPort 58732 -Program $exe -Action Allow
+        }
+        try {
+            Set-LabAgentPolicy -Name $VmName -Values @{ ListenEnabled = 0 }
+            Restart-Agent
+            $off = Listener
+            $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst
+            Save 'listen-off' ([pscustomobject]@{ Listener = $off; Path = $r.path; Inbound = $r.inbound; Addresses = @($r.addresses); Seconds = $r.seconds })
+            $off.Listening | Should -BeFalse -Because 'the agent opens no TCP port'
+            $off.Rule | Should -BeTrue -Because 'the rule is switched off, not deleted (its address scope stays)'
+            $off.Enabled | Should -Be 'False'
+            $r.health.deviceId | Should -Be $script:device.id -Because 'PowerShell, the desktop and the health answer through the broker'
+            $r.inbound | Should -BeFalse
+            @($r.addresses).Count | Should -Be 0 -Because 'an agent that does not listen names no addresses'
+            $r.path | Should -BeIn 'DirectLocal', 'Relayed' -Because 'nothing takes a direct connection, so the broker path'
+
+            Set-LabAgentPolicy -Name $VmName -Values @{ ListenEnabled = 1 }
+            Restart-Agent
+            $on = Listener
+            $back = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst
+            Save 'listen-on' ([pscustomobject]@{ Listener = $on; Path = $back.path; Inbound = $back.inbound })
+            $on.Listening | Should -BeTrue
+            $on.Enabled | Should -Be 'True' -Because 'the rule is switched on again'
+            $back.inbound | Should -BeTrue
+            $back.path | Should -Be 'Network' -Because 'the device answers at its own address again'
+        }
+        finally {
+            Set-LabAgentPolicy -Name $VmName -Clear
+            Invoke-LabGuest -Name $VmName -ScriptBlock { Get-NetFirewallRule -DisplayName 'RemoteHub Agent' -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
+            Restart-Agent
+        }
     }
 
     It 'B-BRK-03 the device policy BrokerEnabled = 0 takes it off the broker, and back when cleared' -Tag 'B-BRK-03' {

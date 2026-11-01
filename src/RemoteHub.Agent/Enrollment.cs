@@ -365,11 +365,45 @@ public static class Enrollment
         catch (Exception ex) { return $"Firewall: rule \"{FirewallRuleName}\" not moved to port {port}: {ex.Message}"; }
     }
 
-    /// <summary>Whether the agent's inbound rule is there – MSI BROKER_ONLY=1 leaves it out, so the device takes no direct connections.</summary>
+    /// <summary>
+    /// Whether the agent's inbound rule is there and switched on – MSI BROKER_ONLY=1 leaves it out and policy
+    /// ListenEnabled = 0 switches it off, so the device takes no direct connections.
+    /// </summary>
     public static bool HasFirewallRule()
     {
-        try { return Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true).Code == 0; }
+        try
+        {
+            var (code, rule) = Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true);
+            return code == 0 && RuleEnabled(rule) != false;
+        }
         catch (Exception ex) when (ex is IOException or System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+    }
+
+    /// <summary>
+    /// At service start, for policy ListenEnabled: switches the inbound rule off while the agent doesn't listen and on
+    /// again when it does. Switched, not deleted, so the address scope the enrollment gave it is still there; a device
+    /// installed without a rule (BROKER_ONLY=1) keeps having none. Null when nothing changed, else what happened.
+    /// </summary>
+    public static string? SetFirewallEnabled(bool enabled)
+    {
+        try
+        {
+            var (code, rule) = Run("netsh.exe", $"advfirewall firewall show rule name=\"{FirewallRuleName}\"", allowFailure: true);
+            if (code != 0 || RuleEnabled(rule) == enabled) return null;
+            Netsh($"advfirewall firewall set rule name=\"{FirewallRuleName}\" new enable={(enabled ? "yes" : "no")}");
+            return enabled ? $"Firewall: rule \"{FirewallRuleName}\" switched on again" : $"Firewall: rule \"{FirewallRuleName}\" switched off (ListenEnabled = 0)";
+        }
+        catch (Exception ex) { return $"Firewall: rule \"{FirewallRuleName}\" not switched {(enabled ? "on" : "off")}: {ex.Message}"; }
+    }
+
+    /// <summary>The "Enabled:" line of <c>netsh advfirewall firewall show rule</c>; null when there is none (other languages).</summary>
+    internal static bool? RuleEnabled(string netshOutput)
+    {
+        var values = netshOutput.Split('\n').Select(l => l.Trim())
+            .Where(l => l.StartsWith("Enabled:", StringComparison.OrdinalIgnoreCase))
+            .Select(l => l["Enabled:".Length..].Trim()).ToList();
+        if (values.Count == 0) return null;
+        return values.All(v => v.Equals("Yes", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>The "LocalPort:" lines of <c>netsh advfirewall firewall show rule</c> (English output; other languages: none found → set anyway).</summary>
