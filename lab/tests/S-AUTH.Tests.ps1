@@ -88,7 +88,7 @@ Describe 'S-AUTH <VmName>' -Tag Agent, Security, 'S-TLS', 'S-AUTH' {
         BeforeAll {
             $since = Get-LabGuestTime -Name $VmName
             $r = Ws $vm.AdminAccount $password @{ pin = ('0' * 64) }
-            Start-Sleep -Seconds 3
+            Start-Sleep -Seconds 3   # nothing may reach the Security log or the agent's log in this time
             $failed = Get-LabFailedLogon -Name $VmName -Since $since
             $log = @(Get-LabAgentLog -Name $VmName -Since $since)
             Save 'pin-mismatch' @{ Result = $r; Failed = $failed; Log = $log }
@@ -113,7 +113,12 @@ Describe 'S-AUTH <VmName>' -Tag Agent, Security, 'S-TLS', 'S-AUTH' {
             $user = Ws $vm.UserAccount $password
             # 1 wrong password + 1 standard user so far: the 6 malformed headers must not have counted
             $rightAfter = Ws $vm.AdminAccount $password
-            Start-Sleep -Seconds 3
+            # the refusals of the wrong password and the standard user reach the event logs a moment after the answers
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'event 2000 for both refusals and a 4625 did not arrive' -Until {
+                $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
+                @($e | Where-Object { $_.Message -match "Refused $([regex]::Escape($vm.AdminAccount)) " }).Count -gt 0 -and
+                @($e | Where-Object { $_.Message -match "Refused $([regex]::Escape($vm.UserAccount)) " }).Count -gt 0 -and
+                @(Get-LabFailedLogon -Name $VmName -Since $since -Account $vm.AdminAccount).Count -gt 0 }
             $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
             $failed = @(Get-LabFailedLogon -Name $VmName -Since $since -Account $vm.AdminAccount)
             Save 'refused' @{ Bad = $bad; None = $none; Malformed = $malformed; Plain = $plain; User = $user; RightAfter = $rightAfter; Events = $events; Failed = $failed }
@@ -188,7 +193,9 @@ Describe 'S-AUTH <VmName>' -Tag Agent, Security, 'S-TLS', 'S-AUTH' {
             }
             $since = Get-LabGuestTime -Name $VmName
             $after = [ordered]@{ deny = Ws 'rhdeny' $password; disabled = Ws 'rhdisabled' $password; expired = Ws 'rhexpired' $password; empty = Ws 'rhempty' '' }
-            Start-Sleep -Seconds 3
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'event 2000 for rhdeny, rhdisabled and rhexpired did not arrive' -Until {
+                $e = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
+                @(foreach ($a in 'rhdeny', 'rhdisabled', 'rhexpired') { if (@($e | Where-Object { $_.Message -match "Refused $a " }).Count -eq 0) { $a } }).Count -eq 0 }
             $events = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 2000)
             $log = @(Get-LabAgentLog -Name $VmName -Since $since)
 

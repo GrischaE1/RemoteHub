@@ -94,7 +94,8 @@ Describe 'POL-AGENT <VmName>' -Tag Agent, 'POL' {
                 Import-Module $mod
                 Invoke-LabAgentCommand -Name $name -Pin $pin -Script 'Start-Sleep -Seconds 25; $PID'
             }
-            Start-Sleep -Seconds 8
+            # the first session holds the one slot once it has started (event 1000)
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the first PowerShell session did not start (event 1000)' -Until { @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1000).Count -gt 0 }
             $r.second = AgentPs $pin
             $null = Receive-Job $job -Wait -AutoRemoveJob -ErrorAction SilentlyContinue
             $r.limitLog = @(Get-LabAgentLog -Name $VmName -Since $since | Where-Object { $_ -match 'session limit' })

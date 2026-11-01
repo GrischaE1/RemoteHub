@@ -5,7 +5,8 @@
     through the requests that Start-LabRun.ps1 / Invoke-AsLabop.ps1 drop there. Each request runs in its own
     PowerShell process, so changes to the lab code apply to the next request without restarting the watcher (changes
     to this file need a restart: Install-LabTask.ps1). A running request is stopped by creating LabRoot\queue\cancel
-    (Stop-LabRun.ps1), or after 12 h (tests) / 2 h (script).
+    (Stop-LabRun.ps1), or after 24 h (tests) / 2 h (script). A full run takes about 13 h (run 20261030-194701 was
+    stopped at 12 h with two files left).
 .PARAMETER Once
     Work through the queue once and exit instead of watching (for trying it by hand).
 #>
@@ -66,7 +67,7 @@ function Invoke-Request {
             if (@($Req.Vm | Where-Object { $_ }).Count -gt 0) { $arguments += " -Vm '$(@($Req.Vm) -join ',')'" }
             if (@($Req.Tag | Where-Object { $_ }).Count -gt 0) { $arguments += " -Tag '$(@($Req.Tag) -join ',')'" }
             $code = Invoke-Child -Script (Join-Path $labRoot 'lab\Invoke-LabTests.ps1') -Arguments $arguments `
-                -Log (Join-Path $runDir 'console.log') -TimeoutHours 12
+                -Log (Join-Path $runDir 'console.log') -TimeoutHours 24
             @{ ExitCode = $code } | ConvertTo-Json | Set-Content (Join-Path $runDir 'done.json') -Encoding UTF8
         }
         'script' {

@@ -51,7 +51,8 @@ public sealed class AgentDesktopView : Border, IRecordableView
     private readonly Button _keysButton;
     private readonly System.Windows.Threading.DispatcherTimer _resizeDebounce = new() { Interval = TimeSpan.FromMilliseconds(600) };
     private readonly Border _choosePanel = new(), _waitPanel = new(), _pinPanel = new(), _endPanel = new(), _securePanel = new(), _noticePanel = new(),
-        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new(), _transferPanel = new(), _dropPanel = new() { Visibility = Visibility.Collapsed };
+        _infoPanel = new(), _reconnectPanel = new(), _pausedPanel = new(), _transferPanel = new(), _dropPanel = new() { Visibility = Visibility.Collapsed },
+        _appClosedPanel = new(), _appClosingPanel = new();
     private readonly TextBlock _dropText = new() { TextWrapping = TextWrapping.Wrap, MaxWidth = 520, Foreground = Brushes.White };
     private readonly TextBlock _selfViewWarning = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0), Visibility = Visibility.Collapsed };
     private bool _showInfo, _keyCombinations = true;
@@ -138,7 +139,11 @@ public sealed class AgentDesktopView : Border, IRecordableView
         BuildReconnectPanel();
         BuildPausedPanel();
         BuildDropPanel();
-        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _transferPanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel, _dropPanel }) _content.Children.Add(p);
+        BuildAppClosedPanel(close);
+        BuildAppClosingPanel();
+        foreach (var p in new[] { _securePanel, _pausedPanel, _noticePanel, _transferPanel, _infoPanel, _reconnectPanel, _choosePanel, _waitPanel, _pinPanel, _endPanel, _dropPanel,
+                     _appClosedPanel, _appClosingPanel })
+            _content.Children.Add(p);
 
         // Files dragged onto the picture: saved on the device's Desktop (AgentDesktopSession.DropFiles). While dragging,
         // the panel says where they go – or why they can't.
@@ -196,7 +201,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
         var title = new TextBlock { FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         title.SetBinding(TextBlock.TextProperty, nameof(SessionBase.Title));
         left.Children.Add(title);
-        var sub = new TextBlock { Text = "  ·  Desktop  ·  " + _session.Connection.HostWithRoute, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
+        var sub = new TextBlock { Text = (_session.App is null ? "  ·  Desktop  ·  " : "  ·  App  ·  ") + _session.Connection.HostWithRoute, FontSize = 12, VerticalAlignment = VerticalAlignment.Center };
         sub.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorTertiaryBrush");
         left.Children.Add(sub);
         left.Children.Add(RemoteToolChrome.TransportBadge());
@@ -330,7 +335,10 @@ public sealed class AgentDesktopView : Border, IRecordableView
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         var connect = new Button { Content = "Connect", Appearance = ControlAppearance.Primary, Icon = new SymbolIcon(SymbolRegular.PlugConnected24), Margin = new Thickness(0, 0, 8, 0) };
         connect.Click += (_, _) => reconnect();
-        var rdp = new Button { Content = "Use RDP instead", Icon = new SymbolIcon(SymbolRegular.Desktop24), Margin = new Thickness(0, 0, 8, 0) };
+        // An app tab neither falls back to RDP nor shows the desktop's icon (§8.4).
+        if (_session.App is not null) icon.Symbol = SymbolRegular.Apps24;
+        var rdp = new Button { Content = "Use RDP instead", Icon = new SymbolIcon(SymbolRegular.Desktop24), Margin = new Thickness(0, 0, 8, 0),
+            Visibility = _session.App is null ? Visibility.Visible : Visibility.Collapsed };
         rdp.Click += (_, _) => useRdp();
         var closeBtn = new Button { Content = "Close tab", Icon = new SymbolIcon(SymbolRegular.Dismiss24) };
         closeBtn.Click += (_, _) => close();
@@ -339,6 +347,54 @@ public sealed class AgentDesktopView : Border, IRecordableView
         buttons.Children.Add(closeBtn);
         p.Children.Add(buttons);
         _endPanel.Child = Card(p, 560);
+    }
+
+    /// <summary>App tab: its app ended by itself (app-tabs-design §4.3) – start it again on the same monitor, or close the tab.</summary>
+    private void BuildAppClosedPanel(Action close)
+    {
+        var p = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center };
+        var icon = new SymbolIcon(SymbolRegular.Apps24) { FontSize = 44, Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = HorizontalAlignment.Center };
+        icon.SetBinding(Control.ForegroundProperty, nameof(SessionBase.AccentBrush));
+        p.Children.Add(icon);
+        var t = Status();
+        t.TextAlignment = TextAlignment.Center;
+        p.Children.Add(t);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        var again = new Button { Content = "Start again", Appearance = ControlAppearance.Primary, Icon = new SymbolIcon(SymbolRegular.ArrowRepeatAll24), Margin = new Thickness(0, 0, 8, 0) };
+        again.Click += (_, _) => _session.RestartApp();
+        var closeBtn = new Button { Content = "Close tab", Icon = new SymbolIcon(SymbolRegular.Dismiss24) };
+        closeBtn.Click += (_, _) => close();
+        buttons.Children.Add(again);
+        buttons.Children.Add(closeBtn);
+        p.Children.Add(buttons);
+        _appClosedPanel.Child = Card(p, 560);
+    }
+
+    /// <summary>
+    /// App tab closed while its app asks something first ("Save changes?"): a card at the bottom, like the transfer panel,
+    /// so the app's question above stays visible and can be answered in the tab – or the app is left running.
+    /// </summary>
+    private void BuildAppClosingPanel()
+    {
+        var p = new StackPanel { Width = 360 };
+        var title = new TextBlock { FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) };
+        title.SetBinding(TextBlock.TextProperty, nameof(SessionBase.StatusText));
+        p.Children.Add(title);
+        p.Children.Add(new TextBlock
+        {
+            Text = "Answer it above and the tab closes with the app – or leave the app running on the device. Cancelled it? Keep the tab.", FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            Foreground = new SolidColorBrush(Color.FromRgb(0xC8, 0xCC, 0xD4)), Margin = new Thickness(0, 0, 0, 10),
+        });
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal };
+        var leave = new Button { Content = "Leave it running", Icon = new SymbolIcon(SymbolRegular.Open24), Margin = new Thickness(0, 0, 8, 0) };
+        leave.Click += (_, _) => _session.CloseApp(leaveRunning: true);
+        var keep = new Button { Content = "Keep the tab" };
+        keep.Click += (_, _) => _session.KeepTab();
+        buttons.Children.Add(leave);
+        buttons.Children.Add(keep);
+        p.Children.Add(buttons);
+        _appClosingPanel.Child = new Border { Child = p, Background = new SolidColorBrush(Color.FromArgb(0xD8, 0x18, 0x1C, 0x24)), Padding = new Thickness(16, 12, 12, 12),
+            CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, 0, 16) };
     }
 
     private void BuildSecurePanel()
@@ -644,10 +700,15 @@ public sealed class AgentDesktopView : Border, IRecordableView
         UpdateAutoSignIn();
     }
 
-    /// <summary>Offered for the console's sign-in screen when the device allows it for this account; not in view-only.</summary>
+    /// <summary>
+    /// Offered for the console's sign-in screen, and for the admin's own locked session there, when the device allows it
+    /// for this account; not in view-only.
+    /// </summary>
     private void UpdateAutoSignIn()
     {
         var offered = ChosenSession is { } s && _session.CanAutoSignIn(s);
+        if (offered && _session.Hello is { } hello)
+            _autoSignIn.Content = ChosenSession!.State == DesktopSessionState.Locked ? $"Unlock automatically as {hello.Account}" : $"Sign in automatically as {hello.Account}";
         _autoSignIn.Visibility = offered ? Visibility.Visible : Visibility.Collapsed;
         _autoSignIn.IsEnabled = _viewOnly.IsChecked != true;
     }
@@ -754,6 +815,7 @@ public sealed class AgentDesktopView : Border, IRecordableView
             case nameof(AgentDesktopSession.SecureDesktopHidden):
             case nameof(AgentDesktopSession.Notice):
             case nameof(AgentDesktopSession.TransferActive):
+            case nameof(AgentDesktopSession.ClosingApp):
             case nameof(AgentDesktopSession.ViewOnly):
             case nameof(AgentDesktopSession.PinAttemptsLeft):
                 Refresh();
@@ -795,15 +857,22 @@ public sealed class AgentDesktopView : Border, IRecordableView
         _pausedPanel.Visibility = V(phase == DesktopPhase.Live && (_session.Paused.Length > 0 || _session.HiddenByUser));
         UpdatePausedPanel();
         var live = phase == DesktopPhase.Live;
+        _appClosedPanel.Visibility = V(phase == DesktopPhase.AppClosed);
+        _appClosingPanel.Visibility = V(live && _session.ClosingApp);
         _infoPanel.Visibility = V(live && _showInfo);
-        _monitors.Visibility = _quality.Visibility = _infoButton.Visibility = V(live);
-        _cad.Visibility = _winKey.Visibility = _fit.Visibility = _keysButton.Visibility = V(live && !_session.ViewOnly);
+        // An app tab shows only its app: no monitor to switch to, no resolution to choose (the tab sets it), no Windows key
+        // or Ctrl+Alt+Del (dropped there anyway) and no privacy screen (the device covers its own screens) – §8.4.
+        var desktop = _session.App is null;
+        _monitors.Visibility = V(live && desktop);
+        _quality.Visibility = _infoButton.Visibility = V(live);
+        _cad.Visibility = _winKey.Visibility = _fit.Visibility = V(live && !_session.ViewOnly && desktop);
+        _keysButton.Visibility = V(live && !_session.ViewOnly);
         // The user at the device hid their screen: nothing typed or sent from here gets through until they show it again.
         var hidden = _session.HiddenByUser;
         _cad.IsEnabled = _winKey.IsEnabled = !hidden; // the keys toggle is this PC's setting: it stays usable
         _cad.ToolTip = hidden ? "Not while the user at the device hides their screen" : "Send Ctrl+Alt+Del";
         _winKey.ToolTip = hidden ? "Not while the user at the device hides their screen" : "Press the Windows key (Start menu)";
-        _privacy.Visibility = V(live && !_session.ViewOnly && _session.CanUsePrivacyScreen);
+        _privacy.Visibility = V(live && !_session.ViewOnly && _session.CanUsePrivacyScreen && desktop);
         var screenOn = _session.Privacy.Screen != DesktopPrivacyStyle.Off;
         _privacy.Appearance = screenOn ? ControlAppearance.Primary : ControlAppearance.Secondary;
         var withMessage = _session.Privacy.Screen == DesktopPrivacyStyle.Message;
@@ -876,12 +945,21 @@ public sealed class AgentDesktopView : Border, IRecordableView
         Canvas.SetTop(_cursorOverlay, _session.CursorPosition.Y - _session.CursorHotspot.Y);
     }
 
-    /// <summary>The picture area in device pixels, so a fitted resolution is shown 1:1 (sharp).</summary>
+    /// <summary>The picture area in device pixels, so a fitted resolution is shown 1:1 (sharp), and this monitor's scale.</summary>
     private void ReportSize()
     {
         if (_content.ActualWidth < 1 || PresentationSource.FromVisual(_content) is not { CompositionTarget: { } target }) return;
         var m = target.TransformToDevice;
-        _session.WindowSizeChanged((int)Math.Round(_content.ActualWidth * m.M11), (int)Math.Round(_content.ActualHeight * m.M22));
+        _session.WindowSizeChanged((int)Math.Round(_content.ActualWidth * m.M11), (int)Math.Round(_content.ActualHeight * m.M22), (int)Math.Round(m.M11 * 100));
+    }
+
+    /// <summary>Moved to a monitor with another scale: the size in pixels and the scale both change.</summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+        UpdatePictureScale();
+        _resizeDebounce.Stop();
+        _resizeDebounce.Start();
     }
 
     /// <summary>

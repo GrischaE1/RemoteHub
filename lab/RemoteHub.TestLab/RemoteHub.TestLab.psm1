@@ -109,7 +109,8 @@ function Test-LabVmReady {
 # What a scenario file needs, from its header (see Invoke-LabTests.ps1): its role, whether it uses other VMs (LabNeeds:
 # lane - found by itself when it calls Get-LabDevice) and of which kinds, the jump host, its time limit, whether a
 # quick run still takes it on every kind (LabQuick: every kind), and whether it runs only after every other file of its
-# kind (LabNeeds: last - D-ZAUDIT reads what the others left).
+# kind (LabNeeds: last - D-ZAUDIT reads what the others left), and whether it runs only when asked for by tag (LabRuns:
+# on request - a spike).
 function Get-LabFileNeeds {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$File, [int]$DefaultLimitMin = 60)
@@ -129,6 +130,7 @@ function Get-LabFileNeeds {
         Limit     = $limit
         EveryKind = $head -match '(?m)^#\s*LabQuick:\s*every kind'
         Last      = $head -match '(?m)^#\s*LabNeeds:.*\blast\b'
+        OnRequest = $head -match '(?m)^#\s*LabRuns:\s*on request'
     }
 }
 
@@ -1316,6 +1318,7 @@ function Send-LabText {
             & $flush
             Start-Sleep -Milliseconds $wait
         }
+        # input pacing: 50 ms between Shift, the key and their release, so the guest sees them in order
         Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = 0x10 }) "${Name}: press Shift"
         try {
             Start-Sleep -Milliseconds 50
@@ -1361,6 +1364,7 @@ function Send-LabMouse {
     $mouse = Get-LabMouse $Name
     Assert-CimResult (Invoke-CimMethod -InputObject $mouse -MethodName SetAbsolutePosition -Arguments @{ HorizontalPosition = [int32]$X; VerticalPosition = [int32]$Y }) "${Name}: mouse position"
     if ($Action -eq 'Move') { return }
+    # input pacing: the guest sees the pointer at its new place before the button, and each press as down then up
     Start-Sleep -Milliseconds 150
     # Msvm_SyntheticMouse buttons: 1 left, 2 right, 3 middle
     $button = switch ($Action) { 'Right' { 2 } 'Middle' { 3 } default { 1 } }
@@ -1383,6 +1387,7 @@ function Send-LabKeyCombo {
             Assert-CimResult (Invoke-CimMethod -InputObject $kb -MethodName PressKey -Arguments @{ keyCode = $c }) "${Name}: press $c"
             $down.Add($c)
         }
+        # input pacing: the combination held a moment, as a hand would
         Start-Sleep -Milliseconds 100
     }
     catch {
@@ -1457,7 +1462,7 @@ function Set-LabAutoLogon {
     }
     Disable-LabIdleLock -Name $Name
     Restart-LabVm -Name $Name -TimeoutSec $TimeoutSec
-    Wait-LabDesktop -Name $Name -Account $user -TimeoutSec $TimeoutSec
+    Wait-LabDesktop -Name $Name -Account $Account -TimeoutSec $TimeoutSec
 }
 
 function Clear-LabAutoLogon {
@@ -1566,7 +1571,21 @@ function Invoke-LabInSession {
                                 $cpu = if ($p -and $null -ne $p.CPU) { [int]$p.CPU } else { '?' }
                                 "$($_.Name)#$($_.ProcessId) s$($_.SessionId) $([int]($now - $_.CreationDate).TotalSeconds)s old cpu ${cpu}s$(if ($_.CommandLine -like "*$enc*") { ' (this task)' })"
                             }) -join ', ')
-                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' }); processes: $procs"
+                    # the task's own PowerShell, when it started: what its threads wait on and the last modules it
+                    # loaded - tells a start stuck in .NET or AMSI from code that waits (run 20261030-110319: lane 2's
+                    # Server, PSAdmin's RDP session, PowerShell started and used 1 s of CPU in 90 s)
+                    $inside = ''
+                    $mine = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$enc*" }) | Select-Object -First 1
+                    if ($mine) {
+                        $p = Get-Process -Id $mine.ProcessId -ErrorAction SilentlyContinue
+                        if ($p) {
+                            $waits = (@($p.Threads | Group-Object { if ("$($_.ThreadState)" -eq 'Wait') { "Wait/$($_.WaitReason)" } else { "$($_.ThreadState)" } } |
+                                    ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+                            $mods = try { (@($p.Modules | Select-Object -Last 8 | ForEach-Object ModuleName) -join ',') } catch { 'n/a' }
+                            $inside = "; its PowerShell: threads $waits; last modules $mods"
+                        }
+                    }
+                    "task $st, last run $($ti.LastRunTime), last result 0x$('{0:X8}' -f $ti.LastTaskResult); sessions: $sessions; LogonUI in session(s): $(if ($logonUi) { $logonUi } else { 'none' })$inside; processes: $procs"
                 }
                 catch { "no task details: $($_.Exception.Message)" }
                 throw "no result from the session task after $timeout s (is $u signed in?) - $why"
@@ -1810,8 +1829,17 @@ function Invoke-LabPerson {
             return $found
         }
         $w = @($found | Where-Object { $_.Title -like $Title -or $_.Title -like "RemoteHub*$Title" }) | Select-Object -First 1
-        if ($w) { Send-LabMouse -Name $Name -X ($w.X + [int]($w.Width / 2)) -Y ($w.Y + [int]($w.Height / 2)) -Action Move; Start-Sleep -Seconds 2 }
-        return [pscustomobject]@{ before = $w; after = @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title) | Select-Object -First 1 }
+        if (-not $w) { return [pscustomobject]@{ before = $null; after = $null } }
+        Send-LabMouse -Name $Name -X ($w.X + [int]($w.Width / 2)) -Y ($w.Y + [int]($w.Height / 2)) -Action Move
+        # until the window has changed its size (the pill opens to the banner); an open banner stays as it is, so a
+        # timeout here is no failure - then the window as it is
+        $read = { @(Invoke-LabPerson -Name $Name -Do windows -Account $Account | Where-Object Title -eq $w.Title) | Select-Object -First 1 }
+        $after = Wait-LabCondition -NoThrow -TimeoutSec 4 -IntervalMs 300 -Because 'the window did not change its size under the pointer' -Until {
+            $a = & $read
+            if ($a -and ($a.Width -ne $w.Width -or $a.Height -ne $w.Height)) { $a }
+        }
+        if (-not $after) { $after = & $read }
+        return [pscustomobject]@{ before = $w; after = $after }
     }
     if ($Do -eq 'locate') { $Do = 'click'; $Value = 'locate' }
     $answer = "C:\ProgramData\RemoteHubLab\session\person-$([guid]::NewGuid().ToString('N').Substring(0, 8)).json"
@@ -2207,6 +2235,137 @@ function Copy-LabPerson {
     }
 }
 
+# The lab's test app for app tabs (guest\RhLabApp.cs): compiled in the guest to C:\ProgramData\RemoteHubLab\RhLabApp.exe
+# (again only when the source changed). -StartMenu also puts the D-APP shortcuts in the common Start menu - one of each
+# kind the agent's list must take or skip (docs/app-tabs-design.md section 6.5). Returns the exe's path.
+function Install-LabTestApp {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [switch]$StartMenu)
+    $src = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\guest\RhLabApp.cs'))
+    # a plain string: the remoting result carries PSComputerName, which ConvertTo-Json would turn into an object
+    [string](Invoke-LabGuest -Name $Name -ArgumentList $src, $StartMenu.IsPresent -ScriptBlock {
+        param($text, $menu)
+        $d = 'C:\ProgramData\RemoteHubLab'
+        $null = New-Item -ItemType Directory -Path "$d\session" -Force
+        icacls "$d\session" /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+        $exe = "$d\RhLabApp.exe"
+        if (-not (Test-Path "$d\RhLabApp.cs") -or [IO.File]::ReadAllText("$d\RhLabApp.cs") -ne $text -or -not (Test-Path $exe)) {
+            Remove-Item $exe -Force -ErrorAction SilentlyContinue
+            Add-Type -TypeDefinition $text -OutputAssembly $exe -OutputType WindowsApplication -ReferencedAssemblies System.Windows.Forms, System.Drawing
+            [IO.File]::WriteAllText("$d\RhLabApp.cs", $text)
+        }
+        if ($menu) {
+            $programs = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
+            $shell = New-Object -ComObject WScript.Shell
+            function Link([string]$Path, [string]$Target, [string]$Arguments = '', [switch]$RunAs) {
+                $null = New-Item -ItemType Directory -Path (Split-Path $Path) -Force
+                $l = $shell.CreateShortcut($Path); $l.TargetPath = $Target; $l.Arguments = $Arguments; $l.WorkingDirectory = $d; $l.Save()
+                if ($RunAs) {
+                    # SLDF_RUNAS_USER (0x2000) in the shell link header's LinkFlags (offset 0x14): WScript.Shell can't set it
+                    $b = [IO.File]::ReadAllBytes($Path); $b[0x15] = $b[0x15] -bor 0x20; [IO.File]::WriteAllBytes($Path, $b)
+                }
+            }
+            Set-Content "$d\readme.txt" 'RH Lab document' -Encoding ASCII
+            Link "$programs\RH Lab App.lnk" $exe '/colour:255,0,0 /title:RH-Lab-App'
+            Link "$programs\RH Lab App Copy.lnk" $exe '/colour:255,0,0 /title:RH-Lab-App'                 # a duplicate: listed once
+            Link "$programs\RH Lab Admin.lnk" $exe '/colour:0,255,0 /title:RH-Lab-Admin' -RunAs          # Run as administrator
+            Link "$programs\RH Lab\RH Lab Tool.lnk" $exe '/colour:0,0,255 /title:RH-Lab-Tool'              # in a group
+            Link "$programs\RH Lab Doc.lnk" "$d\readme.txt"                                                # a document: skipped
+            Link "$programs\RH Lab Missing.lnk" "$d\missing.exe"                                           # no target: skipped
+            Set-Content "$programs\RH Lab Web.url" "[InternetShortcut]`r`nURL=https://example.invalid/" -Encoding ASCII  # skipped
+            # a junction in the Start menu: what is behind it must not be listed
+            $null = New-Item -ItemType Directory -Path "$d\junction-target" -Force
+            Link "$d\junction-target\RH Lab Behind Junction.lnk" $exe '/colour:255,255,0'
+            if (-not (Test-Path "$programs\RH Lab Junction")) { cmd /c mklink /J "$programs\RH Lab Junction" "$d\junction-target" | Out-Null }
+        }
+        $exe
+    })
+}
+
+# The test app's log (RhLabApp /log:<file>): one object per line - e (started, activated, text, closing, asked, closed),
+# at, and pid / elevated / title / text / answer where the event has them. Empty when there is no log yet.
+function Get-LabTestAppLog {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Path)
+    Invoke-LabGuest -Name $Name -ArgumentList $Path -ScriptBlock {
+        param($f) @(Get-Content $f -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+    }
+}
+
+# The account's session as Windows lays it out: monitors (device, bounds, primary, dpi - 96 at 100 %), the visible
+# top-level windows in z-order (pid, class, title, bounds, the monitor their centre is on), the foreground window, the
+# taskbars on other monitors (Shell_SecondaryTrayWnd), and the account's scale per monitor as Windows keeps it
+# (PerMonitorSettings: name=DpiValue). Bounds in pixels, as a per-monitor aware program sees them. -Pids narrows the
+# windows to those processes.
+function Get-LabScreenLayout {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [string]$Account = 'Console', [int[]]$Pids = @())
+    Invoke-LabInSessionJson -Name $Name -Account $Account -Data @{ pids = @($Pids) } -Code @'
+if (-not ('RhLabLayout' -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class RhLabLayout {
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct MONITORINFOEX { public int Size; public RECT Monitor, Work; public uint Flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Device; }
+    public delegate bool MonitorProc(IntPtr m, IntPtr dc, ref RECT r, IntPtr data);
+    public delegate bool WindowProc(IntPtr h, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorProc proc, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfo(IntPtr m, ref MONITORINFOEX info);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(WindowProc proc, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsZoomed(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+    [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr m, int type, out uint x, out uint y);
+    // per-monitor aware (v2): pixels and each monitor's own dpi, not what Windows shows an unaware program
+    static void Aware() { SetThreadDpiAwarenessContext(new IntPtr(-4)); }
+    public static List<object[]> Monitors() {
+        Aware();
+        var list = new List<object[]>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr m, IntPtr dc, ref RECT r, IntPtr d) {
+            var i = new MONITORINFOEX(); i.Size = Marshal.SizeOf(typeof(MONITORINFOEX)); GetMonitorInfo(m, ref i);
+            uint dx, dy; if (GetDpiForMonitor(m, 0 /* MDT_EFFECTIVE_DPI */, out dx, out dy) != 0) dx = 0;
+            list.Add(new object[] { i.Device, i.Monitor.L, i.Monitor.T, i.Monitor.R, i.Monitor.B, (i.Flags & 1) != 0, (int)dx }); return true; }, IntPtr.Zero);
+        return list;
+    }
+    public static List<object[]> Windows() {
+        Aware();
+        var list = new List<object[]>();
+        EnumWindows(delegate(IntPtr h, IntPtr d) {
+            if (!IsWindowVisible(h)) return true;
+            RECT r; GetWindowRect(h, out r); uint pid; GetWindowThreadProcessId(h, out pid);
+            var c = new StringBuilder(256); GetClassName(h, c, 256); var t = new StringBuilder(256); GetWindowText(h, t, 256);
+            list.Add(new object[] { h.ToInt64(), (int)pid, c.ToString(), t.ToString(), r.L, r.T, r.R, r.B, IsIconic(h), IsZoomed(h) }); return true; }, IntPtr.Zero);
+        return list;
+    }
+}
+"@
+}
+$monitors = @([RhLabLayout]::Monitors() | ForEach-Object { [pscustomobject]@{ device = $_[0]; left = $_[1]; top = $_[2]; right = $_[3]; bottom = $_[4]; primary = $_[5]; dpi = $_[6] } })
+function On($x, $y) { foreach ($m in $monitors) { if ($x -ge $m.left -and $x -lt $m.right -and $y -ge $m.top -and $y -lt $m.bottom) { return $m.device } }; '' }
+$pids = @($A.pids)
+$all = @([RhLabLayout]::Windows())
+$windows = @($all | Where-Object { $pids.Count -eq 0 -or $pids -contains $_[1] } | ForEach-Object {
+    [pscustomobject]@{ hwnd = $_[0]; pid = $_[1]; class = $_[2]; title = $_[3]; left = $_[4]; top = $_[5]; right = $_[6]; bottom = $_[7]
+        minimized = $_[8]; maximized = $_[9]; monitor = (On ([int](($_[4] + $_[6]) / 2)) ([int](($_[5] + $_[7]) / 2))) } })
+[pscustomobject]@{
+    monitors   = $monitors
+    windows    = $windows
+    foreground = [RhLabLayout]::GetForegroundWindow().ToInt64()
+    trays      = @($all | Where-Object { $_[2] -eq 'Shell_SecondaryTrayWnd' }).Count
+    perMonitor = @(Get-ChildItem 'HKCU:\Control Panel\Desktop\PerMonitorSettings' -ErrorAction SilentlyContinue | ForEach-Object { "$($_.PSChildName)=$($_.GetValue('DpiValue'))" })
+}
+'@
+}
+
 # One person action through RhPerson -Do serve in the account's session (started when it isn't running): the script
 # updated if it changed, the request written, the answer waited for - one PowerShell Direct call instead of a scheduled
 # task and a new PowerShell per action. "RHLAB-NOSERVER|<why>" when the server didn't come up (the caller then runs the
@@ -2298,7 +2457,6 @@ function Invoke-LabPersonServer {
                 if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) { $ended = $true; break }
             }
             if (Test-Path $req.out) {
-                Start-Sleep -Milliseconds 50
                 # the renamed answer can still be held for a moment (lab run 20261019-193627, C-REC: "being used by
                 # another process" - a scanner opening the new file): read again for up to 5 s
                 $answer = $null
@@ -2686,6 +2844,7 @@ function Disconnect-LabConsole {
             "explorer in: $(@(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" | ForEach-Object SessionId) -join ', ')"
         throw "the console didn't reach the sign-in screen ($state)"
     }
+    # LogonUI loading its credential providers shows nowhere outside it (and not every build has RemoteHub's): a pause
     Start-Sleep -Seconds 5
 }
 
@@ -2791,6 +2950,32 @@ function Wait-LabHostFile {
         if ((Get-Date) -gt $until) { throw "No $Path after $TimeoutSec s." }
         Start-Sleep -Milliseconds 500
     }
+}
+
+# Waits until -Until answers something true (not $null, $false, 0, '' or an empty list) and returns that answer - the
+# condition a fixed Start-Sleep margin only hoped for. An error inside -Until counts as "not yet". After -TimeoutSec it
+# throws "Timed out after N s: <Because>", or with -NoThrow returns the last answer (so a test can assert on it with its
+# own message). -Because says what didn't happen, e.g. "the RDP tab didn't close".
+function Wait-LabCondition {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][scriptblock]$Until,
+        [Parameter(Mandatory)][string]$Because,
+        [int]$TimeoutSec = 30,
+        [int]$IntervalMs = 500,
+        [switch]$NoThrow
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $last = $null
+    $lastError = $null
+    while ($true) {
+        try { $last = & $Until; $lastError = $null } catch { $last = $null; $lastError = "$_" }
+        if ($last) { return $last }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds $IntervalMs
+    }
+    if ($NoThrow) { return $last }
+    throw "Timed out after $TimeoutSec s: $Because$(if ($lastError) { " (last error: $lastError)" })"
 }
 
 # How alike two pictures are (0..1): both scaled to 64x36 grey, 1 - mean absolute difference. A decoded frame and a
@@ -3475,7 +3660,9 @@ function Get-LabHostDiagLog {
     foreach ($line in @($files | ForEach-Object { Get-Content $_ -Encoding UTF8 })) {
         # a line without a date (the rest of a message with a line break) goes with the line before it
         if ($line -match '^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)') { $keep = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', $null) -ge $Since.AddSeconds(-1) }
-        if ($keep) { $line }
+        # a plain string: Get-Content's lines carry PSProvider and the rest, and ConvertTo-Json -Depth 10 of one never
+        # finished (S-SSH-07 on Server hit the 60 min limit in every run since 20261030-004321)
+        if ($keep) { "$line" }
     }
 }
 
@@ -3807,6 +3994,10 @@ function Wait-LabCredentialDialog {
     $titles = 'Windows Security', 'Credential Dialog Xaml Host'
     $until = (Get-Date).AddSeconds($TimeoutSec)
     do {
+        # by window class first, as RemoteHub itself finds it: in run 20261030-194701 (R-RDP-04) the dialog was on the
+        # screen for the whole minute while neither UI Automation check below saw it
+        $c = try { Invoke-LabPerson -Name $Name -Account $Account -Do windows -Value 'Credential Dialog Xaml Host' -TimeoutSec 10 } catch { $null }
+        if (@($c | Where-Object { $_ -and $_.PSObject.Properties['Handle'] }).Count -gt 0) { return $true }
         $l = Invoke-LabUi -Name $Name -Account $Account -Text '*' -Value list -Optional -TimeoutSec 5
         $items = if ($l -and $l.PSObject.Properties['items']) { @($l.items) } else { @() }
         if (@($items | Where-Object { "$_" -match '^Window\|(Windows Security|Credential Dialog Xaml Host)\|' }).Count -gt 0) { return $true }
@@ -3871,7 +4062,12 @@ function Start-LabMockServer {
         }
         $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$root\RhMockServer.ps1`" -Root `"$root`""
         $null = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
-        Start-Sleep -Seconds 3
+        # until its listener has registered https://+:443/ with http.sys (then requests reach it); at most 20 s
+        $until = (Get-Date).AddSeconds(20)
+        do {
+            if ((@(netsh.exe http show servicestate view=requestq) -join "`n") -match 'https://\+:443/') { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $until)
     }
     if ($Files) { Copy-LabFile -Name $Name -Path $Files -Destination 'C:\ProgramData\RemoteHubLab\mock\download' }
 }

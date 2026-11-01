@@ -63,15 +63,21 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
 
         It 'SMOKE-07 locks and unlocks like a person' -Tag 'SMOKE-07' {
             Lock-LabSession -Name $VmName
-            Start-Sleep -Seconds 3   # the lock screen takes a moment to appear
-            # LogonUI in the user's own session (another session may sit at a lock screen anyway)
+            # LogonUI in the user's own session (another session may sit at a lock screen anyway); the lock screen takes a
+            # moment to appear
             Invoke-LabGuest -Name $VmName -ArgumentList $vm.UserAccount -ScriptBlock {
                 param($u)
                 $sessions = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" |
                         Where-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User -eq $u } |
                         ForEach-Object SessionId)
-                [bool](Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $sessions -contains $_.SessionId })
-            } | Should -BeTrue
+                $until = (Get-Date).AddSeconds(15)
+                do {
+                    $locked = [bool](Get-Process LogonUI -ErrorAction SilentlyContinue | Where-Object { $sessions -contains $_.SessionId })
+                    if ($locked) { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
+                $locked
+            } | Should -BeTrue -Because 'LogonUI should run in the user''s session within 15 s of locking it'
             Get-LabScreenshot -Name $VmName -Path (Join-Path $EvidenceDir 'smoke-locked.png') | Out-Null
             Unlock-LabSession -Name $VmName
         }
@@ -157,13 +163,22 @@ Describe 'SMOKE <VmName>' -Tag Smoke {
             'timeout'
         }
         if ("$ready" -notmatch 'ready') { throw "Notepad with smoke-typed.txt didn't come to the front within 60 s" }
+        # lets Notepad take the keyboard focus after coming to the front, so the first keys aren't lost
         Start-Sleep -Milliseconds 500
         Send-LabText -Name $VmName -Text $text
         $typed = Invoke-LabInSession -Name $VmName -ScriptBlock {
             $wsh = New-Object -ComObject WScript.Shell
+            # a pause for the window to take the focus before the keys go to it
             $null = $wsh.AppActivate('Notepad'); Start-Sleep -Milliseconds 500
-            $wsh.SendKeys('^s'); Start-Sleep -Seconds 2
-            Get-Content 'C:\ProgramData\RemoteHubLab\session\smoke-typed.txt' -Raw
+            $wsh.SendKeys('^s')
+            # the file was created empty: it has the text once Notepad has saved it
+            $until = (Get-Date).AddSeconds(15)
+            do {
+                $saved = Get-Content 'C:\ProgramData\RemoteHubLab\session\smoke-typed.txt' -Raw -ErrorAction SilentlyContinue
+                if ("$saved".Trim()) { break }
+                Start-Sleep -Milliseconds 250
+            } while ((Get-Date) -lt $until)
+            $saved
         }
         Stop-LabInSession -Name $VmName -Task $task
         Clear-LabAutoLogon -Name $VmName

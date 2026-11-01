@@ -45,6 +45,7 @@ BeforeAll {
         $bad = { param($m) -not $m.found -or ($m.PSObject.Properties['error'] -and $m.error) }
         $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
         if ((& $bad $m) -and $m.found -and $m.PSObject.Properties['entries'] -and @($m.entries).Count -eq 0) {
+            # a pause before the second right-click: the menu that didn't open shows nothing to wait for
             Start-Sleep -Seconds 2
             $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
         }
@@ -61,7 +62,12 @@ BeforeAll {
             foreach ($t in $Titles) {
                 $m = Ui '*' -Title $t -Value list -Optional -TimeoutSec 2
                 if ($m.found) {
-                    if ($Button) { $null = Ui $Button -Title ([WildcardPattern]::Escape($m.window)) -TimeoutSec 10; Start-Sleep -Milliseconds 1500 }
+                    if ($Button) {
+                        $w = [WildcardPattern]::Escape($m.window)
+                        $null = Ui $Button -Title $w -TimeoutSec 10
+                        # the box gone before the next step looks for the next one (a box of the same kind matches too)
+                        $null = Wait-LabCondition -Until { -not (Ui '*' -Title $w -Value exists -Optional -TimeoutSec 1).found } -Because "the box '$($m.window)' did not close after '$Button'" -TimeoutSec 15
+                    }
                     return "$($m.window)`n$(@($m.items) -join "`n")"
                 }
             }
@@ -81,6 +87,7 @@ BeforeAll {
             $R["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $R["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # two Escapes, apart, close a menu and then a dialog left open
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
             # a recording the failed step started is stopped and saved: else the next case finds "Stop recording" where it
             # wants "Record this tab" (C-REC-08's recording ran on into C-REC-09)
@@ -137,7 +144,9 @@ BeforeAll {
         $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
             param($user)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            # its files are locked until the process has gone
+            $until = (Get-Date).AddSeconds(15)
+            do { if (-not (Get-Process RemoteHub -ErrorAction SilentlyContinue)) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
             $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
                 "C:\Users\$user\Videos\RemoteHub", 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
             foreach ($p in $paths) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
@@ -150,7 +159,7 @@ BeforeAll {
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
         & $Do
         $null = Ui 'Save' -Title 'Edit connection'
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } -Because "'Edit connection' did not close after Save" -TimeoutSec 15
     }
     # The share recshare under Device (Tools > Add network share...), added when it isn't there yet: C-REC-08 needs it
     # too, and a rerun filtered to C-REC-08 skipped the context that adds it (the run of 17.10.2026 05:47: "'recshare'
@@ -162,14 +171,13 @@ BeforeAll {
         $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:recshare' -TimeoutSec 30
         $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhrec'
         $null = Ui 'Add' -Title 'Add network share to Device'
-        Start-Sleep -Seconds 3
+        $null = Wait-LabCondition -Until { -not (Ui '*' -Title 'Add network share to Device' -Value exists -Optional -TimeoutSec 1).found } -Because "'Add network share to Device' did not close after Add" -TimeoutSec 15
     }
     # Double-clicks recshare in the tree. Not found there (a new item isn't always scrolled into view, its parent may be
     # collapsed): searched for in the search box, opened from the result, the search cleared again.
     function Open-RecShare {
         if ((Ui 'recshare' -Value exists -Optional -TimeoutSec 10).found) { $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20; return }
         $null = Ui 'SearchBox' -Value 'set:recshare'
-        Start-Sleep -Seconds 2
         try { $null = Ui 'recshare' -Value doubleclick -TimeoutSec 20 }
         finally { $null = Ui 'SearchBox' -Value 'set:' -Optional -TimeoutSec 5 }
     }
@@ -324,8 +332,8 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 Add-RecShare
                 Open-RecShare
                 $r7.tab = Ui 'Upload selected files' -Value exists -Optional -TimeoutSec 60
-                Start-Sleep -Seconds 3
                 StartRecording $r7 'share'
+                # the length of the recording
                 Start-Sleep -Seconds 8
                 StopRecording
                 $r7.saved = Box $savedBox -Button 'Close'
@@ -354,6 +362,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 Menu 'Connect'
                 $r8.connected = Wait-RdpTab 90
                 StartRecording $r8 'hidden'
+                # the visible part at the start of the video (its frame at 1 s is read)
                 Start-Sleep -Seconds 4
                 # another tab of the connection in front: the recorded one isn't visible. The hidden period is taken on
                 # the video's own clock, from when the share tab's toolbar is found: a clock started after "Record" and
@@ -362,11 +371,13 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 Open-RecShare
                 $r8.shareTab = (Ui 'Upload selected files' -Value exists -Optional -TimeoutSec 60).found
                 $hiddenAt = GuestNow; $r8.hiddenAt = $hiddenAt.ToString('HH:mm:ss.fff')
+                # the length of the hidden period whose frames are read
                 Start-Sleep -Seconds 10
                 # ends at the latest when Connect is clicked: the guest's time before it
                 $shownAt = GuestNow; $r8.shownAt = $shownAt.ToString('HH:mm:ss.fff')
                 # the RDP tab in front again (Connect selects the open one)
                 Menu 'Connect'
+                # the recorded tab in front again for a while before the recording ends
                 Start-Sleep -Seconds 4
                 StopRecording
                 $null = Box $savedBox -Button 'Close'
@@ -409,6 +420,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 Menu 'Connect'
                 $r9.connected = Wait-RdpTab 60
                 StartRecording $r9 'exit'
+                # the length of the recording (the test wants at least 8 s in the file)
                 Start-Sleep -Seconds 10
                 $null = InSession $VmName Console $code.closeMain
                 # sessions and a recording: "... tab(s) are being recorded. Disconnect and exit? Recordings are saved."
@@ -451,6 +463,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 Menu 'Connect'
                 $r10.connected = Wait-RdpTab 90
                 StartRecording $r10 'saved'
+                # the length of the recording
                 Start-Sleep -Seconds 5
                 StopRecording
                 $r10.box = Box $savedBox
@@ -465,6 +478,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
             Step $r10 play {
                 $windowsBefore = @(TopWindows)
                 StartRecording $r10 'play'
+                # the length of the recording
                 Start-Sleep -Seconds 4
                 StopRecording
                 $r10.playFile = NewestVideo
@@ -480,12 +494,14 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
             }
             Step $r10 delete {
                 StartRecording $r10 'delete'
+                # the length of the recording
                 Start-Sleep -Seconds 4
                 StopRecording
                 $r10.deleteFile = NewestVideo
                 $null = Box $savedBox -Button 'Delete recording*'
                 $r10.deleteAsk = Box @('Delete *', 'Delete recording') -Button 'Delete'
-                Start-Sleep -Seconds 3
+                # the file moved to the Recycle Bin; the count is asserted below
+                $null = Wait-LabCondition -Until { @(Videos | Where-Object Name -eq $r10.deleteFile.Name).Count -eq 0 } -Because 'the deleted recording did not leave Videos\RemoteHub' -TimeoutSec 15 -NoThrow
                 $r10.deleteLeft = @(Videos | Where-Object Name -eq $r10.deleteFile.Name).Count
                 $r10.recycled = @(InSession $VmName Console $code.recycled)
             }
@@ -523,12 +539,16 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                 # box can take the focus
                 $null = Ui 'SearchBox' -Value realclick
                 $null = Ui 'SearchBox' -Value 'set:Rec11'
+                # the hits follow the text after a moment; Enter before that opens nothing
                 Start-Sleep -Milliseconds 500
                 $null = Ui 'SearchBox' -Value 'keys:{ENTER}'
+                # Enter handled before the search is cleared (clearing it drops the hit)
                 Start-Sleep -Seconds 1
                 $null = Ui 'SearchBox' -Value 'set:'
-                Start-Sleep -Seconds 5
+                # the RDP tab open (the earlier tabs were all closed, so its button is the new tab's)
+                $null = Ui 'Record this tab to a video file' -Value exists -TimeoutSec 30
                 StartRecording $r11 'first'
+                # the length of the recording
                 Start-Sleep -Seconds 3
                 StopRecording
                 $null = Box $savedBox -Button 'Close'
@@ -544,6 +564,7 @@ Describe 'C-REC2 <VmName>' -Tag Client, UI, 'C-REC' -Skip:(-not $isClient -or $i
                     $n
                 }
                 StartRecording $r11 'second'
+                # the length of the recording
                 Start-Sleep -Seconds 3
                 StopRecording
                 $null = Box $savedBox -Button 'Close'

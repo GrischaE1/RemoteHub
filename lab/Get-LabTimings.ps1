@@ -11,10 +11,12 @@
 [CmdletBinding()]
 param(
     [string]$Run,
-    [string]$Root = (Join-Path (Split-Path $PSScriptRoot) 'artifacts\lab'),
+    [string]$Root,
     [int]$Top = 10
 )
 $ErrorActionPreference = 'Stop'
+# not a parameter default: under powershell.exe -File, 5.1 leaves $PSScriptRoot empty there
+if (-not $Root) { $Root = Join-Path (Split-Path $PSScriptRoot) 'artifacts\lab' }
 if (-not $Run) {
     $Run = Get-ChildItem $Root -Directory | Where-Object Name -match '^\d{8}-\d{6}$' | Sort-Object Name -Descending |
         Select-Object -First 1 -ExpandProperty Name

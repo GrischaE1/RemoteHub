@@ -30,7 +30,9 @@ Describe 'P-SES2 <VmName>' -Tag Agent, 'P-SES', 'P-CLM' {
             # one raw 17 MiB message (RemoteHub sends 1 MiB fragments, so only a raw probe can)
             $since = Get-LabGuestTime -Name $VmName
             $tooBig = Invoke-LabProbe -Name $VmName -Kind big -Params @{ pin = $pin; user = $vm.AdminAccount; password = (Get-LabConfig).Password; mb = 17 }
-            Start-Sleep -Seconds 2
+            $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'event 1001 "Message too large" was not written' -Until {
+                @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1001 | Where-Object { $_.Message -match 'Message too large' }).Count -gt 0
+            }
             $tooBigEvents = @(Get-LabAgentEvent -Name $VmName -Since $since -Id 1001)
             $health = Get-LabAgentHealth -Name $VmName -Pin $pin
             $after = Invoke-LabTool -Name $VmName -Op ps -Pin $pin -Params @{ script = '$PID' }

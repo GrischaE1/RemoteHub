@@ -36,7 +36,7 @@ public class NoteMarkdownTests
         var t = new Thread(() => { try { result = f(); } catch (Exception ex) { error = ex; } });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the STA part");
         if (error is not null) throw new Exception("On the STA thread: " + error.Message, error);
         return result;
     }

@@ -61,6 +61,10 @@ internal static class SelfTest
         }
 
         Report("Windows PowerShell 5.1 present", File.Exists(ShellCommand.PowerShellExe), ShellCommand.PowerShellExe);
+        // A missing msquic.dll is a broken install; an older Windows without QUIC only means sessions through the broker stay relayed.
+        Report("QUIC for the direct path through the RemoteHub Broker (msquic.dll next to the agent)",
+            File.Exists(Path.Combine(AppContext.BaseDirectory, "msquic.dll")),
+            PeerDirect.Supported ? "supported" : "not supported on this Windows version – sessions through the broker stay relayed");
         await app.StopAsync();
         Console.WriteLine(ok ? "Self-test passed." : "Self-test FAILED.");
         return ok ? 0 : 1;

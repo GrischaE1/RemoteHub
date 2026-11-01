@@ -523,7 +523,18 @@ public sealed partial class MainViewModel : ObservableObject
 
     public RdpSession? FindSession(Connection c) => Sessions.OfType<RdpSession>().FirstOrDefault(s => s.Connection == c);
 
-    public AgentDesktopSession? FindAgentDesktop(Connection c) => Sessions.OfType<AgentDesktopSession>().FirstOrDefault(s => s.Connection == c);
+    public AgentDesktopSession? FindAgentDesktop(Connection c) => Sessions.OfType<AgentDesktopSession>().FirstOrDefault(s => s.Connection == c && s.App is null);
+
+    /// <summary>The open app tab of <paramref name="c"/> with this app (program and arguments), if any.</summary>
+    public AgentDesktopSession? FindAgentApp(Connection c, ConnectionApp app) =>
+        Sessions.OfType<AgentDesktopSession>().FirstOrDefault(s => s.Connection == c && s.App is { } open && open.SameApp(app));
+
+    public AgentDesktopSession OpenAgentApp(Connection c, ConnectionApp app)
+    {
+        var s = new AgentDesktopSession(c, app);
+        Register(s);
+        return s;
+    }
 
     public AgentDesktopSession OpenAgentDesktop(Connection c)
     {

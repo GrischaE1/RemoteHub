@@ -169,6 +169,40 @@ internal static class VirtualDisplay
 
     public static Lease NewLease() => new();
 
+    /// <summary>
+    /// One app tab's monitor (<see cref="NewAppLease"/>, app-tabs-design §5): a place in the row of the driver's monitors,
+    /// 1 to <see cref="MaxMonitors"/> − 1 – place 0 is the monitor desktop connections use. Kept by place, not by
+    /// device name: every change of the count re-creates all the driver's monitors under new names.
+    /// </summary>
+    public sealed class AppLease
+    {
+        internal int Place;
+        internal bool Ended;
+    }
+
+    public static AppLease NewAppLease() => new();
+
+    /// <summary>An app tab's monitor: its place in the row and the size it runs at (a listed size that fits the tab).</summary>
+    public sealed record AppMonitor(int Place, int Width, int Height);
+
+    /// <summary>The most monitors the driver runs at once (8 in the spike, app-tabs-design §5.1); app tabs get all but place 0.</summary>
+    public const int MaxMonitors = 8;
+
+    /// <summary>
+    /// The monitor count for app tabs up to <paramref name="place"/>: in steps of 4 (place 0 and three app tabs, then
+    /// 8), so opening a tab changes the count – and with it every open tab's monitor – rarely.
+    /// </summary>
+    internal static int MonitorsFor(int place) => place < 4 ? 4 : MaxMonitors;
+
+    /// <summary>Sizes every app layout offers besides the tabs' own: a tab whose size isn't listed takes the largest that fits.</summary>
+    internal static readonly (int W, int H)[] AppSizes =
+        [(1920, 1080), (1680, 1050), (1600, 900), (1440, 900), (1366, 768), (1280, 1024), (1280, 800), (1280, 720), (1024, 768), (800, 600)];
+
+    /// <summary>The largest of <paramref name="listed"/> that fits <paramref name="width"/> × <paramref name="height"/>, else the smallest.</summary>
+    internal static (int W, int H) Fit(IReadOnlyList<(int W, int H)> listed, int width, int height) =>
+        listed.Count == 0 ? (width, height) : listed.Where(s => s.W <= width && s.H <= height).OrderByDescending(s => (long)s.W * s.H).Select(s => ((int, int)?)s).FirstOrDefault()
+        ?? listed.OrderBy(s => (long)s.W * s.H).First();
+
     /// <summary>The switch for this device: the virtual display the agent installed.</summary>
     private static readonly Switch Default = new(new WindowsDevice(), () => Load()?.InstanceId,
         id => { if (Load() is { } s) Save(s with { InstanceId = id }); }, WriteSettings, Thread.Sleep);
@@ -188,6 +222,22 @@ internal static class VirtualDisplay
     public static string? Hide(Lease lease, Action<string>? progress = null) => Default.Hide(lease, progress);
 
     /// <summary>
+    /// Gives the app tab that holds <paramref name="lease"/> a monitor of its own (switching the virtual display on if
+    /// needed), or fits its monitor to a new tab size. At most <paramref name="maxTabs"/> app tabs (policy
+    /// <c>MaxAppTabs</c>, no more than <see cref="MaxMonitors"/> − 1). Null when the tab has its monitor
+    /// (<paramref name="monitor"/>), else why not; <paramref name="note"/>: what had to be repaired (for the log).
+    /// </summary>
+    public static string? Open(AppLease lease, int width, int height, int maxTabs, out AppMonitor? monitor, out string? note) =>
+        Default.Open(lease, width, height, maxTabs, out monitor, out note);
+
+    /// <summary>
+    /// The app tab that holds <paramref name="lease"/> ended: its place becomes a spare. With the last app tab the
+    /// spares go too (the display goes back to what desktop connections need, or off). The line for the log, null when
+    /// the tab had no monitor.
+    /// </summary>
+    public static string? Close(AppLease lease, Action<string>? progress = null) => Default.Close(lease, progress);
+
+    /// <summary>
     /// Service start: switched off (a crash may have left it on) – in the background, so the service reports running
     /// at once: Windows gives a starting service 30 s, and pnputil can take long or hang for a device in use (Server
     /// 2025, 0.18.18: the service never came up). The lines for the log go to <paramref name="log"/>.
@@ -195,16 +245,32 @@ internal static class VirtualDisplay
     public static Task ResetInBackground(Action<string> log) => Default.ResetInBackground(log);
 
     /// <summary>
-    /// Counts the connections the virtual monitor is on for and switches it on and off. Two locks: the count (held only
-    /// for a moment, so a connection's end is never held up by another one's device step) and the device (one pnputil
-    /// call, driver pipe or re-create at a time). The order is always device, then count.
+    /// Counts the connections and app tabs the virtual display is on for, switches it on and off and sets the driver's
+    /// monitor count. Two locks: the count (held only for a moment, so a connection's end is never held up by another
+    /// one's device step) and the device (one pnputil call, driver pipe or re-create at a time). The order is always
+    /// device, then count.
+    /// <para>
+    /// Desktop connections share the first monitor (place 0), at the last window size asked for. App tabs each hold a
+    /// place of their own after it (app-tabs-design §5): the count grows in steps (<see cref="MonitorsFor"/>) and only
+    /// shrinks when the last app tab ends, because every change re-creates all the driver's monitors. While app tabs
+    /// are open, no new sizes are added to the driver's list (that needs a reload too): a tab or window takes the
+    /// largest listed size that fits it, and its own size is listed at the next change of the count.
+    /// </para>
     /// </summary>
-    internal sealed class Switch(IDevice device, Func<string?> instance, Action<string> saveInstance, Action<int, int> writeSettings, Action<int> wait)
+    internal sealed class Switch(IDevice device, Func<string?> instance, Action<string> saveInstance, Action<int, IReadOnlyList<(int W, int H)>> writeSettings, Action<int> wait)
     {
         private readonly object _count = new();
         private readonly object _device = new();
         private int _shownBy, _offGeneration;
         private (int W, int H) _size;
+        /// <summary>The app tabs that hold a place, and the size each asked for. Changed under the count lock.</summary>
+        private readonly Dictionary<AppLease, (int W, int H)> _apps = [];
+        /// <summary>
+        /// What the driver was last given: its monitor count and its sizes. Written under the device lock; the count is
+        /// set to 0 (off) when a switch-off starts, under the count lock.
+        /// </summary>
+        private int _monitors;
+        private IReadOnlyList<(int W, int H)> _listed = [];
 
         /// <inheritdoc cref="VirtualDisplay.Show(Lease, int, int, out string?)"/>
         public string? Show(Lease lease, int width, int height, out string? note)
@@ -214,27 +280,37 @@ internal static class VirtualDisplay
             lock (_device)
             {
                 string? id;
-                bool first;
+                bool first, apps;
                 (int W, int H) size;
                 lock (_count)
                 {
                     if (lease.Ended) return "the connection has ended";
                     if ((id = instance()) is null) return "the virtual display isn't installed";
                     if (_shownBy > 0 && _size == (width, height)) { Count(lease); return null; }
-                    first = _shownBy == 0;
+                    first = _shownBy == 0 && _apps.Count == 0;
+                    apps = _apps.Count > 0;
                     size = _size;
                 }
                 try
                 {
-                    writeSettings(width, height);
-                    if (first)
+                    if (apps)
                     {
+                        // App tabs have their monitors: a reload would re-create them all. The window gets a listed size.
+                        var fit = Fit(_listed, width, height);
+                        if (fit != (width, height)) note = $"the virtual monitor runs at {fit.W}×{fit.H} while app tabs are open";
+                        (width, height) = fit;
+                    }
+                    else if (first)
+                    {
+                        Write(1, DesktopSizes(width, height));
                         var on = SwitchOn(device, id);
                         note = on.Recovered;
                         // Hide, the service start and Remove act on the device that exists now.
                         if (on.InstanceId != id) saveInstance(id = on.InstanceId);
                     }
                     else
+                    {
+                        Write(1, DesktopSizes(width, height));
                         // On for another connection already: this one counts even if the driver doesn't take the new size –
                         // else the other's end would switch it off under this one (0.18.19: the pipe timed out).
                         try { device.Reload(); }
@@ -243,6 +319,7 @@ internal static class VirtualDisplay
                             note = $"the virtual monitor kept its size {size.W}×{size.H}: {ex.Message}";
                             (width, height) = size;
                         }
+                    }
                 }
                 catch (Exception ex) { return ex.Message; }
 
@@ -256,8 +333,8 @@ internal static class VirtualDisplay
                         return null;
                     }
                     // The connection ended while its monitor was switched on: off again, unless another one has it on.
-                    if (_shownBy > 0) return "the connection ended meanwhile";
-                    generation = ++_offGeneration;
+                    if (_shownBy > 0 || _apps.Count > 0) return "the connection ended meanwhile";
+                    generation = Off();
                 }
                 var off = SwitchOff(device, id, wait, removeIfStuck: true, () => StillOff(generation), _device);
                 note = note is null ? off : note + "; " + off;
@@ -277,12 +354,162 @@ internal static class VirtualDisplay
                 lease.Counted = false;
                 _shownBy = Math.Max(0, _shownBy - 1);
                 if (_shownBy > 0) return $"Virtual display stays on for {_shownBy} other connection(s)";
-                generation = ++_offGeneration;
+                if (_apps.Count > 0) return $"Virtual display stays on for {_apps.Count} app tab(s)";
+                generation = Off();
                 id = instance();
             }
             if (id is null) return "Virtual display not switched off: it isn't installed any more";
             try { return SwitchOff(device, id, wait, removeIfStuck: true, () => StillOff(generation), _device, progress); }
             catch (Exception ex) { return $"Virtual display not switched off: {ex.Message}"; }
+        }
+
+        /// <inheritdoc cref="VirtualDisplay.Open(AppLease, int, int, int, out AppMonitor?, out string?)"/>
+        public string? Open(AppLease lease, int width, int height, int maxTabs, out AppMonitor? monitor, out string? note)
+        {
+            monitor = null;
+            note = null;
+            (width, height) = Normalize(width, height);
+            maxTabs = Math.Clamp(maxTabs, 0, MaxMonitors - 1);
+            lock (_device)
+            {
+                string? id;
+                bool on;
+                int place;
+                Dictionary<AppLease, (int W, int H)> sizes;
+                (int W, int H)? desktop;
+                lock (_count)
+                {
+                    if (lease.Ended) return "the tab has ended";
+                    if ((id = instance()) is null) return "the virtual display isn't installed";
+                    place = lease.Place;
+                    if (place == 0)
+                    {
+                        if (_apps.Count >= maxTabs) return $"{_apps.Count} app tabs are open already – at most {maxTabs}";
+                        place = Enumerable.Range(1, MaxMonitors - 1).First(p => _apps.Keys.All(a => a.Place != p));
+                    }
+                    on = _shownBy > 0 || _apps.Count > 0;
+                    sizes = new(_apps) { [lease] = (width, height) };
+                    desktop = _shownBy > 0 ? _size : null;
+                }
+                try
+                {
+                    var count = Math.Max(_monitors, MonitorsFor(place));
+                    if (!on || count != _monitors)
+                    {
+                        // The tabs' own sizes first (the desktop connections' window, if any, before them), then the common ones.
+                        List<(int W, int H)> listed = [.. desktop is { } d ? [d] : Array.Empty<(int W, int H)>(), .. sizes.Values, .. AppSizes];
+                        Write(count, listed);
+                        if (!on)
+                        {
+                            var started = SwitchOn(device, id);
+                            note = started.Recovered;
+                            if (started.InstanceId != id) saveInstance(id = started.InstanceId);
+                        }
+                        else
+                        {
+                            device.Reload();
+                            note = AfterReload(id);
+                        }
+                    }
+                }
+                catch (Exception ex) { return ex.Message; }
+
+                var fit = Fit(_listed, width, height);
+                int generation;
+                lock (_count)
+                {
+                    if (!lease.Ended)
+                    {
+                        lease.Place = place;
+                        _apps[lease] = (width, height);
+                        monitor = new AppMonitor(place, fit.W, fit.H);
+                        return null;
+                    }
+                    if (_shownBy > 0 || _apps.Count > 0) return "the tab ended meanwhile";
+                    generation = Off();
+                }
+                var off = SwitchOff(device, id, wait, removeIfStuck: true, () => StillOff(generation), _device);
+                note = note is null ? off : note + "; " + off;
+                return "the tab ended while the virtual display was switched on";
+            }
+        }
+
+        /// <inheritdoc cref="VirtualDisplay.Close(AppLease, Action{string}?)"/>
+        public string? Close(AppLease lease, Action<string>? progress = null)
+        {
+            int generation;
+            string? id;
+            (int W, int H) size;
+            int connections;
+            lock (_count)
+            {
+                lease.Ended = true;
+                if (!_apps.Remove(lease)) return null;
+                if (_apps.Count > 0) return $"Virtual display: place {lease.Place} is a spare now; {_apps.Count} app tab(s) still open";
+                id = instance();
+                generation = _shownBy == 0 ? Off() : -1;
+            }
+            if (id is null) return "Virtual display not switched off: it isn't installed any more";
+            if (generation < 0)
+            {
+                // Desktop connections still use the first monitor: back to that one alone, at their window's size.
+                lock (_device)
+                {
+                    lock (_count)
+                    {
+                        if (_apps.Count > 0 || _shownBy == 0) return "Virtual display: the app monitors stay (changed meanwhile)";
+                        connections = _shownBy;
+                        size = _size;
+                    }
+                    try
+                    {
+                        Write(1, DesktopSizes(size.W, size.H));
+                        device.Reload();
+                        return $"Virtual display: the app monitors are off, the first monitor stays for {connections} connection(s){(AfterReload(id) is { } n ? $" ({n})" : "")}";
+                    }
+                    catch (Exception ex) { return $"Virtual display: the app monitors weren't switched off ({ex.Message})"; }
+                }
+            }
+            try { return SwitchOff(device, id, wait, removeIfStuck: true, () => StillOff(generation), _device, progress); }
+            catch (Exception ex) { return $"Virtual display not switched off: {ex.Message}"; }
+        }
+
+        /// <summary>The desktop connections' sizes: the window's first, then a few common ones.</summary>
+        private static List<(int W, int H)> DesktopSizes(int width, int height) => [(width, height), (1920, 1080), (1600, 900), (1280, 720), (1024, 768)];
+
+        /// <summary>Writes the driver's settings and remembers them (device lock).</summary>
+        private void Write(int count, IReadOnlyList<(int W, int H)> sizes)
+        {
+            var listed = sizes.Distinct().ToList();
+            writeSettings(count, listed);
+            _monitors = count;
+            _listed = listed;
+        }
+
+        /// <summary>How long the driver gets to settle after a reload before its device is checked.</summary>
+        internal const int ReloadSettleMs = 2000;
+
+        /// <summary>
+        /// After a reload: a reload with monitors in modes of their own can leave the device failed (problem 43,
+        /// app-tabs-design §5.1); a restart brings it back with the modes kept. Null when it is fine, else what was
+        /// repaired; throws when the restart didn't help (device lock).
+        /// </summary>
+        private string? AfterReload(string id)
+        {
+            wait(ReloadSettleMs);
+            if (device.On(id)) return null;
+            var was = device.Describe(id);
+            var exit = device.Restart(id, out var said);
+            wait(ReloadSettleMs);
+            if (device.On(id)) return $"the virtual display failed after a reload ({was}) and was restarted";
+            throw new InvalidOperationException($"The virtual display stopped working ({was}); restarting it didn't help ({(exit == 0 ? device.Describe(id) : Failed(exit, said))}).");
+        }
+
+        /// <summary>Nothing holds the display any more: a switch-off starts (count lock). Its generation.</summary>
+        private int Off()
+        {
+            _monitors = 0;
+            return ++_offGeneration;
         }
 
         /// <inheritdoc cref="VirtualDisplay.ResetInBackground(Action{string})"/>
@@ -294,9 +521,9 @@ internal static class VirtualDisplay
                 string? id;
                 lock (_count)
                 {
-                    // A connection that came first switched it on and needs it: its end switches it off.
-                    if (_shownBy > 0) return;
-                    generation = ++_offGeneration;
+                    // A connection or app tab that came first switched it on and needs it: its end switches it off.
+                    if (_shownBy > 0 || _apps.Count > 0) return;
+                    generation = Off();
                     id = instance();
                 }
                 // Not removed here: with no connection to wait for, a device that won't switch off is left for the next start.
@@ -311,7 +538,8 @@ internal static class VirtualDisplay
             lock (_count)
             {
                 _shownBy = 0;
-                _offGeneration++;
+                _apps.Clear();
+                Off();
             }
         }
 
@@ -322,10 +550,10 @@ internal static class VirtualDisplay
             _shownBy++;
         }
 
-        /// <summary>The switch-off started as <paramref name="generation"/> is still wanted: no connection has it on, no later one began.</summary>
+        /// <summary>The switch-off started as <paramref name="generation"/> is still wanted: no connection or app tab has it on, no later one began.</summary>
         private bool StillOff(int generation)
         {
-            lock (_count) return _shownBy == 0 && _offGeneration == generation;
+            lock (_count) return _shownBy == 0 && _apps.Count == 0 && _offGeneration == generation;
         }
     }
 
@@ -355,6 +583,8 @@ internal static class VirtualDisplay
         string Create();
         /// <summary>The running driver re-reads its settings.</summary>
         void Reload();
+        /// <summary>Restarts the device, also one that failed (problem 43); pnputil's exit code, <paramref name="said"/>: why it failed.</summary>
+        int Restart(string instance, out string said);
     }
 
     /// <summary>The device's instance ID once it is on (a new one when it had to be created again), and what was repaired.</summary>
@@ -435,6 +665,15 @@ internal static class VirtualDisplay
         }
 
         public void Reload() => VirtualDisplay.Reload();
+
+        public int Restart(string instance, out string said)
+        {
+            var exit = Pnputil(["/restart-device", instance], out said);
+            if (exit == 0 && On(instance)) return 0;
+            // Not supported (older Windows) or still failed: switched off and on, as pnputil /restart-device does.
+            Pnputil(["/disable-device", instance], out _);
+            return Pnputil(["/enable-device", instance], out said);
+        }
     }
 
     private static void Save(State state)
@@ -524,36 +763,41 @@ internal static class VirtualDisplay
     }
 
     /// <summary>The driver's settings: one monitor, the window's size first, a few common sizes, 60 Hz.</summary>
-    internal static XDocument Settings(int width, int height)
+    internal static XDocument Settings(int width, int height) => Settings(1, [(width, height), (1920, 1080), (1600, 900), (1280, 720), (1024, 768)]);
+
+    /// <summary>The driver's settings: <paramref name="count"/> monitors, which may each run any of <paramref name="sizes"/> (in that order), 60 Hz.</summary>
+    internal static XDocument Settings(int count, IReadOnlyList<(int W, int H)> sizes)
     {
-        (int, int)[] sizes = [(width, height), (1920, 1080), (1600, 900), (1280, 720), (1024, 768)];
         return new XDocument(new XDeclaration("1.0", "utf-8", null),
             new XElement("vdd_settings",
-                new XElement("monitors", new XElement("count", 1)),
+                new XElement("monitors", new XElement("count", count)),
                 new XElement("gpu", new XElement("friendlyname", "default")),
                 new XElement("global", new XElement("g_refresh_rate", 60)),
                 new XElement("resolutions", sizes.Distinct().Select(r => new XElement("resolution",
-                    new XElement("width", r.Item1), new XElement("height", r.Item2), new XElement("refresh_rate", 60)))),
+                    new XElement("width", r.W), new XElement("height", r.H), new XElement("refresh_rate", 60)))),
                 new XElement("options",
                     new XElement("CustomEdid", false), new XElement("PreventSpoof", false), new XElement("EdidCeaOverride", false),
                     new XElement("HardwareCursor", true), new XElement("SDR10bit", false), new XElement("HDRPlus", false),
                     new XElement("logging", false), new XElement("debuglogging", false))));
     }
 
-    private static void WriteSettings(int width, int height) => WriteSettings(SettingsFolder, width, height);
+    private static void WriteSettings(int width, int height) => WriteSettings(SettingsFolder, Settings(width, height));
+    private static void WriteSettings(int count, IReadOnlyList<(int W, int H)> sizes) => WriteSettings(SettingsFolder, Settings(count, sizes));
 
     /// <summary>
     /// Writes the driver's settings as the service (LocalSystem) into <paramref name="folder"/>, which is at the drive
     /// root where any signed-in user may create folders: it is made ours first (<see cref="PrepareSettingsFolder"/>), and
     /// a file already there is removed rather than written through – it could be a hard link to a system file.
     /// </summary>
-    internal static void WriteSettings(string folder, int width, int height)
+    internal static void WriteSettings(string folder, int width, int height) => WriteSettings(folder, Settings(width, height));
+
+    private static void WriteSettings(string folder, XDocument settings)
     {
         PrepareSettingsFolder(folder);
         var file = Path.Combine(folder, "vdd_settings.xml");
         File.Delete(file);
         using var stream = new FileStream(file, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        Settings(width, height).Save(stream);
+        settings.Save(stream);
     }
 
     /// <summary>

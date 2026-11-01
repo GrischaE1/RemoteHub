@@ -70,7 +70,12 @@ BeforeAll {
             foreach ($t in $Titles) {
                 $m = Ui '*' -Title $t -Value list -Optional -TimeoutSec 2
                 if ($m.found) {
-                    if ($Button) { $null = Ui $Button -Title ([WildcardPattern]::Escape($m.window)) -TimeoutSec 10; Start-Sleep -Milliseconds 1500 }
+                    if ($Button) {
+                        $w = [WildcardPattern]::Escape($m.window)
+                        $null = Ui $Button -Title $w -TimeoutSec 10
+                        # gone before the next step: a following box can have the same title ("PowerShell remoting")
+                        $null = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because "the box '$($m.window)' didn't close after $Button" -Until { -not (Ui '*' -Title $w -Value exists -Optional -TimeoutSec 1).found }
+                    }
                     return "$($m.window)`n$(@($m.items) -join "`n")"
                 }
             }
@@ -82,6 +87,7 @@ BeforeAll {
         do { foreach ($t in $Titles) { if ((Ui '*' -Title $t -Value exists -Optional -TimeoutSec 1).found) { return $true } } } while ((Get-Date) -lt $until)
         $false
     }
+    # (the pause lets the menu or dialog close before the next key or right-click)
     function Esc { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Milliseconds 400 }
     # one independent UI section: a failure is written down (error, screenshot, open dialogs), the next section runs
     function Step([string]$Name, [scriptblock]$Do) {
@@ -113,7 +119,28 @@ BeforeAll {
     function RestartAgent {
         Invoke-LabGuest -Name $dn -ScriptBlock { Restart-Service RemoteHubAgent -Force }
         $null = WaitFor -TimeoutSec 120 { "$(Invoke-LabGuest -Name $dn -ScriptBlock { (Get-Service RemoteHubAgent).Status.ToString() })" -eq 'Running' }
-        Start-Sleep -Seconds 8
+        WaitAgentPort
+    }
+    # the agent listens on its port again after a (re)start (Running comes a moment before)
+    function WaitAgentPort {
+        $null = Wait-LabCondition -TimeoutSec 90 -Because "the agent on $dn didn't listen on port 58732 after its start" -Until {
+            Invoke-LabGuest -Name $dn -ScriptBlock { [bool](Get-NetTCPConnection -LocalPort 58732 -State Listen -ErrorAction SilentlyContinue) }
+        }
+    }
+    # this PC reaches the agent on the device again after a network cut
+    function WaitAgentReachable {
+        $null = Wait-LabCondition -TimeoutSec 60 -Because "this PC didn't reach $($deviceIp):58732 again after the network came back" -Until {
+            Invoke-LabGuest -Name $VmName -ArgumentList $deviceIp -ScriptBlock {
+                param($ip)
+                $c = New-Object Net.Sockets.TcpClient
+                try { $c.ConnectAsync($ip, 58732).Wait(2000) -and $c.Connected } catch { $false } finally { $c.Dispose() }
+            }
+        }
+    }
+    # the notices from -From on, once one of them matches -Pattern (or those there are after -TimeoutSec: the It checks them)
+    function NoticesWhen([int]$From, [string]$Pattern, [int]$TimeoutSec = 20) {
+        $null = Wait-LabCondition -TimeoutSec $TimeoutSec -NoThrow -Because "no notice like '$Pattern'" -Until { @(Notices $From | Where-Object { $_ -match $Pattern }).Count -gt 0 }
+        @(Notices $From)
     }
 
     # ---- code run in a session
@@ -177,10 +204,15 @@ function Get-PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; i
         foreach ($i in 1..8) {
             $c = Ui 'Close all tabs of this connection' -Optional -TimeoutSec 3
             if (-not $c.found) { break }
-            Start-Sleep -Seconds 2
-            foreach ($t in 'RemoteHub signed in on *automatically*', 'Sign out on the device?') {
-                $m = Ui 'Disconnect' -Title $t -Optional -TimeoutSec 1
-                if ($m.found) { Start-Sleep -Seconds 2; break }
+            # the tabs close, or a box asks first
+            $ask = Wait-LabCondition -TimeoutSec 10 -NoThrow -Because 'the tabs neither closed nor asked' -Until {
+                foreach ($t in 'RemoteHub signed in on *automatically*', 'Sign out on the device?') { if ((Ui 'Disconnect' -Title $t -Value exists -Optional -TimeoutSec 1).found) { return $t } }
+                if (-not (Ui 'Close all tabs of this connection' -Value exists -Optional -TimeoutSec 1).found) { return 'closed' }
+            }
+            if ($ask -and $ask -ne 'closed') {
+                $null = Ui 'Disconnect' -Title $ask -Optional -TimeoutSec 5
+                # closed before the next round, which would otherwise find the closing group again
+                $null = Wait-LabCondition -TimeoutSec 20 -NoThrow -Because 'the tabs did not close after Disconnect' -Until { -not (Ui 'Close all tabs of this connection' -Value exists -Optional -TimeoutSec 1).found }
             }
         }
     }
@@ -225,7 +257,7 @@ function Get-PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; i
         $null = Ui 'Save' -Title 'Edit connection' -Value exists -TimeoutSec 30
         & $Do
         $null = Ui 'Save' -Title 'Edit connection'
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -TimeoutSec 15 -Because 'the Edit connection dialog did not close after Save' -Until { -not (Ui 'Save' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found }
     }
     function SetCredential([string]$User, [string]$Pass) {
         EditConnection {
@@ -253,8 +285,7 @@ function Get-PicDiff($a, $b) { if (-not $a -or -not $b) { return 'no image' }; i
         $null = Ui 'Connect'
         $R["$Key-signed"] = WaitFor -TimeoutSec 180 -Every 5 { (ExplorerOwners) -contains $device.AdminAccount }
         $R["$Key-live"] = if ($R["$Key-signed"]) { (Live 60).found } else { $false }
-        Start-Sleep -Seconds 4
-        $R["$Key-notices"] = @(Notices $mark)
+        $R["$Key-notices"] = if ($R["$Key-signed"]) { NoticesWhen $mark 'When you disconnect, the session is' } else { @(Notices $mark) }
         $R["$Key-sessions"] = AdminSessions
         $R["$Key-since"] = $since
         # not signed in: the rest of the step (asks, sign-out, reconnects) has nothing to work on
@@ -315,8 +346,8 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $R.tl09Before = Ui 'Test again' -Title 'Set up PowerShell remoting' -Value exists -TimeoutSec 60
                 $null = Ui 'Copy script' -Title 'Set up PowerShell remoting'
                 $copied = Get-Date
-                Start-Sleep -Seconds 2
-                $R.tl09After = Ui 'Test again' -Title 'Set up PowerShell remoting' -Value exists
+                $R.tl09After = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because '"Test again" was not enabled after Copy script' -Until { $a = Ui 'Test again' -Title 'Set up PowerShell remoting' -Value exists; if ($a.enabled) { $a } }
+                if (-not $R.tl09After) { $R.tl09After = Ui 'Test again' -Title 'Set up PowerShell remoting' -Value exists }
                 $R.tl09Dialog = @((Ui '*' -Title 'Set up PowerShell remoting' -Value list).items)
                 $R.tl09Clip = ClipInfo
                 $script = Invoke-LabInSession -Name $VmName -Account Console -ScriptBlock { Get-Clipboard -Raw }
@@ -329,7 +360,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 # closed without "Test again": the connection uses HTTPS from now on, the certificate is checked by the
                 # next test (UI-TL-08)
                 $null = Ui 'Close' -Title 'Set up PowerShell remoting'
-                # 120 s after the copy the clipboard is empty again
+                # 120 s after the copy the clipboard is empty again (a fixed wait: that timer is what the test checks)
                 $left = 130 - ((Get-Date) - $copied).TotalSeconds
                 if ($left -gt 0) { Start-Sleep -Seconds ([int][math]::Ceiling($left)) }
                 $R.tl09ClipLater = ClipInfo
@@ -406,6 +437,8 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $null = Ui 'Device label' -Title $t -Value exists -TimeoutSec 60
                 function Try-Install([string]$Key) {
                     $null = Ui 'Install' -Title $t
+                    # the message shows in the next layout pass; it can't be waited for, as the last try's message may
+                    # still be there (port 0 and x give the same one)
                     Start-Sleep -Seconds 1
                     $R["ag14$Key"] = ((Ui '*' -Title $t -Value list).items -join "`n")
                     $R["ag14$Key-open"] = (Ui 'Device label' -Title $t -Value exists -Optional -TimeoutSec 5).found
@@ -428,7 +461,11 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $null = Ui 'Allow connections from' -Title $t -Value 'setnext:192.0.2.10'
                 # offered only when PowerShell remoting works for the connection (UI-TL-08 trusted its HTTPS certificate)
                 $silent = Ui 'Install silently over PowerShell remoting*' -Title $t -Value exists -TimeoutSec 10
-                if (-not $silent.enabled) { throw 'the silent install over PowerShell remoting is not offered (remoting does not work for Device - see UI-TL-08)' }
+                if (-not $silent.enabled) {
+                    # a run with -Tag UI-AG-15 alone skips the context that trusts the certificate (run 20261031-115221)
+                    if (-not ($R.Contains('tl08Ask') -or $R.Contains('tl08-error'))) { throw 'the silent install over PowerShell remoting is not offered: UI-TL-08, which trusts the device''s WinRM certificate, did not run - select it with UI-AG-15' }
+                    throw 'the silent install over PowerShell remoting is not offered (remoting does not work for Device - see UI-TL-08)'
+                }
                 $null = Ui 'Install silently over PowerShell remoting*' -Title $t -Value check
                 $R.ag15AutoSignIn = Ui 'Allow automatic sign-in*' -Title $t -Value check -Optional -TimeoutSec 5
                 $null = Ui 'Use the agent for this connection afterwards' -Title $t -Value check -Optional -TimeoutSec 5
@@ -492,7 +529,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 Esc
                 # started again: the test works (and the menu offers the tools)
                 Invoke-LabGuest -Name $dn -ScriptBlock { Start-Service RemoteHubAgent }
-                Start-Sleep -Seconds 10
+                WaitAgentPort
                 Menu 'Tools>Test RemoteHub Agent*'
                 $R.ag13Works = Box @('The RemoteHub Agent works*', 'RemoteHub Agent') -Button 'OK' -TimeoutSec 120
             }
@@ -518,14 +555,20 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 Set-LabAgentPolicy -Name $dn -Values @{ DesktopClipboard = 2 }
                 try {
                     $R.cp13Live = LiveDesktop -New
+                    # kept: the clipboard sync starts a moment after the picture shows and nothing in the window tells
+                    # when; a copy made before it would be the quiet offer of UI-CP-14 instead
                     Start-Sleep -Seconds 3
                     $null = InSession $VmName 'Console' $setImageCode.Replace('@@K@@', '7') -TimeoutSec 240
-                    Start-Sleep -Seconds 4
-                    $R.cp13Image = "$(InSession $dn 'Console' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                    # read on the device until the picture is there (the last answer is kept for the It)
+                    $img = @{ v = $null }
+                    $null = Wait-LabCondition -TimeoutSec 90 -IntervalMs 1000 -NoThrow -Because 'the picture did not reach the device clipboard' -Until {
+                        $img.v = "$(InSession $dn 'Console' $getImageCode.Replace('@@K@@', '7') -TimeoutSec 300)" -replace '(?s).*DIFF=([^\r\n]*).*', '$1'
+                        $img.v -eq '0'
+                    }
+                    $R.cp13Image = $img.v
                     $mark = NoticeMark
                     $null = SetFileList $VmName 'Console' @('C:\lab\clip\f1.bin')
-                    Start-Sleep -Seconds 6
-                    $R.cp13Notices = @(Notices $mark)
+                    $R.cp13Notices = NoticesWhen $mark 'allowed'
                     Shot 'cp13'
                 }
                 finally { Set-LabAgentPolicy -Name $dn -Clear -Values @{ AllowedConsentModes = @('Ask', 'Pin', 'None') } -Rights @{ ConsentBypass = @($admins) } }
@@ -534,16 +577,17 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 CloseTabs
                 # 101 MB copied before the tab goes live: offered quietly, no notice
                 $null = SetFileList $VmName 'Console' @('C:\lab\big\big101.bin')
+                # kept: RemoteHub takes in the clipboard change before the tab connects (nothing shows when it has)
                 Start-Sleep -Seconds 2
                 $mark = NoticeMark
                 $R.cp14Live = LiveDesktop -New
+                # no notice may appear in this time
                 Start-Sleep -Seconds 10
                 $R.cp14Before = @(Notices $mark)
                 # the same copy while connected: the notice
                 $mark = NoticeMark
                 $null = SetFileList $VmName 'Console' @('C:\lab\big\big101.bin')
-                Start-Sleep -Seconds 8
-                $R.cp14While = @(Notices $mark)
+                $R.cp14While = NoticesWhen $mark 'Too much to copy' 25
             }
             Step 'cp15' {
                 # 99 MB through a slow link, pasted on the device, cancelled here. The limit (10 Mbit/s, about 85 s for the
@@ -557,7 +601,10 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     $null = Invoke-LabGuest -Name $dn -ScriptBlock { Get-ChildItem 'C:\Users\*\cp15' -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue }
                     $mark = NoticeMark
                     $null = SetFileList $VmName 'Console' @('C:\lab\big\big99.bin')
-                    Start-Sleep -Seconds 4
+                    # offered on the device's clipboard before the paste (asks for the format only, which fetches nothing)
+                    $null = Wait-LabCondition -TimeoutSec 30 -IntervalMs 1000 -NoThrow -Because 'the file was not offered on the device clipboard' -Until {
+                        "$(InSession $dn 'Console' "Add-Type -AssemblyName System.Windows.Forms; 'FILES=' + [Windows.Forms.Clipboard]::ContainsFileDropList()" -TimeoutSec 60)" -match 'FILES=True'
+                    }
                     $paste = Start-LabInSession -Name $dn -Account Console -ScriptBlock ([scriptblock]::Create((PasteCode 'cp15')))
                     # the notice's first text, or its progress line for the 99 MB file: the text watcher can miss the first
                     # (run 20261021-222745 saw only "18,3 MB of 99 MB . 1,2 MB/s . about 2 min left")
@@ -571,11 +618,14 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                         $R.cp15ClientLog = @(Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock { param($u) Get-Content "C:\Users\$u\AppData\Roaming\RemoteHub\logs\remotehub.log" -Tail 25 -ErrorAction SilentlyContinue | Where-Object { $_ -match 'Agent desktop' } })
                         throw 'no "Copying 1 file to the device" within 90 s'
                     }
-                    Start-Sleep -Seconds 3
                     Shot 'cp15-progress'
                     $R.cp15Cancel = Ui 'Cancel' -TimeoutSec 10
-                    Start-Sleep -Seconds 4
-                    $R.cp15Notices = @(Notices $mark)
+                    # the notice asked for directly as well: it lasts 6 s, and a pass of the text watcher over RemoteHub's
+                    # window can take 30 s while a tab is open (the retry of run 20261030-194701 missed it)
+                    $direct = Ui 'Cancelled*nothing was copied to the device*' -Value exists -Optional -TimeoutSec 8
+                    $R.cp15Notices = @(NoticesWhen $mark 'Cancelled' -TimeoutSec $(if ($direct.found) { 1 } else { 20 })) +
+                        @(if ($direct.found) { "direct|$($direct.name)" })
+                    # nothing complete may arrive on the device in this time
                     Start-Sleep -Seconds 10
                     $R.cp15Arrived = @(Invoke-LabGuest -Name $dn -ScriptBlock { @(Get-ChildItem 'C:\Users\*\cp15' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { "$($_.Name)=$($_.Length)" }) })
                 }
@@ -595,10 +645,9 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     Shot 'net03-ended'
                 }
                 finally { Connect-LabNetwork -Name $dn -Switches $switches }
-                Start-Sleep -Seconds 2
-                $R.net03Notices = @(Notices $mark)
+                $R.net03Notices = NoticesWhen $mark 'couldn.t be restored' 10
                 # Stop reconnecting ends it at once
-                Start-Sleep -Seconds 10
+                WaitAgentReachable
                 $R.net03Live2 = LiveDesktop -New
                 $switches = Disconnect-LabNetwork -Name $dn
                 try {
@@ -613,7 +662,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     Shot 'net03-stopped'
                 }
                 finally { Connect-LabNetwork -Name $dn -Switches $switches }
-                Start-Sleep -Seconds 5
+                WaitAgentReachable
                 CloseTabs
             }
             Save 'desktop' $R
@@ -697,7 +746,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
             Step 'ad10-locked' {
                 Set-LabAgentPolicy -Name $dn -Clear -Values $policy -Rights $rights
                 Lock-LabSession -Name $dn -Account Console
-                Start-Sleep -Seconds 4
+                $null = Wait-LabCondition -TimeoutSec 30 -Because "the device's console session did not show the lock screen" -Until { @(Get-LabSessions -Name $dn | Where-Object { $_.Console -and $_.LogonUI }).Count -gt 0 }
                 $null = OpenChoose
                 $null = Ui 'Console*(locked)*' -Value check
                 $R.ad10Locked = Choices $later
@@ -830,6 +879,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 AutoSignIn 'lk'
                 $null = Ui 'Disconnect'
                 $R.lkAsked = BoxShown $signOutBox
+                # the session may not be signed out in this time
                 Start-Sleep -Seconds 10
                 $R.lkKept = (ExplorerOwners) -contains $device.AdminAccount
                 CloseTabs
@@ -841,6 +891,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 AutoSignIn 'pl'
                 $null = Ui 'Disconnect'
                 $R.plAsked = BoxShown $signOutBox
+                # the session may not be signed out in this time
                 Start-Sleep -Seconds 10
                 $R.plKept = (ExplorerOwners) -contains $device.AdminAccount
                 CloseTabs
@@ -851,10 +902,10 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 AutoSignIn 'rs'
                 $mark = NoticeMark
                 $switches = Disconnect-LabNetwork -Name $dn
+                # the 60 s cut the case is about
                 try { Start-Sleep -Seconds 60 } finally { Connect-LabNetwork -Name $dn -Switches $switches }
                 $R.rsBack = WaitFor -TimeoutSec 120 -Every 2 { (Live 1).found -and -not (Ui 'Stop reconnecting' -Value exists -Optional -TimeoutSec 1).found }
-                Start-Sleep -Seconds 3
-                $R.rsNotices = @(Notices $mark)
+                $R.rsNotices = NoticesWhen $mark 'Attempt \d+ . trying for up to 120 s' 10
                 $R.rsAfter = AdminSessions
                 CloseTabs
             }
@@ -867,8 +918,7 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                     Shot 'ag11-giveup'
                 }
                 finally { Connect-LabNetwork -Name $dn -Switches $switches }
-                Start-Sleep -Seconds 2
-                $R.guNotices = @(Notices $mark)
+                $R.guNotices = NoticesWhen $mark 'couldn.t be restored' 10
                 CloseTabs
             }
             Save 'auto-sign-in' $R
@@ -930,6 +980,8 @@ Describe 'UI-MORE <VmName>' -Tag Client, UI, 'UI-AG', 'UI-AD', 'UI-CP', 'UI-TL',
                 $R.ag16Tries = @()
                 Menu 'Connect'
                 foreach ($i in 1..7) {
+                    # kept: each try's answer replaces the last one's text on the same page, so nothing tells a new
+                    # answer from the old one - the sign-in gets its time
                     Start-Sleep -Seconds 6
                     $null = Ui 'Use RDP instead' -Value exists -Optional -TimeoutSec 30
                     $R.ag16Tries += TabTexts

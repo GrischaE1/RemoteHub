@@ -32,6 +32,7 @@ public sealed partial class RdpSession : SessionBase
     /// <summary>Connect attempts deferred because the session area had no real size yet.</summary>
     private int _sizeWaits;
     private bool _loggedIn, _closeRequested, _connectPending, _disposed;
+    private int _controlCalls; // our calls into the control still on the stack (Close's Disconnect)
     private RdpOptions _opt = new();
     private CredentialSet _cred = new();
     private RdpRoute _route = RdpRoute.Direct;
@@ -423,9 +424,14 @@ public sealed partial class RdpSession : SessionBase
         _closeRequested = true;
         bool connected = false;
         Try(() => connected = _host.IsCreated && (int)_host.Client.Connected != 0);
+        Services.DiagLog.Write($"Session {GetHashCode():x8}: closing{(connected ? ", disconnecting first" : "")}");
         if (connected)
         {
-            Try(() => _host.Client.Disconnect());
+            // The control can pump messages inside Disconnect (and raise OnDisconnected there): FinishClose waits until
+            // this call has returned, so the control is never released from inside its own call.
+            _controlCalls++;
+            try { Try(() => _host.Client.Disconnect()); }
+            finally { _controlCalls--; }
             // Safety net in case the control never raises OnDisconnected.
             var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             t.Tick += (_, _) => { t.Stop(); FinishClose(); };
@@ -437,7 +443,12 @@ public sealed partial class RdpSession : SessionBase
     private void FinishClose()
     {
         if (_disposed) return;
+        if (_controlCalls > 0) { Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background, FinishClose); return; }
+        // Logged on both sides of the release: a UI thread that hangs in it shows as "releasing" without "released"
+        // (lab UI-JUMP, run 20261028-161817: RemoteHub stopped answering after a tab through a jump host was closed).
+        Services.DiagLog.Write($"Session {GetHashCode():x8}: releasing the RDP control");
         Dispose();
+        Services.DiagLog.Write($"Session {GetHashCode():x8}: RDP control released");
         RaiseClosed();
     }
 

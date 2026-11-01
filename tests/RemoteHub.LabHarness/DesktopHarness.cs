@@ -57,7 +57,7 @@ internal static class DesktopHarness
         public volatile string? SignInPassword;
     }
 
-    private sealed record StatusRecord(long Ms, int Connection, string State, string Message, int PinAttemptsLeft, bool Resume);
+    private sealed record StatusRecord(long Ms, int Connection, string State, string Message, int PinAttemptsLeft, bool Resume, string? EndAction = null, bool Existing = false);
 
     private sealed class StepRecord
     {
@@ -87,7 +87,8 @@ internal static class DesktopHarness
         private readonly List<StatusRecord> _statuses = [];
         private int _statusMark; // a wait looks at statuses from here on (set by start and by a wait that found one)
         private string? _lastResume;
-        private readonly List<object> _layouts = [], _stats = [], _clipboard = [], _transfers = [], _privacy = [], _closes = [], _images = [];
+        private readonly List<object> _layouts = [], _stats = [], _clipboard = [], _transfers = [], _privacy = [], _closes = [], _images = [], _appLists = [];
+        private int _appListsLast; // app lists whose last part came (DesktopAppList.More false)
         private readonly List<(long Ms, string Hex)> _pongs = [];
         private readonly List<string> _errors = [];
         private readonly Dictionary<string, int> _other = [];
@@ -167,6 +168,7 @@ internal static class DesktopHarness
                     clipboard = _clipboard.ToList(),
                     transfers = _transfers.ToList(),
                     privacy = _privacy.ToList(),
+                    appLists = _appLists.ToList(),
                     pongs = _pongs.Select(p => new { ms = p.Ms, bytes = p.Hex }).ToList(),
                     cursor = new { shapes = _cursorShapes, positions = _cursorPositions },
                     frames = new
@@ -212,7 +214,8 @@ internal static class DesktopHarness
                 case "start":
                 {
                     // {session: "console" | id | "user:<name>", consent, viewOnly, fps, quality, monitor, resume: null | "last" | "<token>",
-                    //  features: [..] (missing: what RemoteHub sends; null: none, like older versions), autoSignIn, endAction (Lock / SignOut), sendSignIn, signInPassword}
+                    //  features: [..] (missing: what RemoteHub sends; null: none, like older versions), autoSignIn, endAction (Lock / SignOut), sendSignIn, signInPassword,
+                    //  app: {program, arguments, workingFolder, elevated, name} – an app tab (app-tabs-design §7)}
                     var c = Need();
                     var sessions = c.Client.Hello.Sessions;
                     DesktopSessionInfo? info;
@@ -248,8 +251,11 @@ internal static class DesktopHarness
                     var consent = Str(s, "consent") ?? "auto";
                     if (consent == "auto")
                         consent = info is not null && info.User.Equals(c.Client.Hello.Account, StringComparison.OrdinalIgnoreCase) ? DesktopConsent.None : DesktopConsent.Ask;
+                    DesktopAppStart? app = s.TryGetProperty("app", out var a) && a.ValueKind == JsonValueKind.Object
+                        ? new DesktopAppStart(Str(a, "program") ?? "", Str(a, "arguments") ?? "", Str(a, "workingFolder") ?? "", Bool(a, "elevated", false), Str(a, "name") ?? "App")
+                        : null;
                     var start = new DesktopStart(id, consent, Bool(s, "viewOnly", false), Int(s, "fps", DesktopProtocol.DefaultFramesPerSecond),
-                        Int(s, "quality", DesktopProtocol.DefaultQuality), Int(s, "monitor", 0), resume, features, autoSignIn, Str(s, "endAction"));
+                        Int(s, "quality", DesktopProtocol.DefaultQuality), Int(s, "monitor", 0), resume, features, autoSignIn, Str(s, "endAction"), app);
                     c.AutoSignIn = autoSignIn;
                     c.SendSignIn = Bool(s, "sendSignIn", true);
                     c.SignInPassword = Str(s, "signInPassword");
@@ -261,6 +267,7 @@ internal static class DesktopHarness
                         ["connection"] = c.N, ["session"] = info, ["sessionId"] = id, ["consent"] = start.Consent, ["viewOnly"] = start.ViewOnly,
                         ["fps"] = start.FramesPerSecond, ["quality"] = start.Quality, ["monitor"] = start.Monitor, ["features"] = features,
                         ["autoSignIn"] = autoSignIn, ["resume"] = resumeArg is null ? null : resume is null ? resumeArg + " (no token)" : resumeArg == "last" ? "last" : "given",
+                        ["app"] = app is null ? null : new { app.Program, app.Name, app.Elevated, arguments = app.Arguments.Length > 0 }, // never the arguments themselves
                     });
                 }
 
@@ -456,11 +463,51 @@ internal static class DesktopHarness
 
                 case "settings":
                 {
-                    // {monitor (0), fps (30), quality (60), fitWidth (0), fitHeight (0)}
+                    // {monitor (0), fps (30), quality (60), fitWidth (0), fitHeight (0), scale (0: the monitor's own)}
                     var settings = new DesktopSettings(Int(s, "monitor", 0), Int(s, "fps", DesktopProtocol.DefaultFramesPerSecond), Int(s, "quality", DesktopProtocol.DefaultQuality),
-                        Int(s, "fitWidth", 0), Int(s, "fitHeight", 0));
+                        Int(s, "fitWidth", 0), Int(s, "fitHeight", 0), Int(s, "scale", 0));
                     Need().Client.Send(Msg(DesktopMessage.Settings, settings));
                     return (true, new D { ["settings"] = settings });
+                }
+
+                case "appList":
+                {
+                    // {timeout (60)}: asks for the device's Start menu instead of a start; the list goes to appLists, one
+                    // entry per part (the Start menu, then the Store apps when signed in) - done with the last part
+                    var c = Need();
+                    int before, lastBefore;
+                    lock (_gate) (before, lastBefore, _statusMark) = (_appLists.Count, _appListsLast, _statuses.Count);
+                    c.Client.Send([(byte)DesktopMessage.AppList]);
+                    var refused = "";
+                    var got = await Until(() =>
+                    {
+                        lock (_gate)
+                        {
+                            if (_appListsLast > lastBefore) return true;
+                            for (var k = _statusMark; k < _statuses.Count; k++)
+                                if (_statuses[k].State == DesktopStatusState.Failed) { refused = _statuses[k].Message; return true; }
+                            return false;
+                        }
+                    }, Dbl(s, "timeout", 60), ct);
+                    int count;
+                    lock (_gate) count = _appLists.Count - before;
+                    return (count > 0, new D { ["lists"] = count, ["refused"] = refused.Length > 0 ? refused : null, ["timedOut"] = !got });
+                }
+
+                case "appClose":
+                {
+                    // {force (false)}: the tab is closed – the app is asked to close, or (force) left running
+                    var close = new DesktopAppClose(Bool(s, "force", false));
+                    lock (_gate) _statusMark = _statuses.Count;
+                    Need().Client.Send(Msg(DesktopMessage.AppClose, close));
+                    return (true, new D { ["force"] = close.Force });
+                }
+
+                case "appRestart":
+                {
+                    lock (_gate) _statusMark = _statuses.Count;
+                    Need().Client.Send([(byte)DesktopMessage.AppRestart]);
+                    return (true, new D());
                 }
 
                 case "privacy":
@@ -687,7 +734,7 @@ internal static class DesktopHarness
                     case DesktopMessage.Status:
                     {
                         var s = Read<DesktopStatus>(m);
-                        lock (_gate) _statuses.Add(new StatusRecord(Ms, c.N, s.State, s.Message, s.PinAttemptsLeft, s.Resume is { Length: > 0 }));
+                        lock (_gate) _statuses.Add(new StatusRecord(Ms, c.N, s.State, s.Message, s.PinAttemptsLeft, s.Resume is { Length: > 0 }, s.EndAction, s.Existing));
                         if (s.Resume is { Length: > 0 }) _lastResume = s.Resume;
                         // mirrors AgentDesktopSession.SendSignIn: the password once, only when asked for in this connection
                         if (s.State == DesktopStatusState.SignInReady && c.AutoSignIn && c.SendSignIn && !c.SignInSent)
@@ -712,6 +759,18 @@ internal static class DesktopHarness
                     case DesktopMessage.Privacy:
                         var privacy = Read<DesktopPrivacy>(m);
                         lock (_gate) _privacy.Add(new { ms = Ms, connection = c.N, privacy });
+                        break;
+                    case DesktopMessage.AppList:
+                        var list = Read<DesktopAppList>(m);
+                        lock (_gate)
+                        {
+                            if (!list.More) _appListsLast++;
+                            _appLists.Add(new
+                            {
+                                ms = Ms, connection = c.N, truncated = list.Truncated, more = list.More, note = list.Note,
+                                apps = list.Apps.Select(x => new { x.Name, x.Group, x.Program, x.Arguments, x.WorkingFolder, x.Elevated, icon = x.Icon?.Length }).ToList(),
+                            });
+                        }
                         break;
                     case DesktopMessage.CursorShape:
                         Interlocked.Increment(ref _cursorShapes);
@@ -976,22 +1035,36 @@ internal static class DesktopHarness
             var c = Need();
             if (!_decode) return (false, new D { ["failed"] = "decoding is off (--decode 0)" });
             var path = Path.GetFullPath(Path.Combine(_out, Str(s, "out") ?? $"frame-{Ms}.png"));
+            // {width, height}: a picture of that size - after a resize the old size may come for a while
+            var (wantWidth, wantHeight) = ((int)Dbl(s, "width", 0), (int)Dbl(s, "height", 0));
+            var deadline = DateTime.UtcNow.AddSeconds(Dbl(s, "timeout", 30));
             Decoder? d = null;
             var start = 0;
             try
             {
-                var got = await Until(() =>
+                (byte[] Bgra, int Width, int Height) picture;
+                while (true)
                 {
-                    if (d is null && c.Decoder is { } now)
+                    var got = await Until(() =>
                     {
-                        d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures;
-                        // a screen that doesn't change sends nothing new: a key frame is decoded while we wait
-                        c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
-                    }
-                    return d is not null && (d.Failed is not null || d.Pictures > start);
-                }, Dbl(s, "timeout", 30), ct);
-                if (d?.Failed is { } failed) return (false, new D { ["failed"] = "decoder: " + failed });
-                if (!got || d!.Take() is not { } picture) return (false, new D { ["timedOut"] = true, ["frames"] = Interlocked.Read(ref _frames) });
+                        if (d is null && c.Decoder is { } now)
+                        {
+                            d = now; Interlocked.Increment(ref d.Wanted); start = d.Pictures;
+                            // a screen that doesn't change sends nothing new: a key frame is decoded while we wait
+                            c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                        }
+                        return d is not null && (d.Failed is not null || d.Pictures > start);
+                    }, Math.Max(0.1, (deadline - DateTime.UtcNow).TotalSeconds), ct);
+                    if (d?.Failed is { } failed) return (false, new D { ["failed"] = "decoder: " + failed });
+                    if (!got || d!.Take() is not { } taken) return (false, new D { ["timedOut"] = true, ["frames"] = Interlocked.Read(ref _frames) });
+                    picture = taken;
+                    if (wantWidth == 0 || (picture.Width == wantWidth && picture.Height == wantHeight)) break;
+                    if (DateTime.UtcNow >= deadline)
+                        return (false, new D { ["timedOut"] = true, ["width"] = picture.Width, ["height"] = picture.Height, ["wanted"] = $"{wantWidth}x{wantHeight}" });
+                    start = d!.Pictures;
+                    c.Client.Send(DesktopWire.Empty(DesktopMessage.KeyFrameRequest));
+                    await Task.Delay(200, ct);
+                }
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 SavePng(path, picture.Bgra, picture.Width, picture.Height);
                 var image = new { path, width = picture.Width, height = picture.Height, meanLuma = MeanLuma(picture.Bgra), ms = Ms, connection = c.N };

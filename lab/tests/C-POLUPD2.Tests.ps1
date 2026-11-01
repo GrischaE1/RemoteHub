@@ -121,6 +121,17 @@ BeforeAll {
     # the update server answers /latest with 500 (the mock's control.json; a missing latest.json is only a 404)
     function Set-MockServerError { Set-LabMockControl -Name $VmName -LatestStatus 500 }
     function Clear-MockServerError { Set-LabMockControl -Name $VmName -Clear }
+    # the requests for -Path once there is at least one (or those there are after -TimeoutSec: the It checks them)
+    function RequestsWhen([string]$Path, [int]$TimeoutSec = 60) {
+        $null = Wait-LabCondition -TimeoutSec $TimeoutSec -IntervalMs 2000 -NoThrow -Because "no request for $Path" -Until { @(Requests $Path).Count -gt 0 }
+        Requests $Path
+    }
+    # the update window's text once the download has failed (UpdateWindow: "... from the releases page instead"), or
+    # what it shows after -TimeoutSec
+    function DownloadResult([int]$TimeoutSec = 60) {
+        $x = Wait-LabCondition -TimeoutSec $TimeoutSec -IntervalMs 1000 -NoThrow -Because 'the update window showed no download error' -Until { $w = WinText 'RemoteHub updates'; if ($w -match 'releases page instead') { $w } }
+        if ($x) { $x } else { WinText 'RemoteHub updates' }
+    }
     $script:task = $null
     $device = Get-LabDevice -For $VmName
 }
@@ -154,8 +165,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 Policy @{ UpdateChannel = $value }
                 Clear-Requests
                 Restart-Client
-                Start-Sleep -Seconds 18
-                $r = Requests '/latest'
+                $r = RequestsWhen '/latest'
                 $p.channel[$value] = [pscustomobject]@{ count = @($r).Count; beta = @($r | Where-Object { $_.query -match 'channel=beta' }).Count }
             }
             # nightly (ignored): the channel buttons in Settings stay on
@@ -173,24 +183,24 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Policy @{ UpdateChannel = $null; DisableTelemetry = '1' }
             Clear-Requests
             Restart-Client
-            Start-Sleep -Seconds 18
-            $p.regSzTelemetry = Requests '/telemetry'
+            $p.regSzTelemetry = RequestsWhen '/telemetry'
             Policy @{ DisableTelemetry = $null }
             Save 'channel' $p
 
             # C-UPD-06 / C-UPD-07 / C-UPD-09: all against version 99.0.0 (always "available")
             $u = [ordered]@{}
             Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $current -Leaf)
+            Clear-Requests
             Restart-Client
-            Start-Sleep -Seconds 5
+            # the start-up check done before the mock changes
+            $null = RequestsWhen '/latest'
             # C-UPD-06: a checksum that is 64 chars but not hex -> refused before any download
             Set-LabMockLatest -Name $VmName -Version '99.0.0' -File (Split-Path $current -Leaf) -Sha256 ('Z' * 64)
             Clear-Requests
             Settings-Page 'Updates & privacy'
             $null = Ui 'Check for updates now' -Title 'Settings'
             $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
-            Start-Sleep -Seconds 10
-            $u.noChecksum = WinText 'RemoteHub updates'
+            $u.noChecksum = DownloadResult
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -202,8 +212,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Settings-Page 'Updates & privacy'
             $null = Ui 'Check for updates now' -Title 'Settings'
             $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
-            Start-Sleep -Seconds 12
-            $u.tooLarge = WinText 'RemoteHub updates'
+            $u.tooLarge = DownloadResult
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -212,8 +221,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Settings-Page 'Updates & privacy'
             $null = Ui 'Check for updates now' -Title 'Settings'
             $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
-            Start-Sleep -Seconds 15
-            $u.incomplete = WinText 'RemoteHub updates'
+            $u.incomplete = DownloadResult
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -228,8 +236,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Settings-Page 'Updates & privacy'
             $null = Ui 'Check for updates now' -Title 'Settings'
             $null = Ui 'Download and install' -Title 'RemoteHub updates' -TimeoutSec 40
-            Start-Sleep -Seconds 15
-            $u.redirect = WinText 'RemoteHub updates'
+            $u.redirect = DownloadResult
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Later' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
             $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -253,7 +260,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Set-LabMockControl -Name $VmName -LatestDelayMs 25000
             $u.slow = CheckNow
             Set-LabMockControl -Name $VmName -Clear
-            Start-Sleep -Seconds 15   # the held request ends before the next one
+            Start-Sleep -Seconds 15   # the held request ends before the next one (nothing shows when it has)
             Save 'updates' $u
         }
 
@@ -338,8 +345,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 if ($m.found) { $i.confirm = ($m.items -join "`n"); break }
             } while ((Get-Date) -lt $deadline)
             $null = Ui 'Cancel' -Title '*still connected*' -Optional -TimeoutSec 10
-            Start-Sleep -Seconds 3
-            $i.status = WinText 'RemoteHub updates'
+            $i.status = Wait-LabCondition -TimeoutSec 15 -NoThrow -Because 'the update window did not say the install was cancelled' -Until { $w = WinText 'RemoteHub updates'; if ($w -match 'Install cancelled') { $w } }
+            if (-not $i.status) { $i.status = WinText 'RemoteHub updates' }
             $i.installEnabled = Ui 'Download and install' -Title 'RemoteHub updates' -Value exists -Optional -TimeoutSec 5
             Shot 'upd10'
             $null = Ui 'Close' -Title 'RemoteHub updates' -Optional -TimeoutSec 5
@@ -356,6 +363,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                     helper       = Test-Path 'C:\Users\Admin\AppData\Local\Temp\RemoteHub\Updates\install-update.cmd'
                 }
             }
+            # no install may start in this time
             Start-Sleep -Seconds 5
             $i.versionAfter = InstalledVersion
             Close-Rh
@@ -540,9 +548,14 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
                 $env:COR_ENABLE_PROFILING = '1'; $env:COR_PROFILER = $clsid; $env:COR_PROFILER_PATH = 'C:\Users\Public\rh-lab-profiler.dll'
                 $control = (Start-Process "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList '-NoProfile', '-Command', 'exit' -WindowStyle Hidden -PassThru -Wait).Id
                 foreach ($n in 'COR_ENABLE_PROFILING', 'COR_PROFILER', 'COR_PROFILER_PATH') { Remove-ItemProperty -Path 'HKCU:\Environment' -Name $n -ErrorAction SilentlyContinue }
-                Start-Sleep -Seconds 2
-                $pids = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = '.NET Runtime'; StartTime = $since } -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Message -match [regex]::Escape($clsid) -and $_.Message -match 'Process ID \(decimal\): (\d+)' } | ForEach-Object { [int]$Matches[1] })
+                # the control process's event comes a moment after it ends: read until it is there, for up to 20 s
+                $until = (Get-Date).AddSeconds(20)
+                do {
+                    $pids = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = '.NET Runtime'; StartTime = $since } -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Message -match [regex]::Escape($clsid) -and $_.Message -match 'Process ID \(decimal\): (\d+)' } | ForEach-Object { [int]$Matches[1] })
+                    if ($pids -contains $control) { break }
+                    Start-Sleep -Milliseconds 250
+                } while ((Get-Date) -lt $until)
                 [pscustomobject]@{ control = $control; pids = $pids }
             }
 
@@ -660,7 +673,10 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
 
             # ---- C-TEL-03: telemetry on first, so install-id / run-time.json / a pending crash exist
             Restart-Client
-            Start-Sleep -Seconds 75   # run-time.json is written and ticks once a minute
+            # run-time.json is written at the first one-minute tick
+            $null = Wait-LabCondition -TimeoutSec 150 -IntervalMs 5000 -NoThrow -Because 'install-id and run-time.json were not written' -Until {
+                Invoke-LabGuest -Name $VmName -ScriptBlock { (Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id') -and (Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\run-time.json') }
+            }
             Close-Rh
             $t.idBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\install-id' }
             $t.runtimeBefore = Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\run-time.json' }
@@ -674,6 +690,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Policy @{ DisableTelemetry = 1 }
             Clear-Requests
             Restart-Client
+            # kept: nothing may be sent in this time (the records are discarded at start-up, well within it)
             Start-Sleep -Seconds 20
             $t.off = Invoke-LabGuest -Name $VmName -ScriptBlock {
                 $l = 'C:\Users\Admin\AppData\Local\RemoteHub'
@@ -695,7 +712,8 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             Policy @{ DisableUpdateCheck = 1 }
             Start-LabMockServer -Name $VmName
             Restart-Client
-            Start-Sleep -Seconds 10
+            # the session marker written (CrashReporter.Start), so the kill below is an unclean end of a session
+            $null = Wait-LabCondition -TimeoutSec 30 -Because 'RemoteHub wrote no crash\session.json' -Until { Invoke-LabGuest -Name $VmName -ScriptBlock { Test-Path 'C:\Users\Admin\AppData\Local\RemoteHub\crash\session.json' } }
             # end it unclean (the session marker stays), then write the 1000 event, then start again
             Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force }
             if ($script:task) { try { Stop-LabInSession -Name $VmName -Task $script:task } catch { }; $script:task = $null }
@@ -716,7 +734,7 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             }
             Clear-Requests
             Restart-Client
-            Start-Sleep -Seconds 25
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'no app_crash arrived' -Until { @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' }).Count -gt 0 }
             # every telemetry event that arrived (run 20261016-024318: no app_crash - was anything sent at all?)
             $c.all = @((Requests '/telemetry') | ForEach-Object json | ForEach-Object event)
             $c.pending = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -ErrorAction SilentlyContinue | ForEach-Object Name) }
@@ -746,7 +764,11 @@ Describe 'C-POLUPD2 <VmName>' -Tag Client, 'C-POL', 'C-UPD', 'C-TEL', 'C-CRASH',
             }
             Clear-Requests
             Restart-Client
-            Start-Sleep -Seconds 25
+            # the reports sent and the queue emptied (the old one deleted)
+            $null = Wait-LabCondition -TimeoutSec 60 -IntervalMs 2000 -NoThrow -Because 'the crash queue was not sent and emptied' -Until {
+                @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' }).Count -ge 5 -and
+                (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -Filter 'crash-*.json' -ErrorAction SilentlyContinue).Count }) -eq 0
+            }
             $q.all = @((Requests '/telemetry') | ForEach-Object json | ForEach-Object event)
             $q.sent = @((Requests '/telemetry') | ForEach-Object json | Where-Object { $_.event -eq 'app_crash' } | ForEach-Object message)
             $q.left = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-ChildItem 'C:\Users\Admin\AppData\Local\RemoteHub\crash' -Filter 'crash-*.json' -ErrorAction SilentlyContinue | ForEach-Object Name).Count }

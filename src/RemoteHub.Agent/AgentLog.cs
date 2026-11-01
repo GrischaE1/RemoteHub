@@ -92,6 +92,8 @@ public enum AuditEvent
     AutoSignInEnded = 1107,
     /// <summary>Files the admin dropped on the remote desktop were saved on the signed-in user's Desktop (count and size, no names).</summary>
     DesktopFilesSaved = 1108,
+    /// <summary>A program was started for an app tab: the account, the program's path (never its arguments), elevated or not, the session.</summary>
+    DesktopAppStarted = 1109,
     /// <summary>A jump connection signed in (this device as a jump host).</summary>
     TunnelStarted = 1200,
     /// <summary>A connection through this jump host ended: where to, how long, how much.</summary>

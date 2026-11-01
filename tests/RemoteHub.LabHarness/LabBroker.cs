@@ -81,6 +81,13 @@ internal static class LabBroker
         return B64u([.. iv, .. cipher, .. tag]);
     }
 
+    /// <summary>
+    /// What the session logged about its path – why a direct path failed, for one. The diagnostic log is in this run's
+    /// temporary folder and goes with it, so the answer carries these lines.
+    /// </summary>
+    private static string[] SessionLog() =>
+        File.Exists(RemoteHub.Services.DiagLog.FilePath) ? [.. File.ReadAllLines(RemoteHub.Services.DiagLog.FilePath).Where(l => l.Contains("Broker session", StringComparison.Ordinal))] : [];
+
     private static async Task<object> Health(Dictionary<string, string> o)
     {
         // A throwaway local database (and with it this run's broker connection and key), never the lab user's own.
@@ -137,7 +144,8 @@ internal static class LabBroker
             // How the session went: direct (local / internet) or relayed, and how long the first answer took.
             var path = PeerSessions.PathOf(route)?.ToString();
             return new { joined = info.OrgName, connected = client.IsConnected, isSealed, online = item["online"]?.GetValue<bool>(), pin, health, path,
-                         addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound, seconds = Math.Round((DateTime.UtcNow - started).TotalSeconds, 1) };
+                         addresses = reported?.Addresses.Select(a => a.ToString()), inbound = reported?.Inbound, seconds = Math.Round((DateTime.UtcNow - started).TotalSeconds, 1),
+                         sessionLog = SessionLog() };
         }
         finally
         {

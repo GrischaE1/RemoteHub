@@ -59,8 +59,18 @@ BeforeAll {
             if ($text -cmatch '\bCancel\b') { break }
         }
         $null = Invoke-LabPerson -Name $VmName -Do key -Value '1B'
-        Start-Sleep -Seconds 2
+        # the screen gone again (no Cancel any more), so the next step doesn't meet it
+        $gone = [IO.Path]::ChangeExtension($Path, '.closed.png')
+        $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the Ctrl+Alt+Del screen did not close after Esc' -Until {
+            $null = Get-LabScreenshot -Name $VmName -Path $gone
+            (Get-LabOcr -Path $gone).text -cnotmatch '\bCancel\b'
+        }
         [pscustomobject]@{ text = $text; shown = @($actions | Where-Object { $text -cmatch "\b$([regex]::Escape($_))\b" }) }
+    }
+    # whether none of the five values is set and no record is left for an account (put back)
+    function Test-PutBack([string]$Account) {
+        $v = Get-Values $Account
+        -not @($names | Where-Object { $v.$_ }).Count -and -not @($v.records).Count
     }
 
     $vm = Get-LabVm $VmName
@@ -93,7 +103,7 @@ BeforeAll {
     $r.again = Get-Values $userAccount
     Release $o 'again-done'
     $r.privacy = Receive-LabDesktop $job
-    Start-Sleep -Seconds 4
+    $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the values were not put back after the connection ended' -Until { Test-PutBack $userAccount }
     $r.ended = Get-Values $userAccount
 
     # ---- 2. the helper is killed while they are hidden: the service puts them back when it starts
@@ -106,8 +116,17 @@ BeforeAll {
     $r.killed = Get-Values $userAccount
     # the service and its helper both ended abruptly (a helper alone is started again by the service, and that one puts
     # them back when the connection ends): only the service's start can put them back
-    $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process RemoteHubAgent -ErrorAction SilentlyContinue | Stop-Process -Force }
-    Start-Sleep -Seconds 3
+    $null = Invoke-LabGuest -Name $VmName -ScriptBlock {
+        $killed = @(Get-Process RemoteHubAgent -ErrorAction SilentlyContinue | ForEach-Object Id)
+        if (-not $killed.Count) { return }
+        Get-Process -Id $killed -ErrorAction SilentlyContinue | Stop-Process -Force
+        # until the killed processes have ended (a restarted service is a new process)
+        $until = (Get-Date).AddSeconds(15)
+        do {
+            if (-not (Get-Process -Id $killed -ErrorAction SilentlyContinue)) { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $until)
+    }
     Release $o 'blocked-done'
     $null = try { Receive-LabDesktop $job } catch { $_ }
     $null = Restart-LabAgent -Name $VmName -Pin $pin
@@ -127,7 +146,11 @@ BeforeAll {
         $who = Invoke-LabGuest -Name $VmName -ScriptBlock { (Get-CimInstance Win32_ComputerSystem).UserName }
     } while ($who -notmatch [regex]::Escape(($consoleAccount -split '\\')[-1]) -and (Get-Date) -lt $until)
     $r.autoUser = $who
-    Start-Sleep -Seconds 10 # the helper in the new session, its overlay and the input block
+    # the helper in the new session, its overlay and the input block: the five values set
+    $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -Because 'the five values were not set in the automatic sign-in session' -Until {
+        $v = Get-Values $consoleAccount
+        @($names | Where-Object { $v.$_ -eq 1 }).Count -eq $names.Count
+    }
     $r.autoBlocked = Get-Values $consoleAccount
     $r.cadAuto = Read-CadScreen (Join-Path (Out 'auto') 'cad-auto.png')
     # ended on purpose (--close 1): the session is locked and the values go back. Run 20261019-193627 let the harness

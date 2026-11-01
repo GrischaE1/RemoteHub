@@ -122,7 +122,8 @@ if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
         Invoke-LabGuest -Name $VmName -ArgumentList $localDir, $roamDir -ScriptBlock {
             param($l, $r)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force
-            Start-Sleep -Seconds 1
+            # the files stay open until the process has gone
+            Get-Process RemoteHub -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
             Remove-Item $l, $r -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -130,13 +131,16 @@ if ($w) { [RhLabWinText]::Get($w.Current.NativeWindowHandle) } else { $null }
     # name box (focused when the dialog opens) and Enter pressed.
     function FileDialog([string]$Path, [string]$Title = 'Save As', [string]$Account = 'Console') {
         $null = Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 20 -Account $Account
+        # the dialog is there before its file name box is ready for a click and keys (no UIA pattern shows when)
         Start-Sleep -Seconds 2
         $null = Ui 'File name:' -Title $Title -Value realclick -Optional -TimeoutSec 5 -Account $Account
         Send-LabKeyCombo -Name $VmName -Codes 0x11, 0x41
         Send-LabText -Name $VmName -Text $Path
+        # pacing: the typed path reaches the box before Enter does
         Start-Sleep -Milliseconds 500
         Send-LabKey -Name $VmName -Key Enter
-        Start-Sleep -Seconds 2
+        # the dialog gone, so the next step doesn't find it still open
+        $null = Wait-LabCondition -Until { -not (Ui '*' -Title $Title -Value exists -Optional -TimeoutSec 1 -Account $Account).found } -Because "the $Title dialog did not close after Enter" -TimeoutSec 15 -NoThrow
     }
     # code in the account's session with the database helpers loaded ($A = -Data); answers its output (JSON round trip)
     function InSession([string]$Code, [hashtable]$Data = @{}, [string]$Account = 'Console', [int]$TimeoutSec = 300) {
@@ -766,7 +770,8 @@ public static class RhMemDump {
             $legacy = New-Legacy 'A'
             $d.legacyBytes = InSession 'New-RhLegacySettings $A.json' @{ json = $legacy.json }
             Start-Client
-            Start-Sleep -Seconds 5
+            # the start moves settings.dat into the database and renames it
+            $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Test-Path "$r\settings.dat.migrated" } } -Because 'RemoteHub did not migrate settings.dat (no settings.dat.migrated)' -TimeoutSec 30 -IntervalMs 1000 -NoThrow
             $d.closed3 = Close-Rh
             $d.db03files = Invoke-LabGuest -Name $VmName -ArgumentList $localDir, $roamDir -ScriptBlock {
                 param($l, $r) [pscustomobject]@{ roaming = @(Get-ChildItem $r -Force | ForEach-Object Name); local = @(Get-ChildItem $l -Force | ForEach-Object Name) }
@@ -937,8 +942,10 @@ public static class RhMemDump {
                 $null = Ui 'Device' -Value doubleclick
                 $null = Ui 'Yes' -Title '*Remote Desktop*' -Optional -TimeoutSec 20
                 $a.credDialog = Ui '*' -Title 'Credential Dialog Xaml Host' -Value exists -Optional -TimeoutSec 60
+                # the dialog is found before it has drawn: a moment for the screenshot
                 Start-Sleep -Seconds 3
                 Shot 'aud-pwcopy'
+                # pacing: each Esc closes one dialog, the next one gets the second
                 foreach ($i in 1..2) { $null = Invoke-LabPerson -Name $VmName -Account Console -Do key -Value 1B; Start-Sleep -Seconds 1 }
                 $null = Ui 'Close this tab' -Optional -TimeoutSec 10
             }
@@ -949,11 +956,12 @@ public static class RhMemDump {
                 $a.connected = Connect-Device
                 $null = Ui 'Record this tab to a video file' -TimeoutSec 20
                 $null = Ui 'Start recording' -Title '?*' -Optional -TimeoutSec 10
+                # the recording's length (8 s)
                 Start-Sleep -Seconds 8
                 $null = Ui 'Stop recording and save the video'
                 $a.recordingSaved = Box -Titles 'Recording saved', '*.mp4*' -Button 'Close' -TimeoutSec 30
                 $null = Ui 'Disconnect'
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -Until { -not (Get-DeviceSession) } -Because 'the RDP session on the device did not end after Disconnect' -TimeoutSec 30 -IntervalMs 1000 -NoThrow
                 $null = Ui 'Close this tab' -Optional -TimeoutSec 10
             }
             # edit a host, delete a connection
@@ -961,12 +969,12 @@ public static class RhMemDump {
                 $null = Ui 'Device2' -Value 'menu:Edit?'
                 $null = Ui 'Computer name or IP address' -Title 'Edit connection' -Value "setnext:$newHost"
                 $null = Ui 'Save' -Title 'Edit connection'
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (Ui '*' -Title 'Edit connection' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Edit connection dialog did not close after Save' -TimeoutSec 15 -NoThrow
             }
             Step $a 'delete' {
                 $null = Ui 'ToDelete' -Value 'menu:Delete'
                 $null = Ui 'Delete' -Title '?*' -TimeoutSec 15
-                Start-Sleep -Seconds 3
+                $null = Wait-LabCondition -Until { -not (Ui 'ToDelete' -Value exists -Optional -TimeoutSec 1).found } -Because 'ToDelete was still listed after Delete' -TimeoutSec 15 -NoThrow
             }
             # files: a folder uploaded to an SMB share of the device (a network share of the connection, RemoteHub's
             # file transfer tab)
@@ -975,14 +983,17 @@ public static class RhMemDump {
                 $null = Ui 'Name' -Title 'Add network share to Device' -Value 'setnext:labshare'
                 $null = Ui 'Share name' -Title 'Add network share to Device' -Value 'setnext:rhupload'
                 $null = Ui 'Add' -Title 'Add network share to Device'
-                Start-Sleep -Seconds 3
+                # the dialog has the name in its own box: gone first, so the double-click finds the share in the tree
+                $null = Wait-LabCondition -Until { -not (Ui '*' -Title 'Add network share to Device' -Value exists -Optional -TimeoutSec 1).found } -Because 'the Add network share dialog did not close' -TimeoutSec 15 -NoThrow
                 $null = Ui 'labshare' -Value doubleclick -TimeoutSec 20
+                # UpFolder shows once C:\Users\Public is listed; the click waits for it
                 $null = Ui 'Path This PC' -Value 'keys:^aC:\Users\Public{ENTER}' -TimeoutSec 60
-                Start-Sleep -Seconds 3
                 $null = Ui 'UpFolder' -Value realclick
                 $null = Ui 'Upload selected files'
-                Start-Sleep -Seconds 15
-                $a.uploaded = @(Invoke-LabGuest -Name $device.Name -ScriptBlock { Get-ChildItem 'C:\rhupload' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object Name })
+                # the folder's three files on the share
+                $up = @{}
+                $null = Wait-LabCondition -Until { $up.v = @(Invoke-LabGuest -Name $device.Name -ScriptBlock { Get-ChildItem 'C:\rhupload' -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object Name }); $up.v.Count -ge 3 } -Because 'the three files of UpFolder did not reach the share' -TimeoutSec 60 -IntervalMs 2000 -NoThrow
+                $a.uploaded = $up.v
                 Shot 'aud-files'
             }
             # all entries to CSV
@@ -991,8 +1002,9 @@ public static class RhMemDump {
                 $null = Ui 'Open audit log?' -Title 'Settings'
                 $null = Ui 'Export CSV?' -Title 'Audit log' -TimeoutSec 30
                 FileDialog 'C:\lab\audit-all.csv'
-                Start-Sleep -Seconds 3
-                $a.csvAllStatus = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"
+                $st = @{}
+                $null = Wait-LabCondition -Until { $st.v = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"; $st.v -match 'entries exported to' } -Because 'the audit log did not report the CSV export' -TimeoutSec 20 -NoThrow
+                $a.csvAllStatus = $st.v
                 $null = Ui 'Close' -Title 'Audit log' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }
@@ -1006,8 +1018,9 @@ public static class RhMemDump {
                 $null = Ui 'Open audit log?' -Title 'Settings'
                 $null = Ui 'Export CSV?' -Title 'Audit log' -TimeoutSec 30
                 FileDialog 'C:\lab\audit.csv'
-                Start-Sleep -Seconds 3
-                $a.csvStatus = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"
+                $st = @{}
+                $null = Wait-LabCondition -Until { $st.v = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"; $st.v -match 'entries exported to' } -Because 'the audit log did not report the CSV export' -TimeoutSec 20 -NoThrow
+                $a.csvStatus = $st.v
                 $null = Ui 'Close' -Title 'Audit log' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
             }
@@ -1058,12 +1071,15 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             try {
                 Start-Client
                 New-LabClientConnection -Name $VmName -Display 'NewEntry' -TargetHost 'newentry.lab.test'
+                # the pruning runs in the background after the start and nothing on screen shows when it is done: the time
+                # it is given
                 Start-Sleep -Seconds 30
                 Step $a 'retention' {
                     Settings-Page 'Logs'
                     $null = Ui 'Open audit log?' -Title 'Settings'
-                    Start-Sleep -Seconds 3
-                    $a.info = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"
+                    $info = @{}
+                    $null = Wait-LabCondition -Until { $info.v = (Ui '*' -Title 'Audit log' -Value list).items -join "`n"; $info.v -match 'Entries are kept for' } -Because 'the audit log did not show how long entries are kept' -TimeoutSec 15 -NoThrow
+                    $a.info = $info.v
                     $null = Ui 'Close' -Title 'Audit log' -Optional
                     $null = Ui 'Cancel' -Title 'Settings' -Optional
                 }
@@ -1134,8 +1150,9 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $null = Ui 'Turn on' -Title 'Startup protection'
             $deadline = (Get-Date).AddSeconds(60)
             do { Start-Sleep -Seconds 3; $on = Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Test-Path "$r\lock.json" } } until ($on -or (Get-Date) -gt $deadline)
-            Start-Sleep -Seconds 5
-            $l.onText = (Ui '*' -Title 'Startup protection' -Value list -Optional).items -join "`n"
+            $txt = @{}
+            $null = Wait-LabCondition -Until { $txt.v = (Ui '*' -Title 'Startup protection' -Value list -Optional).items -join "`n"; $txt.v -match 'On . startup password' } -Because 'the Startup protection dialog did not show it turned on' -TimeoutSec 20 -NoThrow
+            $l.onText = $txt.v
             $null = Ui 'Close' -Title 'Startup protection' -Optional
             $null = Ui 'Cancel' -Title 'Settings' -Optional
             $null = Close-Rh
@@ -1145,8 +1162,10 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $l.mainBefore = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 3
             $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value 'set:Wrong-Password-1'
             $null = Ui 'Unlock' -Title 'RemoteHub*locked'
-            Start-Sleep -Seconds 8
-            $l.wrongText = (Ui '*' -Title 'RemoteHub*locked' -Value list -Optional).items -join "`n"
+            # the key derivation takes a few seconds before the answer shows
+            $txt = @{}
+            $null = Wait-LabCondition -Until { $txt.v = (Ui '*' -Title 'RemoteHub*locked' -Value list -Optional).items -join "`n"; $txt.v -match 'Wrong password\.' } -Because 'the lock window did not say Wrong password' -TimeoutSec 30 -NoThrow
+            $l.wrongText = $txt.v
             $l.mainAfterWrong = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 3
             $null = Ui 'type:Edit' -Title 'RemoteHub*locked' -Value "set:$lockPw"
             $null = Ui 'Unlock' -Title 'RemoteHub*locked'
@@ -1178,6 +1197,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $l.sessionBefore = Connect-Device
                 # nothing that is input on this PC from here on (UI Automation reads aren't input); RemoteHub checks
                 # every 15 s, so the lock is due within the time + 15 s
+                # the idle time the lock needs (the case being checked: no input may happen meanwhile)
                 Start-Sleep -Seconds ($l.lockMinutes * 60 + 30)
                 $l.lockedText2 = (Ui '*' -Title 'RemoteHub*locked' -Value list -Optional -TimeoutSec 30).items -join "`n"
                 $l.mainHidden = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 3
@@ -1212,6 +1232,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $l.offConfirm = Box -Titles 'RemoteHub will open without*', 'Turn off startup protection' -Button 'Turn off' -TimeoutSec 30
                 $deadline = (Get-Date).AddSeconds(60)
                 do { Start-Sleep -Seconds 3; $off = Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) -not (Test-Path "$r\lock.json") } } until ($off -or (Get-Date) -gt $deadline)
+                # db.key may still be rewritten after lock.json goes; nothing outside the app shows when, so it gets the time
                 Start-Sleep -Seconds 5
                 $null = Ui 'Close' -Title 'Startup protection' -Optional
                 $null = Ui 'Cancel' -Title 'Settings' -Optional
@@ -1255,16 +1276,20 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                         $null = Ui 'type:Edit#2' -Title 'Startup protection' -Value "set:$lockPw"
                         $null = Ui 'Also unlock with Windows Hello*' -Title 'Startup protection' -Value check
                         $null = Ui 'Turn on' -Title 'Startup protection'
-                        Start-Sleep -Seconds 10
+                        # Windows Hello's prompt, then a moment for its PIN box to take the keys
+                        $null = Wait-LabCredentialDialog -Name $VmName -TimeoutSec 30
+                        Start-Sleep -Seconds 2
                         Send-LabText -Name $VmName -Text $pin; Send-LabKey -Name $VmName -Key Enter
-                        Start-Sleep -Seconds 10
+                        $null = Wait-LabCondition -Until { Invoke-LabGuest -Name $VmName -ArgumentList $roamDir -ScriptBlock { param($r) Test-Path "$r\lock.json" } } -Because 'startup protection with Windows Hello was not turned on (no lock.json)' -TimeoutSec 60 -IntervalMs 2000 -NoThrow
                         $null = Ui 'Close' -Title 'Startup protection' -Optional
                         $null = Ui 'Cancel' -Title 'Settings' -Optional
                         $null = Close-Rh
                         Start-Rh
-                        Start-Sleep -Seconds 10
                         $l.helloText = (Ui '*' -Title 'RemoteHub*locked' -Value list -Optional -TimeoutSec 60).items -join "`n"
+                        $null = Wait-LabCredentialDialog -Name $VmName -TimeoutSec 30
                         Shot 'lock03-prompt'
+                        # a moment for the prompt's PIN box to take the keys
+                        Start-Sleep -Seconds 2
                         Send-LabText -Name $VmName -Text $pin; Send-LabKey -Name $VmName -Key Enter
                         $l.helloMain = Wait-Main -TimeoutSec 60
                         $null = Close-Rh
@@ -1354,8 +1379,10 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $deadline = (Get-Date).AddSeconds(90)
                 do { Start-Sleep -Seconds 3; $h = Get-SharedHash } until ($h -or (Get-Date) -gt $deadline)
             }
+            $shareBefore = Get-SharedHash
             New-LabClientConnection -Name $VmName -Display 'ShareConn1' -TargetHost 'shareconn1.lab.test'
-            Start-Sleep -Seconds 3
+            # the new connection written to the shared file
+            $null = Wait-SharedChange $shareBefore
             $null = Close-Rh
             Start-Rh
             $s.prompt = Ui '*' -Title 'Unlock shared settings' -Value exists -Optional -TimeoutSec 30
@@ -1396,18 +1423,18 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
                 $s.k1Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
                 $null = Ui 'Save' -Title 'Edit connection'
+                # also the time a write before the choice (which must not happen) would take to show in k1BeforeChoice
                 Start-Sleep -Seconds 5
                 $s.k1Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
                 $s.k1BeforeChoice = Get-SharedHash
                 $s.k1Title = Box-Title $s.k1Dialog
                 Shot 'share02-keep'
                 $null = Ui 'Keep mine' -Title '?*' -Optional -TimeoutSec 10
-                Start-Sleep -Seconds 6
-                $s.k1After = Get-SharedHash
+                $s.k1After = Wait-SharedChange $s.k1BeforeChoice -TimeoutSec 20
                 # B sees the file change: it offers to reload
                 $s.k1BPrompt = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Reload' -TimeoutSec 30 -On $device.Name
-                Start-Sleep -Seconds 3
-                $s.k1BA = Ui 'ConnA-mine' -Value exists -Optional -TimeoutSec 10 -On $device.Name
+                # ConnA-mine shows once B has reloaded, so ConnB-other is checked after the reload
+                $s.k1BA = Ui 'ConnA-mine' -Value exists -Optional -TimeoutSec 15 -On $device.Name
                 $s.k1BB = Ui 'ConnB-other' -Value exists -Optional -TimeoutSec 3 -On $device.Name
             }
             $null = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 3
@@ -1423,12 +1450,14 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 # A noticed B's save and asks to reload: declined, so A's own save meets the changed file (the conflict question)
                 $s.r2Early = Box -Titles 'The settings file was updated*', 'Settings updated' -Button 'Cancel' -TimeoutSec 15
                 $null = Ui 'Save' -Title 'Edit connection'
+                # also the time a write before the choice (which must not happen) would take to show in r2BeforeChoice
                 Start-Sleep -Seconds 5
                 $s.r2Dialog = Box -Titles 'The settings file was changed on another PC*', 'Settings changed on another device' -Button '' -TimeoutSec 30
                 $s.r2BeforeChoice = Get-SharedHash
                 $s.r2Title = Box-Title $s.r2Dialog
                 Shot 'share02-reload'
                 $null = Ui 'Reload' -Title '?*' -Optional -TimeoutSec 10
+                # Reload must not write the file: the time a write would take to show in the hash
                 Start-Sleep -Seconds 6
                 $s.r2After = Get-SharedHash
                 $s.r2BOther = Ui 'ConnB-other2' -Value exists -Optional -TimeoutSec 10
@@ -1539,6 +1568,7 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
             $b.harness = InSession 'try { $null = [RhLab.Db]::ReadKeyFile("C:\lab\dbcopy\db.key", $null); "read" } catch { $e = $_.Exception; while ($e.InnerException) { $e = $e.InnerException }; $e.GetType().Name + ": " + $e.Message }' -Account User
             Start-Rh -Account User -DataDir 'C:\lab\dbcopy'
             $b.dbcopyMsg = Box -Titles 'RemoteHub' -Button 'Cancel' -TimeoutSec 90 -Account User
+            # no main window may appear in this time
             Start-Sleep -Seconds 5
             $b.dbcopyMain = Ui 'SearchBox' -Value exists -Optional -TimeoutSec 5 -Account User
             $b.dbcopyFiles = @(Invoke-LabGuest -Name $VmName -ScriptBlock { Get-ChildItem 'C:\lab\dbcopy' -Force | ForEach-Object Name })
@@ -1557,27 +1587,28 @@ $id = [long](@(Invoke-RhSql $p $k.Db 'SELECT id FROM audit ORDER BY id LIMIT 1 O
                 $wrongWin = ("$($b.wrongMsg)" -split "`n" | Select-Object -First 1).TrimEnd("`r")
                 if ($wrongWin) { $null = Ui 'OK' -Title ([WildcardPattern]::Escape($wrongWin) + '*') -Optional -TimeoutSec 10 -Account User }
             }
+            # nothing may be imported after the wrong password: the time a late import would take
             Start-Sleep -Seconds 3
             $b.afterWrong = Dump -Account User
             # C-BAK-01: added as a folder, then replacing everything
             Step $b 'add' {
                 Import-Backup 'C:\lab\rh.rhbackup' $backupPw
                 $b.addAsk = Box -Titles 'Add the backup as a new folder*', 'Import backup' -Button 'Add as folder' -TimeoutSec 90 -Account User
-                Start-Sleep -Seconds 5
-                $b.folderShown = Ui 'Imported *' -Value exists -Optional -TimeoutSec 20 -Account User
+                $b.folderShown = Ui 'Imported *' -Value exists -Optional -TimeoutSec 30 -Account User
             }
             $b.added = Dump -Account User
             Step $b 'replace' {
                 Import-Backup 'C:\lab\rh.rhbackup' $backupPw
                 $b.replaceAsk = Box -Titles 'Add the backup as a new folder*', 'Import backup' -Button 'Replace everything' -TimeoutSec 90 -Account User
-                Start-Sleep -Seconds 5
+                # replaced: the folder the last import added is gone
+                $null = Wait-LabCondition -Until { -not (Ui 'Imported *' -Value exists -Optional -TimeoutSec 1 -Account User).found } -Because 'the imported folder was still there after Replace everything' -TimeoutSec 30 -NoThrow
             }
             $b.replaced = Dump -Account User
             # C-BAK-03: the old .rdpmbackup, added as a folder
             Step $b 'old' {
                 Import-Backup 'C:\lab\old.rdpmbackup' $backupPw
                 $b.oldAsk = Box -Titles 'Add the backup as a new folder*', 'Import backup' -Button 'Add as folder' -TimeoutSec 90 -Account User
-                Start-Sleep -Seconds 5
+                $null = Wait-LabCondition -Until { (Ui 'Imported *' -Value exists -Optional -TimeoutSec 2 -Account User).found } -Because 'no Imported folder appeared for the old backup' -TimeoutSec 30 -NoThrow
             }
             Shot 'bak'
             $null = Close-Rh -Account User

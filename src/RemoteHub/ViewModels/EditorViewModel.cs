@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using RemoteHub.Models;
 using RemoteHub.Rdp;
@@ -72,6 +73,8 @@ public sealed partial class EditorViewModel : ObservableObject
 
     public bool IsNew { get; }
     public bool IsDefaults => _node is null;
+    /// <summary>The item edited; null for the defaults.</summary>
+    public NodeBase? Node => _node;
     public bool IsConnection => _node is Connection;
     /// <summary>Below a jump host: how it is reached (shown on the General page), else null.</summary>
     public string? RouteText => _node?.JumpHost is { } j
@@ -214,6 +217,54 @@ public sealed partial class EditorViewModel : ObservableObject
     /// <summary>Refresh intervals of the processes and services tabs (global defaults only).</summary>
     public List<OptionRow> ToolRows { get; } = new();
 
+    // ---- Apps (docs/app-tabs-design.md §8.1)
+
+    /// <summary>The apps on the Apps page: this item's own list, or – while it inherits – its folder's, read-only.</summary>
+    public ObservableCollection<ConnectionApp> Apps { get; } = new();
+    /// <summary>What this item would inherit (its folders', else the defaults').</summary>
+    public IReadOnlyList<ConnectionApp> InheritedApps { get; private set; } = [];
+    /// <summary>Inherit the apps, or a list of its own; the defaults always have their own.</summary>
+    public OptionRow AppsRow { get; private set; } = null!;
+    /// <summary>The PowerShell remoting page's "Sign in automatically when nobody is signed in": app tabs need it.</summary>
+    public OptionRow? AutoSignInRow { get; private set; }
+    private bool _inheritedAutoSignIn;
+
+    /// <summary>The list on the page is this item's own (else it shows the inherited one, which can't be changed here).</summary>
+    public bool AppsOwn => !CanInherit || AppsRow.Selected.Value is not null;
+
+    /// <summary>Automatic sign-in as the PowerShell remoting page has it now (also before saving).</summary>
+    public bool AutoSignInOn => AutoSignInRow?.Selected.Value is bool own ? own : _inheritedAutoSignIn;
+
+    /// <summary>"Turn on automatic sign-in": the row on the PowerShell remoting page set to On, saved with the rest.</summary>
+    public void TurnOnAutoSignIn()
+    {
+        if (AutoSignInRow is { IsEditable: true } row && row.Choices.FirstOrDefault(c => Equals(c.Value, true)) is { } on) row.Selected = on;
+    }
+
+    private void BuildApps(RdpOptions own, RdpOptions parent)
+    {
+        InheritedApps = CanInherit ? parent.Apps ?? [] : [];
+        _inheritedAutoSignIn = parent.AgentAutoSignIn == true;
+        AutoSignInRow = PsRows.FirstOrDefault(r => r.Label == "Sign in automatically when nobody is signed in");
+        var count = InheritedApps.Count switch { 0 => "none", 1 => "1 app", var n => $"{n} apps" };
+        List<Choice> choices = CanInherit
+            ? [new Choice($"Inherit · {count}", null), new Choice(IsConnection ? "This connection's own apps" : "This folder's own apps", true)]
+            : [new Choice("These apps", true)];
+        AppsRow = new OptionRow
+        {
+            Label = "Apps", Hint = CanInherit ? "Like the other agent options: the folder's apps, or a list of its own that replaces them." : "Every connection without apps of its own gets these.",
+            Choices = choices, Selected = own.Apps is not null || !CanInherit ? choices[^1] : choices[0], Setter = (_, _) => { },
+        };
+        foreach (var a in own.Apps ?? InheritedApps) Apps.Add(a);
+        // Switching to a list of its own starts from what it inherited; back to Inherit shows the folder's again.
+        AppsRow.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(OptionRow.Selected) || AppsOwn) return;
+            Apps.Clear();
+            foreach (var a in InheritedApps) Apps.Add(a);
+        };
+    }
+
     /// <summary>Result of the last PowerShell remoting check, and the RemoteHub Agent of the device (connections only).</summary>
     public string? PsStatusText => _node is not Connection c ? null : string.Join("\n", new[]
     {
@@ -330,7 +381,8 @@ public sealed partial class EditorViewModel : ObservableObject
         PsRows.Add(Row("Sign in automatically when nobody is signed in", own.AgentAutoSignIn, parent.AgentAutoSignIn, YesNo,
             (o, v) => o.AgentAutoSignIn = (bool?)v,
             "Remote desktop through the RemoteHub Agent: when the device shows its sign-in screen, RemoteHub signs in with this connection's " +
-            "credentials. The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
+            "credentials. Your own session on the device is unlocked the same way when it is locked, and locked again when you disconnect. " +
+            "The device must allow it (\"NoUserBehavior\" and the rights \"AutoSignIn\", \"Desktop\" and \"SecureDesktop\" in the device's " +
             "policy) and have the credential provider installed (right-click → Install credential provider). Anyone at the device can see the " +
             "session while you work.", autoSignInOff));
         PsRows.Add(Row("When an automatic sign-in's connection ends", own.AgentAutoSignInEndAction, parent.AgentAutoSignInEndAction,
@@ -358,6 +410,7 @@ public sealed partial class EditorViewModel : ObservableObject
             ToolRows.Add(RefreshRow("Services tab – refresh every", tools.ServiceRefreshSeconds, RemoteToolSettings.DefaultServiceRefresh,
                 v => tools.ServiceRefreshSeconds = v, "Only while the tab is visible. F5 or the refresh button always reads the list again.", AppPolicy.ServiceRefreshSeconds));
         }
+        BuildApps(own, parent); // after PsRows: the Apps page follows their automatic sign-in row
     }
 
     private static readonly int[] RefreshChoices = [0, 5, 10, 15, 30, 60, 120, 300, 600];
@@ -383,6 +436,11 @@ public sealed partial class EditorViewModel : ObservableObject
     public bool Apply()
     {
         Error = null;
+        if (AppsOwn && Apps.Any(a => a.Name.Trim().Length == 0 || a.Program.Trim().Length == 0))
+        {
+            Error = "Give every app a name and a program (Apps page).";
+            return false;
+        }
         string? host = null;
         int port = 3389;
         if (IsConnection)
@@ -417,6 +475,7 @@ public sealed partial class EditorViewModel : ObservableObject
         foreach (var row in DisplayRows.Concat(ResourceRows).Concat(SecurityRows).Concat(PsRows).Concat(ToolRows).Where(r => !r.FixedByPolicy))
             row.Setter(options, row.Selected.Value);
         options.ColorTag = colour;
+        options.Apps = AppsOwn ? [.. Apps.Select(a => a with { Name = a.Name.Trim(), Program = a.Program.Trim(), Arguments = a.Arguments.Trim(), WorkingFolder = a.WorkingFolder.Trim() })] : null;
         if (_node is not null)
         {
             _node.Icon = SelectedIcon?.Symbol;

@@ -65,7 +65,7 @@ namespace rhcp
         volatile long _refs = 1;
         const long _id;                      // this instance's number in the trace
         ICredentialProviderUserArray* _users = nullptr;
-        std::shared_ptr<Channel> _channel;   // null unless CPUS_LOGON in the console session
+        std::shared_ptr<Channel> _channel;   // null unless sign-in or lock screen (TakesScenario) in the console session
         Credential* _credential = nullptr;
     };
 }

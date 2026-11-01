@@ -469,6 +469,206 @@ public class VirtualDisplayTests
 
     private static A.VirtualDisplay.Switch Switch(FakeDevice d, string instance) => new(d, () => instance, _ => { }, (_, _) => { }, _ => { });
 
+    // ---- app tabs (app-tabs-design §5)
+
+    /// <summary>A switch on a device that switches on, recording what the driver was given (count, sizes).</summary>
+    private static A.VirtualDisplay.Switch AppSwitch(FakeDevice d, List<(int Count, IReadOnlyList<(int W, int H)> Sizes)> writes) =>
+        new(d, () => Old, _ => { }, (c, s) => writes.Add((c, s)), _ => { });
+
+    private static A.VirtualDisplay.AppMonitor Opened(A.VirtualDisplay.Switch sw, A.VirtualDisplay.AppLease lease, int width = 1280, int height = 720, int max = 7)
+    {
+        Assert.Null(sw.Open(lease, width, height, max, out var monitor, out _));
+        return monitor!;
+    }
+
+    [Fact]
+    public void App_tabs_get_places_after_the_first_monitor_and_the_count_grows_in_steps()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var writes = new List<(int Count, IReadOnlyList<(int W, int H)> Sizes)>();
+        var sw = AppSwitch(d, writes);
+        var tabs = Enumerable.Range(0, 5).Select(_ => A.VirtualDisplay.NewAppLease()).ToList();
+
+        Assert.Equal(1, Opened(sw, tabs[0]).Place); // place 0 stays the desktop connections' monitor
+        Assert.Equal(4, Assert.Single(writes).Count);
+        Assert.Equal(["enable " + Old], d.Calls);
+        Assert.Equal(2, Opened(sw, tabs[1]).Place);
+        Assert.Equal(3, Opened(sw, tabs[2]).Place);
+        Assert.Single(writes); // the spares: no change of the count, so the other tabs' monitors stay as they are
+        Assert.DoesNotContain("reload", d.Calls);
+
+        Assert.Equal(4, Opened(sw, tabs[3]).Place);
+        Assert.Equal(8, writes[^1].Count);
+        Assert.Single(d.Calls, "reload");
+        Assert.Equal(5, Opened(sw, tabs[4]).Place);
+        Assert.Equal(2, writes.Count);
+    }
+
+    [Fact]
+    public void A_closed_tab_leaves_a_spare_and_the_last_one_switches_the_display_off()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var writes = new List<(int Count, IReadOnlyList<(int W, int H)> Sizes)>();
+        var sw = AppSwitch(d, writes);
+        var a = A.VirtualDisplay.NewAppLease();
+        var b = A.VirtualDisplay.NewAppLease();
+        Opened(sw, a);
+        Opened(sw, b);
+
+        Assert.Contains("place 1 is a spare now", sw.Close(a));
+        Assert.Single(writes); // the count stays
+        Assert.Null(sw.Close(a)); // a second end changes nothing
+        var c = A.VirtualDisplay.NewAppLease();
+        Assert.Equal(1, Opened(sw, c).Place); // the free place is used again
+        Assert.Equal("the tab has ended", sw.Open(a, 1280, 720, 7, out _, out _));
+
+        Assert.Contains("still open", sw.Close(b));
+        Assert.StartsWith($"Virtual display off: {Old} switched off", sw.Close(c));
+        Assert.False(d.On(Old));
+    }
+
+    [Fact]
+    public void No_more_app_tabs_than_the_policy_allows_or_the_driver_takes()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var sw = AppSwitch(d, []);
+        Opened(sw, A.VirtualDisplay.NewAppLease(), max: 2);
+        Opened(sw, A.VirtualDisplay.NewAppLease(), max: 2);
+        Assert.Equal("2 app tabs are open already – at most 2", sw.Open(A.VirtualDisplay.NewAppLease(), 1280, 720, 2, out var none, out _));
+        Assert.Null(none);
+
+        var many = AppSwitch(new FakeDevice { Running = { Old }, EnableExit = 0 }, []);
+        for (var i = 1; i < A.VirtualDisplay.MaxMonitors; i++) Assert.Equal(i, Opened(many, A.VirtualDisplay.NewAppLease(), max: 50).Place);
+        Assert.Contains("at most 7", many.Open(A.VirtualDisplay.NewAppLease(), 1280, 720, 50, out _, out _));
+    }
+
+    [Fact]
+    public void A_tab_size_that_isnt_listed_takes_the_largest_listed_size_until_the_count_changes()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var writes = new List<(int Count, IReadOnlyList<(int W, int H)> Sizes)>();
+        var sw = AppSwitch(d, writes);
+        var first = Opened(sw, A.VirtualDisplay.NewAppLease(), 1422, 958);
+        Assert.Equal((1422, 958), (first.Width, first.Height)); // its own size goes into the list with the first count
+        Assert.Equal((1422, 958), writes[0].Sizes[0]);
+
+        var second = A.VirtualDisplay.NewAppLease();
+        var m = Opened(sw, second, 1500, 940);
+        Assert.Equal((2, 1440, 900), (m.Place, m.Width, m.Height)); // no reload for a size: the largest listed one that fits
+        m = Opened(sw, second, 1300, 760); // a resized tab keeps its place
+        Assert.Equal((2, 1280, 720), (m.Place, m.Width, m.Height));
+        Assert.Single(writes);
+
+        Opened(sw, A.VirtualDisplay.NewAppLease());
+        Opened(sw, A.VirtualDisplay.NewAppLease()); // place 4: the count changes, and the sizes asked for are listed now
+        Assert.Contains((1300, 760), writes[^1].Sizes);
+        m = Opened(sw, second, 1300, 760);
+        Assert.Equal((2, 1300, 760), (m.Place, m.Width, m.Height));
+    }
+
+    [Theory]
+    [InlineData(1920, 1080, 1920, 1080)]
+    [InlineData(1919, 1079, 1680, 1050)]
+    [InlineData(1366, 1000, 1366, 768)]
+    [InlineData(700, 500, 800, 600)] // nothing fits: the smallest
+    public void A_size_fits_the_largest_listed_one(int w, int h, int ew, int eh) =>
+        Assert.Equal((ew, eh), A.VirtualDisplay.Fit(A.VirtualDisplay.AppSizes, w, h));
+
+    [Fact]
+    public void A_device_that_fails_after_a_reload_is_restarted()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var sw = AppSwitch(d, []);
+        for (var i = 0; i < 3; i++) Opened(sw, A.VirtualDisplay.NewAppLease());
+        d.FailOnReload = true; // the spike: a reload with monitors in modes of their own, problem 43
+        Assert.Null(sw.Open(A.VirtualDisplay.NewAppLease(), 1280, 720, 7, out var m, out var note));
+        Assert.Equal(4, m!.Place);
+        Assert.Equal($"the virtual display failed after a reload ({Old}: running, problem 43) and was restarted", note);
+        Assert.Single(d.Calls, "restart " + Old);
+    }
+
+    [Fact]
+    public void A_device_that_stays_failed_after_a_restart_refuses_the_tab_and_says_why()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var sw = AppSwitch(d, []);
+        for (var i = 0; i < 3; i++) Opened(sw, A.VirtualDisplay.NewAppLease());
+        d.FailOnReload = d.RestartFails = true;
+        var why = sw.Open(A.VirtualDisplay.NewAppLease(), 1280, 720, 7, out var m, out _);
+        Assert.Null(m);
+        Assert.Equal($"The virtual display stopped working ({Old}: running, problem 43); restarting it didn't help ({Old}: running, problem 43).", why);
+    }
+
+    [Fact]
+    public void A_desktop_connection_shares_the_display_with_app_tabs_without_a_reload()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var writes = new List<(int Count, IReadOnlyList<(int W, int H)> Sizes)>();
+        var sw = AppSwitch(d, writes);
+        var desktop = A.VirtualDisplay.NewLease();
+        Assert.Null(sw.Show(desktop, 1422, 958, out _));
+        Assert.Equal(1, writes[^1].Count);
+        var tab = A.VirtualDisplay.NewAppLease();
+        Opened(sw, tab); // from one monitor to four: the desktop's window size stays first in the list
+        Assert.Equal((4, (1422, 958)), (writes[^1].Count, writes[^1].Sizes[0]));
+        var reloads = d.Calls.Count(c => c == "reload");
+
+        Assert.Null(sw.Show(desktop, 1500, 1000, out var note)); // a new window size: no reload while app tabs are open
+        Assert.Equal("the virtual monitor runs at 1422×958 while app tabs are open", note); // the largest listed size that fits
+        Assert.Equal(reloads, d.Calls.Count(c => c == "reload"));
+
+        var other = A.VirtualDisplay.NewLease();
+        Assert.Null(sw.Show(other, 1440, 900, out _));
+        Assert.Equal("Virtual display stays on for 1 other connection(s)", sw.Hide(other));
+
+        // the last app tab ends while the desktop connection is still there: back to its monitor alone
+        Assert.StartsWith("Virtual display: the app monitors are off, the first monitor stays for 1 connection(s)", sw.Close(tab));
+        Assert.Equal((1, (1440, 900)), (writes[^1].Count, writes[^1].Sizes[0]));
+        Assert.True(d.On(Old));
+        Assert.StartsWith($"Virtual display off: {Old} switched off", sw.Hide(desktop));
+    }
+
+    [Fact]
+    public void A_switch_off_under_way_ends_when_an_app_tab_opens()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        A.VirtualDisplay.Switch? sw = null;
+        var tab = A.VirtualDisplay.NewAppLease();
+        string? opened = "not opened";
+        // the desktop connection's end tries to switch off a device still in use; between the tries an app tab opens
+        sw = new(d, () => Old, _ => { }, (_, _) => { }, ms => { if (tab.Place == 0) opened = sw!.Open(tab, 1280, 720, 7, out _, out _); });
+        var desktop = A.VirtualDisplay.NewLease();
+        Assert.Null(sw.Show(desktop, 1280, 720, out _));
+        d.DisableBusy = 99;
+        Assert.Equal("Virtual display left on: a connection switched it on again meanwhile", sw.Hide(desktop));
+        Assert.Null(opened);
+        Assert.True(d.On(Old));
+        d.DisableBusy = 0;
+        Assert.StartsWith($"Virtual display off: {Old} switched off", sw.Close(tab));
+    }
+
+    [Fact]
+    public void The_desktop_connection_s_end_leaves_the_display_on_for_app_tabs()
+    {
+        var d = new FakeDevice { Running = { Old }, EnableExit = 0 };
+        var sw = AppSwitch(d, []);
+        var desktop = A.VirtualDisplay.NewLease();
+        Assert.Null(sw.Show(desktop, 1280, 720, out _));
+        var tab = A.VirtualDisplay.NewAppLease();
+        Opened(sw, tab);
+        Assert.Equal("Virtual display stays on for 1 app tab(s)", sw.Hide(desktop));
+        Assert.True(d.On(Old));
+        Assert.StartsWith($"Virtual display off: {Old} switched off", sw.Close(tab));
+    }
+
+    [Fact]
+    public void The_driver_settings_carry_the_monitor_count()
+    {
+        var x = A.VirtualDisplay.Settings(8, [(1422, 958), (1920, 1080), (1422, 958)]);
+        Assert.Equal("8", x.Root!.Element("monitors")!.Element("count")!.Value);
+        Assert.Equal(2, x.Root.Element("resolutions")!.Elements("resolution").Count());
+    }
+
     [Fact]
     public void A_program_that_doesnt_answer_in_time_is_stopped()
     {
@@ -509,10 +709,10 @@ public class VirtualDisplayTests
 
         public bool Present(string instance) => !_removed.Contains(instance) && (instance == Old ? !Gone : instance == New ? _created || Others.Contains(New) : Others.Contains(instance));
         public bool Started(string instance) => Present(instance) && Running.Contains(instance);
-        public bool On(string instance) => Present(instance) && !Off.Contains(instance);
+        public bool On(string instance) => Present(instance) && !Off.Contains(instance) && !Failed;
         public IReadOnlyList<string> Nodes() => new[] { Old, New }.Concat(Others).Distinct().Where(Present).ToList();
         public string Describe(string instance) => !Present(instance) ? $"{instance}: not reported by Windows"
-            : $"{instance}: {(Running.Contains(instance) ? "running" : "not running")}{(Off.Contains(instance) ? ", problem 22 (disabled)" : "")}";
+            : $"{instance}: {(Running.Contains(instance) ? "running" : "not running")}{(Off.Contains(instance) ? ", problem 22 (disabled)" : Failed ? ", problem 43" : "")}";
 
         /// <summary>Switching off: refused this many times while the device still runs (in use), then it switches off.</summary>
         public int DisableBusy;
@@ -571,6 +771,18 @@ public class VirtualDisplayTests
             ReloadStarted.Set();
             ReloadBlock?.Wait();
             if (ReloadFails) throw new IOException("the driver's control pipe didn't answer within 3 s");
+            if (FailOnReload) Failed = true;
+        }
+
+        /// <summary>A reload leaves the device failed (problem 43, as in the app tabs spike); a restart helps unless <see cref="RestartFails"/>.</summary>
+        public bool FailOnReload, RestartFails, Failed;
+
+        public int Restart(string instance, out string said)
+        {
+            Calls.Add("restart " + instance);
+            said = "";
+            if (!RestartFails) Failed = false;
+            return 0;
         }
     }
 }

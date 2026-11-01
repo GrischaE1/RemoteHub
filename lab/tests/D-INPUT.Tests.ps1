@@ -31,10 +31,12 @@ BeforeAll {
                 @{ do = 'markFile'; path = (Join-Path $o 'connected.txt') }, @{ do = 'waitFile'; path = (Join-Path $o 'go.txt'); timeout = 120 }) + $click + $Steps + $tail)
         $null = Invoke-LabPerson -Name $VmName -Do click -Text 'Allow' -TimeoutSec 60
         Wait-LabHostFile (Join-Path $o 'connected.txt')
+        # what the connect brought (the Allow click among it) reaches the marker's log first, so it is skipped
         Start-Sleep -Seconds 2
         $skip = @(Get-LabMarker -Name $VmName -Marker $marker).Count
         Set-Content -Encoding ASCII (Join-Path $o 'go.txt') 'go'
         $r = Receive-LabDesktop $job
+        # the last input sent reaches the marker's log a moment after the session has closed
         Start-Sleep -Seconds 4
         $seen = @(Get-LabMarker -Name $VmName -Marker $marker | Select-Object -Skip $skip)
         Stop-LabInSession -Name $VmName -Task $marker.Task

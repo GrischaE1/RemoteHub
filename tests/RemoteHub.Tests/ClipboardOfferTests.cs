@@ -30,7 +30,7 @@ public class ClipboardOfferTests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join();
+            TestThread.Join(t, "the paste of the offered file");
             Assert.Equal("offered", content);
             Assert.Equal(1, Volatile.Read(ref fetches));
         }
@@ -60,7 +60,7 @@ public class ClipboardOfferTests
             var t = new Thread(() => width = System.Windows.Clipboard.GetImage()?.PixelWidth ?? 0);
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join();
+            TestThread.Join(t, "the paste of the offered image");
             return width;
         }
         Assert.Equal(2, Paste());
@@ -115,7 +115,7 @@ public class ClipboardOfferTests
         });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the paste of the offered image");
         return result;
     }
 

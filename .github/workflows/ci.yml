@@ -37,8 +37,11 @@ jobs:
       - name: Lab harness
         run: dotnet build tests/RemoteHub.LabHarness --configuration Release
 
+      # A test that hangs ends the run after 5 minutes without progress (the longest test takes about 20 s) instead of
+      # at the job's time limit, and the blame sequence names the tests that were running. No dump: the artifacts are
+      # public.
       - name: Test
-        run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --blame-hang-timeout 5m --blame-hang-dump-type none
 
       # The runner's Visual Studio comes without the Spectre-mitigated libraries, which the provider's hardening flags
       # need (MSB8040; credential-provider-design.md §8.1): added here rather than building it without them. The
@@ -99,7 +102,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results
-          path: '**/test-results.trx'
+          path: |
+            **/test-results.trx
+            **/TestResults/**/Sequence*.xml
           if-no-files-found: ignore
 
   # Antivirus, part 2: ClamAV, a second engine, over the same build output. Same EICAR self-check as Defender.

@@ -123,7 +123,12 @@ public static class RhTok {
     $install = $init.Install
     $pin = $init.Pin
     $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
-    Start-Sleep -Seconds 6
+    # until Notepad has its taskbar button (the script below finds it)
+    $null = Wait-LabCondition -NoThrow -TimeoutSec 30 -Because "Notepad's taskbar button did not show" -Until {
+        $null = Invoke-LabInSession -Name $VmName -ScriptBlock $taskbarButton
+        $t = [string](Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Content 'C:\Users\Public\rhlab-taskbar.json' -Raw }) | ConvertFrom-Json
+        [int]$t.index -ge 0
+    }
     $null = Invoke-LabInSession -Name $VmName -ScriptBlock $taskbarButton
     $taskbar = [string](Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Content 'C:\Users\Public\rhlab-taskbar.json' -Raw }) | ConvertFrom-Json
     $right = @(1..([math]::Max(0, [int]$taskbar.index)) | Where-Object { $taskbar.index -gt 0 } | ForEach-Object { @{ do = 'key'; scan = '0xE04D' }, @{ do = 'key'; scan = '0xE04D'; flags = @('Up') }, @{ do = 'sleep'; seconds = 1 } })
@@ -158,7 +163,9 @@ public static class RhTok {
         Stop-LabInSession -Name $VmName -Task $notepad
         $null = Invoke-LabGuest -Name $VmName -ScriptBlock { Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force }
         $notepad = Start-LabInSession -Name $VmName -ScriptBlock { notepad.exe }
-        Start-Sleep -Seconds 4
+        $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because "Notepad's window did not open" -Until {
+            Invoke-LabInSession -Name $VmName -ScriptBlock { [bool](Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne [IntPtr]::Zero }) }
+        }
         $null = Invoke-LabInSession -Name $VmName -ScriptBlock { $null = (New-Object -ComObject WScript.Shell).AppActivate('Untitled - Notepad') }
         Set-LabAgentPolicy -Name $VmName -Clear -Values @{ PrivacyScreen = 2; HelperUIAccess = $(if ($mode -eq 'on') { 1 } else { 0 }) }
         $o = Out $mode
@@ -182,6 +189,7 @@ public static class RhTok {
         Release $o 'base-go'
         foreach ($s in $surfaces) {
             Reached $o "$($s.n)-pre"
+            # (the toast slides in before the harness goes on)
             if ($s.host) { $null = Invoke-LabInSession -Name $VmName -ScriptBlock $s.host; Start-Sleep -Seconds 2 }
             Release $o "$($s.n)-go"
             Reached $o $s.n
@@ -195,7 +203,7 @@ public static class RhTok {
             Release $o "$($s.n)-done"
         }
         Reached $o 'banner'
-        Start-Sleep -Seconds 3
+        $null = Wait-LabCondition -NoThrow -TimeoutSec 15 -Because 'the banner was not in the z-order' -Until { @(Get-ZOrder | Where-Object { $_ -like 'RemoteHub|*' }).Count -gt 0 }
         # by the banner's rectangle, not by OCR: the banner (and the overlay under it) is excluded from capture, a
         # screen read in the session sees neither. "Disconnect" is the banner's last button, at its right end.
         $banner = @(Get-ZOrder | Where-Object { $_ -like 'RemoteHub|*' })[0]
@@ -203,13 +211,17 @@ public static class RhTok {
         if ($banner -match 'rect=(-?\d+),(-?\d+),(-?\d+),(-?\d+)') {
             $m.disconnect.x = [int]$Matches[3] - 55; $m.disconnect.y = [int](([int]$Matches[2] + [int]$Matches[4]) / 2)
             Send-LabMouse -Name $VmName -X $m.disconnect.x -Y $m.disconnect.y
+            # evidence only: the screen just after the click
             Start-Sleep -Seconds 1
             $null = Get-LabScreenshot -Name $VmName -Path (Join-Path $o 'console-after-disconnect.png')
         }
         $m.r = Receive-LabDesktop $job
         $m.ended = @($m.r.statuses | Where-Object state -eq 'Ended' | ForEach-Object message)
         $r[$mode] = $m
-        Start-Sleep -Seconds 3
+        # the ended session's helper gone before the next mode's policy and connection
+        $null = Wait-LabCondition -NoThrow -TimeoutSec 20 -Because 'the desktop helper was still running after the session ended' -Until {
+            -not (Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-CimInstance Win32_Process -Filter "Name='RemoteHubAgent.exe'" | Where-Object CommandLine -match '\sdesktop\s*$').Count })
+        }
     }
     Set-LabAgentPolicy -Name $VmName -Clear
     Stop-LabInSession -Name $VmName -Task $notepad

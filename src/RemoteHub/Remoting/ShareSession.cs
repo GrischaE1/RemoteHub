@@ -86,7 +86,8 @@ public sealed class ShareSession : SessionBase, IRemoteFiles
             State = SessionState.Connected;
             StatusText = "Connected – " + Reached(fs);
             _idle.Start();
-            Services.DiagLog.Write($"Share ({Share.ProtocolLabel}): connected ({Reached(fs)})");
+            // (not Reached: the jump host's name stays out of the log)
+            Services.DiagLog.Write($"Share ({Share.ProtocolLabel}): connected ({fs.Description}{(Connection.JumpHost is null ? "" : " · via a jump host")})");
             Ready?.Invoke();
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }

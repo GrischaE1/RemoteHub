@@ -43,6 +43,9 @@ internal interface IScreenSource : IDisposable
     /// <summary>Back to the resolution Windows had before <see cref="FitResolution"/>.</summary>
     void RestoreResolution() { }
 
+    /// <summary>Sets an app tab's monitor to this display scale (percent); for the log, what it runs at now ("" when nothing was done).</summary>
+    string SetScale(DesktopMonitor monitor, int percent) => "";
+
     /// <summary>How the last picture was taken (shown in RemoteHub's connection info).</summary>
     string CaptureMethod => "";
 
@@ -258,6 +261,8 @@ internal sealed unsafe class WindowsScreen : IScreenSource
         if (DisplayModes.Fit(monitor.Name, width, height)) _resized = monitor.Name;
     }
 
+    public string SetScale(DesktopMonitor monitor, int percent) => DisplayModes.SetScale(monitor.Name, percent);
+
     public void RestoreResolution()
     {
         if (_resized is null) return;
@@ -420,6 +425,22 @@ internal static unsafe class DisplayModes
     }
 
     /// <summary>
+    /// The displays (\\.\DISPLAYn) of all the driver's monitors in the order Windows lists them – the order the driver
+    /// made them in, which app tabs use as their places (app-tabs-design §5).
+    /// </summary>
+    public static IReadOnlyList<string> VirtualMonitors()
+    {
+        var found = new List<string>();
+        var dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) };
+        for (uint i = 0; EnumDisplayDevicesW(null, i, ref dd, 0); i++, dd = new DISPLAY_DEVICEW { cb = sizeof(DISPLAY_DEVICEW) })
+        {
+            if ((dd.StateFlags & 0x1 /* DISPLAY_DEVICE_ATTACHED_TO_DESKTOP */) == 0) continue;
+            if (new string(dd.DeviceString).Contains("Virtual Display Driver", StringComparison.OrdinalIgnoreCase)) found.Add(new string(dd.DeviceName));
+        }
+        return found;
+    }
+
+    /// <summary>
     /// Makes <paramref name="device"/> the primary monitor (taskbar, new windows) – for the virtual monitor, so nothing
     /// opens on an invisible 640×480 output. The whole layout is moved so that it sits at 0,0 (the monitor at 0,0 is the
     /// primary one); Windows picks another primary again when the virtual monitor goes away.
@@ -460,8 +481,90 @@ internal static unsafe class DisplayModes
         return r == 0 ? null : $"apply: {r}";
     }
 
+    /// <summary>
+    /// Sets <paramref name="device"/>'s display scale to <paramref name="percent"/> (one of <see cref="DesktopProtocol.ScaleSteps"/>),
+    /// or the largest Windows allows at its resolution, as the Settings app does: through DisplayConfigGetDeviceInfo and
+    /// DisplayConfigSetDeviceInfo with the undocumented DPI scale types (-3, -4), which count in steps from the monitor's
+    /// recommended scale. It takes effect at once – per-monitor aware apps get WM_DPICHANGED, Windows scales the others.
+    /// </summary>
+    /// <returns>For the log: what the monitor runs at now, or why it isn't the scale asked for.</returns>
+    public static string SetScale(string device, int percent)
+    {
+        if (Source(device) is not { } source) return $"{percent} % asked – the monitor isn't among the active displays";
+        var get = new DISPLAYCONFIG_SOURCE_DPI_SCALE_GET { type = -3, size = sizeof(DISPLAYCONFIG_SOURCE_DPI_SCALE_GET), adapterId = source.Adapter, id = source.Id };
+        var r = DisplayConfigGetDeviceInfo(ref get);
+        if (r != 0) return $"{percent} % asked – the monitor's scale can't be read (error {r})";
+        if (ScaleFor(percent, get.minScaleRel, get.maxScaleRel) is not { } to)
+            return $"{percent} % asked – Windows reports scales from {get.minScaleRel} to {get.maxScaleRel} steps, which aren't Settings' steps";
+        if (to.Rel != get.curScaleRel)
+        {
+            var set = new DISPLAYCONFIG_SOURCE_DPI_SCALE_SET { type = -4, size = sizeof(DISPLAYCONFIG_SOURCE_DPI_SCALE_SET), adapterId = source.Adapter, id = source.Id, scaleRel = to.Rel };
+            r = DisplayConfigSetDeviceInfo(ref set);
+            if (r != 0) return $"{percent} % asked – Windows refused it (error {r})";
+        }
+        return to.Percent == percent ? $"{percent} %" : $"{to.Percent} % ({percent} % asked – the most Windows allows at this resolution)";
+    }
+
+    /// <summary>
+    /// The step to set for <paramref name="percent"/>, relative to the recommended scale, from the range Windows reports
+    /// (<paramref name="minRel"/> is 100 %, so the recommended scale is <c>-minRel</c> steps up): that step, or the
+    /// largest allowed when it is above <paramref name="maxRel"/>. Null when the report doesn't fit the steps.
+    /// </summary>
+    internal static (int Rel, int Percent)? ScaleFor(int percent, int minRel, int maxRel)
+    {
+        var steps = DesktopProtocol.ScaleSteps;
+        var recommended = -minRel;
+        var want = Array.IndexOf(steps, percent);
+        if (want < 0 || recommended < 0 || recommended >= steps.Length || maxRel < minRel) return null;
+        var index = Math.Min(want, Math.Min(recommended + maxRel, steps.Length - 1));
+        return (index - recommended, steps[index]);
+    }
+
+    /// <summary>The display source (adapter and id) whose GDI name is <paramref name="device"/>, among the active paths.</summary>
+    private static (LUID Adapter, uint Id)? Source(string device)
+    {
+        const uint activeOnly = 0x2; // QDC_ONLY_ACTIVE_PATHS
+        if (GetDisplayConfigBufferSizes(activeOnly, out var pathCount, out var modeCount) != 0) return null;
+        var paths = new DISPLAYCONFIG_PATH_INFO[pathCount];
+        var modes = new DISPLAYCONFIG_MODE_INFO[modeCount];
+        if (QueryDisplayConfig(activeOnly, ref pathCount, paths, ref modeCount, modes, IntPtr.Zero) != 0) return null;
+        for (var i = 0; i < pathCount; i++)
+        {
+            var name = new DISPLAYCONFIG_SOURCE_DEVICE_NAME
+            {
+                type = 1, // DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME
+                size = sizeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME),
+                adapterId = paths[i].sourceAdapterId,
+                id = paths[i].sourceId,
+            };
+            if (DisplayConfigGetDeviceInfo(ref name) == 0 && new string(name.viewGdiDeviceName).Equals(device, StringComparison.OrdinalIgnoreCase))
+                return (paths[i].sourceAdapterId, paths[i].sourceId);
+        }
+        return null;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct LUID { public uint Low; public int High; }
+
+    /// <summary>DISPLAYCONFIG_SOURCE_DPI_SCALE_GET (undocumented, type -3): steps from the recommended scale.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_SOURCE_DPI_SCALE_GET
+    {
+        public int type, size;
+        public LUID adapterId;
+        public uint id;
+        public int minScaleRel, curScaleRel, maxScaleRel;
+    }
+
+    /// <summary>DISPLAYCONFIG_SOURCE_DPI_SCALE_SET (undocumented, type -4).</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DISPLAYCONFIG_SOURCE_DPI_SCALE_SET
+    {
+        public int type, size;
+        public LUID adapterId;
+        public uint id;
+        public int scaleRel;
+    }
 
     /// <summary>DISPLAYCONFIG_PATH_INFO (source and target info flattened).</summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -504,6 +607,8 @@ internal static unsafe class DisplayModes
     [DllImport("user32.dll")] private static extern int QueryDisplayConfig(uint flags, ref uint pathCount, [Out] DISPLAYCONFIG_PATH_INFO[] paths, ref uint modeCount, [Out] DISPLAYCONFIG_MODE_INFO[] modes, IntPtr topology);
     [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint pathCount, [In] DISPLAYCONFIG_PATH_INFO[] paths, uint modeCount, [In] DISPLAYCONFIG_MODE_INFO[] modes, uint flags);
     [DllImport("user32.dll")] private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DEVICE_NAME info);
+    [DllImport("user32.dll")] private static extern int DisplayConfigGetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DPI_SCALE_GET info);
+    [DllImport("user32.dll")] private static extern int DisplayConfigSetDeviceInfo(ref DISPLAYCONFIG_SOURCE_DPI_SCALE_SET info);
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct DISPLAY_DEVICEW
     {

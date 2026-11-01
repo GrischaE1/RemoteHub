@@ -48,7 +48,9 @@ internal readonly record struct ScreenRect(int Left, int Top, int Right, int Bot
 /// <param name="Shell">A shell surface that shows other apps' content (thumbnails, Alt+Tab, Task View, notifications).</param>
 /// <param name="Unresolved">A Store app's frame whose app couldn't be found out.</param>
 /// <param name="Exe">The full path of its program, normalised (<see cref="AppIds.Normalize"/>); "" if unknown.</param>
-internal sealed record AppWindow(IntPtr Handle, string App, ScreenRect Bounds, bool Opaque, bool Shell = false, bool Unresolved = false, string Exe = "");
+/// <param name="OutOfPicture">Kept out of captures (WDA_EXCLUDEFROMCAPTURE, e.g. the privacy screen): not in the picture at all.</param>
+internal sealed record AppWindow(IntPtr Handle, string App, ScreenRect Bounds, bool Opaque, bool Shell = false, bool Unresolved = false, string Exe = "",
+    bool OutOfPicture = false);
 
 /// <summary>A running app as the user picks it: one row per app, however many windows it has.</summary>
 /// <param name="Exe">The full path of its program, so a policy entry naming a Store app by path finds it too.</param>
@@ -175,8 +177,9 @@ internal sealed unsafe class WindowsAppWindows : IAppWindows
             var cls = ClassName(h);
             var (app, exe) = Identify(h, pid, cls, out var unresolved);
             var shell = ShellClasses.Contains(cls) || cls == "Windows.UI.Core.CoreWindow" && exe.EndsWith(@"\shellexperiencehost.exe", StringComparison.Ordinal);
-            var opaque = pid != _self && (ex & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == 0 && GetWindowDisplayAffinity(h, out var affinity) && affinity == 0;
-            list.Add(new AppWindow(h, app, bounds, opaque, shell, unresolved, exe));
+            var known = GetWindowDisplayAffinity(h, out var affinity);
+            var opaque = pid != _self && (ex & (WS_EX_LAYERED | WS_EX_TRANSPARENT)) == 0 && known && affinity == 0;
+            list.Add(new AppWindow(h, app, bounds, opaque, shell, unresolved, exe, OutOfPicture: known && affinity == 0x11 /* WDA_EXCLUDEFROMCAPTURE */));
         }
         return list;
     }

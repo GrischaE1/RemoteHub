@@ -36,7 +36,7 @@ public sealed class SftpShare : ShareFileSystem
         var start = startFolder.Trim().Replace('\\', '/');
         Start = start.Length == 0 ? _client.WorkingDirectory : start.StartsWith('/') ? start : Join(_client.WorkingDirectory, start);
         if (Start.Length > 1) Start = Start.TrimEnd('/');
-        Description = "SFTP · " + _client.ConnectionInfo.ServerVersion;
+        Description = "SFTP · " + SshShell.Software(_client.ConnectionInfo.ServerVersion);
     }
 
     public override string Start { get; }

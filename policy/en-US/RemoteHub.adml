@@ -1256,6 +1256,34 @@ Registry: VirtualDisplay (REG_SZ) = auto, always or off.</string>
       <string id="Agent_VirtualDisplay_auto">Only when the device has no usable resolution</string>
       <string id="Agent_VirtualDisplay_always">Always</string>
       <string id="Agent_VirtualDisplay_off">Never</string>
+      <string id="Agent_DesktopApps">Allow app tabs</string>
+      <string id="Agent_DesktopApps_Help">Enabled or Not configured: an admin with "Who may see and control the screen" can open single apps from this device in tabs of their own in RemoteHub. Each app runs in the admin's own session on this device, on a virtual monitor of its own; the agent signs the admin in automatically when nobody is signed in. RemoteHub can also list the apps in this device's Start menu.
+
+Disabled: no app tabs and no Start menu list. The remote desktop itself isn't affected.
+
+App tabs need the agent's virtual display (install option "Virtual display for servers without a monitor").
+
+Registry: DesktopApps (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_DesktopAppsElevated">Allow apps as administrator in app tabs</string>
+      <string id="Agent_DesktopAppsElevated_Help">Enabled or Not configured: an app marked "Run as administrator" starts with the admin's full administrator rights, without a UAC prompt – the admin is an administrator on this device and signed in to the agent with their password. Every start is audited.
+
+Disabled: such apps are refused; apps that ask for administrator rights later show the UAC prompt on the device's secure desktop.
+
+Registry: DesktopAppsElevated (REG_DWORD) = 1 or 0.</string>
+      <string id="Agent_DesktopAppsAllowed">Programs app tabs may start</string>
+      <string id="Agent_DesktopAppsAllowed_Help">The only programs that may be started in app tabs, one full path per line, for example C:\Windows\System32\mmc.exe. Environment variables such as %SystemRoot% may be used.
+
+Not configured: any program the admin could start in their own session.
+
+Enabled with an empty list: none.
+
+Registry: DesktopAppsAllowed (REG_MULTI_SZ).</string>
+      <string id="Agent_MaxAppTabs">Most app tabs at once</string>
+      <string id="Agent_MaxAppTabs_Help">How many app tabs may be open on this device at the same time (1–7). Each one has a virtual monitor of its own.
+
+Not configured: 7.
+
+Registry: MaxAppTabs (REG_DWORD).</string>
 
       <!-- Agent: consent -->
       <string id="Agent_AllowedConsentModes">Allowed ways to get the user's consent</string>
@@ -1496,6 +1524,12 @@ Registry: MaxSessions (REG_DWORD).</string>
       </presentation>
       <presentation id="Agent_PrivacyScreen">
         <dropdownList refId="PrivacyScreen" noSort="true" defaultItem="0">Privacy screen:</dropdownList>
+      </presentation>
+      <presentation id="Agent_DesktopAppsAllowed">
+        <multiTextBox refId="DesktopAppsAllowed">Programs (one full path per line):</multiTextBox>
+      </presentation>
+      <presentation id="Agent_MaxAppTabs">
+        <decimalTextBox refId="MaxAppTabs" defaultValue="7" spinStep="1">App tabs:</decimalTextBox>
       </presentation>
       <presentation id="Agent_HiddenApps">
         <multiTextBox refId="HiddenApps">Apps (one per line):</multiTextBox>

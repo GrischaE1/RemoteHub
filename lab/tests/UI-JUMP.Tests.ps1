@@ -45,13 +45,16 @@ BeforeAll {
     # (Reveal), clicked, and the menu tried once more; the retries are written down in the results.
     function MenuTry([string]$Entry, [string]$Node, [int]$TimeoutSec = 30) {
         $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
+        # (a menu of only a text box's entries is the search box's: missed as well - J-19 in run 20261030-194701)
         $none = $m.found -and $m.PSObject.Properties['error'] -and "$($m.error)" -like 'no menu entry*' -and
-            -not @(@($m.PSObject.Properties['entries'] | ForEach-Object { $_.Value }) | Where-Object { $_ }).Count
+            -not @(@($m.PSObject.Properties['entries'] | ForEach-Object { $_.Value }) |
+                Where-Object { $_ -and $_ -notin 'Copy', 'Cut', 'Paste', 'Select all', 'Select All', 'Undo', 'Redo' }).Count
         if ($none) {
             if (-not $R.Contains('menuRetries')) { $R.menuRetries = New-Object System.Collections.ArrayList }
             $v = Reveal $Node
             $null = $R.menuRetries.Add("$Node > ${Entry}: $(ConvertTo-Json -InputObject $v -Compress)")
             $null = Ui $Node -Value realclick -Optional
+            # the click selects the row and the tree settles before the next right-click
             Start-Sleep -Milliseconds 500
             $m = Ui $Node -Value "menu:$Entry" -TimeoutSec $TimeoutSec -Optional
         }
@@ -105,12 +108,15 @@ foreach ($m in @($AE::RootElement.FindAll($TS::Children, $isWin) | Where-Object 
     # Every step starts without dialogs left by an earlier one (written down as "<step>-leftover").
     function Step([System.Collections.IDictionary]$Into, [string]$Name, [scriptblock]$Do) {
         $left = @(Clear-Dialogs)
+        # (a moment for the closed dialogs to go and the main window to take input again: another look would be a
+        # session task of several seconds)
         if ($left.Count) { $Into["$Name-leftover"] = $left; Start-Sleep -Seconds 1 }
         try { . $Do }
         catch {
             $Into["$Name-error"] = "$_"
             Shot "fail-$Name"
             try { $Into["$Name-dialogs"] = @((Invoke-LabUi -Name $VmName -Text '*' -Title '?*' -Value list -Optional -TimeoutSec 3).items | Select-Object -First 60) } catch { }
+            # Esc twice, a moment apart: a menu and the dialog under it close one per press
             foreach ($i in 1..2) { try { Key 1B } catch { }; Start-Sleep -Milliseconds 500 }
         }
     }
@@ -200,6 +206,7 @@ if (Outside $e.Current.BoundingRectangle) {
     while ($ti -and $ti.Current.ControlType -ne [Windows.Automation.ControlType]::TreeItem) { $ti = $walker.GetParent($ti) }
     $p = $null
     if ($ti -and $ti.TryGetCurrentPattern([Windows.Automation.ScrollItemPattern]::Pattern, [ref]$p)) { try { $p.ScrollIntoView(); $how = 'item' } catch { } }
+    # the tree lays out after the scroll before the rectangles are read
     Start-Sleep -Milliseconds 400
     $sp = $null
     for ($i = 0; $i -lt 3; $i++) {
@@ -318,6 +325,7 @@ Add-Type -Namespace RhLab -Name Drag -MemberDefinition '[DllImport("user32.dll")
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 function Go([int]$x, [int]$y) { [RhLab.Drag]::mouse_event(0x8001, [int]($x * 65535 / ($b.Width - 1)), [int]($y * 65535 / ($b.Height - 1)), 0, [IntPtr]::Zero) }
 $x0 = __X0__; $y0 = __Y0__; $x1 = __X1__; $y1 = __Y1__
+# paced as a hand moves: WPF starts a drag only from movement with the button held, and drops where the pointer rests
 Go $x0 $y0; Start-Sleep -Milliseconds 300
 [RhLab.Drag]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 200
 for ($i = 1; $i -le 30; $i++) { Go ([int]($x0 + ($x1 - $x0) * $i / 30)) ([int]($y0 + ($y1 - $y0) * $i / 30)); Start-Sleep -Milliseconds 40 }
@@ -327,6 +335,7 @@ Go $x1 $y1; Start-Sleep -Milliseconds 700
 '@
     function Drag([int[]]$From, [int[]]$To) {
         $null = InSession $dragCode @{ X0 = $From[0]; Y0 = $From[1]; X1 = $To[0]; Y1 = $To[1] }
+        # the drop's change in the tree (or its question) comes a moment later; what it should be is the caller's check
         Start-Sleep -Seconds 2
     }
     # A file dragged from another program (Explorer's way: an OLE drag with a file list): a small window in the
@@ -353,6 +362,7 @@ Add-Type -Namespace RhLab -Name Mv -MemberDefinition '[DllImport("user32.dll")] 
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 function Go([int]$x, [int]$y) { [RhLab.Mv]::mouse_event(0x8001, [int]($x * 65535 / ($b.Width - 1)), [int]($y * 65535 / ($b.Height - 1)), 0, [IntPtr]::Zero) }
 $x0 = __X0__; $y0 = __Y0__; $x1 = __X1__; $y1 = __Y1__
+# the form is shown before this starts, and drawn and taking clicks a moment later; then paced as a hand moves
 Start-Sleep -Milliseconds 1500
 Go $x0 $y0; Start-Sleep -Milliseconds 300
 [RhLab.Mv]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 300
@@ -365,6 +375,7 @@ Go $x1 $y1; Start-Sleep -Milliseconds 800
         $mover = $moverCode.Replace('__X0__', "$($sx + 30)").Replace('__Y0__', "$($sy + 30)").Replace('__X1__', "$($To[0])").Replace('__Y1__', "$($To[1])")
         $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($mover))
         $r = InSession $dragFileCode @{ FILE = $File; SX = $sx; SY = $sy; MOVER = $enc } -TimeoutSec 90
+        # the import of the dropped file shows in the tree a moment later; what it should be is the caller's check
         Start-Sleep -Seconds 2
         $r
     }
@@ -390,7 +401,12 @@ Go $x1 $y1; Start-Sleep -Milliseconds 800
                 if ($l -match '^\s*>?(?<u>\S+)\s+(?:(?<n>\S+)\s+)?(?<id>\d+)\s+(?:Active|Disc)' -and $Matches.u -eq $u) { logoff $Matches.id }
             }
         }
-        Start-Sleep -Seconds 5
+        # (no throw: a session left over shows in the step's own checks)
+        $null = Wait-LabCondition -Until {
+            -not @(Invoke-LabGuest -Name $device.Name -ArgumentList $device.AdminAccount -ScriptBlock {
+                    param($u) @(quser 2>$null | Select-Object -Skip 1 | Where-Object { $_ -match '^\s*>?(?<u>\S+)\s' -and $Matches.u -eq $u })
+                }).Count
+        } -Because "PSAdmin's sessions on the device were not signed out" -TimeoutSec 30 -NoThrow
     }
     # the device's RDP certificate (thumbprint)
     function RdpThumb { Invoke-LabGuest -Name $device.Name -ScriptBlock { (Get-CimInstance -Namespace root\cimv2\TerminalServices -ClassName Win32_TSGeneralSetting -Filter "TerminalName='RDP-tcp'").SSLCertificateSHA1Hash } }
@@ -415,7 +431,9 @@ Go $x1 $y1; Start-Sleep -Milliseconds 800
         $left = Invoke-LabGuest -Name $VmName -ArgumentList $vm.ConsoleAccount -ScriptBlock {
             param($user)
             Get-Process RemoteHub -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
+            # its files are free once the process is gone
+            $until = (Get-Date).AddSeconds(15)
+            do { if (-not @(Get-Process RemoteHub -ErrorAction SilentlyContinue).Count) { break }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $until)
             $paths = "C:\Users\$user\AppData\Local\RemoteHub", "C:\Users\$user\AppData\Roaming\RemoteHub",
                 "C:\Users\$user\Videos\RemoteHub", 'C:\Users\Public\dropA.rdp', 'C:\Users\Public\dropB.rdp',
                 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CredentialsDelegation'
@@ -454,7 +472,8 @@ Add-Type -AssemblyName System.Windows.Forms
             $msi = Get-ChildItem 'C:\LabAgentByHand' -Filter 'RemoteHub-Agent*.msi' | Select-Object -First 1
             (Start-Process msiexec.exe -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/l*v', 'C:\LabAgentByHand\install.log' -Wait -PassThru).ExitCode
         }
-        # RemoteHub asks the agent every 10 s
+        # RemoteHub asks the agent every 10 s: two of its rounds and a margin, as nothing in the tree says it has claimed
+        # the agent (the audit log entry does, but reading it opens a window over the next step)
         Start-Sleep -Seconds 25
         $o
     }
@@ -512,7 +531,7 @@ Add-Type -AssemblyName System.Windows.Forms
         $null = Ui 'Anchor' -Value realclick
         New-LabClientConnection -Name $VmName -Display 'Behind' -TargetHost $target -User $device.AdminAccount -Password $password
         $null = Menu 'Move under>JumpHost' -Node 'Behind'
-        Start-Sleep -Seconds 2
+        $null = Wait-LabCondition -Until { @(Items | Where-Object { $_ -like 'Text|via JumpHost|*' }).Count } -Because 'Behind shows no "via JumpHost" after the move' -TimeoutSec 15 -NoThrow
         Save 'setup' @{ Pair = $R.pair; Target = $target; Jump = $script:jump.Address; Computer = $computer }
     }
 }
@@ -521,6 +540,9 @@ AfterAll {
     if ($isClient) {
         Shot 'end'
         Save 'results' $R
+        # RemoteHub's diagnostic log (no names, no secrets): where its UI thread was when it stopped answering (run
+        # 20261028-161817 - RdpSession writes "releasing the RDP control" before the release and "released" after it)
+        try { Get-LabFile -Name $VmName -Path "C:\Users\$($vm.ConsoleAccount)\AppData\Roaming\RemoteHub\logs\remotehub.log" -Destination (Join-Path $EvidenceDir 'ui-jump-remotehub-log') } catch { }
         try { Stop-LabClient -Name $VmName -Task $script:task } catch { }
         # undone for the next file on this VM; anything that fails: the next file starts from the checkpoint
         try { Clear-ClientLeftovers } catch { Set-LabVmDirty -Name $VmName }
@@ -574,6 +596,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $p.thumb2 = RdpThumb
                 $null = Menu 'Connect' -Node 'Behind'
                 $p.changed = Box '*presents a different RDP certificate*' -Button 'Cancel' -TimeoutSec 120
+                # no tab may open in this time (Cancel opens none)
                 Start-Sleep -Seconds 3
                 $p.tabAfterCancel = Wait-RdpTab 10
                 $p.tabsAfterCancel = @(Items | Where-Object { $_ -like 'Text|Remote desktop|*' }).Count
@@ -641,8 +664,7 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 $t.shareDropped = [ordered]@{ row = @((TreeHit $pr 'JShare').row); x = (TreeHit $pr 'JShare').treeItem.x; jumpX = (TreeHit $pr 'JumpHost').treeItem.x }
                 # ... Move under puts it under the jump host
                 $null = Menu 'Move under>JumpHost' -Node 'JShare'
-                Start-Sleep -Seconds 2
-                $t.shareMoved = @((TreeHit (Probe @('JShare')) 'JShare').row)
+                $null = Wait-LabCondition -Until { $t.shareMoved = @((TreeHit (Probe @('JShare')) 'JShare').row); $t.shareMoved -contains 'via JumpHost' } -Because 'JShare shows no "via JumpHost" after Move under' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
             }
             Step $t indent {
                 $pr = Probe @('Plain', 'InFolder', 'JumpHost', 'Behind', 'JFolder', 'JShare')
@@ -667,14 +689,14 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 # account isn't inherited)
                 $null = Menu 'Move under>JumpHost' -Node 'Mover'
                 $t.moveIn = Box '*Move "Mover" to*' -Button 'Move'
-                Start-Sleep -Seconds 2
-                $pr = Probe @('Mover', 'CredFolder')
+                $w = @{}
+                $null = Wait-LabCondition -Until { $w.pr = Probe @('Mover', 'CredFolder'); @((TreeHit $w.pr 'Mover').row) -contains 'via JumpHost' } -Because 'Mover shows no "via JumpHost" after the move' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+                $pr = $w.pr
                 $t.moverIn = @((TreeHit $pr 'Mover').row)
                 # out of it again, dropped into the folder with the account
                 Drag (Center $pr 'Mover') (Center $pr 'CredFolder')
                 $t.moveOut = Box '*Move "Mover" to*' -Button 'Move'
-                Start-Sleep -Seconds 2
-                $t.moverOut = @((TreeHit (Probe @('Mover')) 'Mover').row)
+                $null = Wait-LabCondition -Until { $t.moverOut = @((TreeHit (Probe @('Mover')) 'Mover').row); $t.moverOut.Count -and $t.moverOut -notcontains 'via JumpHost' } -Because 'Mover still shows "via JumpHost" after the move out' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
             }
             Step $t noAgent {
                 $pr = RevealRows @('Lonely', 'Orphan') @('Orphan', 'Lonely', 'lonely.lab.test')
@@ -711,8 +733,9 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             }
             Step $t duplicate {
                 $null = Menu 'Duplicate' -Node 'JumpHost'
-                Start-Sleep -Seconds 2
-                $pr = Probe @('JumpHost (copy)', 'via JumpHost (copy)')
+                $w = @{}
+                $null = Wait-LabCondition -Until { $w.pr = Probe @('JumpHost (copy)', 'via JumpHost (copy)'); [bool](TreeHit $w.pr 'JumpHost (copy)') } -Because 'no "JumpHost (copy)" in the tree after Duplicate' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+                $pr = $w.pr
                 $t.copy = [bool](TreeHit $pr 'JumpHost (copy)')
                 $t.copyItems = @(Hits $pr 'via JumpHost (copy)').Count
                 # its agent cleared: the menu offers the install, not the update
@@ -721,7 +744,6 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
                 Key 1B; Key 1B
                 # a copy of the connection reached through it: its RDP certificate pin is cleared (asked as the first time)
                 $null = Menu 'Duplicate' -Node 'Behind'
-                Start-Sleep -Seconds 2
                 $null = Menu 'Connect' -Node 'Behind (copy)'
                 # the jump host's password is asked first when the RDP context didn't run before (a rerun filtered to
                 # J-20 in the run of 17.10.2026 05:47: the box below never came, the password dialog stayed): entered,
@@ -735,9 +757,10 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             Save 'tree' $t
         }
 
-        It 'J-15 inside a jump host''s frame its connections, folders and shares sit 12 px further in than a folder''s items' -Tag 'J-15' {
+        # (one step, like a folder's contents, since the guide lines replaced the frames - no extra 12 px)
+        It 'J-15 under a jump host its connections, folders and shares sit one step in, like a folder''s items' -Tag 'J-15' {
             foreach ($k in 'folder', 'behind', 'jfolder', 'jshare') { $t.indent[$k] | Should -Not -BeNullOrEmpty -Because $k }
-            foreach ($k in 'behind', 'jfolder', 'jshare') { ($t.indent[$k] - $t.indent.folder) | Should -BeIn 11, 12, 13 -Because "$k against a folder's item" }
+            foreach ($k in 'behind', 'jfolder', 'jshare') { [math]::Abs($t.indent[$k] - $t.indent.folder) | Should -BeLessOrEqual 1 -Because "$k against a folder's item: the same step" }
         }
 
         It 'J-16 route shown in the tree ("via JumpHost", its tooltip), the editor and the tooltip''s location' -Tag 'J-16' {
@@ -910,16 +933,19 @@ Describe 'UI-JUMP <VmName>' -Tag Client, UI, Jump, 'J', 'UI-JUMP' -Skip:(-not $i
             $d = $R.del = [ordered]@{}
             Step $d all {
                 Close-Tabs
+                # Lonely and Orphan come from the tree built for J-15 to J-17: a run with -Tag J-19 alone skips that
+                # context (run 20261031-115221)
+                if (-not @(Items | Where-Object { $_ -like '*|Lonely|*' }).Count) { throw 'Lonely is not in the tree: the context that builds it (J-15 to J-17) did not run - select J-17 with J-19' }
                 $null = Menu 'Delete' -Node 'Lonely'
                 $d.all = Box '*Delete connection "Lonely"*' -Button 'Delete all'
-                Start-Sleep -Seconds 2
-                $d.afterAll = Items
+                $null = Wait-LabCondition -Until { $d.afterAll = Items; -not @($d.afterAll | Where-Object { $_ -like '*|Orphan|*' -or $_ -like '*|Lonely|*' }).Count } -Because 'Lonely or Orphan still in the tree after Delete all' -TimeoutSec 15 -NoThrow
             }
             Step $d keep {
                 $null = Menu 'Delete' -Node 'JumpHost'
                 $d.keep = Box '*Delete connection "JumpHost"*' -Button 'Keep them'
-                Start-Sleep -Seconds 2
-                $pr = Probe @('Behind', 'JumpHost', 'via JumpHost')
+                $w = @{}
+                $null = Wait-LabCondition -Until { $w.pr = Probe @('Behind', 'JumpHost', 'via JumpHost'); -not (TreeHit $w.pr 'JumpHost') } -Because 'JumpHost still in the tree after Delete' -TimeoutSec 20 -IntervalMs 1000 -NoThrow
+                $pr = $w.pr
                 $d.behindRow = @((TreeHit $pr 'Behind').row)
                 $d.jumpLeft = [bool](TreeHit $pr 'JumpHost')
                 $d.via = @(Hits $pr 'via JumpHost').Count

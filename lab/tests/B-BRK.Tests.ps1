@@ -82,9 +82,10 @@ BeforeAll {
                     Select-Object TimeCreated, Message
             }
         }
-        # the agent's own command on the device (as PSAdmin): output and exit code; -Secret goes to standard input
+        # the agent's own command on the device (as PSAdmin): output and exit code; -Secret goes to standard input.
+        # $Arguments is already one element of the list: wrapped once more, the agent got "broker leave" as one argument.
         function Invoke-AgentExe([string[]]$Arguments, [string]$Secret) {
-            Invoke-LabGuest -Name $VmName -ArgumentList (, $Arguments), $Secret -ScriptBlock {
+            Invoke-LabGuest -Name $VmName -ArgumentList $Arguments, $Secret -ScriptBlock {
                 param($argv, $secret)
                 $psi = New-Object Diagnostics.ProcessStartInfo (Join-Path $env:ProgramFiles 'RemoteHub Agent\RemoteHubAgent.exe')
                 $psi.Arguments = ($argv | ForEach-Object { "`"$_`"" }) -join ' '
@@ -145,7 +146,7 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         $fw = Invoke-LabGuest -Name $VmName -ScriptBlock { @(Get-NetFirewallProfile | Where-Object Enabled).Count }
         $fw | Should -BeGreaterThan 0 -Because 'the case is about the device firewall letting the direct path in'
         $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
-        Save 'direct' ($r | Select-Object path, seconds, pin, health)
+        Save 'direct' ($r | Select-Object path, seconds, pin, health, sessionLog)
         $r.health.deviceId | Should -Be $script:device.id
         $r.path | Should -Be 'DirectLocal' -Because 'host candidates on the lab network answer and the agent opens the punched port for the console'
         (Get-StartedSession).Message | Should -Match 'direct local'
@@ -242,13 +243,22 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
         # a second address on the device's adapter, in a private range the lab doesn't use: a network change as a new
         # DHCP lease or a VPN would bring (the agent tells the broker once the addresses have settled for 2 s)
         $extra = "10.250.$(Get-Random -Minimum 1 -Maximum 254).$(Get-Random -Minimum 1 -Maximum 254)"
-        Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock {
+        # A static address on a DHCP adapter turns DHCP off for it, and the DHCP address and DNS servers go with it: the
+        # device was cut off until DHCP came back. With DHCP/static coexistence on (netsh only, no cmdlet) the static
+        # address sits next to the lease; DHCP is still put back afterwards if it went off anyway.
+        $net = Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock {
             param($ip)
             $if = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } | Select-Object -First 1).InterfaceIndex
+            $dhcp = [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp
+            $null = netsh interface ipv4 set interface interface=$if dhcpstaticipcoexistence=enabled
+            $coexistence = $LASTEXITCODE
             $null = New-NetIPAddress -InterfaceIndex $if -IPAddress $ip -PrefixLength 24 -SkipAsSource $true
+            [pscustomobject]@{ Interface = $if; Dhcp = $dhcp; Coexistence = $coexistence; DhcpAfterAdd = [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp }
         }
+        Save 'net' ($net | Select-Object Dhcp, Coexistence, DhcpAfterAdd)
+        # Nothing while the device can't be reached, should the adapter's change still cut the broker connection.
         function Reported {
-            (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses
+            try { (Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id -DirectFirst).addresses } catch { @() }
         }
         try {
             $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -258,7 +268,17 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
             $added | Should -BeLessThan 45 -Because 'reported once the network settled, not with the next reconnect'
         }
         finally {
-            Invoke-LabGuest -Name $VmName -ArgumentList $extra -ScriptBlock { param($ip) Remove-NetIPAddress -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue }
+            Invoke-LabGuest -Name $VmName -ArgumentList $extra, $net.Interface, $net.Dhcp -ScriptBlock {
+                param($ip, $if, $dhcp)
+                Remove-NetIPAddress -IPAddress $ip -Confirm:$false -ErrorAction SilentlyContinue
+                $null = netsh interface ipv4 set interface interface=$if dhcpstaticipcoexistence=disabled
+                if ($dhcp -eq 'Enabled' -and [string](Get-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4).Dhcp -ne 'Enabled') {
+                    Set-NetIPInterface -InterfaceIndex $if -AddressFamily IPv4 -Dhcp Enabled
+                    Set-DnsClientServerAddress -InterfaceIndex $if -ResetServerAddresses
+                }
+            }
+            # the cases after this one need the device at the broker again
+            $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         do { $now = @(Reported); if ($now -notcontains $extra) { break }; Start-Sleep -Seconds 3 } while ($sw.Elapsed.TotalSeconds -lt 60)
@@ -321,8 +341,9 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
     It 'B-BRK-03 the device policy BrokerEnabled = 0 takes it off the broker, and back when cleared' -Tag 'B-BRK-03' {
         if (-not $broker) { Set-ItResult -Skipped -Because $noBroker; return }
         Set-LabAgentPolicy -Name $VmName -Values @{ BrokerEnabled = 0 }
-        $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer -Offline
-        Set-LabAgentPolicy -Name $VmName -Clear
+        # cleared also when the device doesn't go offline: the cases after this one need the broker
+        try { $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer -Offline }
+        finally { Set-LabAgentPolicy -Name $VmName -Clear }
         $null = Wait-LabBrokerDevice -Broker $broker -Org $org.org -ComputerName $computer
     }
 
@@ -366,12 +387,13 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
                 [pscustomobject]@{ hop = "$hop"; ifIndex = $route.InterfaceIndex; log = $log; lines = $lines; remote = "$($conn.RemoteAddress):$($conn.RemotePort)" }
             }
             $cut.PSObject.Properties['error'] | Should -BeNullOrEmpty -Because "$(if ($cut.PSObject.Properties['error']) { $cut.error })"
-            # the agent's log: the line saying it gave the connection up (an en dash in it: matched with '.')
+            # the agent's log: the line saying the connection ended - its own keep-alive giving up ("nothing from the broker
+            # for ..."), or Windows resetting it first when the retransmissions of a keep-alive find no way out (about 35 s)
             $gaveUp = Invoke-LabGuest -Name $VmName -ArgumentList $cut.log, $cut.lines -ScriptBlock {
                 param($log, $skip)
                 $sw = [Diagnostics.Stopwatch]::StartNew()
                 do {
-                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'the connection was given up . nothing from the broker for' })[0]
+                    $line = @(Get-Content $log -ErrorAction SilentlyContinue | Select-Object -Skip $skip | Where-Object { $_ -match 'RemoteHub Broker \S+: ' -and $_ -notmatch ': connected again' })[0]
                     if ($line) { break }
                     Start-Sleep -Seconds 2
                 } while ($sw.Elapsed.TotalSeconds -lt 150)
@@ -396,7 +418,7 @@ Describe 'B-BRK <VmName>' -Tag Agent, Broker, 'B-BRK' {
             }
             $r = Test-LabBrokerHealth -Broker $broker -OrgInfo $org -DeviceId $script:device.id
             Save 'silent-link' ([pscustomobject]@{ cut = $cut; gaveUp = $gaveUp; again = $again; health = $r.health })
-            $gaveUp.line | Should -Not -BeNullOrEmpty -Because "the agent gives a connection up that carries nothing (waited $($gaveUp.seconds) s)"
+            $gaveUp.line | Should -Not -BeNullOrEmpty -Because "a connection that carries nothing ends (waited $($gaveUp.seconds) s)"
             $gaveUp.seconds | Should -BeLessThan 110 -Because 'two 30 s intervals and 15 s, read every 2 s'
             $again | Should -Not -BeNullOrEmpty -Because 'the agent logs that it is connected again'
             $r.health.deviceId | Should -Be $script:device.id

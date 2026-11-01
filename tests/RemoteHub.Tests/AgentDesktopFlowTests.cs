@@ -173,6 +173,12 @@ public partial class AgentDesktopFlowTests
         public readonly ConcurrentQueue<(int, int)> Fits = new();
         public int Restores;
         public void FitResolution(A.DesktopMonitor monitor, int width, int height) => Fits.Enqueue((width, height));
+        public readonly ConcurrentQueue<int> Scales = new();
+        public string SetScale(A.DesktopMonitor monitor, int percent)
+        {
+            Scales.Enqueue(percent);
+            return $"{percent} %";
+        }
         public void RestoreResolution() => Interlocked.Increment(ref Restores);
         /// <summary>Set to false to simulate the user's desktop appearing (unlock or sign-in).</summary>
         public volatile bool Secure = secure;
@@ -351,8 +357,8 @@ public partial class AgentDesktopFlowTests
             }
         }
 
-        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false) =>
-            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn), DesktopJson.Default.DesktopStart));
+        public void Start(int session, string consent, bool viewOnly = false, string? resume = null, string[]? features = null, bool autoSignIn = false, DesktopAppStart? app = null) =>
+            Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(session, consent, viewOnly, 30, 60, 0, resume, features, autoSignIn, App: app), DesktopJson.Default.DesktopStart));
 
         /// <summary>Closes like RemoteHub ending the session on purpose, and waits until the agent has read the close: disposing
         /// right away can reset the connection first, which the agent rightly takes for a drop.</summary>
@@ -993,6 +999,26 @@ public partial class AgentDesktopFlowTests
         Assert.Null(d.Helpers.Uis[1].Pin);
         Assert.Equal(0, d.Helpers.Uis[1].Asked);
         Assert.DoesNotContain(v.Statuses, s => s.State is DesktopStatusState.EnterPin or DesktopStatusState.WaitingForUser);
+    }
+
+    [Fact]
+    public async Task An_app_tab_without_the_virtual_display_or_automatic_sign_in_is_refused_before_anything_runs()
+    {
+        await using var d = await StartDevice();
+        d.Sessions.Current = [ActiveUser with { User = @"TESTdmin" }];
+        using var v = await Connect(d);
+        // Offered where the virtual display is installed (as on some test machines); never to this account here, which has no
+        // automatic sign-in on the test device.
+        Assert.Equal(A.VirtualDisplay.Installed, v.Client.Hello.Features!.Contains(DesktopFeatures.Apps));
+        Assert.False(v.Client.Hello.Rights.Apps);
+        v.Start(ActiveUser.Id, DesktopConsent.None, app: new DesktopAppStart(@"C:\Windows\System32
+otepad.exe", "--secret-argument", "", false, "Notepad"));
+        var s = v.Next();
+        Assert.Equal(DesktopStatusState.Failed, s.State);
+        Assert.StartsWith("App tabs need", s.Message); // the virtual display or automatic sign-in, whichever this machine lacks
+        Assert.Equal(0, d.Helpers.Started);
+        WaitFor(() => d.Audits.Contains(A.AuditEvent.DesktopRefused), "audit entry");
+        Assert.DoesNotContain(A.AuditEvent.DesktopAppStarted, d.Audits);
     }
 
     [Fact]
@@ -1864,11 +1890,36 @@ public partial class AgentDesktopFlowTests
             v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, int.MaxValue, 99999), DesktopJson.Default.DesktopSettings));
             WaitFor(() => d.Helpers.Screens[0].Fits.Contains((DesktopProtocol.MaxFitWidth, DesktopProtocol.MaxFitHeight)), "the largest resolution");
             Assert.DoesNotContain(d.Helpers.Screens[0].Fits, f => f.Item1 > DesktopProtocol.MaxFitWidth || f.Item2 > DesktopProtocol.MaxFitHeight || f.Item1 <= 0 || f.Item2 <= 0);
+            // A display scale is for an app tab's own monitor: a desktop's monitors are the user's and keep theirs
+            v.Client.Send(DesktopWire.Json(DesktopMessage.Settings, new DesktopSettings(0, 30, 60, 1600, 900, 150), DesktopJson.Default.DesktopSettings));
+            WaitFor(() => d.Helpers.Screens[0].Fits.Contains((1600, 900)), "the size with a scale asked for");
+            Assert.Empty(d.Helpers.Screens[0].Scales);
             restores = d.Helpers.Screens[0].Restores; // a size is set: nothing restores it until the end
         }
         finally { v.Dispose(); }
         WaitFor(() => d.Helpers.Screens[0].Restores > restores, "the device's own resolution back after disconnecting");
     }
+
+    [Theory]
+    [InlineData(150, 0, 0, 0, 0, 100)]     // the recommended scale is 100 % and nothing more is allowed: 100 %
+    [InlineData(150, 0, 2, 2, 2, 150)]     // allowed: two steps up
+    [InlineData(150, 0, 1, 1, 1, 125)]     // only 125 % allowed at this resolution: the most allowed
+    [InlineData(100, -1, 1, -1, 0, 100)]   // recommended 125 %: 100 % is a step down
+    [InlineData(175, -2, 2, 1, 3, 175)]    // recommended 150 %
+    [InlineData(500, 0, 20, 11, 11, 500)]  // a range past the last step is cut to it
+    public void The_scale_is_set_in_steps_from_the_recommended_one_within_what_Windows_allows(int percent, int minRel, int maxRel, int rel, int index, int expected)
+    {
+        Assert.Equal(expected, DesktopProtocol.ScaleSteps[index]);
+        Assert.Equal((rel, expected), A.DisplayModes.ScaleFor(percent, minRel, maxRel));
+    }
+
+    [Theory]
+    [InlineData(130, 0, 2)]   // not one of the steps
+    [InlineData(150, 1, 2)]   // the smallest scale above 100 %: not a range Windows reports
+    [InlineData(150, -12, 0)] // the recommended scale past the last step
+    [InlineData(150, 0, -1)]  // the largest below the smallest
+    public void A_scale_range_that_does_not_fit_the_steps_is_left_alone(int percent, int minRel, int maxRel) =>
+        Assert.Null(A.DisplayModes.ScaleFor(percent, minRel, maxRel));
 
     [Theory]
     [InlineData(1600, 900, 1600, 900)]   // listed: exact
@@ -1957,7 +2008,9 @@ public partial class AgentDesktopFlowTests
         Assert.Equal(DesktopStatusState.SignInReady, v.Next(DesktopStatusState.SignInReady).State);
         var request = DesktopWire.SignInRequest("pw");
         v.Client.Send(request);
-        Assert.Equal(DesktopStatusState.SignedIn, v.Next(DesktopStatusState.SignedIn).State);
+        var signed = v.Next(DesktopStatusState.SignedIn);
+        Assert.Equal(DesktopStatusState.SignedIn, signed.State);
+        Assert.False(signed.Existing); // a session made for this connection
 
         Assert.Equal("pw", broker.Password);
         Assert.Equal(("TEST", "admin", SidOf("admin"), ConsoleSignIn.Id), (broker.Request!.Domain, broker.Request.User, broker.Request.Sid, broker.Request.Session));
@@ -1969,11 +2022,12 @@ public partial class AgentDesktopFlowTests
     }
 
     [Fact]
-    public async Task Automatic_sign_in_is_refused_in_view_only_and_when_the_account_has_a_session()
+    public async Task Automatic_sign_in_is_refused_in_view_only_and_when_the_account_has_a_session_in_use()
     {
         A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
         var broker = new FakeAutoSignIn();
-        var rdp = new A.DesktopSessionInfo(5, @"TEST\admin", A.DesktopSessionState.Disconnected, false, "RDP-Tcp#1");
+        // Someone uses it over RDP: signing in on the console would take it over (a disconnected one is reconnected, below).
+        var rdp = new A.DesktopSessionInfo(5, @"TEST\admin", A.DesktopSessionState.Active, false, "RDP-Tcp#1");
         await using (var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [ConsoleSignIn]))
         using (var v = await Connect(d))
         {
@@ -2162,6 +2216,110 @@ public partial class AgentDesktopFlowTests
         WaitFor(() => d.Audits.Contains(A.AuditEvent.AutoSignInEnded), "audit 1107");
         Assert.Contains(A.AuditEvent.AutoSignInSucceeded, d.Audits);
         Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    // ---- the account's own session, unlocked or reconnected (design §12.1)
+
+    private static readonly A.DesktopSessionInfo OwnLockedConsole = new(2, @"TEST\admin", A.DesktopSessionState.Locked, true, "Console");
+
+    [Fact]
+    public async Task The_accounts_own_locked_session_is_unlocked_and_only_ever_locked_again()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        Screen? lockScreen = null;
+        // The device's policy and RemoteHub both ask for a sign-out: the work in the session isn't this connection's.
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), A.AutoSignInEndActions.SignOut), autoSignIn: broker,
+            sessionList: [OwnLockedConsole], screens: n => n == 1 ? lockScreen = new Screen(secure: true) : new Screen());
+        d.Sessions.Sids[2] = SidOf("admin");
+        broker.Answer = _ =>
+        {
+            d.Sessions.Current = [OwnLockedConsole with { State = A.DesktopSessionState.Active }];
+            lockScreen!.Secure = false; // Windows took the unlock: the lock screen goes, the session stays
+            return new A.AutoSignInResult(true, "", "Signed in.");
+        };
+        using var v = await Connect(d);
+        Assert.Contains(DesktopFeatures.AutoUnlock, v.Client.Hello.Features!);
+        v.Client.Send(DesktopWire.Json(DesktopMessage.Start, new DesktopStart(OwnLockedConsole.Id, DesktopConsent.Ask, false, 30, 60, 0, null, null, true,
+            A.AutoSignInEndActions.SignOut), DesktopJson.Default.DesktopStart));
+        Assert.Equal($@"Ready to unlock as TEST\admin.", v.Next(DesktopStatusState.SignInReady).Message);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        var signed = v.Next(DesktopStatusState.SignedIn);
+
+        Assert.Equal((true, A.AutoSignInEndActions.Lock), (signed.Existing, signed.EndAction));
+        Assert.StartsWith("Unlocked as", signed.Message);
+        Assert.Equal((OwnLockedConsole.Id, "pw"), (broker.Request!.Session, broker.Password));
+        Assert.Contains(d.AuditTexts, a => a.Id == A.AuditEvent.AutoSignInSucceeded && a.Text.Contains("unlocked console session 2"));
+        WaitFor(() => d.Helpers.Started >= 2, "a helper on the unlocked desktop");
+        Assert.All(d.Helpers.Uis, u => Assert.Equal(0, u.Asked)); // the admin's own session: nobody is asked
+        await v.CloseOnPurpose();
+        WaitFor(() => d.Sessions.Disconnects.Contains(2), "locked again");
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    [Fact]
+    public async Task Someone_elses_locked_session_is_never_unlocked_whatever_its_name()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        // Another account, and one written like the admin's but with another SID (renamed, or another domain's): by SID only.
+        foreach (var (user, sid) in new[] { (@"TEST\other", "S-1-5-21-9-9-9-500"), (@"TEST\admin", "S-1-5-21-9-9-9-501") })
+        {
+            await using var d = await StartDevice(policy: AutoSignInPolicy(), autoSignIn: broker, sessionList: [OwnLockedConsole with { User = user }], secureScreen: true);
+            d.Sessions.Sids[2] = sid;
+            using var v = await Connect(d);
+            v.Start(OwnLockedConsole.Id, DesktopConsent.Ask, autoSignIn: true);
+            Assert.Contains("Someone is signed in on the console", v.Next(DesktopStatusState.SignInFailed).Message);
+        }
+        Assert.Equal(0, broker.Calls);
+    }
+
+    [Fact]
+    public async Task The_accounts_disconnected_session_is_reconnected_and_only_ever_locked_again()
+    {
+        A.DesktopEndpoint.AutoSignInAttempts = new A.AutoSignInGate();
+        var broker = new FakeAutoSignIn();
+        var rdp = new A.DesktopSessionInfo(5, @"TEST\admin", A.DesktopSessionState.Disconnected, false, "RDP-Tcp#1");
+        await using var d = await StartDevice(policy: WithEndAction(AutoSignInPolicy(), A.AutoSignInEndActions.SignOut), autoSignIn: broker,
+            sessionList: [ConsoleSignIn, rdp], secureScreen: true);
+        d.Sessions.Sids[5] = SidOf("admin");
+        broker.Answer = _ =>
+        {
+            // Windows reconnects the account's session to the console instead of making a new one.
+            d.Sessions.Current = [rdp with { State = A.DesktopSessionState.Active, Console = true, Station = "Console" }];
+            d.Sessions.Console = 5;
+            return new A.AutoSignInResult(true, "", "Signed in.");
+        };
+        using var v = await Connect(d);
+        v.Start(ConsoleSignIn.Id, DesktopConsent.Ask, autoSignIn: true);
+        Assert.Contains("sign in", v.Next(DesktopStatusState.SignInReady).Message);
+        v.Client.Send(DesktopWire.SignInRequest("pw"));
+        var signed = v.Next(DesktopStatusState.SignedIn);
+
+        Assert.Equal((true, A.AutoSignInEndActions.Lock), (signed.Existing, signed.EndAction));
+        Assert.Contains(d.AuditTexts, a => a.Id == A.AuditEvent.AutoSignInSucceeded && a.Text.Contains("disconnected session, reconnected"));
+        WaitFor(() => d.Helpers.SessionIds.Contains(5), "a helper in the reconnected session");
+        await v.CloseOnPurpose();
+        WaitFor(() => d.Sessions.Disconnects.Contains(5), "locked again");
+        Assert.Empty(d.Sessions.LogOffs);
+    }
+
+    [Fact]
+    public void RemoteHub_offers_to_unlock_only_the_accounts_own_locked_console_session()
+    {
+        var s = new AgentDesktopSession(new RemoteHub.Models.Connection { Name = "pc", Host = "pc.contoso.local" });
+        DesktopHello Hello(params string[] features) => new(DesktopProtocol.Version, "pc", @"TEST\admin",
+            new DesktopRights(true, true, false, AutoSignIn: true), [DesktopConsent.Ask], [], 30, 90, 30, features);
+        var own = new DesktopSessionInfo(2, @"test\ADMIN", DesktopSessionState.Locked, true, "Console");
+
+        s.Hello = Hello(DesktopFeatures.AutoSignIn, DesktopFeatures.AutoUnlock);
+        Assert.True(s.CanAutoSignIn(new DesktopSessionInfo(2, "", DesktopSessionState.SignIn, true, "Console")));
+        Assert.True(s.CanAutoSignIn(own));
+        Assert.False(s.CanAutoSignIn(own with { User = @"TEST\other" }));
+        Assert.False(s.CanAutoSignIn(own with { Console = false, Station = "RDP-Tcp#1" }));
+        Assert.False(s.CanAutoSignIn(own with { State = DesktopSessionState.Active }));
+        s.Hello = Hello(DesktopFeatures.AutoSignIn); // an agent from before unlocking
+        Assert.False(s.CanAutoSignIn(own));
     }
 
     // ---- phase 4: after the sign-in (design §9)
@@ -2423,6 +2581,41 @@ public partial class AgentDesktopFlowTests
             Assert.False(File.Exists(file));
         }
         finally { File.Delete(file); }
+    }
+
+    [Fact]
+    public void A_session_that_was_there_before_is_locked_wherever_a_made_one_would_be_signed_out()
+    {
+        var file = Path.Combine(Path.GetTempPath(), $"rh-autosignin-{Guid.NewGuid():N}.json");
+        A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var s = new Sessions(new A.DesktopSessionInfo(3, @"TEST\admin", A.DesktopSessionState.Active, true, "Console"));
+            s.Sids[3] = SidOf("admin");
+            var log = new A.AgentLog("", 1);
+            var auto = new A.AutoSignInSessions(s, file);
+
+            // Signed out by the connection's setting, or for a drop with nothing to cover the screen: locked instead.
+            auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.SignOut, existing: true);
+            Assert.Equal(A.AutoSignInEndActions.Lock, auto.Owned(3)?.EndAction);
+            Assert.Equal("locked", auto.EndOnPurpose(3, log, "connection lost, nothing to cover the screen", A.AutoSignInEndActions.SignOut));
+
+            // A drop not continued in time: locked once the hold is over, and the cover ends then.
+            auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock, existing: true);
+            var helper = new CoverHelper();
+            auto.Dropped(3, helper, log);
+            WaitFor(() => s.Disconnects.Count == 2, "locked after the hold");
+            WaitFor(() => helper.Disposed, "the cover ends once the session is locked");
+
+            // Left by an agent that stopped during the hold: locked at the next start.
+            A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2);
+            auto.Signed(3, SidOf("admin"), @"TEST\admin", A.AutoSignInEndActions.Lock, existing: true);
+            auto.Dropped(3, new CoverHelper(), log);
+            new A.AutoSignInSessions(s, file).Recover(log);
+            Assert.Equal(3, s.Disconnects.Count);
+            Assert.Empty(s.LogOffs);
+        }
+        finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); File.Delete(file); }
     }
 
     [Fact]

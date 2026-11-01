@@ -41,6 +41,10 @@ public enum AgentRight
 /// <item><c>AuditToEventLog</c> (DWORD) – 0: audit entries only in the agent's log file, not in the Windows Application log.</item>
 /// <item><c>PrivacyScreen</c> (DWORD) – 0: the admin can't black out the device's screen; 1: can, but the mouse and keyboard at the device stay usable; 2: can, and the mouse and keyboard at the device are blocked with it (default – the admin can still leave them usable).</item>
 /// <item><c>HiddenApps</c> (REG_MULTI_SZ) – apps never shown to an admin, whatever the user chooses: full program paths, or <c>aumid:</c> + a Store app's AppUserModelID.</item>
+/// <item><c>DesktopApps</c> (DWORD) – 0: no app tabs on this device, and no Start menu list (app-tabs-design §9).</item>
+/// <item><c>DesktopAppsElevated</c> (DWORD) – 0: apps in app tabs are never started as administrator.</item>
+/// <item><c>DesktopAppsAllowed</c> (REG_MULTI_SZ) – when set, only these programs (full paths) may be started in app tabs; set but empty: none.</item>
+/// <item><c>MaxAppTabs</c> (DWORD) – app tabs open at once on this device (1–7, default 7).</item>
 /// <item><c>TunnelEnabled</c> (DWORD) – 0: this device is never a jump host.</item>
 /// <item><c>TunnelTargets</c> (REG_MULTI_SZ) – where a jump connection may go: address ranges (<c>10.20.0.0/16</c>, <c>fd00::/8</c>, <c>10.1.2.3</c>) and names (<c>sql01.contoso.local</c>, <c>*.contoso.local</c>). Unset: anywhere – except this device's own loopback, link-local and multicast addresses, which only an address range naming them allows.</item>
 /// <item><c>TunnelPorts</c> (REG_MULTI_SZ) – ports a jump connection may go to: <c>3389</c>, <c>5985-5986</c>, <c>*</c>. Unset: every port.</item>
@@ -69,6 +73,14 @@ public sealed record AgentPolicy
     public int PrivacyScreen { get; init; } = PrivacyScreenLevel.WithInputBlock;
     /// <summary>HiddenApps: programs (full path) or Store apps (<c>aumid:</c> + AppUserModelID) never shown to an admin.</summary>
     public IReadOnlyList<string> HiddenApps { get; init; } = [];
+    /// <summary>DesktopApps: app tabs and the Start menu list.</summary>
+    public bool DesktopApps { get; init; } = true;
+    /// <summary>DesktopAppsElevated: apps in app tabs may be started as administrator.</summary>
+    public bool DesktopAppsElevated { get; init; } = true;
+    /// <summary>DesktopAppsAllowed: the only programs app tabs may start (<see cref="AppIds.Normalize"/>d); null = any.</summary>
+    public IReadOnlyList<string>? DesktopAppsAllowed { get; init; }
+    /// <summary>MaxAppTabs: app tabs open at once.</summary>
+    public int MaxAppTabs { get; init; } = global::RemoteHub.Agent.VirtualDisplay.MaxMonitors - 1;
     /// <summary>TunnelEnabled: this device may be used as a jump host.</summary>
     public bool TunnelEnabled { get; init; } = true;
     /// <summary>TunnelTargets and TunnelPorts: where jump connections may go.</summary>
@@ -199,6 +211,7 @@ public sealed record AgentPolicy
     internal static AgentPolicy Refused(string reason) => new()
     {
         DesktopEnabled = false,
+        DesktopApps = false,
         PowerShellEnabled = false,
         ConsentModes = [],
         PrivacyScreen = PrivacyScreenLevel.Off,
@@ -233,6 +246,11 @@ public sealed record AgentPolicy
             AuditToEventLog = Raw(PolicyCatalog.AuditToEventLog) is not 0,
             PrivacyScreen = Number(PolicyCatalog.PrivacyScreen) ?? d.PrivacyScreen,
             HiddenApps = Strings(PolicyCatalog.HiddenApps)?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.HiddenApps,
+            DesktopApps = Raw(PolicyCatalog.DesktopApps) is not 0,
+            DesktopAppsElevated = Raw(PolicyCatalog.DesktopAppsElevated) is not 0,
+            // Set but with nothing usable in it: no program – a list that restricts must not turn into "any".
+            DesktopAppsAllowed = Strings(PolicyCatalog.DesktopAppsAllowed)?.Where(a => a.Trim().Length > 0).Select(AppIds.Normalize).Distinct().ToList() ?? d.DesktopAppsAllowed,
+            MaxAppTabs = Number(PolicyCatalog.MaxAppTabs) ?? d.MaxAppTabs,
             TunnelEnabled = Raw(PolicyCatalog.TunnelEnabled) is not 0,
             Tunnel = TunnelRules.Parse(Strings(PolicyCatalog.TunnelTargets), Strings(PolicyCatalog.TunnelPorts)),
             MaxTunnelStreams = Number(PolicyCatalog.MaxTunnelStreams) ?? d.MaxTunnelStreams,

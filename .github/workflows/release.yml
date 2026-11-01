@@ -56,15 +56,20 @@ jobs:
       - name: Build
         run: dotnet build RemoteHub.sln --configuration Release --no-restore -p:Version=${{ steps.version.outputs.version }}
 
+      # A test that hangs ends the run after 5 minutes without progress (the longest test takes about 20 s) instead of
+      # at the job's time limit, and the blame sequence names the tests that were running. No dump: the artifacts are
+      # public.
       - name: Test
-        run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test RemoteHub.sln --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --blame-hang-timeout 5m --blame-hang-dump-type none
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results
-          path: '**/test-results.trx'
+          path: |
+            **/test-results.trx
+            **/TestResults/**/Sequence*.xml
           if-no-files-found: ignore
 
       # Code signing through SSL.com eSigner (CodeSignTool), in the environment release-signing: its secrets ES_USERNAME,

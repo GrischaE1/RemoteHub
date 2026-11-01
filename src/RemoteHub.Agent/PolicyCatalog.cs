@@ -366,6 +366,13 @@ public static class PolicyCatalog
     /// <summary>Ports on the device itself that its tunnel opens (RDP through the agent, port forwarding) – "RDP" = its RDP port.</summary>
     public static readonly PolicyEntry TunnelOwnPorts = Agent("TunnelOwnPorts", PolicyKind.List, "Jump host", "Ports on this device itself", since: BrokerSince);
 
+    // App tabs (docs/app-tabs-design.md §9).
+    private const string AppTabsSince = "0.22.0";
+    public static readonly PolicyEntry DesktopApps = Agent("DesktopApps", PolicyKind.Number, "Remote desktop", "Allow app tabs", 0, 1, labels: OnOff, since: AppTabsSince);
+    public static readonly PolicyEntry DesktopAppsElevated = Agent("DesktopAppsElevated", PolicyKind.Number, "Remote desktop", "Allow apps as administrator in app tabs", 0, 1, labels: OnOff, since: AppTabsSince);
+    public static readonly PolicyEntry DesktopAppsAllowed = Agent("DesktopAppsAllowed", PolicyKind.List, "Remote desktop", "Programs app tabs may start", since: AppTabsSince);
+    public static readonly PolicyEntry MaxAppTabs = Agent("MaxAppTabs", PolicyKind.Number, "Remote desktop", "Most app tabs at once", 1, 7, since: AppTabsSince);
+
     private const string BrokerSince = "0.22.0";
 
     /// <summary>Subkey Rights: one list of groups per AgentRight, in the enum's order.</summary>
@@ -420,6 +427,7 @@ public static class PolicyCatalog
         PowerShellEnabled,
         AllowedGroups, .. Rights,
         DesktopEnabled, MaxFramesPerSecond, MaxQuality, DesktopClipboard, DesktopIdleTimeoutMinutes, VirtualDisplay,
+        DesktopApps, DesktopAppsElevated, DesktopAppsAllowed, MaxAppTabs,
         AllowedConsentModes, ConsentTimeoutSeconds,
         PrivacyScreen, PrivacyScreenMessage, HiddenApps,
         NoUserBehavior, AutoSignInRequirePrivacyScreen, AutoSignInEndAction,
