@@ -123,7 +123,7 @@ public class SecureClipboardTests
         });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the STA part");
         if (error != null) throw new Xunit.Sdk.XunitException("The STA part failed: " + error);
     }
 }

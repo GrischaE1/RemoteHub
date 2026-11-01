@@ -11,7 +11,7 @@ public class PasswordBoxTests
         var t = new Thread(() => { try { a(); } catch (Exception e) { err = e; } });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the STA part");
         if (err is not null) throw new Exception(err.Message, err);
     }
 
