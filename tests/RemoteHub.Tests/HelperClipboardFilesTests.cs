@@ -175,7 +175,7 @@ public class HelperClipboardFilesTests
             Assert.True(reader.Join(5000), "the OLE read didn't return");
             Assert.True(files is not null, why);
             Assert.Equal(new[] { file }, files);
-            winforms.Join();
+            TestThread.Join(winforms, "the Windows Forms copier");
         }
         finally
         {
@@ -351,7 +351,7 @@ public class HelperClipboardFilesTests
             var t = new Thread(() => System.Windows.Forms.Clipboard.SetText("meanwhile"));
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join();
+            TestThread.Join(t, "the copy of a text");
             Assert.True(SpinWait.SpinUntil(() => texts.Contains("meanwhile"), 5000), "the helper waited for the reader");
             release.Set();
             Thread.Sleep(500);
@@ -493,7 +493,7 @@ public class HelperClipboardFilesTests
         {
             // A junction needs no privilege (unlike a symbolic link).
             using (var mklink = Process.Start(new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{Path.Combine(copied, "junction")}\" \"{outside}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!)
-                mklink.WaitForExit();
+                Assert.True(mklink.WaitForExit(30_000), "mklink didn't end");
             Assert.True(Directory.Exists(Path.Combine(copied, "junction")));
             var o = A.ClipboardTransfer.Files(1, [copied], out var error)!;
             Assert.Null(error);
@@ -542,7 +542,7 @@ public class HelperClipboardFilesTests
         });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the copy of the files");
         Skip.If(failed is not null, $"no clipboard in this session ({failed?.Message})");
     }
 
@@ -625,7 +625,7 @@ public class HelperClipboardFilesTests
         try
         {
             writer.Start();
-            writer.Join();
+            TestThread.Join(writer, "the copying program", 60);
             Skip.If(copied == 0, $"no clipboard in this session ({failures.FirstOrDefault()})");
             Assert.True(failures.IsEmpty, "copies failed while the helper read: " + string.Join(" | ", failures));
             Assert.True(SpinWait.SpinUntil(() => texts.Contains("the last copy"), 5000), "the last copy didn't reach the helper");
@@ -655,7 +655,7 @@ public class HelperClipboardFilesTests
         var t = new Thread(System.Windows.Forms.Clipboard.Clear);
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "clearing the clipboard");
     }
 
     [SkippableFact]
@@ -677,7 +677,7 @@ public class HelperClipboardFilesTests
         });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join();
+        TestThread.Join(t, "the copy of an image");
         try
         {
             Skip.If(failed is not null, $"no clipboard in this session ({failed?.Message})");

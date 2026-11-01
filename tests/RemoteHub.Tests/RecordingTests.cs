@@ -167,7 +167,7 @@ public class RecordingTests
         });
         thread.SetApartmentState(System.Threading.ApartmentState.STA);
         thread.Start();
-        thread.Join();
+        TestThread.Join(thread, "the capture");
         if (failure is not null) throw new Xunit.Sdk.XunitException(failure.ToString());
     }
 

@@ -36,7 +36,7 @@ public class VirtualFilesTests
         thread.Start();
         try
         {
-            ready.Wait();
+            Assert.True(ready.Wait(10_000), "the offering thread didn't start");
             Skip.If(offered == 0, "no clipboard in this session");
             Thread.Sleep(2000); // Explorer and others look at the new clipboard content
             Assert.Equal(0, Volatile.Read(ref fetches));
@@ -51,7 +51,7 @@ public class VirtualFilesTests
             });
             reader.SetApartmentState(ApartmentState.STA);
             reader.Start();
-            reader.Join();
+            TestThread.Join(reader, "the paste of the offered file");
             Assert.Equal("report.txt", names);
             Assert.Equal("virtual content", content);
             Assert.Equal(1, Volatile.Read(ref fetches));
