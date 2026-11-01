@@ -38,6 +38,7 @@ public static class AppPolicy
     public static bool? RecordingIncludeDetails => Flag(PolicyCatalog.RecordingIncludeDetails);
     public static int? ProcessRefreshSeconds => PolicyCatalog.Number(PolicyCatalog.ProcessRefreshSeconds, Source);
     public static int? ServiceRefreshSeconds => PolicyCatalog.Number(PolicyCatalog.ServiceRefreshSeconds, Source);
+    public static int? TaskRefreshSeconds => PolicyCatalog.Number(PolicyCatalog.TaskRefreshSeconds, Source);
     public static string? AgentDesktopQuality => PolicyCatalog.Text(PolicyCatalog.AgentDesktopQuality, Source);
     public static string? AgentDesktopConsent => PolicyCatalog.Text(PolicyCatalog.AgentDesktopConsent, Source);
     /// <summary>1: every agent desktop starts view only, and it can't be switched to control.</summary>

@@ -23,6 +23,8 @@ public static class AuditEvents
     public const string FilesTransferred = "files.transferred";
     // Lock, restart … from a connection's Device actions: the action and its result, never a message's text.
     public const string DeviceAction = "device.action";
+    // Scheduled tasks tab: run, end, enable, disable with the task's path; Event Viewer tab: the exported log's name and count.
+    public const string TaskAction = "task.action", EventLogExported = "eventlog.exported";
     public const string RecordingStarted = "recording.started", RecordingStopped = "recording.stopped";
     public const string StorageMigrated = "storage.migrated", StorageCheckFailed = "storage.check_failed", StorageRestored = "storage.restored",
         StorageLocationChanged = "storage.location_changed";
@@ -61,6 +63,8 @@ public static class AuditEvents
         DesktopDecoderStopped => "Desktop decoder stopped",
         FilesTransferred => "Files transferred",
         DeviceAction => "Device action",
+        TaskAction => "Scheduled task",
+        EventLogExported => "Event log exported",
         RecordingStarted => "Recording started",
         RecordingStopped => "Recording saved",
         StorageMigrated => "Settings moved to the database",
@@ -91,7 +95,7 @@ public static class AuditEvents
         ("Sessions", [SessionConnected, SessionEnded, SessionFailed]),
         ("Changes to connections and settings", [DataAdded, DataChanged, DataDeleted, NodeRestored, NodePurged]),
         ("Passwords and protection", [PasswordCopied, AppUnlocked, AppUnlockFailed, AppLocked, ProtectionChanged, AuditRetentionChanged]),
-        ("Files, recordings and agents", [FilesTransferred, DeviceAction, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn, AgentEnrollment, BrokerConnected, BrokerDisconnected]),
+        ("Files, recordings and agents", [FilesTransferred, DeviceAction, TaskAction, EventLogExported, RecordingStarted, RecordingStopped, AgentInstalled, AgentCredentialProvider, AgentAutoSignIn, AgentEnrollment, BrokerConnected, BrokerDisconnected]),
         ("Backups and storage", [BackupExported, BackupImported, StorageMigrated, StorageCheckFailed, StorageRestored, StorageLocationChanged]),
         ("Notes", [NoteAdded, NoteChanged, NoteDeleted, NoteRestored, NotesExported, NotesImported]),
         ("Scripts", [ScriptAdded, ScriptDeleted, ScriptRestored, ScriptDeployed, ScriptRun, ScriptsExported, ScriptsImported]),

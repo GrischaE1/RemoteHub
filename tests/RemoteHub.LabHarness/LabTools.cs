@@ -35,6 +35,9 @@ using RemoteHub.Services;
 ///   reg-delete-key --key .. | reg-export --key .. --out <local file>
 ///   svc-list | svc-control --name .. --action Start|Stop|Restart | svc-startup --name .. --startup Automatic|AutomaticDelayed|Manual|Disabled
 ///   proc-list | proc-stop --ids 1|2 --names a|b [--tree 1]
+///   evt-logs | evt-list --log .. [--levels Error|Warning] [--hours n] [--source ..] [--max n] [--before id]
+///   evt-export --log .. --out <file> [--levels ..] [--hours n] [--source ..]   RemoteEventLog.Export + FileDownloader
+///   task-list | task-do --folder .. --name .. --action Run|End|Enable|Disable | task-details --folder .. --name ..
 ///   dev-users                                who is signed in, as Device actions sees it (DeviceActions.SignedIn)
 ///   dev-action --action Lock|SendMessage|SignOut|Restart|ShutDown|GroupPolicyUpdate|IntuneSync [--message ..] [--device ..]
 ///                                            one device action: { ok, text } as RemoteHub shows it
@@ -116,6 +119,7 @@ internal static class LabTools
                 "complete" => Complete(target, o),
                 "fs-upload" => await Upload(target, o),
                 "fs-download" => await Download(target, o),
+                "evt-export" => await ExportEvents(target, o),
                 "dev-action" => DeviceActionOp(target, o),
                 _ => WithRunspace(target, rs => Simple(rs, op, o)),
             };
@@ -333,6 +337,21 @@ internal static class LabTools
         return new { replacementIndex = r?.ReplacementIndex, matches = r?.Matches.Select(m => m.CompletionText).Take(50).ToList() ?? [] };
     });
 
+    private static EventQuery EventQueryOf(Dictionary<string, string> o) => new(o["log"],
+        o.GetValueOrDefault("levels") is { Length: > 0 } l ? [.. l.Split('|').Select(Enum.Parse<EventLevel>)] : [],
+        int.TryParse(o.GetValueOrDefault("hours"), out var h) ? DateTime.UtcNow.AddHours(-h) : null, o.GetValueOrDefault("source") ?? "");
+
+    // The Event Viewer tab's export: wevtutil on the device, the file downloaded as the tab does, the device's copy deleted.
+    private static async Task<object> ExportEvents(PsTarget t, Dictionary<string, string> o)
+    {
+        var q = EventQueryOf(o);
+        var (path, size) = WithRunspace(t, rs => RemoteEventLog.Export(rs, q));
+        var item = TransferItem.Download(path, o["out"], Path.GetFileName(o["out"]), "lab", size);
+        await FileDownloader.DownloadAsync(() => Open(t), ex => PsRemoting.Explain(ex, t), true, [item], a => a());
+        var left = WithRunspace(t, rs => { RemoteEventLog.DeleteExport(rs, path); return (object)RemoteFs.Invoke(rs, "param([string]$p) Test-Path -LiteralPath $p", ("p", path)).FirstOrDefault()?.ToString() ?? ""; });
+        return new { remote = path, size, state = item.State.ToString(), item.StatusText, bytes = File.Exists(o["out"]) ? new FileInfo(o["out"]).Length : 0, leftOnDevice = left };
+    }
+
     private static object Simple(Runspace rs, string op, Dictionary<string, string> o)
     {
         switch (op)
@@ -372,6 +391,32 @@ internal static class LabTools
             }
 
             case "dev-users": return new { users = DeviceActions.SignedIn(rs) };
+
+            case "evt-logs": return new { logs = RemoteEventLog.Logs(rs).Select(l => new { l.Name, l.Count }) };
+            case "evt-list":
+            {
+                var page = RemoteEventLog.Events(rs, EventQueryOf(o), long.TryParse(o.GetValueOrDefault("before"), out var b) ? b : 0,
+                    int.TryParse(o.GetValueOrDefault("max"), out var m) ? m : RemoteEventLog.PageSize);
+                return new { page.More, events = page.Entries.Select(e => new { e.RecordId, e.TimeUtc, level = e.Level.ToString(), e.Source, e.EventId, e.Message }) };
+            }
+
+            case "task-list":
+            {
+                var l = RemoteTasks.List(rs);
+                return new { l.Folders, tasks = l.Tasks.Select(x => new { x.Folder, x.Name, x.Path, state = x.State.ToString(), x.LastRunUtc, x.NextRunUtc, x.LastResult, x.RunAs }) };
+            }
+            case "task-do":
+            {
+                var task = RemoteTasks.List(rs).Tasks.FirstOrDefault(x => string.Equals(x.Folder, o["folder"], StringComparison.OrdinalIgnoreCase) && string.Equals(x.Name, o["name"], StringComparison.OrdinalIgnoreCase))
+                           ?? new TaskInfo(o["folder"], o["name"], TaskState.Unknown, null, null, 0, "", "", "");
+                RemoteTasks.Do(rs, task, Enum.Parse<TaskAction>(o["action"]));
+                return new { done = o["action"] };
+            }
+            case "task-details":
+            {
+                var task = RemoteTasks.List(rs).Tasks.First(x => string.Equals(x.Folder, o["folder"], StringComparison.OrdinalIgnoreCase) && string.Equals(x.Name, o["name"], StringComparison.OrdinalIgnoreCase));
+                return new { text = RemoteTasks.Describe(task, RemoteTasks.Xml(rs, task)) };
+            }
 
             case "svc-list":
                 return new { services = RemoteServices.List(rs).Select(s => new { s.Name, s.DisplayName, s.State, startup = s.Startup.ToString(), s.Account, s.ProcessId }) };

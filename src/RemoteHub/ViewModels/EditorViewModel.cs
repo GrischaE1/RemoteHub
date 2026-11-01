@@ -409,6 +409,8 @@ public sealed partial class EditorViewModel : ObservableObject
                 v => tools.ProcessRefreshSeconds = v, "Only while the tab is visible. CPU % is the average since the previous refresh.", AppPolicy.ProcessRefreshSeconds));
             ToolRows.Add(RefreshRow("Services tab – refresh every", tools.ServiceRefreshSeconds, RemoteToolSettings.DefaultServiceRefresh,
                 v => tools.ServiceRefreshSeconds = v, "Only while the tab is visible. F5 or the refresh button always reads the list again.", AppPolicy.ServiceRefreshSeconds));
+            ToolRows.Add(RefreshRow("Scheduled tasks tab – refresh every", tools.TaskRefreshSeconds, RemoteToolSettings.DefaultTaskRefresh,
+                v => tools.TaskRefreshSeconds = v, "Only while the tab is visible. F5 or the refresh button always reads the list again.", AppPolicy.TaskRefreshSeconds));
         }
         BuildApps(own, parent); // after PsRows: the Apps page follows their automatic sign-in row
     }

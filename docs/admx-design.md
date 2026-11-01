@@ -161,6 +161,8 @@ The features are grouped by **how RemoteHub reaches the device**, because RDP, t
 | `AllowAgentRegistry` | The registry tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentServices` | The services tab through the agent | Agent `PowerShellEnabled` |
 | `AllowAgentProcesses` | The processes tab through the agent | Agent `PowerShellEnabled` |
+| `AllowAgentEventLog` | The Event Viewer tab through the agent (since 0.22.0) | Agent `PowerShellEnabled` |
+| `AllowAgentScheduledTasks` | The scheduled tasks tab through the agent (since 0.22.0) | Agent `PowerShellEnabled` |
 | `AllowAgentDeviceActions` *(0.21.0)* | A connection's *Device actions* (lock, message, sign out, restart, shut down, Group Policy, Intune) through the agent | Agent `PowerShellEnabled`, right `PowerShell` |
 | `AllowBroker` *(0.22.0)* | The RemoteHub Broker on this PC: *Settings → RemoteHub Broker* says why and offers nothing, synced folders aren't kept up to date, their devices are reached only directly | Agent `BrokerEnabled` |
 | `BrokerDirect` *(0.22.0)* | 0: sessions through the broker are always relayed – this PC never tries the direct path (not a feature switch: DWORD 0/1, 1 by default) | Agent `BrokerDirect` |
@@ -178,6 +180,8 @@ The features are grouped by **how RemoteHub reaches the device**, because RDP, t
 | `AllowRemotingRegistry` | The registry tab over WinRM | – |
 | `AllowRemotingServices` | The services tab over WinRM | – |
 | `AllowRemotingProcesses` | The processes tab over WinRM | – |
+| `AllowRemotingEventLog` | The Event Viewer tab over WinRM (since 0.22.0) | – |
+| `AllowRemotingScheduledTasks` | The scheduled tasks tab over WinRM (since 0.22.0) | – |
 | `AllowRemotingDeviceActions` *(0.21.0)* | A connection's *Device actions* over WinRM | – |
 | `AllowRemotingSetup` | *Set up PowerShell remoting on the target…* | – |
 
@@ -304,6 +308,7 @@ The shared file's password is never a policy (P10). Each PC asks for it once, as
 |---|---|---|---|
 | `ProcessRefreshSeconds` | DWORD 0–3600 (0 = only by hand) | 15 | Global defaults → Tools |
 | `ServiceRefreshSeconds` | DWORD 0–3600 | 60 | Global defaults → Tools |
+| `TaskRefreshSeconds` | DWORD 0–3600 (since 0.22.0) | 60 | Global defaults → Tools |
 
 ### 6.8 Agent remote desktop (console side)
 

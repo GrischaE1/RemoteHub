@@ -400,11 +400,13 @@ public sealed class AppData
 /// <summary>Global settings of the remote tool tabs (shared with the other settings).</summary>
 public sealed class RemoteToolSettings
 {
-    public const int DefaultProcessRefresh = 15, DefaultServiceRefresh = 60;
+    public const int DefaultProcessRefresh = 15, DefaultServiceRefresh = 60, DefaultTaskRefresh = 60;
     /// <summary>Seconds between refreshes of the processes tab while it is visible; 0 = only by hand.</summary>
     public int ProcessRefreshSeconds { get; set; } = DefaultProcessRefresh;
     /// <summary>Seconds between refreshes of the services tab while it is visible; 0 = only by hand.</summary>
     public int ServiceRefreshSeconds { get; set; } = DefaultServiceRefresh;
+    /// <summary>Seconds between refreshes of the scheduled tasks tab while it is visible; 0 = only by hand.</summary>
+    public int TaskRefreshSeconds { get; set; } = DefaultTaskRefresh;
 }
 
 public sealed class UiState

@@ -18,8 +18,10 @@ using TextBox = Wpf.Ui.Controls.TextBox;
 namespace RemoteHub.Views;
 
 /// <summary>
-/// Tab content for a list of remote items (processes, services): filter box, sortable columns, a status line and an
-/// automatic refresh while the tab is visible. Rows are updated in place so selection, sorting and scroll position stay.
+/// Tab content for a list of remote items (processes, services, scheduled tasks, events): filter box, sortable columns,
+/// a status line and an automatic refresh while the tab is visible (or refresh by hand only). Rows are updated in place so
+/// selection, sorting and scroll position stay. A view may add a pane beside the list (a folder tree), a pane below it
+/// (the selected item's text) and a row of filters under the toolbar.
 /// </summary>
 public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterableView where TRow : class
 {
@@ -34,7 +36,11 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     private readonly Wpf.Ui.Controls.GridView _grid = new();
     private readonly Dictionary<GridViewColumn, (string Header, string Sort)> _columns = [];
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private readonly Func<int> _intervalSeconds;
+    private readonly Func<int>? _intervalSeconds;
+    private readonly DockPanel _body;
+    private readonly DockPanel _bar;
+    private readonly Grid _content = new();
+    private FrameworkElement? _side, _detail;
     private DateTime _lastLoad = DateTime.MinValue;
     private DateTime? _soon;
     private DateTime _errorUntil;
@@ -47,7 +53,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     protected readonly ListView List = new() { BorderThickness = new Thickness(0) };
     protected readonly ListCollectionView View;
 
-    protected RemoteListView(RemoteToolSession session, SymbolRegular icon, string kind, Func<int> intervalSeconds, Action reconnect, Action close)
+    /// <param name="intervalSeconds">Seconds between automatic refreshes (0 = off by setting); null: refreshed by hand only, no pause button.</param>
+    protected RemoteListView(RemoteToolSession session, SymbolRegular icon, string kind, Func<int>? intervalSeconds, Action reconnect, Action close)
     {
         Session = session;
         _intervalSeconds = intervalSeconds;
@@ -67,15 +74,16 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         Grid.SetRow(cell, 1);
         root.Children.Add(cell);
         RecordingArea = cell;
-        var body = new DockPanel { Margin = new Thickness(10, 10, 10, 8) };
+        var body = _body = new DockPanel { Margin = new Thickness(10, 10, 10, 8) };
         cell.Children.Add(body);
         cell.Children.Add(RemoteToolChrome.Overlay(reconnect, close));
 
         // ---- toolbar: item actions | filter | refresh + auto refresh
-        var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
+        var bar = _bar = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
         var refresh = RemoteToolChrome.Tool(SymbolRegular.ArrowClockwise24, "Refresh now (F5)", () => _ = Refresh(manual: true));
         _pause = RemoteToolChrome.Tool(SymbolRegular.Pause24, "", () => { _paused = !_paused; UpdatePause(); if (!_paused) Tick(); });
         foreach (var b in new[] { _pause, refresh }) { DockPanel.SetDock(b, Dock.Right); b.Margin = new Thickness(4, 0, 0, 0); bar.Children.Add(b); }
+        if (intervalSeconds is null) _pause.Visibility = Visibility.Collapsed;
         DockPanel.SetDock(_tools, Dock.Left);
         bar.Children.Add(_tools);
         _filter.Margin = new Thickness(0);
@@ -100,7 +108,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
         ResetStatusColour();
 
         // ---- list
-        View = new ListCollectionView(Rows) { IsLiveSorting = true, Filter = o => o is TRow r && (_filter.Text.Trim() is not { Length: > 0 } f || Matches(r, f)) };
+        // Typed text searches every row; without it the view's scope applies (the folder chosen in a side pane).
+        View = new ListCollectionView(Rows) { IsLiveSorting = true, Filter = o => o is TRow r && (_filter.Text.Trim() is { Length: > 0 } f ? Matches(r, f) : InScope(r)) };
         List.ItemsSource = View;
         // Rows that arrive after the filter was typed (the first load, a refresh): the first match is selected when nothing
         // is, as if the text had just been typed.
@@ -142,7 +151,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
             else if (e.Key == Key.Down) { List.Focus(); e.Handled = true; }
             else if (e.Key == Key.Enter && Selected is [var match]) { Activate(match); e.Handled = true; }
         };
-        body.Children.Add(List);
+        _content.Children.Add(List);
+        body.Children.Add(_content);
 
         session.Ready += () => { _lastLoad = DateTime.MinValue; _ = Refresh(manual: false); };
         session.FocusRequested += () => Dispatcher.BeginInvoke(() => List.Focus(), DispatcherPriority.Input);
@@ -162,6 +172,8 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     protected abstract bool Matches(TRow row, string filter);
     protected abstract ContextMenu? Menu(List<TRow> selected);
     protected virtual void Activate(TRow row) { }
+    /// <summary>Rows shown while the filter box is empty (all by default).</summary>
+    protected virtual bool InScope(TRow row) => true;
     protected virtual void OnKey(KeyEventArgs e) { }
     protected virtual void SelectionChanged() { }
 
@@ -190,6 +202,77 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     {
         b.Margin = new Thickness(0, 0, 4, 0);
         _tools.Children.Add(b);
+    }
+
+    /// <summary>A row of filters under the toolbar, spaced from the list as the toolbar is.</summary>
+    protected void FilterRow(FrameworkElement row)
+    {
+        row.Margin = new Thickness(0, 0, 0, 6);
+        DockPanel.SetDock(row, Dock.Top);
+        _body.Children.Insert(_body.Children.IndexOf(_bar) + 1, row);
+    }
+
+    /// <summary>A pane left of the list (a folder tree), resizable with the registry tab's splitter.</summary>
+    protected void SidePane(FrameworkElement side)
+    {
+        _side = side;
+        LayoutPanes();
+    }
+
+    /// <summary>A pane below the list (the selected item's text), resizable with the same splitter turned on its side.</summary>
+    protected void DetailPane(FrameworkElement detail)
+    {
+        _detail = detail;
+        LayoutPanes();
+    }
+
+    private void LayoutPanes()
+    {
+        _content.Children.Clear();
+        _content.ColumnDefinitions.Clear();
+        _content.RowDefinitions.Clear();
+        var listColumn = 0;
+        if (_side is not null)
+        {
+            _content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(320), MinWidth = 160 });
+            _content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star), MinWidth = 200 });
+            _content.Children.Add(_side);
+            var splitter = new GridSplitter { Width = 6, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Stretch, Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.PreviousAndNext };
+            Grid.SetColumn(splitter, 1);
+            _content.Children.Add(splitter);
+            listColumn = 2;
+        }
+        Grid.SetColumn(List, listColumn);
+        _content.Children.Add(List);
+        if (_detail is not null)
+        {
+            _content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star), MinHeight = 80 });
+            _content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(160), MinHeight = 60 });
+            var splitter = new GridSplitter { Height = 6, HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Center, Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.PreviousAndNext, ResizeDirection = GridResizeDirection.Rows };
+            Grid.SetRow(splitter, 1);
+            Grid.SetColumn(splitter, listColumn);
+            _content.Children.Add(splitter);
+            Grid.SetRow(_detail, 2);
+            Grid.SetColumn(_detail, listColumn);
+            _content.Children.Add(_detail);
+            if (_side is not null) Grid.SetRowSpan(_side, 3);
+        }
+    }
+
+    /// <summary>The scope changed (another folder): shows its rows and counts them in the status line.</summary>
+    protected void ScopeChanged()
+    {
+        View.Refresh();
+        UpdateStatus();
+    }
+
+    /// <summary>The status line's summary changed outside a refresh (e.g. more rows were read).</summary>
+    protected void SetSummary(string summary)
+    {
+        _summary = summary;
+        UpdateStatus();
     }
 
     /// <summary>Adds a column. <paramref name="sort"/> is the row property used for sorting (a raw value, not the display text).</summary>
@@ -284,7 +367,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     {
         if (_paused || _loading || !IsVisible || !Session.IsConnected) return;
         var now = DateTime.UtcNow;
-        var every = _intervalSeconds();
+        var every = _intervalSeconds?.Invoke() ?? 0;
         if (_soon is { } s && now >= s) { _soon = null; _ = Refresh(manual: false); return; }
         if (_lastLoad == DateTime.MinValue || (every > 0 && now - _lastLoad >= TimeSpan.FromSeconds(every))) _ = Refresh(manual: false);
         UpdatePause();
@@ -292,6 +375,7 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
 
     private void UpdatePause()
     {
+        if (_intervalSeconds is null) return; // refreshed by hand only: no pause button
         var every = _intervalSeconds();
         _pause.IsEnabled = every > 0;
         _pause.Icon = new SymbolIcon(_paused || every <= 0 ? SymbolRegular.Play24 : SymbolRegular.Pause24);
@@ -325,6 +409,14 @@ public abstract class RemoteListView<TRow> : Border, IRecordableView, IFilterabl
     {
         _status.Text = text;
         _status.Foreground = Brushes.IndianRed;
+        _errorUntil = DateTime.UtcNow.AddSeconds(15);
+    }
+
+    /// <summary>A result worth reading (an export's file), kept for a while like an error.</summary>
+    protected void SetInfo(string text)
+    {
+        ResetStatusColour();
+        _status.Text = text;
         _errorUntil = DateTime.UtcNow.AddSeconds(15);
     }
 

@@ -172,6 +172,7 @@ public static class PolicyCatalog
     public static readonly PolicyEntry RecordingIncludeDetails = Setting("RecordingIncludeDetails", PolicyKind.Number, "Recordings", "Show the connection's details in recordings", 0, 1, labels: OnOff);
     public static readonly PolicyEntry ProcessRefreshSeconds = Setting("ProcessRefreshSeconds", PolicyKind.Number, "Remote tools", "Refresh the processes tab every (seconds, 0 = by hand)", 0, 3600);
     public static readonly PolicyEntry ServiceRefreshSeconds = Setting("ServiceRefreshSeconds", PolicyKind.Number, "Remote tools", "Refresh the services tab every (seconds, 0 = by hand)", 0, 3600);
+    public static readonly PolicyEntry TaskRefreshSeconds = Setting("TaskRefreshSeconds", PolicyKind.Number, "Remote tools", "Refresh the scheduled tasks tab every (seconds, 0 = by hand)", 0, 3600, since: ToolTabsSince);
     public static readonly PolicyEntry AgentDesktopQuality = Setting("AgentDesktopQuality", PolicyKind.Text, "Agent remote desktop", "Picture", words: ["Low", "Admin", "High", "Smooth"],
         labels: new Dictionary<string, string> { ["Low"] = "Slow connection – 15 fps", ["Admin"] = "Admin work – 30 fps", ["High"] = "Sharp – 30 fps, best picture", ["Smooth"] = "Smooth – 60 fps, best picture" });
     public static readonly PolicyEntry AgentDesktopConsent = Setting("AgentDesktopConsent", PolicyKind.Text, "Agent remote desktop", "How the signed-in user is asked", words: ["Ask", "Pin", "None"],
@@ -206,6 +207,8 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowAgentRegistry = Feature("AllowAgentRegistry", "RemoteHub Agent", "Allow the registry through the agent");
     public static readonly PolicyEntry AllowAgentServices = Feature("AllowAgentServices", "RemoteHub Agent", "Allow services through the agent");
     public static readonly PolicyEntry AllowAgentProcesses = Feature("AllowAgentProcesses", "RemoteHub Agent", "Allow processes through the agent");
+    public static readonly PolicyEntry AllowAgentEventLog = Feature("AllowAgentEventLog", "RemoteHub Agent", "Allow the event viewer through the agent", ToolTabsSince);
+    public static readonly PolicyEntry AllowAgentScheduledTasks = Feature("AllowAgentScheduledTasks", "RemoteHub Agent", "Allow scheduled tasks through the agent", ToolTabsSince);
     public static readonly PolicyEntry AllowAgentDeviceActions = Feature("AllowAgentDeviceActions", "RemoteHub Agent", "Allow device actions through the agent", DeviceActionsSince);
     public static readonly PolicyEntry AllowAgentInstall = Feature("AllowAgentInstall", "RemoteHub Agent", "Allow installing and updating the agent");
     public static readonly PolicyEntry AllowCredentialProviderInstall = Feature("AllowCredentialProviderInstall", "RemoteHub Agent", "Allow installing and removing the credential provider");
@@ -215,6 +218,8 @@ public static class PolicyCatalog
     public static readonly PolicyEntry AllowRemotingRegistry = Feature("AllowRemotingRegistry", "PowerShell remoting", "Allow the registry over WinRM");
     public static readonly PolicyEntry AllowRemotingServices = Feature("AllowRemotingServices", "PowerShell remoting", "Allow services over WinRM");
     public static readonly PolicyEntry AllowRemotingProcesses = Feature("AllowRemotingProcesses", "PowerShell remoting", "Allow processes over WinRM");
+    public static readonly PolicyEntry AllowRemotingEventLog = Feature("AllowRemotingEventLog", "PowerShell remoting", "Allow the event viewer over WinRM", ToolTabsSince);
+    public static readonly PolicyEntry AllowRemotingScheduledTasks = Feature("AllowRemotingScheduledTasks", "PowerShell remoting", "Allow scheduled tasks over WinRM", ToolTabsSince);
     public static readonly PolicyEntry AllowRemotingDeviceActions = Feature("AllowRemotingDeviceActions", "PowerShell remoting", "Allow device actions over WinRM", DeviceActionsSince);
     public static readonly PolicyEntry AllowRemotingSetup = Feature("AllowRemotingSetup", "PowerShell remoting", "Allow setting up PowerShell remoting on a target");
     public static readonly PolicyEntry AllowQuickConnect = Feature("AllowQuickConnect", "Connections", "Allow quick connect to a typed address");
@@ -393,9 +398,9 @@ public static class PolicyCatalog
     [
         AllowRdp,
         AllowAgent, AllowAgentDesktop, AllowAgentPowerShell, AllowAgentFileTransfer, AllowAgentRegistry, AllowAgentServices, AllowAgentProcesses,
-        AllowAgentDeviceActions, AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
+        AllowAgentEventLog, AllowAgentScheduledTasks, AllowAgentDeviceActions, AllowAgentInstall, AllowCredentialProviderInstall, DisableAgentAutoSignIn,
         AllowPowerShellRemoting, AllowRemotingPowerShell, AllowRemotingFileTransfer, AllowRemotingRegistry, AllowRemotingServices, AllowRemotingProcesses,
-        AllowRemotingDeviceActions, AllowRemotingSetup,
+        AllowRemotingEventLog, AllowRemotingScheduledTasks, AllowRemotingDeviceActions, AllowRemotingSetup,
         AllowQuickConnect, AllowConnectionEditing, AllowSsh,
         AllowJumpHosts, AllowNetworkShares, AllowSmb, AllowSftp, AllowFtp, AllowWebDav, AllowBroker,
         AllowSavedPasswords, AllowPasswordCopy,
@@ -414,7 +419,7 @@ public static class PolicyCatalog
         SettingsLocation, SettingsFolder, AllowSharedSettings,
         AuditRetentionDays, DiagnosticLog, DiagnosticLogRetentionDays,
         DisableRecording, RecordingFolder, RecordingFps, RecordingResolution, RecordingUseGpu, RecordingIncludeDetails,
-        ProcessRefreshSeconds, ServiceRefreshSeconds,
+        ProcessRefreshSeconds, ServiceRefreshSeconds, TaskRefreshSeconds,
         ConsoleBrokerDirect,
         AgentDesktopQuality, AgentDesktopConsent, AgentDesktopViewOnly, AgentDesktopFitToWindow, AgentDesktopShowInfo, AgentDesktopKeyCombinations,
         AgentDesktopClipboard,
@@ -483,8 +488,8 @@ public static class PolicyCatalog
 
     /// <summary>A console setting of §6, in the root key.</summary>
     private static PolicyEntry Setting(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
-        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null) =>
-        Console(name, kind, group, title, min, max, words, labels, since: Phase4);
+        IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = Phase4) =>
+        Console(name, kind, group, title, min, max, words, labels, since: since);
 
     /// <summary>A console feature: DWORD 0 = blocked, 1 = allowed.</summary>
     private static PolicyEntry Feature(string name, string group, string title, string since = Phase3) =>
@@ -492,6 +497,9 @@ public static class PolicyCatalog
 
     /// <summary>Lock, restart, shut down and the other device actions in the connection's menu.</summary>
     private const string DeviceActionsSince = "0.21.0";
+
+    /// <summary>The Event Viewer and Scheduled tasks tabs.</summary>
+    private const string ToolTabsSince = "0.22.0";
 
     private static PolicyEntry Agent(string name, PolicyKind kind, string group, string title, int min = 0, int max = 0,
         IReadOnlyList<string>? words = null, IReadOnlyDictionary<string, string>? labels = null, string since = "0.18.11",

@@ -7,9 +7,9 @@ namespace RemoteHub.Services;
 public enum Feature
 {
     Rdp,
-    Agent, AgentDesktop, AgentPowerShell, AgentFileTransfer, AgentRegistry, AgentServices, AgentProcesses, AgentDeviceActions, AgentInstall,
+    Agent, AgentDesktop, AgentPowerShell, AgentFileTransfer, AgentRegistry, AgentServices, AgentProcesses, AgentEventLog, AgentScheduledTasks, AgentDeviceActions, AgentInstall,
     CredentialProviderInstall, AgentAutoSignIn,
-    PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingDeviceActions,
+    PowerShellRemoting, RemotingPowerShell, RemotingFileTransfer, RemotingRegistry, RemotingServices, RemotingProcesses, RemotingEventLog, RemotingScheduledTasks, RemotingDeviceActions,
     RemotingSetup,
     QuickConnect, ConnectionEditing, Ssh,
     JumpHosts, NetworkShares, Smb, Sftp, Ftp, WebDav,
@@ -24,7 +24,7 @@ public enum Feature
 /// The tabs and the device actions (lock, restart …) that work through the agent or WinRM; which switch applies depends on
 /// the connection's transport.
 /// </summary>
-public enum RemoteTool { PowerShell, FileTransfer, Registry, Services, Processes, DeviceActions }
+public enum RemoteTool { PowerShell, FileTransfer, Registry, Services, Processes, EventLog, ScheduledTasks, DeviceActions }
 
 /// <summary>
 /// Whether a feature is allowed on this PC. A feature's own value at 0 blocks it, and so does its main switch
@@ -50,6 +50,8 @@ public static class Features
         [Feature.AgentRegistry] = new(PolicyCatalog.AllowAgentRegistry, "The registry through the RemoteHub Agent", Feature.Agent),
         [Feature.AgentServices] = new(PolicyCatalog.AllowAgentServices, "Services through the RemoteHub Agent", Feature.Agent),
         [Feature.AgentProcesses] = new(PolicyCatalog.AllowAgentProcesses, "Processes through the RemoteHub Agent", Feature.Agent),
+        [Feature.AgentEventLog] = new(PolicyCatalog.AllowAgentEventLog, "The event viewer through the RemoteHub Agent", Feature.Agent),
+        [Feature.AgentScheduledTasks] = new(PolicyCatalog.AllowAgentScheduledTasks, "Scheduled tasks through the RemoteHub Agent", Feature.Agent, Plural: true),
         [Feature.AgentDeviceActions] = new(PolicyCatalog.AllowAgentDeviceActions, "Device actions through the RemoteHub Agent", Feature.Agent, Plural: true),
         [Feature.AgentInstall] = new(PolicyCatalog.AllowAgentInstall, "Installing and updating the RemoteHub Agent", Feature.Agent),
         [Feature.CredentialProviderInstall] = new(PolicyCatalog.AllowCredentialProviderInstall, "Installing and removing the credential provider", Feature.Agent),
@@ -60,6 +62,8 @@ public static class Features
         [Feature.RemotingRegistry] = new(PolicyCatalog.AllowRemotingRegistry, "The registry over WinRM", Feature.PowerShellRemoting),
         [Feature.RemotingServices] = new(PolicyCatalog.AllowRemotingServices, "Services over WinRM", Feature.PowerShellRemoting),
         [Feature.RemotingProcesses] = new(PolicyCatalog.AllowRemotingProcesses, "Processes over WinRM", Feature.PowerShellRemoting),
+        [Feature.RemotingEventLog] = new(PolicyCatalog.AllowRemotingEventLog, "The event viewer over WinRM", Feature.PowerShellRemoting),
+        [Feature.RemotingScheduledTasks] = new(PolicyCatalog.AllowRemotingScheduledTasks, "Scheduled tasks over WinRM", Feature.PowerShellRemoting, Plural: true),
         [Feature.RemotingDeviceActions] = new(PolicyCatalog.AllowRemotingDeviceActions, "Device actions over WinRM", Feature.PowerShellRemoting, Plural: true),
         [Feature.RemotingSetup] = new(PolicyCatalog.AllowRemotingSetup, "Setting up PowerShell remoting on a target", Feature.PowerShellRemoting),
         [Feature.QuickConnect] = new(PolicyCatalog.AllowQuickConnect, "Quick connect"),
@@ -128,11 +132,15 @@ public static class Features
         (RemoteTool.Registry, true) => Feature.AgentRegistry,
         (RemoteTool.Services, true) => Feature.AgentServices,
         (RemoteTool.Processes, true) => Feature.AgentProcesses,
+        (RemoteTool.EventLog, true) => Feature.AgentEventLog,
+        (RemoteTool.ScheduledTasks, true) => Feature.AgentScheduledTasks,
         (RemoteTool.DeviceActions, true) => Feature.AgentDeviceActions,
         (RemoteTool.PowerShell, false) => Feature.RemotingPowerShell,
         (RemoteTool.FileTransfer, false) => Feature.RemotingFileTransfer,
         (RemoteTool.Registry, false) => Feature.RemotingRegistry,
         (RemoteTool.Services, false) => Feature.RemotingServices,
+        (RemoteTool.EventLog, false) => Feature.RemotingEventLog,
+        (RemoteTool.ScheduledTasks, false) => Feature.RemotingScheduledTasks,
         (RemoteTool.DeviceActions, false) => Feature.RemotingDeviceActions,
         _ => Feature.RemotingProcesses,
     };

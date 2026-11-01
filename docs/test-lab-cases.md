@@ -273,6 +273,13 @@ classes (`RemoteFs`, `FileTransfer`, `RemoteRegistry`, `RemoteServices`, `Remote
 | T-PROC-01 | List | contains the tab's own process, user names shown for an admin | H | 2 | ✅ |
 | T-PROC-02 | End process / tree | test process tree ended completely | H PS | 2 | ✅ |
 | T-PROC-03 | Critical processes | ending System, Idle, Registry, smss, csrss, wininit, winlogon, services, lsass, lsaiso (PID 0 / 4) refused: "<name> (PID n) is a critical Windows process and can't be ended from here." (the own remoting process is refused only by the Processes tab, UI-TL-05) | H | 1 | ✅ |
+| T-EVT-01 | Event Viewer: logs and one event | the logs listed with Application first; an event written on the device (source RemoteHubLab, ID 4242, Error, a message with a pipe, a tab and a new line) read with the Error, 24 hours and source filter, its message exactly as written | H PS | 1 | ◐ |
+| T-EVT-02 | Event Viewer: Load more | 7 events, read 5 at a time: newest first, *more* reported, the next page only older records, none twice | H PS | 2 | ◐ |
+| T-EVT-03 | Event Viewer: export | the filtered events as `.evtx` (wevtutil on the device, downloaded like a file): `Get-WinEvent -Path` on this PC reads them, only the filter's source, the device's copy deleted | H | 2 | ◐ |
+| T-TASK-01 | Scheduled tasks: list and details | a lab task in `\RemoteHubLab\` listed with its folder, Ready; more than 20 tasks under `\Microsoft\Windows\`; details say what it runs and as whom | H PS | 1 | ◐ |
+| T-TASK-02 | Scheduled tasks: run and end | Run → the device shows it Running; End → Ready again | H PS | 1 | ◐ |
+| T-TASK-03 | Scheduled tasks: disable and enable | Disable → Disabled, Run refused; Enable → Ready | H PS | 2 | ◐ |
+| T-TASK-04 | Scheduled tasks: RemoteHub's own | a task in `\RemoteHub\`: End and Disable refused "… belongs to RemoteHub and can't be ended or disabled here.", the task unchanged | H PS | 1 | ◐ |
 
 ### 7.1 Network shares of a connection (S-SHARE)
 

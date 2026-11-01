@@ -495,6 +495,8 @@
                                     <MenuItem x:Name="CmRegistry" Header="Registry" Click="CmRegistry_Click" Icon="{ui:SymbolIcon CubeTree24}" />
                                     <MenuItem x:Name="CmServices" Header="Services" Click="CmServices_Click" Icon="{ui:SymbolIcon WrenchScrewdriver24}" />
                                     <MenuItem x:Name="CmProcesses" Header="Processes" Click="CmProcesses_Click" Icon="{ui:SymbolIcon Pulse24}" />
+                                    <MenuItem x:Name="CmEventLog" Header="Event Viewer" Click="CmEventLog_Click" Icon="{ui:SymbolIcon DocumentBulletList24}" />
+                                    <MenuItem x:Name="CmScheduledTasks" Header="Scheduled tasks" Click="CmScheduledTasks_Click" Icon="{ui:SymbolIcon CalendarClock24}" />
                                     <MenuItem x:Name="CmPsTest" Header="Test PowerShell remoting" Click="CmPsTest_Click" Icon="{ui:SymbolIcon ArrowSync24}" />
                                     <Separator x:Name="CmSharesSep" />
                                     <MenuItem x:Name="CmAddShare" Header="Add network share…" Click="CmAddShare_Click" Icon="{ui:SymbolIcon FolderLink24}"

@@ -46,7 +46,8 @@ public class DeviceActionsTests
     [Fact]
     public void Device_actions_alone_still_count_as_a_tool_so_the_test_is_offered()
     {
-        (string, int)[] tabsOff = [("AllowAgentPowerShell", 0), ("AllowAgentFileTransfer", 0), ("AllowAgentRegistry", 0), ("AllowAgentServices", 0), ("AllowAgentProcesses", 0)];
+        (string, int)[] tabsOff = [("AllowAgentPowerShell", 0), ("AllowAgentFileTransfer", 0), ("AllowAgentRegistry", 0), ("AllowAgentServices", 0), ("AllowAgentProcesses", 0),
+            ("AllowAgentEventLog", 0), ("AllowAgentScheduledTasks", 0)];
         Assert.True(Services.Features.AnyTool(viaAgent: true, Set(tabsOff)));
         Assert.False(Services.Features.AnyTool(viaAgent: true, Set([.. tabsOff, ("AllowAgentDeviceActions", 0)])));
     }

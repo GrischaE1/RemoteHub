@@ -101,6 +101,7 @@ public sealed class SettingsOverviewWindow : FluentWindow
         {
             ("Processes tab", Interval(AppPolicy.ProcessRefreshSeconds ?? d.Tools.ProcessRefreshSeconds)),
             ("Services tab", Interval(AppPolicy.ServiceRefreshSeconds ?? d.Tools.ServiceRefreshSeconds)),
+            ("Scheduled tasks tab", Interval(AppPolicy.TaskRefreshSeconds ?? d.Tools.TaskRefreshSeconds)),
             ("Recordings", AppPolicy.RecordingDisabled ? "Turned off by your IT policy"
                 : Recordings.Describe(Recordings.Options(d.Ui)) + (Recordings.IncludeDetails(d.Ui) ? " · with connection details" : "") + " · " +
                   Recordings.Folder(d.Ui) + (AppPolicy.RecordingFolder is not null ? " (set by your IT policy)" : "")),

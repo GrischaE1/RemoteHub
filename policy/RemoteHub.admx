@@ -203,6 +203,20 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="Console_AllowAgentEventLog" class="Both" displayName="$(string.Console_AllowAgentEventLog)" explainText="$(string.Console_AllowAgentEventLog_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentEventLog">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowAgentScheduledTasks" class="Both" displayName="$(string.Console_AllowAgentScheduledTasks)" explainText="$(string.Console_AllowAgentScheduledTasks_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowAgentScheduledTasks">
+      <parentCategory ref="Console_Agent" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="Console_AllowAgentDeviceActions" class="Both" displayName="$(string.Console_AllowAgentDeviceActions)" explainText="$(string.Console_AllowAgentDeviceActions_Help)"
             key="Software\Policies\RemoteHub" valueName="AllowAgentDeviceActions">
       <parentCategory ref="Console_Agent" />
@@ -278,6 +292,20 @@
             key="Software\Policies\RemoteHub" valueName="AllowRemotingProcesses">
       <parentCategory ref="Console_Remoting" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_19_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingEventLog" class="Both" displayName="$(string.Console_AllowRemotingEventLog)" explainText="$(string.Console_AllowRemotingEventLog_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingEventLog">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="Console_AllowRemotingScheduledTasks" class="Both" displayName="$(string.Console_AllowRemotingScheduledTasks)" explainText="$(string.Console_AllowRemotingScheduledTasks_Help)"
+            key="Software\Policies\RemoteHub" valueName="AllowRemotingScheduledTasks">
+      <parentCategory ref="Console_Remoting" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
@@ -545,6 +573,12 @@
       <parentCategory ref="Console_Tools" />
       <supportedOn ref="SUPPORTED_RemoteHub_0_19_0" />
       <elements><decimal id="ServiceRefreshSeconds" valueName="ServiceRefreshSeconds" minValue="0" maxValue="3600" required="true" /></elements>
+    </policy>
+    <policy name="Console_TaskRefreshSeconds" class="Both" displayName="$(string.Console_TaskRefreshSeconds)" explainText="$(string.Console_TaskRefreshSeconds_Help)" presentation="$(presentation.Console_TaskRefreshSeconds)"
+            key="Software\Policies\RemoteHub">
+      <parentCategory ref="Console_Tools" />
+      <supportedOn ref="SUPPORTED_RemoteHub_0_22_0" />
+      <elements><decimal id="TaskRefreshSeconds" valueName="TaskRefreshSeconds" minValue="0" maxValue="3600" required="true" /></elements>
     </policy>
 
     <policy name="Console_AgentDesktopQuality" class="Both" displayName="$(string.Console_AgentDesktopQuality)" explainText="$(string.Console_AgentDesktopQuality_Help)" presentation="$(presentation.Console_AgentDesktopQuality)"
