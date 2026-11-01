@@ -181,7 +181,6 @@ internal static class DirectReach
         return null;
     }
 
-    /// <summary>The broker's answer, or null when it can't be asked now (not connected, too slow, an older broker).</summary>
     /// <summary><see cref="Ask"/> after <paramref name="wait"/>; null without asking when <paramref name="stop"/> ends the wait.</summary>
     private static async Task<DeviceAddresses?> AskAfter(TimeSpan wait, Func<CancellationToken, Task<DeviceAddresses?>> addresses, CancellationToken stop, CancellationToken ct)
     {
@@ -193,6 +192,7 @@ internal static class DirectReach
         return await Ask(addresses, ct).ConfigureAwait(false);
     }
 
+    /// <summary>The broker's answer, or null when it can't be asked now (not connected, too slow, an older broker).</summary>
     private static async Task<DeviceAddresses?> Ask(Func<CancellationToken, Task<DeviceAddresses?>> addresses, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
