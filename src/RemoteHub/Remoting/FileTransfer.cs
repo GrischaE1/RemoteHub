@@ -755,7 +755,8 @@ public static class FileDownloader
             break;
         }
         try { ps.EndInvoke(run); }
-        catch (PipelineStoppedException) when (stopping) { /* the cancel above */ }
+        // The cancel above: a local pipeline reports it as PipelineStoppedException, a remote one as its own error.
+        catch (Exception) when (stopping && stopAt is not null) { }
         catch (RuntimeException ex) when (ex is not System.Management.Automation.Remoting.PSRemotingTransportException)
         {
             Abandon();

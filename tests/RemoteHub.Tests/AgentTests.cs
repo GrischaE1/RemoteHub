@@ -608,6 +608,20 @@ public class AgentTests
                 Assert.Equal(File.ReadAllBytes(f), File.ReadAllBytes(Path.Combine(dst, Path.GetRelativePath(src, f))));
             Assert.Contains("sent compressed", items.Single(i => i.RelativePath == "big.log").StatusText);
             Assert.Empty(Directory.GetFiles(dst, "*.remotehub-part", SearchOption.AllDirectories));
+
+            // Cancelled mid-file: the stopped remote pipeline ends with an error of its own, which is the cancel, not a failure.
+            Directory.Delete(dst, true);
+            var again = Items();
+            var noisy = again.Single(i => i.RelativePath == @"sub\noise.bin");
+            await FileDownloader.DownloadAsync(() => PsRemoting.Open(target), ex => PsRemoting.Explain(ex, target), false, again, x =>
+            {
+                x();
+                if (noisy.SentBytes > 0 && !noisy.CancelRequested) noisy.Cancel();
+            });
+            Assert.True(noisy.State == TransferState.Cancelled, noisy.StatusText);
+            Assert.False(File.Exists(noisy.LocalPath));
+            Assert.All(again.Where(i => i != noisy), i => Assert.True(i.State == TransferState.Done, $"{i.RelativePath}: {i.StatusText}"));
+            Assert.Empty(Directory.GetFiles(dst, "*.remotehub-part", SearchOption.AllDirectories));
         }
         finally
         {
