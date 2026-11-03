@@ -114,6 +114,6 @@ Source: https://github.com/PowerShell/PowerShell
 
 ## Microsoft.Extensions.Hosting.WindowsServices (RemoteHub Agent, running as a Windows service)
 
-Microsoft.Extensions.Hosting.WindowsServices 10.0.13 – © Microsoft Corporation. All rights reserved. MIT License (text
+Microsoft.Extensions.Hosting.WindowsServices 10.0.14 – © Microsoft Corporation. All rights reserved. MIT License (text
 as above).
 Source: https://github.com/dotnet/runtime
