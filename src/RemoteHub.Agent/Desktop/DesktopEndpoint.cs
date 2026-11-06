@@ -380,7 +380,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                         // not – that's no network problem, and the token mustn't outlive it.
                         var error = fromClient.Exception!.GetBaseException();
                         _lost = !IsProtocolError(error);
-                        _endReason = (_lost ? "connection lost: " : "invalid message from RemoteHub: ") + error.Message;
+                        _endReason = _lost ? LostReason(error) : "invalid message from RemoteHub: " + error.Message;
                     }
                     else if (fromClient.IsCanceled)
                     {
@@ -399,6 +399,14 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
                 // The aborted request (a drop) or a takeover cancels the helper's loop too, often before the receive: that
                 // is no helper ending, and starting a new helper for a connection that is gone only delays the end.
                 ct.ThrowIfCancellationRequested();
+                // The same when the helper's loop failed to pass a frame on to RemoteHub: the keep-alive timeout aborted the
+                // socket, and a frame on its way noticed before the pending receive ended cancelled.
+                if (ended == fromHelper && fromHelper.Exception?.GetBaseException() is WebSocketException lostOnSend)
+                {
+                    _lost = true;
+                    _endReason = LostReason(lostOnSend);
+                    break;
+                }
                 if (ended == watch && await IdleCheck(ct)) break;
                 if (ended == watch && _live) await PausedCheck(desktop, ct);
                 var target = session.Console ? desktop.Sessions.ConsoleSessionId() ?? _helperSession : _helperSession;
@@ -524,7 +532,7 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         catch (Exception ex) when (ex is WebSocketException or IOException or InvalidDataException)
         {
             _lost = true;
-            _endReason = "connection lost: " + ex.Message;
+            _endReason = LostReason(ex);
         }
         catch (Exception ex)
         {
@@ -1276,6 +1284,15 @@ internal sealed class DesktopEndpoint(AgentHostOptions o, ShellIdentity identity
         o.Log.Write($"Desktop: Ctrl+Alt+Del for {identity.Account} in session {_helperSession} by the {by}: {(error.Length == 0 ? "sent" : error)} " +
                     $"(SoftwareSASGeneration = {SecureAttention.Current()?.ToString() ?? "not set"}, console session {o.Desktop?.Sessions.ConsoleSessionId()?.ToString() ?? "none"}" +
                     (by == "service" ? $", {SecureAttention.LastDetail})" : ")"));
+
+    /// <summary>
+    /// Why a broken connection ended. A send or receive on a socket that is already aborted (the keep-alive timeout or the
+    /// aborted request did it) says only that – the same drop as a receive that ended cancelled, so it reads the same.
+    /// </summary>
+    private string LostReason(Exception e) =>
+        e is WebSocketException { WebSocketErrorCode: WebSocketError.InvalidState } && _ws.State == WebSocketState.Aborted
+            ? (_resume?.TakenOver == true ? "continued in a new connection" : "connection lost")
+            : "connection lost: " + e.Message;
 
     /// <summary>Malformed or incomplete messages (bad JSON, missing fields, wrong sizes) – as opposed to a broken connection.</summary>
     private static bool IsProtocolError(Exception e) =>

@@ -93,6 +93,31 @@ public partial class AgentDesktopFlowTests
     }
 
     [Fact]
+    public async Task A_drop_a_frame_on_its_way_notices_first_is_lost_and_continues_without_asking_again()
+    {
+        var d = StartDirect(changing: int.MaxValue); // frames keep coming, as on a busy screen
+        var (first, run) = d.Connect();
+        SendStart(first, ActiveUser.Id, DesktopConsent.Ask);
+        var token = NextStatus(first, DesktopStatusState.Connected).Resume!;
+        var sent = first.SentOf((byte)DesktopMessage.Video);
+        WaitFor(() => first.SentOf((byte)DesktopMessage.Video) > sent + 3, "frames flowing from the helper");
+
+        // The keep-alive timeout aborted the socket and the next frame's send fails before the pending receive ends: that
+        // is the drop too, not the helper ending (seen on a slow CI runner as "connection lost: The WebSocket instance
+        // cannot be used for communication because it has been transitioned into an invalid state.").
+        first.Abort();
+        await run.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.EndsWith("(connection lost)", d.Ended());
+        Assert.Equal(1, d.Helpers.Started);
+
+        var (second, _) = d.Connect();
+        SendStart(second, ActiveUser.Id, DesktopConsent.Ask, resume: token);
+        Assert.Equal(DesktopStatusState.Connected, NextStatus(second, DesktopStatusState.Connected).State);
+        Assert.Equal(0, d.Helpers.Uis[1].Asked);
+        second.Close();
+    }
+
+    [Fact]
     public async Task An_aborted_request_is_lost_without_restarting_the_helper_and_a_later_close_still_revokes()
     {
         var d = StartDirect();
@@ -174,7 +199,8 @@ public partial class AgentDesktopFlowTests
             Assert.Matches("\"Dropped\"\\s*:\\s*true", recorded);
 
             WaitFor(() => d.Sessions.LogOffs.Contains(3), "sign-out after the hold");
-            Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.AutoSignInEnded && a.Message.EndsWith("signed out (connection lost and not continued in time)"));
+            WaitFor(() => d.Audits.Any(a => a.Id == A.AuditEvent.AutoSignInEnded && a.Message.EndsWith("signed out (connection lost and not continued in time)")),
+                "the audit entry for the sign-out"); // written just after it
             Assert.Empty(d.Sessions.Disconnects);
 
             // The service killed during the hold instead: the next start signs the session out.
@@ -247,7 +273,8 @@ public partial class AgentDesktopFlowTests
             var again = DateTime.UtcNow;
             WaitFor(() => d.Sessions.LogOffs.Contains(3), "sign-out after the hold");
             Assert.True(DateTime.UtcNow - again >= hold - TimeSpan.FromMilliseconds(200), "signed out before the hold ran out");
-            Assert.Contains(d.Audits, a => a.Id == A.AuditEvent.AutoSignInEnded && a.Message.EndsWith("signed out (connection lost and not continued in time)"));
+            WaitFor(() => d.Audits.Any(a => a.Id == A.AuditEvent.AutoSignInEnded && a.Message.EndsWith("signed out (connection lost and not continued in time)")),
+                "the audit entry for the sign-out"); // written just after it
             Assert.Empty(d.Sessions.Disconnects);
         }
         finally { A.AutoSignInSessions.HoldAfterDrop = TimeSpan.FromMinutes(2); }
