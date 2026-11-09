@@ -1,10 +1,12 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
-Status: Draft v2 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+Status: Draft v3 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
 protocol `remotehub-broker/1`). v2 takes in the answers to v1's open questions (§20): the history lives in a
 **RemoteHub-hosted, multi-tenant monitoring service** sized for hundreds of thousands of devices, not in the console;
 monitoring is **activated from the console** under the tenant's licence; devices behind **jump hosts** upload through
-them; the console **queries** the service. §19 has what is still open, §21 the database choice, §22 volumes and costs.
+them; the console **queries** the service. v3 makes delivery **event-driven first**: changes travel when they happen, the full sync is a daily hash-only
+reconciliation, and only the performance digest has a cadence (§6). §19 has what is still open, §21 the database
+choice, §22 volumes and costs by interval.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -18,10 +20,10 @@ device on one timeline – and, across a tenant's devices, dashboards and report
 
 | Part | What |
 |---|---|
-| **Collection on the device** | The RemoteHub Agent collects an **inventory** (installed apps, Windows updates, drivers, hardware, operating system, users and groups, configuration – Group Policy and MDM/CSP, services, security state) on a schedule: every **60 minutes** by default, configurable to any longer interval, never shorter (§6.1). It collects only once the console has **activated** monitoring on it (§6.4). |
-| **Events** | The agent watches the device for things that matter and sends the part of the inventory they changed at once, not at the next interval: an app installed, updated or removed; a Windows update or a driver installed; an app crash or hang; a blue screen or an unexpected restart; a service that died; disk and hardware errors; Defender detections (§5.2). |
-| **Performance and thresholds** | The agent samples CPU, memory, disk and network every 10 s, keeps 1- and 5-minute summaries, and raises an **alert** when a value stays above a threshold for a time – by default CPU at or above 80 % for 5 minutes. Thresholds, windows and the metrics watched are set by the admin (§5.4). An alert sends the recent samples and the processes behind them. |
-| **Delivery** | The agent **uploads** every bundle to the **RemoteHub monitoring service** – the broker's front door, with a column store behind it (§9, §10). A device with its own broker connection uploads directly; a device behind a jump host uploads through the jump host's agent, and so on along the chain, as long as one device in it reaches the broker (§9.3). The agent keeps an outbox for the days it can't (§8). |
+| **Collection on the device** | The RemoteHub Agent collects an **inventory** (installed apps, Windows updates, drivers, hardware, operating system, users and groups, configuration – Group Policy and MDM/CSP, services, security state) once as a baseline, then keeps it current **by events**: every section has a watcher, and a change sends that section at once (§6.2). A **full sync** once a day (configurable, 12 hours to a week) reconciles: it carries only the sections' hashes, and the service asks for a section only when its hash differs (§6.1). It collects only once the console has **activated** monitoring on it (§6.5). |
+| **Events** | The agent watches the device for things that matter and sends them when they happen: an app installed, updated or removed; a Windows update or a driver installed; a service, account, group or hardware change; a configuration change; an app crash or hang; a blue screen or an unexpected restart; a service that died; disk and hardware errors; Defender detections (§5.2). Everything is **device-initiated**: the service never calls a device, and the console calls one only to activate or to look now. |
+| **Performance and thresholds** | The agent samples CPU, memory, disk and network every 10 s, keeps 1- and 5-minute summaries, and raises an **alert** when a value stays above a threshold for a time – by default CPU at or above 80 % for 5 minutes. Thresholds, windows and the metrics watched are set by the admin (§5.4). An alert sends the recent samples and the processes behind them at once; the summaries otherwise travel in a **performance digest** every 4 hours by default (1 to 24; §6.3). |
+| **Delivery** | The agent **uploads** every bundle to the **RemoteHub monitoring service** – the broker's front door, with a column store behind it (§9, §10). A device with its own broker connection uploads directly; a device behind a jump host uploads through the jump host's agent, and so on along the chain, as long as one device in it reaches the broker (§9.3). The agent keeps an outbox for the days it can't (§8). The upload's answer carries what the service wants back – a section whose hash differs, settings the console left for the device – so no connection to the device is needed for either (§9.2). |
 | **The service** | Multi-tenant (a tenant is a broker organisation), a **region per tenant** (EU, US), tenant id on every row, retention by the tenant's tier – **30 days** by default, 60 or 90 by licence (§10). It holds the inventory history, events, alerts and performance, computes the dashboards and reports, and answers the console's queries. It is run by RemoteHub. |
 | **In the console** | A **Device** tab per connection: an overview with the current health, then inventory sections, alerts and events – answered by the service, with a small cache so the last state shows while offline (§11.1). **Activation** of monitoring per tenant, folder or device from the console, under the tenant's entitlement (§11.3). |
 | **Timeline** | The DEX view in that tab: performance curves, alerts, changes (apps, updates, drivers, configuration) and problems (crashes, blue screens, service failures) on one time axis, zoomable from an hour to the tenant's retention, with the changes that precede a problem pointed out (§11.2). |
@@ -37,7 +39,7 @@ device on one timeline – and, across a tenant's devices, dashboards and report
    sealed, monitoring data is stored and queried by RemoteHub's service on the tenant's behalf: that is what fleet-wide
    dashboards and a timeline over a quarter need. It is said plainly in the README, `PRIVACY.md` and the activation
    dialog, the tenant chooses its region, its data is isolated by tenant id and deleted with the tenant, and nothing is
-   collected before the tenant's admin activates it (§6.4, §14).
+   collected before the tenant's admin activates it (§6.5, §14).
 3. **No secrets, and identities only where IT allows them.** Bundles never contain passwords, keys, product keys,
    recovery keys, file contents, command lines, window titles or clipboard. Account names (signed-in users, local
    accounts, group members, the MDM enrolment's user) are collected by default, because a DEX view is about a person's
@@ -164,6 +166,10 @@ Event Viewer tab. A kind that changes an inventory section also triggers that se
 | `config.gpo` | Changes | Microsoft-Windows-GroupPolicy/Operational 8004–8007 (processing done), 1085/1125/1129 (failed); then a diff of the `config` GPO list and policy values – a bundle only when something changed | Scope (computer, user), result, which GPOs and how many values changed | `config` |
 | `config.mdm` | Changes | DeviceManagement-Enterprise-Diagnostics-Provider/Admin sync-completed and failed events (ids confirmed in the lab, M-CFG), then a diff of the CSP values | Result, values changed | `config` |
 | `config.security` | Changes | Windows Defender/Operational 5001/5010/5012 (protection turned off), 2000/2001 (signatures); firewall profile changes (Windows Firewall With Advanced Security/Firewall 2003/2004/2005 as confirmed in the lab) | What changed | `config` |
+| `service.changed` | Changes | System: Service Control Manager 7040 (start type changed), 7045 (new service installed); a registry notification on `HKLM\SYSTEM\CurrentControlSet\Services`; then a diff of `services` | Service, what changed (installed, removed, start type, account kind) | `services` |
+| `user.changed`, `group.changed` | Changes | Security 4720, 4722, 4725, 4726, 4738, 4740 (accounts) and 4728, 4732, 4733, 4735 (group members) where the audit policy records them; a registry notification on `HKLM\SAM` otherwise (the service runs as LocalSystem, which may read it – confirmed in the lab, M-EVT-09); then a diff of `users` | Account or group (with `MonitoringIncludeUsers`), what changed | `users` |
+| `hardware.changed` | Changes | `RegisterDeviceNotification` from the service for device interface arrival and removal, Microsoft-Windows-Kernel-PnP 400/410/420 (device configured, started, removed); then a diff of `hardware` (a new disk, monitor, dock, adapter, memory after a service visit) | Device class and name, added or removed | `hardware` |
+| `os.changed` | Changes | Registry notifications on the CBS `RebootPending`, Windows Update `RebootRequired` and `CurrentVersion` keys; then a diff of `os` | Pending restart, build, display version, activation state | `os` |
 | `app.crash`, `app.hang` | Problems | Application: Application Error 1000, Application Hang 1002, Windows Error Reporting 1001 (bucket, for grouping), .NET Runtime 1026 | Program (name and version), faulting module and version, exception code, session's user (with `MonitoringIncludeUsers`) | – |
 | `os.bluescreen`, `os.unexpectedRestart` | Problems | System: BugCheck 1001 (code and parameters, dump path – the path only, never the dump), Kernel-Power 41 (bug check code), EventLog 6008; a new file under `C:\Windows\Minidump` corroborates | Code, parameters, probable driver where BugCheck names one | `os` |
 | `service.failed` | Problems | System: Service Control Manager 7031, 7034 (terminated), 7000, 7009, 7011, 7023, 7024 (start failed) | Service, what Windows did (restart, nothing) | – |
@@ -198,7 +204,7 @@ Every **10 s** the sampler reads these counters through PDH (`PdhCollectQueryDat
 
 Summaries: the 10 s samples are folded into **1-minute** summaries (average, maximum, top processes) kept for 48 hours
 on the device, and **5-minute** summaries (average, maximum, minimum) that travel in the bundles. The full bundle
-carries the interval's 5-minute summaries; an alert bundle carries the 1-minute summaries of the 15 minutes before and
+digest carries the 5-minute summaries since the last one (§6.3); an alert bundle carries the 1-minute summaries of the 15 minutes before and
 the 10 s samples of the alert's window, so the timeline can show the exact shape of the spike. Nothing is sampled per
 user.
 
@@ -248,37 +254,56 @@ file contents, command lines, environment variables, window titles, clipboard, k
 e-mail, document names, per-user application usage time. The agent's own enrolment secret, broker keys and monitoring
 key are never in `agent`. A collector that would need any of these to work is a design error, not a configuration.
 
-## 6. Schedules, triggers and activation
+## 6. Events first, then the digest, then the daily sync
 
-### 6.1 The interval
+Order of preference, as the owner set it: a change travels when it happens (device-initiated, §6.2); what has no
+event – the performance curve – travels in a digest (§6.3); and a full sync once a day reconciles so nothing stays
+wrong for long (§6.1). Nothing polls a device: the service never calls one, and the console calls one only to
+activate it or to look at it now.
 
-- `monitoring.intervalMinutes` (agent.json, set from the console) or the policy `MonitoringIntervalMinutes`: **60 by
-  default, 60 to 10,080** (a week). A value below 60 is invalid and keeps 60 – an hour is the floor the requirement
-  set, and the collectors' budget (§15.2) is made for it. §22 shows a longer interval saves requests, not bytes, so the
-  default stays at an hour for a current timeline.
-- Each device adds a fixed **jitter** (0–10 minutes, derived from the device id) so a fleet activated at the same
-  minute doesn't upload at the same second.
-- The first inventory runs **5 minutes after activation or after the service starts** (or 15 minutes after boot,
-  whichever is later), then every interval. A missed run (the device slept) runs on resume, after the same 5 minutes.
-- The full bundle is **full**: every enabled section (`MonitoringSections`), the interval's 5-minute summaries, the
-  events that weren't sent by a trigger, and the open alerts. A section that didn't change still goes, as a hash only
-  (§7): the service knows it is unchanged without receiving it again, and asks for it (`sections` in the upload's
-  answer, §9.2) when it has no copy.
+### 6.1 The full sync: a daily reconciliation
 
-### 6.2 Triggered bundles
+- `monitoring.fullSyncHours` (agent.json, set from the console) or the policy `MonitoringFullSyncHours`: **24 by
+  default, 12 to 168**. A value below 12 is invalid and keeps 24.
+- It carries **hashes only**: for every enabled section (`MonitoringSections`) the SHA-256 of its current content, plus
+  the open alerts and whatever events weren't sent by a trigger. About 1.5 KB. The service compares the hashes with the
+  copies it holds and names the sections that differ in the upload's answer (§9.2); the agent sends those whole in a
+  partial bundle at once. A differing hash means an event was missed (the watcher wasn't running, a change the watchers
+  don't cover) or the service lost a copy; the console sees the change as *between the two syncs*.
+- The **first** sync after activation (§6.5) is the baseline and sends every section whole, 5 minutes after activation
+  (or 15 minutes after boot, whichever is later). Everything after that is hashes unless asked.
+- Each device adds a fixed **jitter** (0–60 minutes, derived from the device id) so a fleet activated at the same
+  minute doesn't sync at the same second. A missed sync (the device was off) runs on the next start, after the same
+  5 minutes.
 
-- A watched event (§5.2) that names a section makes the agent **re-collect that section after a 30 s debounce** (an
-  installer writes several keys; a Windows Update installs several packages), diff it against the last copy, and send a
-  **partial bundle**: the event(s), the changed section whole, and nothing else. An event without a section (a crash)
-  is sent in a partial bundle with the last 15 minutes of 1-minute summaries, so the timeline shows the load around it.
+### 6.2 Events: changes travel when they happen
+
+- Every section has at least one watcher (§5.2): registry change notifications for `apps`, `config` and `os`; the
+  Service Control Manager's events and a registry notification on `Services` for `services`; account and group events
+  and a notification on `SAM` for `users`; PnP events and `RegisterDeviceNotification` for `hardware` and `drivers`;
+  Windows Update's events for `updates`. A watched event makes the agent **re-collect that section after a 30 s
+  debounce** (an installer writes several keys; a Windows Update installs several packages), diff it against the last
+  copy, and – only if something changed – send a **partial bundle**: the event(s), the changed section whole, and
+  nothing else.
+- An event without a section (a crash, a blue screen, a failed service) is sent in a partial bundle with the last
+  15 minutes of 1-minute summaries, so the timeline shows the load around it.
 - An alert opening sends the alert, the samples of §5.3 and the current `processes`. An alert closing sends the closed
   alert.
 - **Flood control:** at most **30 triggered bundles per hour** per device; beyond that, events are kept in the outbox
-  and go with the next full bundle, and the full bundle says how many were held back. Repeated identical events
-  (the same crash of the same program, the same disk error) within 10 minutes are counted into one event with a count.
-- Nothing is triggered during the first 5 minutes after boot; those events go with the first full bundle.
+  and go with the next digest or sync, which says how many were held back. Repeated identical events (the same crash of
+  the same program, the same disk error) within 10 minutes are counted into one event with a count. Low-value events –
+  sessions, definition updates – never trigger; they ride with the next upload of any kind.
+- Nothing is triggered during the first 5 minutes after boot; those events go with the next upload.
 
-### 6.3 Sequence numbers
+### 6.3 The performance digest
+
+The curve has no event, so it has a cadence: `monitoring.digestMinutes` or the policy `MonitoringDigestMinutes`, **240
+by default (4 hours), 60 to 1440**. A digest carries the 5-minute summaries since the last one (about 1.7 KB an hour
+covered), the untriggered events and the open alerts. At 24 hours it merges with the full sync. The timeline's curve
+lags by up to the digest interval; alerts don't, and *Refresh now* (§9.1) shows the device as it is. A tenant that
+wants a current curve sets 60; §22 shows what each setting costs.
+
+### 6.4 Sequence numbers
 
 Every bundle gets the next number of a **per-device monotonic sequence** (persisted in the outbox before the bundle is
 written, as `agent.json` is written: temp file, flush, replace). The service acknowledges by sequence number and
@@ -286,7 +311,7 @@ rejects a repeat, so nothing is stored twice and a gap is visible. A device enro
 [agent-spec.md](agent-spec.md) §5.3) is a new device at the service; the console shows the old history under the
 connection and marks the cut.
 
-### 6.4 Activation
+### 6.5 Activation
 
 Nothing is collected until the console activates the device (v1 Q7: the agent takes the licence and the choice from
 the console, not from its install).
@@ -305,7 +330,7 @@ the console, not from its install).
    upload is signed with that key, and the service knows which tenant the device belongs to. A device that already has
    a broker registration in the same tenant is recognised by its key.
 4. **Collect.** The agent writes the activation state to `agent.json` (`monitoring.activated`, the service address,
-   the tenant id, the upstream), audits 1404 and starts the first inventory after 5 minutes.
+   the tenant id, the upstream), audits 1404 and sends the baseline after 5 minutes (§6.1).
 5. **Deactivate.** `DELETE /v1/monitoring/activation` from the console (or *Deactivate* at the service for the whole
    tenant, which the agent learns from the next upload's answer) stops collection, deletes the outbox and the
    sections, audits 1405, and the service marks the device inactive; its rows age out with the tier or are deleted at
@@ -313,8 +338,16 @@ the console, not from its install).
    active device at the next policy read.
 
 The service refuses uploads from a device whose tenant isn't licensed, is over its cap or whose activation was
-revoked (403 with the reason); the agent backs off to the next interval, logs 3500 once per service run, and the Device
+revoked (403 with the reason); the agent backs off to the next digest, logs 3500 once per service run, and the Device
 tab shows the reason.
+
+### 6.6 Settings without a connection to the device
+
+Settings are **device-initiated** too, wherever the console doesn't need them applied this second: the console writes
+a device's or a folder's settings to the service (`PUT …/devices/{id}/settings`, §9.4), and the device picks them up
+in the answer to its next upload (§9.2) – at the latest at the next digest, 4 hours by default. The direct
+`PUT /v1/monitoring/settings` (§9.1) stays for *Apply now* while the console is connected to the device, and the agent
+reports which it has in `status`. Either way the device holds the settings and the policy wins (§12.2).
 
 ## 7. Bundles
 
@@ -326,11 +359,12 @@ A bundle is a UTF-8 JSON document, **gzip-compressed**, signed by the device for
   "deviceId": "3f1a9e2c-…",
   "tenant": "o_…",
   "seq": 4711,
-  "kind": "full" | "partial" | "alert",
+  "kind": "sync" | "digest" | "partial",
   "time": "2026-11-09T09:00:03Z",  // the device's clock, UTC
   "uptimeMs": 1234567,              // monotonic, for placing samples when the clock jumped
   "agentVersion": "0.23.0",
-  "intervalMinutes": 60,
+  "kindDetail": "baseline" | "sync" | "digest" | "section" | "event" | "alert",
+  "settingsVersion": 12,              // the settings the device has applied (§6.6)
   "sections": {
     "apps":     { "hash": "sha256-…", "collectedAt": "…", "items": [ … ] },
     "drivers":  { "hash": "sha256-…" },                      // unchanged: hash only
@@ -350,7 +384,7 @@ A bundle is a UTF-8 JSON document, **gzip-compressed**, signed by the device for
 - **Unknown fields and sections are ignored**, not refused: an older service reads a newer agent's bundle and stores
   what it knows. `format` changes only when the envelope changes incompatibly.
 - Section hashes are SHA-256 over the canonical JSON of `items` (sorted keys, as `BrokerProtocol.Canonical`), so the
-  device and the service agree on "unchanged".
+  device and the service agree on "unchanged" – the daily sync is nothing but these hashes (§6.1).
 - The format is self-describing, per device, ordered, with the device's own time: what a self-hosted service would
   ingest unchanged later.
 
@@ -367,7 +401,7 @@ LocalSystem service shouldn't gain a native one for this. Files, written with `D
 | `sections/<name>.json` | The last copy of each section, for the diffs of §6.2 |
 | `perf/<yyyyMMdd>.bin` | The day's 1-minute summaries, a fixed binary record per minute (about 200 bytes), 48 hours kept |
 
-- Uninstall (`RemoteHubAgent.exe cleanup`) and deactivation (§6.4) remove the folder.
+- Uninstall (`RemoteHubAgent.exe cleanup`) and deactivation (§6.5) remove the folder.
 - A damaged `state.json` (as `agent.json` in [agent-spec.md](agent-spec.md) §7.2) keeps the activation from
   `agent.json` and restarts the sequence at the service's acknowledged number plus one. Nothing here can stop the
   service from starting – a monitoring error is logged (3500) and monitoring retries at the next interval.
@@ -382,9 +416,9 @@ Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as
 
 | Method | Path | Right | Purpose |
 |---|---|---|---|
-| GET | `/v1/monitoring/status` | Monitoring | `{enabled, activated, tenant, path (direct / through <upstream>), lastSeq, acknowledgedSeq, lastUpload, lastFull, nextFull, intervalMinutes, settings, settingsSource (policy/device/default), openAlerts, outboxBytes, lastRefusal, time}` – `time` is the device's clock, so the console can note a skew |
+| GET | `/v1/monitoring/status` | Monitoring | `{enabled, activated, tenant, path (direct / through <upstream>), lastSeq, acknowledgedSeq, lastUpload, lastFullSync, nextFullSync, nextDigest, fullSyncHours, digestMinutes, settings, settingsSource (policy/console/service/default), settingsVersion, openAlerts, outboxBytes, lastRefusal, time}` – `time` is the device's clock, so the console can note a skew |
 | GET | `/v1/monitoring/now?sections=apps,drivers` | Monitoring | Collects the named sections now and the current 10 s samples and returns them to the console without writing a bundle (*Refresh now* in the Device tab, at most once a minute per account); the console shows them and the service isn't involved |
-| PUT / DELETE | `/v1/monitoring/activation` | MonitoringSettings | The activation of §6.4 (token, service address, upstream) / deactivation. 409 with the policy's name when `MonitoringEnabled` = 0; 400 for a token that doesn't name this device |
+| PUT / DELETE | `/v1/monitoring/activation` | MonitoringSettings | The activation of §6.5 (token, service address, upstream) / deactivation. 409 with the policy's name when `MonitoringEnabled` = 0; 400 for a token that doesn't name this device |
 | PUT / GET | `/v1/monitoring/settings` | MonitoringSettings / Monitoring | The device settings of §12.2 as JSON. Values a policy configures are refused with 409 and the policy's name; invalid values 400 with the reason. Written to `agent.json`, audited (1402) |
 | POST | `/v1/monitoring/forward` | none – devices, not consoles (§9.3) | A relay: the body is another device's signed upload, forwarded to the service unchanged |
 
@@ -399,15 +433,17 @@ Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as
 
 - `POST https://<broker>/v1/o/{org}/monitoring/upload` with the gzip bundle as the body and the device's signature
   over `remotehub-broker/1|<org>|monitoring|<deviceId>|<seq>|SHA-256(body)` in a header (PS256 with the device
-  certificate's key, §6.4 step 3 – the signature the broker's registration already uses, so the Workers verify it
+  certificate's key, §6.5 step 3 – the signature the broker's registration already uses, so the Workers verify it
   with the stored public key). TLS to the front door as the broker connection uses it (`BrokerHttpProxy` applies).
-- The answer: `{acknowledged: <seq>, sections: ["apps", …], settings?: {…}, deactivated?: true, reason?: "…"}` –
-  `sections` names hash-only sections the service has no copy of, which the agent sends whole in the next bundle;
-  `settings` are the tenant's defaults the service asks the device to adopt when the console set none (the console's
-  own `PUT` wins); `deactivated` ends collection (§6.4).
+- The answer: `{acknowledged: <seq>, sections: ["apps", …], settings?: {…}, settingsVersion?: 12, deactivated?: true,
+  reason?: "…"}` – `sections` names sections whose hash differs from the service's copy or that it lacks, which the
+  agent sends whole in a partial bundle at once (§6.1); `settings` are the settings waiting at the service for this
+  device – the console's per-device or per-folder values, else the tenant's defaults (§6.6) – with a version the agent
+  echoes in its next upload so the console sees them applied; `deactivated` ends collection (§6.5). The answer is the
+  service's only way to the device, and the device asks for it only by uploading.
 - Retry: an upload that fails (network, 5xx, 429) stays in the outbox and is retried with backoff (1, 2, 4 … up to
   60 minutes), oldest first, at most 5 in flight; a 403 (not licensed, over cap, revoked) stops uploads until the next
-  interval and is shown in status.
+  digest and is shown in status.
 - Quota at the service: 60 uploads per device per hour, 4 MB each; per tenant, the entitlement's device cap and
   200 MB an hour; beyond that 429. The console never uploads on a device's behalf.
 
@@ -448,14 +484,14 @@ ES256 signature over each request), tenant-scoped:
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/o/{org}/monitoring/entitlement` | Licensed, tier, cap, region, devices active |
-| POST | `/v1/o/{org}/monitoring/activations` | An activation token for a device id and fingerprint (§6.4) |
+| POST | `/v1/o/{org}/monitoring/activations` | An activation token for a device id and fingerprint (§6.5) |
 | GET | `/v1/o/{org}/monitoring/devices/{id}/overview` | The tiles of the Device tab: current health, open alerts, last received, last 2 hours of 5-minute summaries |
 | GET | `…/devices/{id}/sections/{name}[?at=<time>]` | The current (or a past) copy of a section, and `…/changes?from&to` the diff events |
 | GET | `…/devices/{id}/events?from&to&lanes` · `…/alerts?open` · `…/performance?from&to&step&metrics` | The timeline's data, at the step the zoom needs |
 | POST | `…/devices/{id}/alerts/{alertId}/acknowledge` · `DELETE …/devices/{id}` | Acknowledge; delete a device's data |
 | GET | `/v1/o/{org}/monitoring/dashboards/{name}?folder&from&to` · `…/reports/{name}` | The dashboards and reports of §11.4, computed at the service, paged |
 | GET | `/v1/o/{org}/monitoring/search?q=` | Devices by app, version, KB, driver (§11.4) |
-| PUT | `/v1/o/{org}/monitoring/defaults` | The tenant's default settings for new activations |
+| PUT | `/v1/o/{org}/monitoring/defaults` · `…/devices/{id}/settings` · `…/folders/{id}/settings` | The tenant's defaults; settings waiting for a device or every device of a folder, handed over in the next upload's answer (§6.6); a folder's apply to new devices too |
 
 Answers are JSON with the same limits as bundles; the console clips again when it shows them (§14). Nothing is
 queried in the background except the overview of devices with an open Device tab and, with *Show alerts in the
@@ -517,6 +553,23 @@ device_state (tenant, device, last_seen, last_full, interval, path, agent_versio
 It never connects to a device, never runs anything on one, and never reads a bundle's content beyond validation and
 the diffs. Operations at RemoteHub see tenant ids, sizes, counts and errors; opening a tenant's rows needs that
 tenant's support consent and is logged (§14).
+
+### 10.4 Throughput
+
+Where thousands of uploads a second would bite, in the order they cost (§22.3 has the rates):
+
+| Step per upload | Cost | At 200,000 devices and the defaults | What keeps it in hand |
+|---|---|---|---|
+| Signature check (RSA-3072 PSS, WebCrypto) | about 0.3 ms CPU | 55 a second at the digest peak | Spread across the edge by construction; nothing to do |
+| Device key, tenant and entitlement lookup | a D1 read, milliseconds, one database | the first real queue at a few hundred a second | Cached in Workers KV or the Cache API with a 5-minute TTL; quota counters in a Durable Object per tenant |
+| Inflate and parse (15 KB) | about 0.15 ms CPU | negligible | Streaming inflate under the §7 caps |
+| Validation and clipping | about 0.2 ms CPU | negligible | – |
+| Diff of a changed section | 2–5 ms, a read of the stored copy | about 14 a second on Patch Tuesday | Current sections in `sections_current`, one read per changed section |
+| ClickHouse insert | I/O | hundreds of small inserts a second | Asynchronous inserts batch on the server; a Cloudflare Queue in front if the measured p99 passes 2 s (§19 Q2) |
+
+Decompression is last on the list: zlib inflates hundreds of MB a second on one core and the aligned-fleet peak is
+under a megabyte a second. Nothing here is a single server – each upload is a Worker invocation on the edge node the
+device reached.
 
 ## 11. The console
 
@@ -631,14 +684,15 @@ tiles' sparkline, the alert detail, and the full Timeline section.
   reporting which took it, which refused (policy, right) and which weren't reached. *Deactivate…* is the same dialog
   with the data question (*Keep the history until it ages out* / *Delete this device's data now*). Needs the right
   `MonitoringSettings` on each device, and `AllowMonitoring` on this PC.
-- **Per device:** the Device tab's *Settings* section shows the activation state and path, the interval, the sections
-  collected, and every rule of §5.4 as a row with on/off, threshold and window (`NumberBox`es with the ranges of §5.4),
-  with the value's source (*device*, *tenant default*, *policy*). *Apply* sends `PUT /v1/monitoring/settings`; a value
-  the policy configures is greyed with the lock and *Set by your organisation*, as everywhere
+- **Per device:** the Device tab's *Settings* section shows the activation state and path, the full sync and digest
+  intervals, the sections collected, and every rule of §5.4 as a row with on/off, threshold and window (`NumberBox`es with the ranges of §5.4),
+  with the value's source (*device*, *tenant default*, *policy*). *Apply* writes them to the service for the device's next upload, *Apply now* also sends
+  `PUT /v1/monitoring/settings` over the connection (§6.6); a value the policy configures is greyed with the lock and *Set by your organisation*, as everywhere
   ([admx-design.md](admx-design.md) P2). Without the right the section is read-only and says so.
 - **For many devices:** right-click a folder → *Monitoring settings…* opens the same form with *Apply to every device in
-  this folder* (and its subfolders), runs device by device and reports. The device holds its settings, so two consoles
-  can't disagree about a device; the tenant's defaults apply only where no console set a value.
+  this folder* (and its subfolders): written to the service once, picked up by each device at its next upload, with
+  the dialog showing which have confirmed (`settingsVersion`). The device holds its settings, so two consoles can't
+  disagree about a device; the tenant's defaults apply only where no console set a value.
 - **Console settings** (*Settings → Monitoring*): *Open the Device tab with a connection*; *Show alerts in the
   navigation*; the cache's size (default 50 devices).
 - **The navigation:** with that setting on, a connection with an open alert shows the alert dot on its icon (the
@@ -689,10 +743,11 @@ policies.
 | `MonitoringEnabled` | DWORD | 0: the device can't be activated and an active device is deactivated at the next read; `/v1/monitoring/*` answers 404, health leaves out `monitoring`, the outbox is deleted (1 – *may be activated*; nothing is collected until the console activates) |
 | `MonitoringService` | SZ | The only service address the agent may upload to (any the activation names). For tenants that pin their broker with `BrokerUrl`, the same host |
 | `MonitoringRelay` | DWORD | 0: this device never forwards other devices' uploads (§9.3) (1 when `TunnelEnabled` is on) |
-| `MonitoringIntervalMinutes` | DWORD 60–10080 | The full inventory's interval (60) |
+| `MonitoringFullSyncHours` | DWORD 12–168 | The daily reconciliation's interval (24; §6.1) |
+| `MonitoringDigestMinutes` | DWORD 60–1440 | The performance digest's interval (240; §6.3) |
 | `MonitoringSections` | MULTI_SZ | Which sections are collected: any of `os`, `hardware`, `apps`, `updates`, `drivers`, `services`, `users`, `config`, `agent` (all) |
 | `MonitoringIncludeUsers` | DWORD | 0: no account names anywhere – sessions, local users, group members, crash and sign-in events say *a user*; per-user app entries and the user's GPOs and CSP values are left out (1) |
-| `MonitoringEvents` | DWORD | 0: no event watching, only the interval (1) |
+| `MonitoringEvents` | DWORD | 0: no event watching – changes are found only by the daily sync's reconciliation (1) |
 | `MonitoringPerformance` | DWORD | 0: no sampling, no threshold alerts (1) |
 | `MonitoringCpuPercent`, `MonitoringCpuMinutes` | DWORD | 0 turns the rule off; else 50–100 and 1–60 (80, 5) |
 | `MonitoringMemoryPercent`, `MonitoringMemoryMinutes` | DWORD | (90, 5) |
@@ -706,7 +761,7 @@ policies.
 Rights (subkey `Rights`): `Monitoring`, `MonitoringSettings` (§9.1). `RemoteHubAgent.exe policy` prints them all;
 *Settings → Policies* lists them from `PolicyCatalog.cs`; the ADMX test checks the template against it.
 
-No install-time switch and no enrolment-file field: activation comes from the console (§6.4). The MSI and the
+No install-time switch and no enrolment-file field: activation comes from the console (§6.5). The MSI and the
 `.rhagent` file stay as they are.
 
 ## 13. Audit and logging
@@ -715,7 +770,7 @@ Agent (`AuditEvent`, the Application log unless `AuditToEventLog` = 0):
 
 | Id | Event | Recorded |
 |---|---|---|
-| 1400 `MonitoringStarted` | Collection runs (once per service run while activated) | Interval, sections, path (direct or upstream) |
+| 1400 `MonitoringStarted` | Collection runs (once per service run while activated) | Full sync and digest intervals, sections, path (direct or upstream) |
 | 1401 `MonitoringRead` | A console read status, settings or `now` | Account, source address, what – never the content |
 | 1402 `MonitoringSettingsChanged` | Settings changed through the endpoint | Account, source, which values and the new values (no secrets exist here) |
 | 1403 `MonitoringUploaded` | The first successful upload per service run, and again after a failure | Service, `seq`, path |
@@ -799,10 +854,10 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
 | Part | Budget | How it is kept |
 |---|---|---|
 | Sampler | < 0.1 % CPU, < 10 MB | One PDH query, 10 s; process list from one `NtQuerySystemInformation` call |
-| Full inventory | < 30 s CPU, < 100 MB peak, finished within 5 minutes | Sections collected one after another on a thread at `BelowNormal` priority, each with its own stop (WMI 30 s, WU search 60 s); a section that overruns is skipped this time and reported in `agent` |
+| Baseline or a re-collected section | < 30 s CPU, < 100 MB peak, finished within 5 minutes | Sections collected one after another on a thread at `BelowNormal` priority, each with its own stop (WMI 30 s, WU search 60 s); a section that overruns is skipped this time and reported in `agent` |
 | Event watching | < 0.1 % CPU | `EventLogWatcher` subscriptions with XPath filters per id, no polling |
 | Outbox | ≤ 64 MB, a few hundred KB in practice | §8 |
-| Uploads | ≤ 2 MB an hour in practice | Full bundles with hash-only sections; gzip (§22) |
+| Uploads | about 100 KB a day, 10 uploads a day at the defaults | Events only when something changed, a hash-only daily sync, a 4-hour digest; gzip (§22) |
 | Relay on a jump host | ≤ 600 forwards an hour, bytes in and out | §9.3 |
 
 The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and the result goes into this section.
@@ -845,15 +900,16 @@ where a case applies to Server too; the lab broker gains the service with a loca
 
 | ID | Case | Pass when | How | P |
 |---|---|---|---|---|
-| M-ACT-01 | Activation | the harness activates the VM through the agent → `status` shows activated, path direct, 1404 audited; within 10 minutes the service has a full bundle with every section; health lists `monitoring` | H | 1 |
+| M-ACT-01 | Activation | the harness activates the VM through the agent → `status` shows activated, path direct, 1404 audited; within 10 minutes the service has the baseline with every section (its size recorded); health lists `monitoring` | H | 1 |
 | M-ACT-02 | Not before activation | a fresh install collects nothing for 30 minutes: no outbox, no 1400, no upload at the lab service | H PS | 1 |
 | M-ACT-03 | Deactivation and policy | `DELETE` → collection stops, outbox gone, 1405; `MonitoringEnabled` = 0 on an active device → deactivated at the next read, 404, health without `monitoring` | H PS | 1 |
 | M-ACT-04 | Rights and tokens | an account without `MonitoringSettings` can't activate (403, 2501) but reads `status`; a token for another device id or fingerprint → 400; an expired token → 400 | H | 1 |
-| M-ACT-05 | Licence at the service | the lab tenant set over its cap or unlicensed → uploads 403, 2503 audited, `status.lastRefusal` names it, the Device tab shows it; licensed again → uploads resume within the interval | H | 1 |
+| M-ACT-05 | Licence at the service | the lab tenant set over its cap or unlicensed → uploads 403, 2503 audited, `status.lastRefusal` names it, the Device tab shows it; licensed again → uploads resume with the next digest | H | 1 |
 | M-INV-01 | Sections' truth | the apps the VM has (the agent MSI, a test MSI), its KBs, its drivers, local users, the lab's GPO and the Defender state appear with the right values at the service; nothing of §5.5 in the bundle (scan) | H PS | 1 |
-| M-INV-02 | Interval | with `MonitoringIntervalMinutes` = 60 the second full bundle arrives 60 ± 10 minutes after the first; 30 is refused (invalid, logged once) and 60 stays | H PS | 2 |
+| M-INV-02 | Sync and digest intervals | with `MonitoringFullSyncHours` = 12 and `MonitoringDigestMinutes` = 60 a hash-only sync arrives 12 h ± 1 h after the baseline and a digest every 60 ± 5 minutes; 6 and 30 are refused (invalid, logged once) and the defaults stay | H PS | 2 |
 | M-INV-03 | Users off | `MonitoringIncludeUsers` = 0 → no account name anywhere in a full bundle (scan for the VM's known accounts), counts still there | H | 1 |
-| M-INV-04 | Hash-only sections | the second full bundle carries unchanged sections as hashes; the service asked for none; a section deleted at the service is asked for and arrives whole with the next bundle | H | 2 |
+| M-INV-04 | Reconciliation | the daily sync carries hashes only (under 4 KB); the service asked for none; a section deleted at the service, and a change made with `MonitoringEvents` = 0, are asked for and arrive whole within a minute of the sync | H | 1 |
+| M-INV-05 | Settings from the service | the harness writes settings for the device at the lab service → the device applies them with its next upload, echoes `settingsVersion`, `status` says source `console`; a folder's settings reach two devices | H | 1 |
 | M-EVT-01 | App installed | install a test MSI → a partial bundle with `app.installed` and the `apps` section at the service within 90 s; uninstall → `app.removed` | H PS | 1 |
 | M-EVT-02 | Store app and EXE installer | `Add-AppxPackage` and an Inno Setup test installer → events within 90 s, kind says Store / installer | H S | 2 |
 | M-EVT-03 | Driver and update | install a test driver (the lab's signed null driver) → `driver.installed`; install a `.msu` → `update.installed` and `os` pending restart; a definition update → recorded, no triggered bundle | H PS | 2 |
@@ -861,6 +917,7 @@ where a case applies to Server too; the lab broker gains the service with a loca
 | M-EVT-05 | Blue screen | a forced bug check in the guest → after the restart `os.bluescreen` with the code, `device.started` with the boot duration | H PS C | 1 |
 | M-EVT-06 | Service failure | kill a test service's process → `service.failed` and the alert; the agent's own service isn't listed as failed after a lab-initiated restart | H PS | 2 |
 | M-EVT-07 | Group Policy | change the lab GPO and `gpupdate` → `config.gpo` with the changed values named within 2 minutes; `gpupdate` without a change → no bundle | H PS | 2 |
+| M-EVT-09 | Services, accounts, hardware | a new service, a start type change, a new local user and a group membership, a plugged-in USB disk → each a partial bundle with the changed section within 90 s; the SAM notification path confirmed where the audit policy is off | H PS | 1 |
 | M-EVT-08 | Flood | 100 crashes in a minute → identical events counted, at most 30 triggered bundles an hour, the rest in the next full bundle with `heldBack`; 20 locks and unlocks → no triggered bundle | H S | 2 |
 | M-PERF-01 | CPU alert | a burner at 100 % on all cores for 6 minutes → the alert opens between 5:00 and 5:30 with the burner on top, the alert bundle holds the 10 s samples; the burner stops → closes within 6 minutes with duration and peak | H S | 1 |
 | M-PERF-02 | No false alert | 4 minutes at 100 %, then idle → no alert; 10 minutes alternating 30 s at 100 % and 30 s idle → no alert | H S | 1 |
@@ -870,9 +927,9 @@ where a case applies to Server too; the lab broker gains the service with a loca
 | M-PERF-06 | Boot and sign-in | restart; sign in as normaluser → `device.started` with a boot duration, `session.signIn` with a duration (confirms the measurement) | H C S | 2 |
 | M-RELAY-01 | Through a jump host | **2VM**, the target without a broker connection: activation with the jump host as upstream → uploads arrive at the service signed by the target; the jump host audits 1406; `status` says *through JUMP01*; the jump host's log has no section contents | H | 1 |
 | M-RELAY-02 | Relay limits | `MonitoringRelay` = 0 → 404 and the target's outbox fills, then drains when it is 1 again; a body over 4 MB → 413; 61 forwards in an hour from one address → 429 and 2502; a source outside `TunnelTargets` → 403 | H | 1 |
-| M-RELAY-03 | Chain and loss | jump host behind a jump host: two hops, uploads arrive; the head's broker connection cut for 20 minutes → outboxes fill, nothing lost, all arrive within the interval after it is back | H N | 2 |
+| M-RELAY-03 | Chain and loss | jump host behind a jump host: two hops, uploads arrive; the head's broker connection cut for 20 minutes → outboxes fill, nothing lost, all arrive within a digest interval after it is back | H N | 2 |
 | M-CON-01 | Device tab | **2VM**, RemoteHub in the client VM: the tab shows the inventory, the events of M-EVT and the alert of M-PERF-01 on the timeline from the lab service; offline → the cache is shown and marked; screenshots in both themes | U | 1 |
-| M-CON-02 | Diff events | install a test app between two full bundles without the watcher (`MonitoringEvents` = 0) → the tab shows *between HH:MM and HH:MM* for the change | U H | 2 |
+| M-CON-02 | Diff events | install a test app with the watcher off (`MonitoringEvents` = 0) → after the next sync's reconciliation the tab shows *between HH:MM and HH:MM* for the change | U H | 2 |
 | M-CON-03 | Dashboards and search | the lab's devices appear in *Open alerts*, *Pending restarts*, *Crashing apps*; `monitoring:` search finds the test app's version; a CSV export has the rows and is audited | U | 2 |
 | SEC-MON-01 | Hostile bundle at the service | uploads from a test client with the VM's key: over the limits (size, depth, a gzip bomb, strings with control and RTL characters, a `file://` and an `http://` string, a 100,000-item apps list) → each refused or clipped at the service, counted; the console shows text only, nothing is opened or fetched | H U | 1 |
 | SEC-MON-02 | Wrong identity | a bundle signed by device A naming device B, a repeated `seq`, a bundle after deactivation, a token issued for another tenant → refused with the right status, nothing stored under B | H | 1 |
@@ -885,8 +942,8 @@ A failing collector on a lab VM is a finding for §15.1's skip list, not a reaso
 
 | Phase | Content | Done when |
 |---|---|---|
-| **1 – Inventory and the service** | Agent: collectors (§5.1), outbox (§8), full bundles on the interval (§6.1), activation (§6.4), the direct upload (§9.2), endpoints `status`, `now`, `settings`, `activation`, rights, `MonitoringEnabled`, `…Service`, `…IntervalMinutes`, `…Sections`, `…IncludeUsers`, audit 1400–1405, 2501, 2503, 3500, cleanup. Service: entitlement and activation in D1, the upload with signature and quotas, validation, ClickHouse tables for sections, events (diff), device state, the overview and section queries, TTL by tier, deletion. Console: `MonitoringServiceClient`, the cache, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), *Activate…* and *Deactivate…*, `AllowMonitoring`, the entitlement in Settings | M-ACT-*, M-INV-*, M-CON-02, SEC-MON-01–03 pass; §15.2 measured |
-| **2 – Events and alerts** | Agent: watchers (§5.2), triggered bundles (§6.2), sampler (§5.3), thresholds (§5.4), the remaining policies, 1402, 2500. Service: alerts, performance tables, the timeline queries, tenant defaults. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, tenant defaults in Settings | M-EVT-*, M-PERF-* pass |
+| **1 – Inventory and the service** | Agent: collectors (§5.1), outbox (§8), the baseline and the daily hash-only sync (§6.1), the section watchers and partial bundles (§6.2 – the change events of every section, so phase 1 is already event-driven), activation (§6.5), settings from the upload answer (§6.6), the direct upload (§9.2), endpoints `status`, `now`, `settings`, `activation`, rights, `MonitoringEnabled`, `…Service`, `…FullSyncHours`, `…DigestMinutes`, `…Sections`, `…IncludeUsers`, audit 1400–1405, 2501, 2503, 3500, cleanup. Service: entitlement and activation in D1, the upload with signature and quotas, validation, ClickHouse tables for sections, events (diff), device state, the overview and section queries, TTL by tier, deletion. Console: `MonitoringServiceClient`, the cache, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), *Activate…* and *Deactivate…*, `AllowMonitoring`, the entitlement in Settings | M-ACT-*, M-INV-*, M-CON-02, SEC-MON-01–03 pass; §15.2 measured |
+| **2 – Problems, performance and alerts** | Agent: the problem and session watchers (§5.2), sampler (§5.3), the digest (§6.3), thresholds (§5.4), the remaining policies, 1402, 2500. Service: alerts, performance tables, the timeline queries, tenant defaults. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, tenant defaults in Settings | M-EVT-*, M-PERF-* pass |
 | **3 – Timeline** | `DeviceTimeline`, the Timeline section, sparklines on the tiles, correlation footer (service-side counts), keyboard and automation | M-CON-01, the U screenshots reviewed |
 | **4 – Relay through jump hosts** | Agent: `/v1/monitoring/forward`, upstreams, `MonitoringRelay`, 1406, 2502; console: upstreams from the tree in the activation | M-RELAY-*, SEC-MON-04 pass |
 | **5 – Monitoring view** | The rail view, every dashboard of §11.4 with the customer's choice, reports and export, search, the cross-device correlation, the service audit page | M-CON-03 |
@@ -952,7 +1009,8 @@ judgement call were the deciding voice:
 | All dashboards ship, the customer picks | The owner (v1 Q4) |
 | Remediation is a planned later phase | The owner (v1 Q6) |
 | Account names collected by default, policy to turn off; the full configuration value set | The owner (v1 Q1, Q2) |
-| "Send every 60 minutes" is an upload to the service; the interval's floor is 60 minutes | The request and the budget; §22 shows the interval saves requests, not bytes |
+| Event-driven first: changes travel when they happen, the full sync is a daily hash-only reconciliation, the performance digest every 4 hours | The owner (v2): client-initiated updates wherever possible and a full sync once or twice a day; §22 shows the request count drops to a third at the same information |
+| Settings reach the device in the upload's answer; a direct push only for *Apply now* | The same: the device initiates; it also reaches devices the console can't connect to right now |
 | Full inventory on the interval, changed sections on a trigger, the service computes diffs | The request ("send the selective information") and robustness – a snapshot can't be out of step |
 | Thresholds live on the device, set from the console per tenant default, folder or device, policy wins | The project's P1 and P6 (the device is the boundary); two consoles can't disagree about a device |
 | Alerts need 90 % of samples above the threshold and close with hysteresis | Judgement: "over 80 % for 5 min" read as sustained, not averaged |
@@ -1024,7 +1082,7 @@ The console stores no history (v1 Q9's answer ended that): a cache of the last o
 devices in its encrypted SQLite, a few MB. v1's analysis of DuckDB and an embedded ClickHouse for the console is moot;
 if a self-hosted service ever comes, it is the service's image that carries ClickHouse, not the console.
 
-## 22. Data volumes and costs at 1, 4 and 8 hours
+## 22. Data volumes and costs by digest interval
 
 Prices are the published ones at the time of writing – Cloudflare Workers Paid $5 a month with 10 million requests and
 30 million CPU-ms included, then $0.30 and $0.02 per million; D1 5 GB, 25 billion rows read and 50 million rows written
@@ -1036,51 +1094,56 @@ $0.2985 per compute unit-hour (8 GiB RAM, 2 vCPU) in AWS us-east-1, Enterprise $
 
 | Item | Value | Why |
 |---|---|---|
-| Envelope and hash-only sections | 1.5 KB | §7 |
-| 5-minute performance summaries | 1.7 KB per hour covered | 12 metrics × avg/max/min × 12 points, top processes, gzip |
-| Section changes | 40 KB a day | about one `apps` change a day (Edge, Teams and Store apps update themselves); other sections rarely |
-| Triggered bundles | 3 a day, 15 KB on average | app changes, crashes, updates, alerts; session events and definition updates don't trigger (§5.2) |
-| Worker CPU per upload | 10 ms | signature check, decompression within limits, validation, diff, insert |
+| Daily sync, hashes only | 1.5 KB | §6.1 |
+| Performance digest | 1.5 KB envelope + 1.7 KB per hour covered | 12 metrics × avg/max/min × 12 points an hour, top processes, gzip |
+| Triggered bundles | 3 a day: one `apps` change of 40 KB (Edge, Teams and Store apps update themselves), two of 5 KB (a crash with its 15 minutes of samples, an update, an alert) – 50 KB | §6.2 |
+| Worker CPU per upload | 1 ms typical, 5 ms for a changed section | signature check, decompression within limits, validation, diff, insert (§10.4) |
 | Console queries | 0.1 per upload | a tab open for a tenth of devices; dashboards cached a minute |
 | Column-store size | 40 % of gzip JSON for performance and events, 100 % for section blobs | typical ClickHouse ratios for typed numeric columns; measured in phase 1 |
 
 ### 22.2 Per device
 
-| Interval | Full bundle | On the wire a day | Uploads a day | Uploads a month | Snapshot-only variant, a day |
-|---|---|---|---|---|---|
-| 1 h | 3.2 KB | 162 KB | 27 | 810 | 119 KB |
-| 4 h | 8.4 KB | 135 KB | 9 | 270 | 88 KB |
-| 8 h | 15.2 KB | 131 KB | 6 | 180 | 83 KB |
+The digest interval is the only knob that changes the request count; the daily sync is one small upload and the
+triggered bundles are the information itself.
 
-- **The interval saves requests, not bytes.** Three quarters of the bytes are section changes and triggered bundles,
-  which happen when they happen; the performance summaries cover the same hours whichever bundle carries them. Going
-  from 1 to 8 hours cuts uploads by 4.5× and bytes by 20 %.
-- **The snapshot-only variant** – no continuous sampling, one reading per interval – saves about a quarter of the bytes
-  and loses every threshold alert: *CPU at or above 80 % for 5 minutes* can't be seen in a reading every hour. Sampling
-  stays on the device (it costs the device nothing measurable, §15.2); the interval only decides how often the
-  summaries travel. Longer intervals make the timeline later: a 4-hour interval shows the morning's load at noon,
-  unless an alert sent it earlier.
-- **On the device's link:** 5 MB a month at 1 hour; a metered link needs no longer interval.
+| Digest | Daily sync | On the wire a day | Uploads a day | Uploads a month | Outbox for 7 days offline |
+|---|---|---|---|---|---|
+| 1 h | 24 h | 128 KB | 28 | 840 | 0.9 MB |
+| **4 h (default)** | **24 h** | **101 KB** | **10** | **300** | **0.7 MB** |
+| 12 h | 24 h | 95 KB | 6 | 180 | 0.7 MB |
+| 24 h (merged with the sync) | 24 h | 92 KB | 4 | 120 | 0.6 MB |
+| v2 for comparison: hourly full bundle | 1 h | 162 KB | 27 | 810 | 1.1 MB |
+
+- **Against v2's hourly full bundle, the defaults cut uploads to 37 % and bytes to 62 %** with the same information
+  arriving: a change is at the service within a minute of happening, which the hourly model couldn't promise either.
+- **The floor is the triggered content** – about 50 KB a day – which is what the admin wants to see. Below the 4-hour
+  digest the savings are a few KB and a few uploads; the curve's lag grows instead.
+- **The snapshot-only variant** (no continuous sampling) would drop the digest entirely and every threshold alert with
+  it: *CPU at or above 80 % for 5 minutes* can't be seen in a reading a day. Sampling stays on the device (§15.2); the
+  digest only decides how often the summaries travel.
+- **On the device's link:** 3 MB a month at the defaults.
 
 ### 22.3 Per environment and month
 
 Ingest is what arrives; the store is the 30-day tier plus 7 days of 1-minute data, at the column-store ratio of
-§22.1; rows are `perf_5m` plus events. Worker requests are uploads plus console queries.
+§22.1 – the same whatever the intervals, since the same summaries, events and changes arrive. Worker requests are
+uploads plus console queries.
 
-| Devices | Interval | Uploads a month | Ingest | Store (30 d) | Store (90 d) | Rows a day | Worker requests | Workers |
-|---|---|---|---|---|---|---|---|---|
-| 10,000 | 1 h | 8.1 M | 46 GB | 15 GB | 34 GB | 35 M | 8.9 M | $5.00 |
-| 10,000 | 4 h | 2.7 M | 39 GB | 15 GB | 34 GB | 35 M | 3.0 M | $5.00 |
-| 10,000 | 8 h | 1.8 M | 37 GB | 15 GB | 34 GB | 35 M | 2.0 M | $5.00 |
-| 100,000 | 1 h | 81 M | 463 GB | 150 GB | 340 GB | 346 M | 89 M | $45 |
-| 100,000 | 4 h | 27 M | 386 GB | 150 GB | 340 GB | 346 M | 30 M | $17 |
-| 100,000 | 8 h | 18 M | 374 GB | 150 GB | 340 GB | 346 M | 20 M | $11 |
-| 200,000 | 1 h | 162 M | 927 GB | 300 GB | 680 GB | 691 M | 178 M | $88 |
-| 200,000 | 4 h | 54 M | 772 GB | 300 GB | 680 GB | 691 M | 59 M | $29 |
-| 200,000 | 8 h | 36 M | 749 GB | 300 GB | 680 GB | 691 M | 39 M | $17 |
+| Devices | Digest | Uploads a month | Ingest | Store (30 d) | Store (90 d) | Worker requests | Workers |
+|---|---|---|---|---|---|---|---|
+| 10,000 | 1 h | 8.4 M | 37 GB | 15 GB | 34 GB | 9.2 M | $5 |
+| 10,000 | 4 h | 3.0 M | 29 GB | 15 GB | 34 GB | 3.3 M | $5 |
+| 10,000 | 12 h | 1.8 M | 27 GB | 15 GB | 34 GB | 2.0 M | $5 |
+| 100,000 | 1 h | 84 M | 367 GB | 150 GB | 340 GB | 92 M | $31 |
+| 100,000 | 4 h | 30 M | 290 GB | 150 GB | 340 GB | 33 M | $12 |
+| 100,000 | 12 h | 18 M | 273 GB | 150 GB | 340 GB | 20 M | $8 |
+| 200,000 | 1 h | 168 M | 734 GB | 300 GB | 680 GB | 185 M | $61 |
+| 200,000 | 4 h | 60 M | 580 GB | 300 GB | 680 GB | 66 M | $23 |
+| 200,000 | 12 h | 36 M | 545 GB | 300 GB | 680 GB | 40 M | $14 |
 
-The store is the same whatever the interval – the same summaries, events and changes arrive – and D1's part
-(metadata, a few hundred bytes per device) stays inside the plan at every size.
+D1's part (metadata, a few hundred bytes per device) stays inside the plan at every size. Peak load: a fleet
+activated at the same minute digests inside the same hour – with the 60-minute jitter about 55 uploads a second at
+200,000 devices, 6 times a day; Patch Tuesday adds about 14 changed-section uploads a second over 4 hours (§10.4).
 
 ### 22.4 ClickHouse Cloud
 
@@ -1097,8 +1160,9 @@ a load test in phase 1:
 - A second region doubles the fixed part: two tenants' worth of devices in EU and US are two services. The smallest
   Scale service is about $440 a month per region whether it holds 1 or 10,000 devices, so the EU and US clusters are
   the floor of the service's cost: about **$900 a month** before the first device.
-- The **interval moves the compute only a little** (ingestion is a minor part of the load next to the dashboards);
-  it moves the Workers line by 3–5×, which is tens of dollars. The 8-hour interval is not a cost measure at any size.
+- The **digest interval moves the compute only a little** (ingestion is a minor part of the load next to the
+  dashboards); it moves the Workers line by 2–4×, which is tens of dollars at most. The intervals are chosen for
+  freshness and chatter, not for money.
 - **Enterprise tier** (private networking, customer-managed keys, SSO) is 1.3× the compute; a European region 1.3×
   again. For the EU cluster budget about $570 a month for the smallest service on Enterprise in Germany.
 - **Self-managed** (three nodes per region, 8 vCPU / 32 GiB each) is about $900–1,200 a month per region in compute
@@ -1112,10 +1176,10 @@ a load test in phase 1:
   device per month at the top**, and the ClickHouse floor of two regions dominates at the bottom.
 - The retention tiers change storage, which is cents, not compute: the price difference between 30 and 90 days is
   not in the infrastructure. A tier is a licence decision.
-- **Keep 60 minutes as the default**, because the cost case for a longer interval doesn't exist and the hourly bundle
-  is what makes the timeline current without an alert. Offer 4 and 8 hours (and up to a week) for tenants that want
-  less chatter.
+- **Defaults: changes by event, the digest every 4 hours, the sync once a day.** A tenant that wants a current
+  curve sets the digest to an hour for tens of dollars a month more at 200,000 devices; one that wants the least
+  chatter sets it to a day and keeps every change and alert as it happens.
 
 The figures come from the assumptions of §22.1 and the sizing of §22.4; phase 1 replaces them with measured bundle
-sizes from the lab (M-ACT-01 records the first full bundle's size per VM) and a load test of the service, and §22.3–22.4
+sizes from the lab (M-ACT-01 records the baseline's size per VM, M-INV-02 a digest's and a sync's) and a load test of the service, and §22.3–22.4
 are recomputed then.
