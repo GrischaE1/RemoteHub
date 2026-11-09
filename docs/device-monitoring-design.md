@@ -327,7 +327,7 @@ door's address from enrolment ([environment-enrollment-design.md](environment-en
 needs no connection from the console to the device:
 
 1. **Entitlement.** RemoteHub sets on the tenant's record at the environment: monitoring licensed, the tier (30, 60 or
-   90 days), the device cap, the region. The console reads it with its discovery and shows it under
+   90 days), the device cap, the region. The console reads it with the person's memberships and shows it under
    *Settings → Environment* and *Settings → Monitoring*.
 2. **Activate.** The admin chooses *Monitoring → Activate…* on the tenant's synced folder, a folder or a device
    (§11.3). The console writes the activation – which devices, with which settings – to the service
@@ -550,8 +550,10 @@ path fills outboxes down the chain until it is back; nothing is lost for 7 days 
 
 ### 9.4 Console → service: queries, activation and settings
 
-The console talks to the service with its **console key** of the broker protocol (the registered console's PS256 or
-ES256 signature over each request), tenant-scoped:
+The console talks to the service as the **signed-in person**: the environment's access token plus the console key's
+signature over each request ([environment-enrollment-design.md](environment-enrollment-design.md) §8), so every query
+is tenant-scoped by the person's membership and role – *Viewer* and above may read, *Admin* and above activate and
+change settings:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -578,7 +580,7 @@ navigation*, one call per minute for the tenant's open alerts.
 | Part | What | Where |
 |---|---|---|
 | **Front door** | A **Worker of its own** in the broker's repository, next to the session broker's, bound to the same D1 and to KV through service bindings and deployed on its own: ingestion takes hundreds of uploads a second and runs a validator over hostile input, and a bug or a load spike there must not take down session brokering. It verifies device and console signatures, enforces entitlement and quotas, validates bundles against §7, writes to the store, answers queries, runs activation | Cloudflare, every region – serverless, no container |
-| **Metadata** | Tenants, entitlements (tier, cap, region), activations, device → tenant and key, console keys, quotas' counters | The broker's D1 (today's database) |
+| **Metadata** | Tenants, entitlements (tier, cap, region), activations, device → tenant and key, members and consoles, quotas' counters | The environment's D1 (today's broker database) |
 | **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** – one cluster per region (EU, US), shared by the region's tenants, tenant id on every row (§21) |
 | **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
 
@@ -617,7 +619,8 @@ device_state (tenant, device, last_seen, last_full, interval, path, agent_versio
 - **Retention per tenant** is a column, so one table serves every tier: `TTL time + toIntervalDay(retention_days)`.
   A tier change rewrites the column for the tenant's rows (`ALTER … UPDATE`, background). The 1-minute and 10 s data
   keep 7 days on every tier.
-- **Isolation:** every query the Worker issues starts with `WHERE tenant = {tenant}` from the verified console key;
+- **Isolation:** every query the Worker issues starts with `WHERE tenant = {tenant}` from the verified access token's
+  membership;
   there is no query path without it (a unit test asserts it on every statement template). Row policies in ClickHouse
   (`CREATE ROW POLICY … USING tenant = currentUser()`-style per-tenant users) are the second fence for the dashboards'
   views. A tenant's region is fixed at creation; its rows never leave the region's cluster.
@@ -880,7 +883,8 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
   only with that tenant's support consent, logged in the tenant's service audit), and how it is deleted.
 - **Identity on every upload.** A bundle is signed with the device's certificate key, registered under the tenant at
   activation; the front door verifies it before anything else, and a relay can't alter it. Consoles sign their queries
-  with their registered key; every query is tenant-scoped by that key, never by a parameter.
+  with their registered key and carry the person's access token; every query is tenant-scoped by the membership in
+  that token, never by a parameter, and the audit names the person.
 - **Tenant isolation at the store:** tenant id on every row, in every `ORDER BY`, in every `WHERE` the Worker issues
   (tested), row policies as the second fence, a region per tenant with no cross-region queries.
 - **The service treats bundles as hostile** (TB8): the gzip is read through a size-limited stream (compressed and
@@ -896,8 +900,8 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
   and activation endpoints accept small fixed JSON objects, range-checked, behind a right. The relay endpoint accepts a
   bounded body and forwards it to one fixed path.
 - **Keys:** the device's monitoring identity is its existing non-exportable certificate key; the console's is its
-  broker console key; activation is a record at the service the device fetches with that same key. No new secret is
-  stored anywhere.
+  access token and console key from the environment's sign-in; activation is a record at the service the device
+  fetches with its own key. No new secret is stored anywhere.
 - **People at the device:** `MonitoringIncludeUsers`, `MonitoringSections` and `MonitoringEvents` narrow what IT
   collects; the Application log shows activation (1404) and every collection run (1400), so the collection is visible on
   the device.
@@ -1073,7 +1077,6 @@ When phase 1 lands:
 | Q2 | **Where does the ingestion run** – the Worker inserts into ClickHouse directly (simple, one hop) or through a queue (Cloudflare Queues) that smooths bursts and survives a ClickHouse outage? | Direct with asynchronous inserts in phase 1; the outbox on the device already smooths; a queue when the measured p99 of an upload passes 2 s. |
 | Q3 | **Tier change and data:** when a tenant moves from 90 to 30 days, is the older data deleted at once (TTL rewrite) or kept until it would have aged out? | Deleted at the next TTL merge (within a day), said in the tier dialog. |
 | Q4 | **Support access:** who at RemoteHub may open a tenant's rows, with what consent and for how long? | Only after the tenant's admin grants *support access* in *Settings → Monitoring* for 7 days; every read logged in the tenant's service audit. Needs the operations design. |
-| Q5 | **The console key for queries** – reuse the broker console key as proposed, or a separate monitoring key the tenant admin can revoke without ending broker access? | Reuse: one identity per console, revoked at *Remove* on the broker page. |
 | Q6 | **Alert notifications** from the service (e-mail, webhook, Teams) – phase 5 or later? | Later; phase 5 is dashboards. |
 | Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
 
