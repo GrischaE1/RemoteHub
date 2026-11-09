@@ -583,10 +583,14 @@ navigation*, one call per minute for the tenant's open alerts.
 
 | Part | What | Where |
 |---|---|---|
-| **Front door** | The broker's Cloudflare Workers: verifies device and console signatures, enforces entitlement and quotas, validates bundles against §7, writes to the store, answers queries, runs activation | Cloudflare, every region |
+| **Front door** | A **Worker of its own** in the broker's repository, next to the session broker's, bound to the same D1 and to KV through service bindings and deployed on its own: ingestion takes hundreds of uploads a second and runs a validator over hostile input, and a bug or a load spike there must not take down session brokering. It verifies device and console signatures, enforces entitlement and quotas, validates bundles against §7, writes to the store, answers queries, runs activation | Cloudflare, every region – serverless, no container |
 | **Metadata** | Tenants, entitlements (tier, cap, region), activations, device → tenant and key, console keys, quotas' counters | The broker's D1 (today's database) |
 | **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** – one cluster per region (EU, US), shared by the region's tenants, tenant id on every row (§21) |
 | **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
+
+Nothing in the service is a container in v1: the Workers are serverless and ClickHouse Cloud is managed. A container
+appears only with self-managed ClickHouse (§19 Q1), a customer-hosted service (§2, later), or an ingestion buffer
+beyond what Cloudflare Queues gives (§19 Q2).
 
 Ingestion path: the Worker verifies the signature and quota, inflates within the limits, decodes the Protobuf message
 with `protobuf-es`, validates (§7), computes the section diffs against the device's current rows, and inserts rows into ClickHouse over its HTTP interface with
