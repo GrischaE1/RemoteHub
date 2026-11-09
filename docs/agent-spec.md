@@ -335,7 +335,7 @@ zero-filled after a hard power-off, and the service didn't start).
 - Logged: start and stop, port, certificate fingerprint, every sign-in and refusal (account, source address, reason), and session start and end (account, source, duration, PowerShell PID).
 - Audit entries (sign-in refused, session start and end, desktop, tunnel, automatic sign-in) also go to the Windows Application log, source *RemoteHub Agent*, unless the policy `AuditToEventLog` = 0.
 - Never logged: passwords and command content.
-- Nothing leaves the device. The agent sends no telemetry and no crash reports. (Device monitoring, [device-monitoring-design.md](device-monitoring-design.md) §9.3, would upload inventory bundles to the organisation's own RemoteHub Broker, sealed for its consoles – still nothing to the vendor; this line changes when that is built.)
+- Nothing leaves the device. The agent sends no telemetry and no crash reports. (Device monitoring, [device-monitoring-design.md](device-monitoring-design.md) §9.2, would – once activated from the console – upload inventory bundles to the tenant's RemoteHub monitoring service, which stores and queries them for that tenant; still no telemetry about the agent itself. This line changes when that is built.)
 
 ## 9. Updates
 

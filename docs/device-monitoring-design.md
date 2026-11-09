@@ -1,9 +1,10 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
-Status: Draft v1 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
-protocol `remotehub-broker/1`). The open questions are in §19, the decisions taken so far in §20, §21 weighs a second database (ClickHouse, DuckDB)
-against the encrypted SQLite the console has, and §22 puts numbers on data volumes and Cloudflare costs at 1, 4 and
-8 hour intervals.
+Status: Draft v2 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+protocol `remotehub-broker/1`). v2 takes in the answers to v1's open questions (§20): the history lives in a
+**RemoteHub-hosted, multi-tenant monitoring service** sized for hundreds of thousands of devices, not in the console;
+monitoring is **activated from the console** under the tenant's licence; devices behind **jump hosts** upload through
+them; the console **queries** the service. §19 has what is still open, §21 the database choice, §22 volumes and costs.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -13,100 +14,114 @@ when it is open and forgets them when it closes. This design gives RemoteHub a *
 that puts what happened on a device in order – so that "the Intel graphics driver was updated on Tuesday, and since
 then Zoom crashes twice a day" or "Teams updated itself at 09:12, and the CPU has been above 80 % since" can be seen
 rather than guessed. That is the digital employee experience (DEX) approach: inventory, events and performance of one
-device on one timeline.
+device on one timeline – and, across a tenant's devices, dashboards and reports.
 
 | Part | What |
 |---|---|
-| **Collection on the device** | The RemoteHub Agent collects an **inventory** (installed apps, Windows updates, drivers, hardware, operating system, users and groups, configuration – Group Policy and MDM/CSP, services, security state) on a schedule: every **60 minutes** by default, configurable to any longer interval, never shorter (§6.1). |
+| **Collection on the device** | The RemoteHub Agent collects an **inventory** (installed apps, Windows updates, drivers, hardware, operating system, users and groups, configuration – Group Policy and MDM/CSP, services, security state) on a schedule: every **60 minutes** by default, configurable to any longer interval, never shorter (§6.1). It collects only once the console has **activated** monitoring on it (§6.4). |
 | **Events** | The agent watches the device for things that matter and sends the part of the inventory they changed at once, not at the next interval: an app installed, updated or removed; a Windows update or a driver installed; an app crash or hang; a blue screen or an unexpected restart; a service that died; disk and hardware errors; Defender detections (§5.2). |
 | **Performance and thresholds** | The agent samples CPU, memory, disk and network every 10 s, keeps 1- and 5-minute summaries, and raises an **alert** when a value stays above a threshold for a time – by default CPU at or above 80 % for 5 minutes. Thresholds, windows and the metrics watched are set by the admin (§5.4). An alert sends the recent samples and the processes behind them. |
-| **Delivery** | The agent keeps everything in a local store with a bounded retention (§8). Where the device has a RemoteHub Broker, the agent **uploads** each bundle to the broker, sealed so only the organisation's consoles can read it, and consoles collect it from there (§9.3). Without a broker, consoles **fetch** from the agent on the same schedule whenever they run (§9.2). Either way nothing is lost while no console is running. |
-| **In the console** | A **Device** tab per connection: an overview with the current health, then inventory sections, alerts and events – readable also while the device is off, from what was last received (§11.1). |
-| **Timeline** | The DEX view in that tab: performance curves, alerts, changes (apps, updates, drivers, configuration) and problems (crashes, blue screens, service failures) on one time axis, zoomable from an hour to 90 days, with the changes that precede a problem pointed out (§11.2). |
-| **Later** | A **Monitoring** view on the view rail for the whole fleet: dashboards (devices with open alerts, most crashing apps, pending restarts, disk space) and reports (§11.4, phase 5). |
+| **Delivery** | The agent **uploads** every bundle to the **RemoteHub monitoring service** – the broker's front door, with a column store behind it (§9, §10). A device with its own broker connection uploads directly; a device behind a jump host uploads through the jump host's agent, and so on along the chain, as long as one device in it reaches the broker (§9.3). The agent keeps an outbox for the days it can't (§8). |
+| **The service** | Multi-tenant (a tenant is a broker organisation), a **region per tenant** (EU, US), tenant id on every row, retention by the tenant's tier – **30 days** by default, 60 or 90 by licence (§10). It holds the inventory history, events, alerts and performance, computes the dashboards and reports, and answers the console's queries. It is run by RemoteHub. |
+| **In the console** | A **Device** tab per connection: an overview with the current health, then inventory sections, alerts and events – answered by the service, with a small cache so the last state shows while offline (§11.1). **Activation** of monitoring per tenant, folder or device from the console, under the tenant's entitlement (§11.3). |
+| **Timeline** | The DEX view in that tab: performance curves, alerts, changes (apps, updates, drivers, configuration) and problems (crashes, blue screens, service failures) on one time axis, zoomable from an hour to the tenant's retention, with the changes that precede a problem pointed out (§11.2). |
+| **Dashboards and reports** | A **Monitoring** view on the view rail for the whole tenant: every dashboard of §11.4 (open alerts, crashing apps, pending restarts, patch level, disk space, devices not heard from …), the customer picks which to show; reports over a folder and period, exported (phase 5). |
+| **Later** | Remediation: an alert runs a deployed script version on the device, with its own approval and audit design (§17). |
 
 ### 1.1 Principles
 
 1. **The agent collects, it never acts.** Monitoring reads the device: registry, WMI/CIM, the event logs, performance
    counters, the Windows Update history. It changes nothing on the device, installs nothing, kills nothing. The agent
    keeps its rule from [agent-spec.md](agent-spec.md) §2 – no command set of its own.
-2. **Data goes only to the organisation.** Bundles go to the organisation's own consoles, directly or through its own
-   RemoteHub Broker, sealed so the broker can't read them. Nothing goes to the vendor; the agent still sends no
-   telemetry ([agent-spec.md](agent-spec.md) §8 changes its wording, §18).
+2. **The data goes to the tenant's service, and the service reads it.** Unlike broker sessions, which the broker relays
+   sealed, monitoring data is stored and queried by RemoteHub's service on the tenant's behalf: that is what fleet-wide
+   dashboards and a timeline over a quarter need. It is said plainly in the README, `PRIVACY.md` and the activation
+   dialog, the tenant chooses its region, its data is isolated by tenant id and deleted with the tenant, and nothing is
+   collected before the tenant's admin activates it (§6.4, §14).
 3. **No secrets, and identities only where IT allows them.** Bundles never contain passwords, keys, product keys,
    recovery keys, file contents, command lines, window titles or clipboard. Account names (signed-in users, local
    accounts, group members, the MDM enrolment's user) are collected by default, because a DEX view is about a person's
    device, but the policy `MonitoringIncludeUsers` = 0 replaces them with *a user* (§12).
-4. **Whatever comes from a device is untrusted.** A compromised device must not be able to harm the console through a
-   bundle (threat boundary TB8, [security-test-lab-design.md](security-test-lab-design.md)): every bundle is parsed
-   against limits, every string is clipped and shown as text, nothing in it is a link, a path to open or HTML (§14).
+4. **Whatever comes from a device is untrusted.** A compromised device must not be able to harm the service or the
+   console through a bundle (threat boundary TB8, [security-test-lab-design.md](security-test-lab-design.md)): every
+   bundle is parsed against limits at the service, every string is clipped and shown as text, nothing in it is a link,
+   a path to open or HTML (§14).
 5. **The device must not notice.** Collection runs below normal priority, is spread out and stops when it takes too
    long. It must not itself be the reason the CPU is at 80 % (§15.2).
-6. **Built on what is there.** The agent's TLS pin, Windows sign-in, rights and policy; the broker's seals; the
-   console's encrypted database; the tool tabs' chrome and lists. Policy values go into `PolicyCatalog.cs` and the ADMX
-   template like every other ([admx-design.md](admx-design.md)).
-7. **Configured means locked.** Thresholds and the interval are device settings an admin changes from the console, but
-   a policy value wins and shows locked ([admx-design.md](admx-design.md) P1).
+6. **Built on what is there.** The agent's TLS pin, Windows sign-in, rights and policy; the broker's tenants, device
+   and console identities and proofs; the tool tabs' chrome and lists. Policy values go into `PolicyCatalog.cs` and the
+   ADMX template like every other ([admx-design.md](admx-design.md)).
+7. **Activated from the console, locked by policy.** The tenant's entitlement is on the service; the admin activates
+   monitoring per tenant, folder or device and sets thresholds from the console; the agent takes what the console
+   gives it. A device policy can forbid monitoring or fix a value, and then shows locked ([admx-design.md](admx-design.md) P1).
 
 ## 2. Non-goals (v1)
 
-- **Remediation.** No automatic restart of a crashing service, no uninstall of an app that crashes, no scripts run on an
-  alert. An alert can offer *Run script…* and the device actions as a next step, each confirmed by the admin as today.
-- **A server of RemoteHub's own.** Consoles keep what they collect in their own database; the broker stores sealed
-  bundles for a limited time (§9.3) and doesn't read them. Fleet-wide history shared between admins waits for a server;
-  the bundle format is made so a server can take it unchanged (§7).
+- **Remediation in v1.** No automatic restart of a crashing service, no uninstall of an app that crashes, no scripts
+  run on an alert. An alert offers *Run script…* and the device actions as a manual next step, each confirmed by the
+  admin as today. Automatic remediation is a planned later phase (§17), with its own approval and audit design.
+- **A customer-hosted service.** V1 is RemoteHub's hosted service. The service's image and the bundle format are made
+  so a self-hosted deployment is possible later, but installing and operating it at a customer is not designed here.
+- **Downloading the agent's monitoring binaries on demand** (only to activated devices). Out of scope for this
+  design; the collectors ship in the agent, inactive until activated.
 - **Per-user experience scores, baselines and anomaly detection.** V1 has fixed thresholds the admin sets. A learned
-  baseline ("this device is slower than usual") is listed in §17 as later work.
+  baseline ("this device is slower than usual") is later work (§17).
 - **Software metering** (how long which app was in the foreground), browsing, keystrokes, screenshots. Not DEX as
   RemoteHub means it, and a privacy problem.
 - **Patching and app deployment.** RemoteHub shows what is installed and what is pending; it doesn't install.
 - **Agent-less devices.** Inventory needs the agent. A device reached over WinRM only can still be inspected with
   the remote tools and the script library's INV scripts as today; nothing is collected for it.
-- **Temperatures and fan speeds.** Windows gives no reliable, vendor-independent reading. GPU load is listed as later
-  work (§17).
+- **Devices with no path to the broker at all** – no broker connection of their own and no jump host in their chain
+  that has one. They show *not monitored – no path to the RemoteHub monitoring service*.
+- **Temperatures and fan speeds.** Windows gives no reliable, vendor-independent reading. GPU load is later work (§17).
 
 ## 3. What is at stake
 
 | Asset | Threat | Where it is handled |
 |---|---|---|
-| The inventory of a device (apps, patch level, users, configuration) – a map for an attacker | Read by someone without the right; read in transit; read on the broker | Right `Monitoring` (§9.1), the agent's TLS pin and sign-in, seals on the broker (§9.3), the console's encrypted DB (§10) |
-| The console | A device sends a bundle made to crash or exploit the console, or to mislead the admin | Limits and clipping (§14), bundles are data never instructions, the device's identity is its pinned certificate or its broker record |
-| The device | Monitoring slows it down, fills its disk, or opens a new way in | Budget and retention (§8, §15.2); no new listener, no new input from the network except the settings endpoint, which needs a right (§9.1) |
-| People at the device | Surveillance beyond what IT needs | §1.1 principle 3, `MonitoringIncludeUsers`, `MonitoringSections`, the Windows Application log records that monitoring runs (§13) |
-| The broker | A device floods it, or a console reads another organisation's bundles | Per-device quota on the broker, organisation-scoped paths with the existing device and console proofs (§9.3) |
+| The inventory of a device (apps, patch level, users, configuration) – a map for an attacker | Read by someone without the right; read in transit; read by another tenant; read at RemoteHub beyond what the service needs | Rights on the device (§9.1), TLS everywhere, device and console proofs of the broker protocol, tenant id on every row and every query (§10.3), region per tenant, access at RemoteHub limited to operations (§14) |
+| The service | A device floods it or sends bundles made to crash the parser; a tenant reads another's rows | Quotas per device and tenant, limits on every field at ingestion, tenant-scoped queries only, the device's identity on every upload (§9.2, §14) |
+| The console | A device's data misleads the admin or exploits the console's rendering | Everything shown is text, clipped at the service and again in the console; nothing from a bundle is a link, a path or markup (§14) |
+| The device | Monitoring slows it down, fills its disk, or opens a new way in | Budget and outbox limits (§8, §15.2); no new listener; the settings endpoint needs a right; the relay endpoint on a jump host forwards only to the service, bounded (§9.3) |
+| People at the device | Surveillance beyond what IT needs | §1.1 principle 3, `MonitoringIncludeUsers`, `MonitoringSections`, activation visible on the device (Application log 1404), what is collected listed in `PRIVACY.md` (§18) |
+| A jump host used as a relay | Used as an open proxy, or to read the bundles it forwards | It forwards only to the service's fixed path, rate-limited per source; bundles are signed by the device and TLS runs end to end from the device to the service (§9.3) |
 
 ## 4. Architecture
 
 ```
-Device                                                  RemoteHub Broker (optional)          Console(s)
-┌─────────────────────────────────────────────┐        ┌──────────────────────────┐        ┌──────────────────────────┐
-│ RemoteHubAgent (LocalSystem)                 │        │ per device: a mailbox of  │        │ MonitoringClient         │
-│  Monitoring/                                 │ upload │ sealed bundles, 7 days    │ fetch  │  ├ from the agent (§9.2) │
-│  ├ Collectors  – inventory sections (§5.1)   │ ─────▶ │ or 64 MB, whichever first │ ─────▶ │  └ from the broker (§9.3)│
-│  ├ Watchers    – event logs, registry (§5.2) │        │ (the broker only stores)  │        │ MonitoringStore (SQLite, │
-│  ├ Sampler     – PDH counters, 10 s (§5.3)   │        └──────────────────────────┘        │  encrypted; §10)         │
-│  ├ Thresholds  – alerts with hysteresis(§5.4)│                                            │  ├ snapshots + diff →    │
-│  ├ Bundler     – full / partial bundles (§7) │        direct, or a broker session:         │  │   change events        │
-│  └ Store       – %ProgramData%\…\monitoring  │ ◀───── GET /v1/monitoring/…  (right         │  ├ events, alerts        │
-│                  (§8)                        │        Monitoring)                          │  └ performance rollups   │
-│  /v1/monitoring/{status,bundles,settings}    │ ◀───── PUT /v1/monitoring/settings (right   │ Device tab · Timeline    │
-│                                              │        MonitoringSettings)                  │ Monitoring view (later)  │
-└─────────────────────────────────────────────┘                                            └──────────────────────────┘
+Device                                   Jump host (optional)            RemoteHub monitoring service                Console(s)
+┌──────────────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────────────────┐    ┌───────────────────────┐
+│ RemoteHubAgent (LocalSystem)     │    │ RemoteHubAgent           │    │ Front door: the broker's Workers       │    │ MonitoringService     │
+│  Monitoring/                     │    │  /v1/monitoring/forward  │    │  POST /v1/o/{org}/monitoring/upload    │◀───│  (queries, cache)     │
+│  ├ Activation (from the console) │    │  → the service, bounded, │    │  GET  /v1/o/{org}/monitoring/…  (query)│    │ Device tab · Timeline │
+│  ├ Collectors  – sections (§5.1) │ ──▶│  forwards bytes only     │───▶│  activation, entitlement, tenant meta  │    │ Monitoring view       │
+│  ├ Watchers    – events (§5.2)   │    └──────────────────────────┘    │  (D1)                                  │    │ Activate… (§11.3)     │
+│  ├ Sampler     – PDH, 10 s (§5.3)│  or directly, with its own         │ Store: ClickHouse, region per tenant   │    └───────────────────────┘
+│  ├ Thresholds  – alerts (§5.4)   │  broker connection                 │  sections, events, alerts, performance │              │
+│  ├ Bundler     – bundles (§7)    │ ────────────────────────────────▶ │  TTL by the tenant's tier (30/60/90 d) │              │ pinned agent connection
+│  └ Outbox      – until uploaded  │                                    │  dashboards as materialised views      │              ▼
+│  /v1/monitoring/{status,now,     │ ◀──────────────────────────────────────────────────────────────────────────────── PUT /v1/monitoring/activation
+│   settings,activation}           │                                                                                     PUT /v1/monitoring/settings
+└──────────────────────────────────┘                                                                                     (right MonitoringSettings)
 ```
 
-- **One source of truth on the device.** Every bundle is written to the device's store first (§8). The upload to the
-  broker and the fetch by a console both read from that store, so the two paths deliver the same bundles and a console
-  that missed some catches up from either side by sequence number.
-- **Two delivery paths, one format.** The user's requirement – the device *sends* every 60 minutes – holds where a
-  broker exists: the device uploads without any console being on. Without a broker there is nothing to send to: a
-  console is a desktop app with no listener, often off, and there may be several. So consoles fetch on the same
-  schedule when they run, and the device's store bridges the gaps. The console shows which path a device uses.
-- **The console computes the differences.** The device sends inventory sections whole; the console keeps the last
-  snapshot of each section and turns the difference into change events (*Zoom 6.2.1 → 6.3.0*, *driver igdkmd64 updated*,
-  *GPO "Default Domain Policy" version 42 → 43*). The device does the same diff locally only to decide whether a change
-  happened at all and to name it in the triggered bundle (§6.2), so both sides agree.
-- **Through a jump host or the broker,** the agent's endpoints are reached as every agent endpoint is: inside the
-  pinned TLS connection, with the connection's Windows credentials. No new trust path.
+- **One store, at the service.** The device keeps an outbox only until the service has acknowledged a bundle (§8);
+  the console keeps a small cache (§11.1). History, search and dashboards are the service's, so every console of a
+  tenant sees the same thing and nothing depends on a console being on.
+- **The front door is the broker.** It already knows tenants (organisations), devices (registration proofs with the
+  device's key), consoles (their keys), regions and quotas, and runs on Cloudflare Workers with D1. Monitoring adds an
+  upload endpoint that verifies the device and writes to ClickHouse, a query API for consoles, and the activation and
+  entitlement records in D1 (§10).
+- **Two ways up, one identity.** A device with its own broker connection uploads straight to the front door. A device
+  without one uploads to its jump host's agent, which forwards the bytes to the front door (or to its own jump host –
+  the chain); the upload is signed by the device for the service either way, so the relay adds nothing and can change
+  nothing (§9.3). The console decides the route by the tree, as for everything else ([jump-host-design.md](jump-host-design.md)).
+- **The service computes the differences.** The device sends inventory sections whole (or their hash when unchanged);
+  the service keeps the last snapshot of each section and turns the difference into change events (*Zoom 6.2.1 →
+  6.3.0*, *driver igdkmd64 updated*, *GPO "Default Domain Policy" version 42 → 43*). The device does the same diff
+  locally only to decide whether a change happened and to name it in the triggered bundle (§6.2), so both agree.
+- **The console talks to the device only to activate and configure**, over the pinned agent connection with the
+  connection's Windows credentials, directly, through a jump host or through a broker session, as every agent request.
 
 ## 5. What is collected
 
@@ -124,8 +139,11 @@ reviewed against them; where a source needs confirming on real devices it says *
 | `drivers` | Signed drivers: device class, device name, driver provider, version, date, INF name, signer, whether the device is working (problem code) | `Win32_PnPSignedDriver`, `Win32_PnPEntity` (problem codes) | 2,000 entries |
 | `services` | Name, display name, start type, state, account kind (LocalSystem, NetworkService, a user – named only with `MonitoringIncludeUsers`), path (program only, no arguments), delayed start, triggers present | `QueryServiceConfig`, `EnumServicesStatusEx` (no WMI – faster) | 1,000 entries |
 | `users` | Local users (name, SID kind, enabled, password required, last sign-in, in Administrators), local groups and their members (name, kind: local, domain, Entra ID), who is signed in now (session id, account, state, since, console or RDP), the device's domain or Entra ID join state (joined, hybrid, registered; tenant id; never a token). With `MonitoringIncludeUsers` = 0: counts only, members left out | `NetUserEnum`, `NetLocalGroupEnum`/`GetMembers`, `WTSEnumerateSessions`, `NetGetJoinInformation`, `dsregcmd`-equivalent registry (`HKLM\SYSTEM\CurrentControlSet\Control\CloudDomainJoin`) | 500 users, 200 groups, 2,000 members |
-| `config` | **Group Policy:** applied GPOs for the computer (and the signed-in user with `MonitoringIncludeUsers`): name, GUID, version, link, enforced, last processing time and result; the effective policy values under `HKLM\SOFTWARE\Policies` and `HKCU\…` of the signed-in user (key, name, type, value – strings clipped to 256 characters; a value whose name contains *password*, *secret*, *key* or *token* is sent as `<left out>`). **MDM/CSP:** enrolment present, provider id (Intune, other), enrolment type, device id at the MDM, last sync time and result; the effective CSP policy values (`PolicyManager\current\device\<area>\<policy>`) and the user's; applied configuration profiles' ids where the CSP records them (lab). **Other:** Defender state (real-time protection, signature version and age, last scan, tamper protection), firewall profiles on or off, UAC level, RDP enabled, WinRM listeners, power plan, time source | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\History` (+ the user's), `root\rsop\computer` only when the history is empty, `HKLM\SOFTWARE\Microsoft\Enrollments`, `HKLM\SOFTWARE\Microsoft\PolicyManager`, `MSFT_MpComputerStatus` (`root\Microsoft\Windows\Defender`), `MSFT_NetFirewallProfile`, registry | 5,000 policy values, 2,000 CSP values |
-| `agent` | The agent's own version, policy values in force and their source (as `RemoteHubAgent.exe policy` prints – names and values, never the enrolment secret), rights in force (group names), monitoring settings in force, store size, last upload | `AgentConfig`, `AgentPolicy` | – |
+| `config` | **Group Policy:** applied GPOs for the computer (and the signed-in user with `MonitoringIncludeUsers`): name, GUID, version, link, enforced, last processing time and result; the effective policy values under `HKLM\SOFTWARE\Policies` and `HKCU\…` of the signed-in user (key, name, type, value – strings clipped to 256 characters; a value whose name contains *password*, *secret*, *key*, *token*, *credential* or *pin* is sent as `<left out>`). **MDM/CSP:** enrolment present, provider id (Intune, other), enrolment type, device id at the MDM, last sync time and result; the effective CSP policy values (`PolicyManager\current\device\<area>\<policy>`) and the user's; applied configuration profiles' ids where the CSP records them (lab). **Other:** Defender state (real-time protection, signature version and age, last scan, tamper protection), firewall profiles on or off, UAC level, RDP enabled, WinRM listeners, power plan, time source | `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\History` (+ the user's), `root\rsop\computer` only when the history is empty, `HKLM\SOFTWARE\Microsoft\Enrollments`, `HKLM\SOFTWARE\Microsoft\PolicyManager`, `MSFT_MpComputerStatus` (`root\Microsoft\Windows\Defender`), `MSFT_NetFirewallProfile`, registry | 5,000 policy values, 2,000 CSP values |
+| `agent` | The agent's own version, policy values in force and their source (as `RemoteHubAgent.exe policy` prints – names and values, never the enrolment secret or keys), rights in force (group names), monitoring settings and activation state, outbox size, last upload and its path (direct, through which jump host) | `AgentConfig`, `AgentPolicy` | – |
+
+The full set of configuration values is collected on purpose (v1 Q2): "which setting changed on this device" is what
+the timeline is for, and a section travels only when its hash changes.
 
 Not collected, on purpose: certificates and their keys, Wi-Fi profiles, saved credentials, browser data, document
 names, printer jobs, scheduled task actions' arguments, environment variables, the contents of any file.
@@ -143,7 +161,7 @@ Event Viewer tab. A kind that changes an inventory section also triggers that se
 | `app.installed`, `app.updated`, `app.removed` | Changes | Registry change on the Uninstall keys (machine and loaded user hives) and the AppX database – the agent re-reads `apps`, diffs it against its last copy and names what changed; MsiInstaller 1033/1034/1035/1036 and AppXDeploymentServer 854 only confirm the source (MSI, Store) | App name, old and new version, publisher, scope, how (MSI, Store, installer) | `apps` |
 | `update.installed`, `update.failed` | Changes | System: Microsoft-Windows-WindowsUpdateClient 19, 20; Setup log (servicing) 1, 2; a feature update is noticed as a changed OS build at the next `os` collection and as a `device.restarted` after setup | Title, KB, result code, whether a restart is pending | `updates`, `os` – except definition updates (Defender signatures arrive several times a day): recorded, not triggered |
 | `driver.installed`, `driver.failed` | Changes | System: Microsoft-Windows-UserPnp 20001 (install done), 20003; Microsoft-Windows-Kernel-PnP 400/410/411; the agent diffs `drivers` to name old and new version | Device, provider, old and new version, INF | `drivers` |
-| `config.gpo` | Changes | Microsoft-Windows-GroupPolicy/Operational 8004–8007 (processing done), 1085/1125/1129 (failed); then a diff of the `config` GPO list and policy values | Scope (computer, user), result, which GPOs and how many values changed | `config` |
+| `config.gpo` | Changes | Microsoft-Windows-GroupPolicy/Operational 8004–8007 (processing done), 1085/1125/1129 (failed); then a diff of the `config` GPO list and policy values – a bundle only when something changed | Scope (computer, user), result, which GPOs and how many values changed | `config` |
 | `config.mdm` | Changes | DeviceManagement-Enterprise-Diagnostics-Provider/Admin sync-completed and failed events (ids confirmed in the lab, M-CFG), then a diff of the CSP values | Result, values changed | `config` |
 | `config.security` | Changes | Windows Defender/Operational 5001/5010/5012 (protection turned off), 2000/2001 (signatures); firewall profile changes (Windows Firewall With Advanced Security/Firewall 2003/2004/2005 as confirmed in the lab) | What changed | `config` |
 | `app.crash`, `app.hang` | Problems | Application: Application Error 1000, Application Hang 1002, Windows Error Reporting 1001 (bucket, for grouping), .NET Runtime 1026 | Program (name and version), faulting module and version, exception code, session's user (with `MonitoringIncludeUsers`) | – |
@@ -153,7 +171,7 @@ Event Viewer tab. A kind that changes an inventory section also triggers that se
 | `memory.low` | Problems | Microsoft-Windows-Resource-Exhaustion-Detector 2004 | Top consumers the event names (program names) | performance samples |
 | `security.detection` | Problems | Windows Defender/Operational 1116, 1117, 1118, 1119 | Threat name, severity, action, path's folder only (no file name) | – |
 | `device.restarted`, `device.shutDown`, `device.started` | Sessions | System: User32 1074 (who asked and the reason), Kernel-General 12/13, EventLog 6005/6006, Kernel-Boot (fast startup) | Reason, process that asked, initiating user (with `MonitoringIncludeUsers`), boot duration from Diagnostics-Performance/Operational 100 (`MainPathBootTime` + `BootPostBootTime`), shutdown duration from 200 | `os` |
-| `session.signIn`, `session.signOut`, `session.lock`, `session.unlock`, `session.connect`, `session.disconnect` | Sessions | Microsoft-Windows-Winlogon 7001/7002, TerminalServices-LocalSessionManager/Operational 21–25, 39/40; sign-in duration measured by the agent from 7001 to the shell's first window (lab) | Session id, account (with `MonitoringIncludeUsers`), console or RDP, duration | none – a device sees dozens a day; they go with the next full bundle, and `users` is re-read only there |
+| `session.signIn`, `session.signOut`, `session.lock`, `session.unlock`, `session.connect`, `session.disconnect` | Sessions | Microsoft-Windows-Winlogon 7001/7002, TerminalServices-LocalSessionManager/Operational 21–25, 39/40; sign-in duration measured by the agent from 7001 to the shell's first window (lab; boot duration alone if it proves unreliable) | Session id, account (with `MonitoringIncludeUsers`), console or RDP, duration | none – a device sees dozens a day; they go with the next full bundle, and `users` is re-read only there |
 | `time.changed` | Sessions | Kernel-General 1 (system time changed), with the old and new time | Delta | – |
 | `agent.*` | Sessions | The agent's own audit events as they happen (sessions, refusals, broker) | Event id and the message | – |
 
@@ -179,12 +197,13 @@ Every **10 s** the sampler reads these counters through PDH (`PdhCollectQueryDat
 | `sessions` | Number of active user sessions | count |
 
 Summaries: the 10 s samples are folded into **1-minute** summaries (average, maximum, top processes) kept for 48 hours
-on the device, and **5-minute** summaries (average, maximum, minimum) kept for the store's retention. The hourly bundle
-carries the hour's 5-minute summaries; an alert bundle carries the 1-minute summaries of the 15 minutes before and the
-10 s samples of the alert's window, so the console can show the exact shape of the spike. Nothing is sampled per user.
+on the device, and **5-minute** summaries (average, maximum, minimum) that travel in the bundles. The full bundle
+carries the interval's 5-minute summaries; an alert bundle carries the 1-minute summaries of the 15 minutes before and
+the 10 s samples of the alert's window, so the timeline can show the exact shape of the spike. Nothing is sampled per
+user.
 
 Samples carry the device's clock (UTC) and the monotonic uptime, so a `time.changed` event doesn't tear the curve: the
-console places samples by the monotonic offset from the bundle's own time stamp when the two disagree.
+service places samples by the monotonic offset from the bundle's own time stamp when the two disagree.
 
 ### 5.4 Thresholds and alerts
 
@@ -195,7 +214,7 @@ An **alert rule** is a metric, a threshold, a window and a severity. The default
 | CPU | ≥ 80 % for 5 min | 50–100 %, 1–60 min |
 | Memory used | ≥ 90 % for 5 min | 50–100 %, 1–60 min |
 | Disk active time | ≥ 90 % for 5 min, or queue length ≥ 2 for 5 min | 50–100 %, 1–60 min |
-| Free space (any fixed volume) | < 10 % or < 5 GB | 1–50 %, 1–100 GB |
+| Free space (any fixed volume) | < 10 % or < 5 GB – either opens it | 1–50 %, 1–100 GB; 0 turns that half off |
 | Network errors | ≥ 100 errors/min for 5 min | 1–10,000, 1–60 min |
 | Boot duration | > 120 s | 30–900 s |
 | Sign-in duration | > 60 s | 10–600 s |
@@ -203,8 +222,9 @@ An **alert rule** is a metric, a threshold, a window and a severity. The default
 | Service failures | any `service.failed` of an automatic service | on or off |
 | Blue screen, hardware error, Defender detection | always an alert | – |
 
-Each rule can be turned off. The admin sets them per device from the console (§11.3), or IT sets them by policy for
-every device (§12); the agent evaluates them, so an alert is raised whether or not a console is running.
+Each rule can be turned off. The admin sets them from the console per tenant (the defaults new activations get), per
+folder or per device (§11.3), or IT fixes them by policy on the device (§12); the agent evaluates them, so an alert is
+raised whether or not a console is running.
 
 **How a sustained rule is evaluated** (`ThresholdState`, one per rule, unit-tested with a fake clock):
 
@@ -225,24 +245,25 @@ every device (§12); the agent evaluates them, so an alert is raised whether or 
 
 Passwords, hashes, tickets, keys of any kind (BitLocker recovery, Wi-Fi, product, API), certificates' private parts,
 file contents, command lines, environment variables, window titles, clipboard, keystrokes, screenshots, browser data,
-e-mail, document names, per-user application usage time. The agent's own enrolment secret and broker keys are never in
-`agent`. A collector that would need any of these to work is a design error, not a configuration.
+e-mail, document names, per-user application usage time. The agent's own enrolment secret, broker keys and monitoring
+key are never in `agent`. A collector that would need any of these to work is a design error, not a configuration.
 
-## 6. Schedules and triggers
+## 6. Schedules, triggers and activation
 
 ### 6.1 The interval
 
-- `monitoring.intervalMinutes` (agent.json) or the policy `MonitoringIntervalMinutes`: **60 by default, 60 to 10,080**
-  (a week). A value below 60 is invalid and keeps 60 – an hour is the floor the requirement set, and the collectors'
-  budget (§15.2) is made for it.
-- Each device adds a fixed **jitter** (0–10 minutes, derived from the device id) so a fleet installed by Intune at the
-  same minute doesn't upload to the broker at the same second.
-- The first inventory runs **5 minutes after the service starts** (or 15 minutes after boot, whichever is later), then
-  every interval. A missed run (the device slept) runs on resume, after the same 5 minutes.
-- The hourly bundle is **full**: every enabled section (`MonitoringSections`), the hour's 5-minute summaries, the
-  events of the hour that weren't sent by a trigger, and the open alerts. A section that didn't change still goes, as a
-  hash only (§7): the console knows it is unchanged without receiving it again, and a console that never saw it asks
-  for it (§9.2).
+- `monitoring.intervalMinutes` (agent.json, set from the console) or the policy `MonitoringIntervalMinutes`: **60 by
+  default, 60 to 10,080** (a week). A value below 60 is invalid and keeps 60 – an hour is the floor the requirement
+  set, and the collectors' budget (§15.2) is made for it. §22 shows a longer interval saves requests, not bytes, so the
+  default stays at an hour for a current timeline.
+- Each device adds a fixed **jitter** (0–10 minutes, derived from the device id) so a fleet activated at the same
+  minute doesn't upload at the same second.
+- The first inventory runs **5 minutes after activation or after the service starts** (or 15 minutes after boot,
+  whichever is later), then every interval. A missed run (the device slept) runs on resume, after the same 5 minutes.
+- The full bundle is **full**: every enabled section (`MonitoringSections`), the interval's 5-minute summaries, the
+  events that weren't sent by a trigger, and the open alerts. A section that didn't change still goes, as a hash only
+  (§7): the service knows it is unchanged without receiving it again, and asks for it (`sections` in the upload's
+  answer, §9.2) when it has no copy.
 
 ### 6.2 Triggered bundles
 
@@ -252,27 +273,58 @@ e-mail, document names, per-user application usage time. The agent's own enrolme
   is sent in a partial bundle with the last 15 minutes of 1-minute summaries, so the timeline shows the load around it.
 - An alert opening sends the alert, the samples of §5.3 and the current `processes`. An alert closing sends the closed
   alert.
-- **Flood control:** at most **30 triggered bundles per hour** per device; beyond that, events are kept in the store
-  and go with the next hourly bundle, and the hourly bundle says how many were held back. Repeated identical events
+- **Flood control:** at most **30 triggered bundles per hour** per device; beyond that, events are kept in the outbox
+  and go with the next full bundle, and the full bundle says how many were held back. Repeated identical events
   (the same crash of the same program, the same disk error) within 10 minutes are counted into one event with a count.
-- Nothing is triggered during the first 5 minutes after boot; those events go with the first hourly bundle.
+- Nothing is triggered during the first 5 minutes after boot; those events go with the first full bundle.
 
 ### 6.3 Sequence numbers
 
-Every bundle gets the next number of a **per-device monotonic sequence** (persisted in the store before the bundle is
-written, as `agent.json` is written: temp file, flush, replace). The console asks for "everything after N" on both
-paths, so nothing is received twice and a gap is visible. A device enrolled again (new identity, [agent-spec.md](agent-spec.md)
-§5.3) starts at 1 with a new `storeId`; the console keeps the old history under the connection and marks the cut.
+Every bundle gets the next number of a **per-device monotonic sequence** (persisted in the outbox before the bundle is
+written, as `agent.json` is written: temp file, flush, replace). The service acknowledges by sequence number and
+rejects a repeat, so nothing is stored twice and a gap is visible. A device enrolled again (new identity,
+[agent-spec.md](agent-spec.md) §5.3) is a new device at the service; the console shows the old history under the
+connection and marks the cut.
+
+### 6.4 Activation
+
+Nothing is collected until the console activates the device (v1 Q7: the agent takes the licence and the choice from
+the console, not from its install).
+
+1. **Entitlement.** RemoteHub sets on the tenant's record at the service: monitoring licensed, the tier (30, 60 or
+   90 days), the device cap, the region. The console reads it when it connects to the broker and shows it under
+   *Settings → RemoteHub Broker* and *Settings → Monitoring*.
+2. **Activate.** The admin chooses *Monitoring → Activate…* on the tenant's synced folder, a folder or a device
+   (§11.3). For each device the console asks the service for an **activation**: a token signed by the service with the
+   tenant, the device id, the device's certificate fingerprint and a 24-hour expiry. The console sends it to the agent
+   with `PUT /v1/monitoring/activation` (right `MonitoringSettings`) over the pinned connection, with the settings
+   (§11.3) and, for a device reached through a jump host, the **upstream** (§9.3).
+3. **Register.** The agent presents the activation to the service (directly or through its upstream) and registers
+   the public key of its **device certificate** – the same RSA key the TLS pin and the broker registration use, which
+   never leaves the device – signing the registration with it (PS256, as `BrokerProtocol` does). From then on every
+   upload is signed with that key, and the service knows which tenant the device belongs to. A device that already has
+   a broker registration in the same tenant is recognised by its key.
+4. **Collect.** The agent writes the activation state to `agent.json` (`monitoring.activated`, the service address,
+   the tenant id, the upstream), audits 1404 and starts the first inventory after 5 minutes.
+5. **Deactivate.** `DELETE /v1/monitoring/activation` from the console (or *Deactivate* at the service for the whole
+   tenant, which the agent learns from the next upload's answer) stops collection, deletes the outbox and the
+   sections, audits 1405, and the service marks the device inactive; its rows age out with the tier or are deleted at
+   once with *Delete this device's data…*. The policy `MonitoringEnabled` = 0 refuses an activation and deactivates an
+   active device at the next policy read.
+
+The service refuses uploads from a device whose tenant isn't licensed, is over its cap or whose activation was
+revoked (403 with the reason); the agent backs off to the next interval, logs 3500 once per service run, and the Device
+tab shows the reason.
 
 ## 7. Bundles
 
-A bundle is a UTF-8 JSON document, **gzip-compressed**, with the envelope:
+A bundle is a UTF-8 JSON document, **gzip-compressed**, signed by the device for the service (§9.2), with the envelope:
 
 ```json
 {
   "format": 1,
   "deviceId": "3f1a9e2c-…",
-  "storeId": "a1b2…",            // new at each enrolment; the console tells a re-enrolled device by it
+  "tenant": "o_…",
   "seq": 4711,
   "kind": "full" | "partial" | "alert",
   "time": "2026-11-09T09:00:03Z",  // the device's clock, UTC
@@ -291,19 +343,18 @@ A bundle is a UTF-8 JSON document, **gzip-compressed**, with the envelope:
 }
 ```
 
-- **Limits** (checked by the console before parsing further, and by the agent before writing): compressed ≤ 4 MB,
+- **Limits** (checked by the service before parsing further, and by the agent before writing): compressed ≤ 4 MB,
   uncompressed ≤ 32 MB, nesting depth ≤ 8, strings ≤ 1,024 characters (section-specific limits in §5.1), arrays as
-  in §5.1, at most 500 events and 50 alerts per bundle. A bundle over a limit is refused whole and counted
-  (`MonitoringStore.Refused`); the agent never produces one (it clips while collecting), so a refused bundle means a
-  changed device.
-- **Unknown fields and sections are ignored**, not refused: an older console reads a newer agent's bundle and shows
+  in §5.1, at most 500 events and 50 alerts per bundle. A bundle over a limit is refused whole and counted for the
+  device; the agent never produces one (it clips while collecting), so a refused bundle means a changed device.
+- **Unknown fields and sections are ignored**, not refused: an older service reads a newer agent's bundle and stores
   what it knows. `format` changes only when the envelope changes incompatibly.
 - Section hashes are SHA-256 over the canonical JSON of `items` (sorted keys, as `BrokerProtocol.Canonical`), so the
-  device and every console agree on "unchanged".
-- The format is what a RemoteHub Server would store later: self-describing, per device, ordered, with the device's own
-  time. Nothing in it depends on the broker or on a console.
+  device and the service agree on "unchanged".
+- The format is self-describing, per device, ordered, with the device's own time: what a self-hosted service would
+  ingest unchanged later.
 
-## 8. The device store
+## 8. The device outbox
 
 `%ProgramData%\RemoteHub\Agent\monitoring\` – inside the agent's folder, so it has the folder's ACL (SYSTEM and
 Administrators only, [agent-spec.md](agent-spec.md) §5.3). No database: the agent has no SQLite dependency, and a
@@ -311,140 +362,161 @@ LocalSystem service shouldn't gain a native one for this. Files, written with `D
 
 | File | Contents |
 |---|---|
-| `state.json` | `storeId`, next `seq`, event-log bookmarks, last hash per section, the thresholds' state, last upload per broker, settings in force |
-| `bundles/<seq>.rhmon` | One bundle each (gzip JSON, §7). Kept for `MonitoringRetentionDays` (default 30, 1–90) or until the store reaches **256 MB**, oldest first – the bundles a console hasn't fetched yet are the last to go, and a device with no console for a month still has its last full bundle |
+| `state.json` | Activation (service address, tenant, upstream), next `seq`, event-log bookmarks, last hash per section, the thresholds' state, last upload and acknowledged `seq`, settings in force |
+| `outbox/<seq>.rhmon` | One bundle each (gzip JSON, §7) until the service acknowledges it. Kept at most **7 days or 64 MB**, oldest first – a device without a path for a week keeps its newest full bundle and the console sees a gap, not an outage |
 | `sections/<name>.json` | The last copy of each section, for the diffs of §6.2 |
-| `perf/<yyyyMMdd>.bin` | The day's 1-minute summaries, a fixed binary record per minute (about 200 bytes), 48 hours kept; the 5-minute summaries live in the bundles |
-| `upload.json` | Which bundles the broker has acknowledged (§9.3) |
+| `perf/<yyyyMMdd>.bin` | The day's 1-minute summaries, a fixed binary record per minute (about 200 bytes), 48 hours kept |
 
-- Uninstall (`RemoteHubAgent.exe cleanup`) removes the folder. `MonitoringEnabled` = 0 stops collecting and uploading
-  and deletes the store at the next service start, so turning monitoring off by policy leaves no inventory behind.
-- A damaged `state.json` (as `agent.json` in [agent-spec.md](agent-spec.md) §7.2) restarts the store with a new
-  `storeId`; bundles that are there stay readable. Nothing here can stop the service from starting – a monitoring error
-  is logged (3500) and monitoring retries at the next interval.
+- Uninstall (`RemoteHubAgent.exe cleanup`) and deactivation (§6.4) remove the folder.
+- A damaged `state.json` (as `agent.json` in [agent-spec.md](agent-spec.md) §7.2) keeps the activation from
+  `agent.json` and restarts the sequence at the service's acknowledged number plus one. Nothing here can stop the
+  service from starting – a monitoring error is logged (3500) and monitoring retries at the next interval.
 
 ## 9. Wire
 
-### 9.1 The agent's endpoints
+### 9.1 The agent's endpoints (console → device)
 
 Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as `/v1/powershell`
 ([agent-spec.md](agent-spec.md) §4, §6). New rights in `Rights`: **`Monitoring`** (read) and **`MonitoringSettings`**
-(change thresholds and the interval), both defaulting to `allowedGroups` like `PowerShell`.
+(activate, deactivate, change thresholds and the interval), both defaulting to `allowedGroups` like `PowerShell`.
 
 | Method | Path | Right | Purpose |
 |---|---|---|---|
-| GET | `/v1/monitoring/status` | Monitoring | `{enabled, storeId, lastSeq, lastFull, nextFull, intervalMinutes, settings, settingsSource (policy/device/default), openAlerts, storeBytes, broker: {uploads: true/false, lastUpload, acknowledgedSeq}, time}` – `time` is the device's clock, so the console can note a skew |
-| GET | `/v1/monitoring/bundles?after=<seq>&max=<n>` | Monitoring | The bundles after `seq`, oldest first, as one gzip stream of length-prefixed bundles, at most `n` (default 50) or 16 MB; the response says whether more follow. A new console (`after=0`) gets the newest **full** bundle first and then only bundles after it – it needs no history to show the device as it is now, and can ask for older ones with `before=<seq>` to fill the timeline |
-| GET | `/v1/monitoring/sections?names=apps,drivers` | Monitoring | The last copy of the named sections, whole – for a console whose last snapshot is missing when it receives a hash-only section |
-| GET | `/v1/monitoring/now` | Monitoring | Collects the named sections now and the current 10 s samples, without writing a bundle (*Refresh now* in the Device tab, at most once a minute per account) |
-| PUT | `/v1/monitoring/settings` | MonitoringSettings | The device settings of §12.2 as JSON. Values a policy configures are refused with 409 and the policy's name; invalid values 400 with the reason. Written to `agent.json`, audited (1402) |
-| GET | `/v1/monitoring/settings` | Monitoring | The settings in force and their source |
+| GET | `/v1/monitoring/status` | Monitoring | `{enabled, activated, tenant, path (direct / through <upstream>), lastSeq, acknowledgedSeq, lastUpload, lastFull, nextFull, intervalMinutes, settings, settingsSource (policy/device/default), openAlerts, outboxBytes, lastRefusal, time}` – `time` is the device's clock, so the console can note a skew |
+| GET | `/v1/monitoring/now?sections=apps,drivers` | Monitoring | Collects the named sections now and the current 10 s samples and returns them to the console without writing a bundle (*Refresh now* in the Device tab, at most once a minute per account); the console shows them and the service isn't involved |
+| PUT / DELETE | `/v1/monitoring/activation` | MonitoringSettings | The activation of §6.4 (token, service address, upstream) / deactivation. 409 with the policy's name when `MonitoringEnabled` = 0; 400 for a token that doesn't name this device |
+| PUT / GET | `/v1/monitoring/settings` | MonitoringSettings / Monitoring | The device settings of §12.2 as JSON. Values a policy configures are refused with 409 and the policy's name; invalid values 400 with the reason. Written to `agent.json`, audited (1402) |
+| POST | `/v1/monitoring/forward` | none – devices, not consoles (§9.3) | A relay: the body is another device's signed upload, forwarded to the service unchanged |
 
 - Health (`/v1/health`) lists the feature **`monitoring`** when `MonitoringEnabled` is on, so a console knows before
-  signing in; an older agent lists nothing and the Device tab says the agent needs updating.
+  signing in; an older agent lists nothing and the Device tab says the agent needs updating. It never says whether the
+  device is activated – that needs the right.
 - Status codes as in [agent-spec.md](agent-spec.md) §6: 401 and 403 from the sign-in, 404 when `MonitoringEnabled` = 0,
-  429 from the gate. A session here counts against `maxSessions` while the request runs, not longer.
-- Through a jump host and through the broker these requests travel as every agent request does – the console opens
-  them through the same transport it uses for the PowerShell endpoint, so routing, pinning and *Reach* need no change.
+  429 from the gate.
+- Through a jump host and through the broker these requests travel as every agent request does.
 
-### 9.2 Console fetch (direct, jump host or broker session)
+### 9.2 Device → service: the upload
 
-`MonitoringClient` in the console, one scheduler for all connections with an agent that offers `monitoring`:
+- `POST https://<broker>/v1/o/{org}/monitoring/upload` with the gzip bundle as the body and the device's signature
+  over `remotehub-broker/1|<org>|monitoring|<deviceId>|<seq>|SHA-256(body)` in a header (PS256 with the device
+  certificate's key, §6.4 step 3 – the signature the broker's registration already uses, so the Workers verify it
+  with the stored public key). TLS to the front door as the broker connection uses it (`BrokerHttpProxy` applies).
+- The answer: `{acknowledged: <seq>, sections: ["apps", …], settings?: {…}, deactivated?: true, reason?: "…"}` –
+  `sections` names hash-only sections the service has no copy of, which the agent sends whole in the next bundle;
+  `settings` are the tenant's defaults the service asks the device to adopt when the console set none (the console's
+  own `PUT` wins); `deactivated` ends collection (§6.4).
+- Retry: an upload that fails (network, 5xx, 429) stays in the outbox and is retried with backoff (1, 2, 4 … up to
+  60 minutes), oldest first, at most 5 in flight; a 403 (not licensed, over cap, revoked) stops uploads until the next
+  interval and is shown in status.
+- Quota at the service: 60 uploads per device per hour, 4 MB each; per tenant, the entitlement's device cap and
+  200 MB an hour; beyond that 429. The console never uploads on a device's behalf.
 
-- **When:** at the console's start (spread over the first 5 minutes, at most 8 devices at once), then **every
-  `intervalMinutes` of the device** (it learns it from `status`), when the connection is used (a tab opens), when the
-  broker reports a device online that was offline, and on *Refresh now*. A device that doesn't answer is retried at
-  the next interval, not sooner – a fetch never wakes a VPN or shows a sign-in error; it fails quietly and the Device
-  tab shows *Last received: 3 h ago*.
-- **With which credentials:** the connection's saved credentials, as the other tools do. A connection without saved
-  credentials isn't fetched in the background (no prompt from a background task); its Device tab says so and offers
-  *Fetch now…* with a prompt.
-- **What it asks:** `bundles?after=<last seq the console has>`; on `storeId` change, `after=0` and the cut is marked.
-  A hash-only section whose snapshot the console lacks is followed by `sections?names=…`.
-- **Cost:** a device with nothing new answers `status` only (one small request per interval). The console never
-  fetches `now` in the background.
+### 9.3 Through a jump host: the relay
 
-### 9.3 Through the RemoteHub Broker: the device uploads
+A device whose agent has no broker connection uploads through the device it is reached by, as long as one device in
+the chain has one (v1 Q3 follow-up). The route is the tree, as for every jump-host connection
+([jump-host-design.md](jump-host-design.md) §1.1): the console, which knows the chain, gives the device its **upstream**
+with the activation – the jump host's address, port and certificate fingerprint. The jump host's own upstream, if it has
+one, is the next hop; the device with a broker connection posts to the front door.
 
-This path needs a broker change (the broker is a service of its own; its repository is outside this one). It is listed
-here as the contract the agent and the console are written to, in the broker's own terms (`BrokerProtocol.cs`):
+- The device opens TLS to its upstream's agent and **checks the pin** it was given – the same check the console makes.
+  It posts its signed upload to `/v1/monitoring/forward`. No Windows sign-in: a device has no account on its jump
+  host, and the body carries its identity for the service.
+- The jump host's agent **forwards bytes only**: the body, as is, to its own upstream or to the front door's fixed
+  path for its own tenant (`/v1/o/{org}/monitoring/upload`), and returns the answer unchanged. It can't read the bundle
+  beyond its size – it is gzip signed for the service, and TLS from the jump host to the front door is the jump
+  host's; the device's signature makes any change visible to the service. It never forwards anywhere else, so it is
+  not a proxy.
+- **Limits on the relay:** policy `MonitoringRelay` (default on when `TunnelEnabled` is on; §12.2); a body at most
+  4 MB; 60 forwards an hour per source address and 600 an hour per jump host, else 429; sources must be in
+  `TunnelTargets` when that is set, since the devices behind a jump host are the targets it is allowed to reach – the
+  same filter in the other direction; special addresses refused as for tunnels. A forward counts as a session for
+  `maxSessions` only while it runs.
+- **Audit on the jump host:** 1406 `MonitoringForwarded` per source device and hour (source address, count, bytes –
+  the device id is inside the signed body and not read), 2502 `MonitoringForwardRefused` with the reason.
+- **Chains:** the console builds the upstream list from the tree – a device three levels down gets the next device
+  up; each hop forwards one step. The agent's `status` says *through JUMP01 → JUMP00*. A chain whose head loses its
+  broker connection fills outboxes down the chain until it is back; nothing is lost for 7 days (§8).
+- A device that has both a broker connection and a jump host above it uploads directly; the console gives it no
+  upstream.
 
-- **A mailbox per device:** `PUT /v1/o/{org}/devices/{deviceId}/monitoring/{seq}` with the device's existing
-  registration proof; the body is the **sealed bundle**. The broker keeps a device's bundles for **7 days or 64 MB**,
-  whichever is reached first, oldest first, and answers with the highest `seq` it holds (the agent's
-  acknowledgement). A quota of 60 uploads per device per hour, 4 MB each; more is 429 and the agent waits for the
-  next interval.
-- **Where the broker keeps them:** in its existing D1 database, a table of its own (`org, device_id, seq, time, size,
-  body BLOB`) with the retention run by the broker's scheduled worker. D1's row limit is 2 MB, so a bundle over 1.9 MB
-  is stored in numbered chunks and reassembled on read – rare, since a full bundle is a few KB (§22). §22 shows D1 is
-  the cheaper store up to the 10 GB a D1 database may hold (about 9,000 devices in one organisation at the 7-day
-  retention); an organisation beyond that gets its mailbox in R2 instead, behind the same paths. Nothing on the agent
-  or console side depends on which.
-- **Consoles read:** `GET /v1/o/{org}/devices/{deviceId}/monitoring?after=<seq>` with the console's proof, for every
-  device in the organisation's synced folder the console has; the broker also pushes a `monitoring` notice on the
-  console's existing connection when a device uploads, so the console fetches within seconds while it runs. A console
-  that was off for a week asks the device itself for what the broker dropped (§9.2), through the broker session.
-- **The seal:** a key for monitoring is derived from the organisation's **device secret** like the other keys
-  (`BrokerProtocol.DeriveKey`, new `KeyLabel.Monitoring`), so the device has it, every console has it (the keyring gives
-  consoles the device secrets – `OpenKeyring`), and the broker never does: it gets only the enrol and join keys. The
-  bundle is encrypted with **AES-256-GCM** under that key, nonce random 12 bytes, associated data
-  `remotehub-broker/1|<org>|monitoring|<deviceId>|<storeId>|<seq>`, so a bundle can't be moved to another device or
-  sequence number by whoever holds the broker. The broker sees sizes and times only. A device secret that is retired
-  retires its monitoring key with it; bundles sealed under it are still readable by consoles whose keyring still holds
-  the secret, as records are.
-- **Which path a device uses:** `monitoring.uploadToBroker` (default on) on a device that has joined a broker. The
-  console fetches from the broker's mailbox first and only then from the device, and shows *through RemoteHub Broker*
-  on the Device tab's last-received line. A device with `BrokerDirect` = 0 or `ListenEnabled` = 0 is served entirely
-  by the mailbox and the broker session.
-- **Until the broker has it,** the agent keeps uploading nothing (the broker answers 404 for the path) and logs it
-  once per service run; consoles fetch through the broker session. The console shows the device as *fetched*, not
-  *sent*.
+### 9.4 Console → service: queries and activation
 
-## 10. Console storage
+The console talks to the service with its **console key** of the broker protocol (the registered console's PS256 or
+ES256 signature over each request), tenant-scoped:
 
-New tables in the encrypted local database ([local-db-design.md](local-db-design.md) §6), schema version +1, in
-`Data/MonitoringStore.cs`:
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/v1/o/{org}/monitoring/entitlement` | Licensed, tier, cap, region, devices active |
+| POST | `/v1/o/{org}/monitoring/activations` | An activation token for a device id and fingerprint (§6.4) |
+| GET | `/v1/o/{org}/monitoring/devices/{id}/overview` | The tiles of the Device tab: current health, open alerts, last received, last 2 hours of 5-minute summaries |
+| GET | `…/devices/{id}/sections/{name}[?at=<time>]` | The current (or a past) copy of a section, and `…/changes?from&to` the diff events |
+| GET | `…/devices/{id}/events?from&to&lanes` · `…/alerts?open` · `…/performance?from&to&step&metrics` | The timeline's data, at the step the zoom needs |
+| POST | `…/devices/{id}/alerts/{alertId}/acknowledge` · `DELETE …/devices/{id}` | Acknowledge; delete a device's data |
+| GET | `/v1/o/{org}/monitoring/dashboards/{name}?folder&from&to` · `…/reports/{name}` | The dashboards and reports of §11.4, computed at the service, paged |
+| GET | `/v1/o/{org}/monitoring/search?q=` | Devices by app, version, KB, driver (§11.4) |
+| PUT | `/v1/o/{org}/monitoring/defaults` | The tenant's default settings for new activations |
+
+Answers are JSON with the same limits as bundles; the console clips again when it shows them (§14). Nothing is
+queried in the background except the overview of devices with an open Device tab and, with *Show alerts in the
+navigation*, one call per minute for the tenant's open alerts.
+
+## 10. The service
+
+### 10.1 Shape
+
+| Part | What | Where |
+|---|---|---|
+| **Front door** | The broker's Cloudflare Workers: verifies device and console signatures, enforces entitlement and quotas, validates bundles against §7, writes to the store, answers queries, runs activation | Cloudflare, every region |
+| **Metadata** | Tenants, entitlements (tier, cap, region), activations, device → tenant and key, console keys, quotas' counters | The broker's D1 (today's database) |
+| **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** – one cluster per region (EU, US), shared by the region's tenants, tenant id on every row (§21) |
+| **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
+
+Ingestion path: the Worker verifies the signature and quota, decompresses within the limits, validates, computes the
+section diffs against the device's current rows, and inserts rows into ClickHouse over its HTTP interface with
+**asynchronous inserts** (the Worker never waits for a merge). An upload is acknowledged when the insert is accepted.
+
+### 10.2 Tables (ClickHouse, sketched)
 
 ```sql
-device_monitoring (connection_id TEXT PK, device_id TEXT, store_id TEXT, last_seq INT, last_full_utc INT,
-                   last_received_utc INT, path TEXT, interval_minutes INT, clock_skew_s INT, refused INT)
-device_sections   (connection_id TEXT, name TEXT, hash TEXT, collected_utc INT, received_utc INT, data BLOB,
-                   PRIMARY KEY (connection_id, name, collected_utc))        -- gzip JSON; one row per change, the newest is current
-device_events     (id TEXT PK, connection_id TEXT, time_utc INT, kind TEXT, lane TEXT, severity INT, subject TEXT,
-                   title TEXT, detail TEXT, count INT, record_id INT, log TEXT, seq INT, source TEXT)
-                                                                            -- source: 'device' (watched) or 'diff' (the console's comparison)
-device_alerts     (id TEXT PK, connection_id TEXT, rule TEXT, opened_utc INT, closed_utc INT, peak REAL, average REAL,
-                   detail TEXT, acknowledged_utc INT)
-device_perf       (connection_id TEXT, hour_utc INT, step INT, data BLOB,
-                   PRIMARY KEY (connection_id, step, hour_utc))               -- one row per device and hour: every metric's points packed
-                                                                            -- (float32 avg/max/min, top processes), gzip; step 300 for the
-                                                                            -- retention, 60 and 10 for 7 days
-device_perf_days  (connection_id TEXT, day_utc INT, metric TEXT, avg REAL, max REAL, p95 REAL, above_threshold_min INT,
-                   PRIMARY KEY (connection_id, metric, day_utc))             -- maintained on import; what fleet dashboards read
-device_apps       (connection_id TEXT, key TEXT, name TEXT, version TEXT, publisher TEXT, scope TEXT,
-                   PRIMARY KEY (connection_id, key))                         -- the current apps section, one row per app, for
-                                                                            -- "which devices have Zoom 6.2.1" without opening blobs
+-- every table: tenant String, device UUID, region fixed by the cluster; retention_days from the tenant's tier
+events      (tenant, device, time DateTime64(3), kind LowCardinality(String), lane, severity UInt8, subject, title,
+             detail String /* JSON, clipped */, count UInt32, record_id Int64, log, seq UInt64, source Enum('device','diff'),
+             retention_days UInt16)
+  ENGINE MergeTree PARTITION BY toYYYYMM(time) ORDER BY (tenant, device, time)
+  TTL time + toIntervalDay(retention_days)
+alerts      (tenant, device, alert_id UUID, rule, opened DateTime64, closed Nullable(DateTime64), peak, average, detail, acknowledged …)
+  ENGINE ReplacingMergeTree(version) ORDER BY (tenant, device, alert_id)
+perf_5m     (tenant, device, time DateTime, metric LowCardinality(String), avg Float32, max Float32, min Float32, top String, retention_days)
+  ENGINE MergeTree PARTITION BY toYYYYMM(time) ORDER BY (tenant, device, metric, time) TTL time + toIntervalDay(retention_days)
+perf_fine   (… step UInt16, values Array(Float32) …)     -- 1-minute and 10 s samples around alerts, TTL 7 days
+sections    (tenant, device, name, collected DateTime, hash FixedString(32), data String /* gzip JSON */, retention_days)
+  ENGINE MergeTree ORDER BY (tenant, device, name, collected) TTL collected + toIntervalDay(retention_days)
+sections_current  (tenant, device, name, hash, collected, data) ENGINE ReplacingMergeTree(collected) ORDER BY (tenant, device, name)
+apps_current (tenant, device, key, name, version, publisher, scope …) ENGINE ReplacingMergeTree ORDER BY (tenant, device, key)
+device_state (tenant, device, last_seen, last_full, interval, path, agent_version, pending_restart, open_alerts, …)
+  ENGINE ReplacingMergeTree(last_seen) ORDER BY (tenant, device)
+-- materialised views: perf_days (per device, metric, day: avg, max, p95, minutes above threshold),
+-- crashes_by_app_7d, pending_restarts, patch_level (newest cumulative update per build), disk_space, not_heard_from
 ```
 
-- **Retention** (*Settings → Monitoring*, console policy `MonitoringRetentionDays` 7–3650, default **90**): sections
-  keep every change, events and alerts and 5-minute performance for the retention, finer performance for 7 days. A
-  deleted connection takes its monitoring rows with it to *Recently deleted* and for good when that is emptied.
-- **The diff engine** (`SectionDiff`, pure and unit-tested): for each section a key per item (`apps`: scope + uninstall
-  key path; `drivers`: device instance + INF; `updates`: KB + title; `services`: name; `users`: SID; `config`: GPO GUID,
-  policy value path) and a list of fields whose change is worth an event. Added, removed and changed items become
-  `device_events` with `source = 'diff'`, with the **time of the device's own event when one matches** (the watched
-  `app.installed` from §5.2 for the same key within the debounce) and otherwise the section's `collectedAt` – the event
-  then says *between 08:00 and 09:00* in the timeline.
-- **Sizes, honestly estimated** (§21.1 has the arithmetic): about 80 KB a day per device for the 90-day history
-  (5-minute performance about 15 KB, events about 25 KB, a section change about 40 KB), plus about 200 KB a day per
-  device for the 1-minute performance kept 7 days. 50 devices for 90 days are about 0.4 GB; **500 devices about
-  4 GB**, of which 0.7 GB is the 1-minute history. That is within SQLite's range but beyond what
-  [local-db-design.md](local-db-design.md) §7 measured, so phase 1 measures import and query times at 500 devices and
-  the retention defaults (§12.1) are confirmed against them. The performance rows are packed per hour and the daily
-  summaries are kept separately, so the timeline reads a few hundred rows and a fleet dashboard reads the summary
-  table, never the packed points (§21.2).
-- **Full-text search** (`device_sections_fts` over app names, publishers, KB numbers, driver names) feeds the
-  navigation search later (*which devices have Zoom 6.2.1?* – phase 5).
+- **Retention per tenant** is a column, so one table serves every tier: `TTL time + toIntervalDay(retention_days)`.
+  A tier change rewrites the column for the tenant's rows (`ALTER … UPDATE`, background). The 1-minute and 10 s data
+  keep 7 days on every tier.
+- **Isolation:** every query the Worker issues starts with `WHERE tenant = {tenant}` from the verified console key;
+  there is no query path without it (a unit test asserts it on every statement template). Row policies in ClickHouse
+  (`CREATE ROW POLICY … USING tenant = currentUser()`-style per-tenant users) are the second fence for the dashboards'
+  views. A tenant's region is fixed at creation; its rows never leave the region's cluster.
+- **Deletion:** a device's or a tenant's rows are deleted with lightweight deletes and the metadata removed; backups
+  age out with their 7-day window. A tenant export is the same tables filtered, as Parquet, on request.
+- **Encryption at rest** is the cluster's (ClickHouse Cloud encrypts volumes; a self-managed cluster uses the
+  provider's disk encryption); in transit TLS everywhere, including Worker → ClickHouse.
+
+### 10.3 What the service never does
+
+It never connects to a device, never runs anything on one, and never reads a bundle's content beyond validation and
+the diffs. Operations at RemoteHub see tenant ids, sizes, counts and errors; opening a tenant's rows needs that
+tenant's support consent and is logged (§14).
 
 ## 11. The console
 
@@ -458,10 +530,12 @@ from.
 
 Opened with right-click → **Device** on a connection with an agent (also from the session tab's menu, and as the first
 tab when *Open the Device tab with a connection* is on in *Settings → Monitoring*). Gated by the console feature
-`AllowMonitoring` (§12.1). It reads the console's store, so it opens at once and works while the device is off.
+`AllowMonitoring` (§12.1). It queries the service (§9.4) and shows the **cache** – the last overview and the last 24
+hours of timeline data for devices whose tab was opened on this PC, in the encrypted database – while offline, marked
+*Last received …* and *offline – showing what this PC saw last*.
 
 ```
-┌ ● NUC13  ·  Device  ·  nuc13.lab  [RemoteHub Agent] ──────────────────────────── Last received 09:00 (through RemoteHub Broker) ↻ ┐
+┌ ● NUC13  ·  Device  ·  nuc13.lab  [RemoteHub Agent] ─────────────────────────────── Last received 09:00 (through JUMP01) ↻ ┐
 │ Overview   │ ┌ CPU ────────┐ ┌ Memory ─────┐ ┌ Disk C: ────┐ ┌ Uptime ──────┐ ┌ Updates ─────┐ ┌ Alerts ──────┐            │
 │ Timeline   │ │ 23 %  ▁▂▃▂▁ │ │ 61 %  ▃▃▄▃▃ │ │ 71 % used   │ │ 3 d 4 h      │ │ 2 pending    │ │ 1 open       │            │
 │ Alerts  ●1 │ │ max 97 % ⚠  │ │             │ │ 54 GB free  │ │ restart due  │ │ KB5064081    │ │ CPU ≥ 80 %   │            │
@@ -481,18 +555,18 @@ The tree of roles and the pieces at each:
 
 | Role | Piece | Notes |
 |---|---|---|
-| Header | `RemoteToolChrome.Header` – stripe, icon `SymbolRegular.Pulse24`, connection name, *Device*, host, transport badge | The right end gets the **last-received line** and a *Refresh now* button (`SymbolRegular.ArrowSync24`), as the lists have F5 |
+| Header | `RemoteToolChrome.Header` – stripe, icon `SymbolRegular.Pulse24`, connection name, *Device*, host, transport badge | The right end gets the **last-received line** (with the path: direct, through which jump host) and a *Refresh now* button (`SymbolRegular.ArrowSync24`) that calls the agent's `now` for the shown section |
 | Section list | A `ListView` of sections on the left, like the Scheduled tasks tab's folder pane (`RemoteListView` side pane) | Width saved in `UiState.DeviceSectionsWidth`; a count badge on *Alerts* in `SessionStateToBrush.RedBrush`/`AmberBrush` by the highest open severity |
 | Overview | `Card`s in a `WrapPanel`: six **stat tiles** (value, one-line caption, a 24-point sparkline of the last 2 hours) and a *Recent* list of the last 10 events and alerts | Tiles use the theme's text brushes; the sparkline is the timeline control (§11.2) in its smallest form, so there is one way to draw a curve |
 | Timeline | §11.2 | |
-| Alerts | `RemoteListView`-style list: state dot, opened, rule, duration, peak, top processes; the selected alert's detail below (samples as a small timeline, *Acknowledge*, *Open timeline here*, *Monitoring settings…*) | Acknowledging is the console's own note (`acknowledged_utc`); it changes nothing on the device |
-| Apps, Updates, Drivers, Services, Users | `RemoteListView` lists with the filter box, sortable columns, and a **changes** toggle (*Show changes in the last 7 days*) that marks added, changed and removed rows with the colour dots the tree uses | Columns per section follow §5.1; a right-click offers *Copy*, *Show in timeline*, and for an app *Processes* (opens the Processes tab filtered to its program) |
+| Alerts | `RemoteListView`-style list: state dot, opened, rule, duration, peak, top processes; the selected alert's detail below (samples as a small timeline, *Acknowledge*, *Open timeline here*, *Monitoring settings…*, *Run script…*, the device actions) | Acknowledging is recorded at the service for every console of the tenant; *Run script…* and the device actions are the manual remediation of §2 |
+| Apps, Updates, Drivers, Services, Users | `RemoteListView` lists with the filter box, sortable columns, and a **changes** toggle (*Show changes in the last 7 days*) that marks added, changed and removed rows with the colour dots the tree uses | Columns per section follow §5.1; a right-click offers *Copy*, *Show in timeline*, *Which other devices have this version* (§11.4 search) and for an app *Processes* (opens the Processes tab filtered to its program) |
 | Hardware, OS, Config | A two-column property list in `Card`s per group (as *Settings → Policies* lists values), with *Copy as text*; `config` has three groups – Group Policy, MDM/CSP, Security – each with its own filter box | Values that changed in the last 7 days get the change dot and a tooltip with the old value and when |
 | Events | The watched events (§5.2), newest first, with the lane filter (*Changes*, *Problems*, *Sessions*) and the Event Viewer's level dots; *Open in Event Viewer* opens that tab at the record | |
 | Settings | §11.3 | |
-| Empty states | `EmptyHint` as in Notes: *Nothing received yet – the agent collects its first inventory 5 minutes after it starts*; *Monitoring is turned off on this device (policy)*; *This agent is older than 0.23 and doesn't collect*; *No saved credentials – Fetch now…* | Each names what to do, never a code |
+| Empty states | `EmptyHint` as in Notes: *Not activated – Activate monitoring on this device…*; *Nothing received yet – the agent collects its first inventory 5 minutes after activation*; *Monitoring is turned off on this device (policy)*; *This agent is older than 0.23 and doesn't collect*; *Not monitored – no path to the RemoteHub monitoring service*; *This tenant isn't licensed for monitoring*; *Offline – showing what this PC saw last* | Each names what to do, never a code |
 
-Everything shown is text from the store, clipped as it was received (§14): no cell is a hyperlink, no path opens
+Everything shown is text from the service, clipped as it was received (§14): no cell is a hyperlink, no path opens
 anything.
 
 ### 11.2 The timeline
@@ -521,10 +595,11 @@ tiles' sparkline, the alert detail, and the full Timeline section.
 - **Lanes**, top to bottom: the performance curves (CPU, memory, disk; network and queue length can be switched on),
   then **Alerts** as bands, **Changes**, **Problems** and **Sessions** as markers. Lanes can be hidden; the choice is
   kept in `UiState`. The dotted line is the rule's threshold.
-- **Zoom** from 1 hour to 90 days with the buttons, Ctrl+wheel or a drag on the axis; pan with the arrows, a drag, or
-  Shift+wheel. The curve's resolution follows the zoom: 10 s samples where the console has them (alerts), 1-minute for
-  up to 24 hours, 5-minute beyond. A gap in the data (device off, nothing received) is a gap in the curve, never
-  interpolated; a `time.changed` event is a mark on the axis.
+- **Zoom** from 1 hour to the tenant's retention (30, 60 or 90 days – the buttons beyond the tier are greyed with the
+  tier named) with the buttons, Ctrl+wheel or a drag on the axis; pan with the arrows, a drag, or Shift+wheel. The
+  curve's resolution follows the zoom and the service answers at that step: 10 s samples where they exist (alerts),
+  1-minute for up to 24 hours, 5-minute beyond. A gap in the data (device off, nothing received) is a gap in the curve,
+  never interpolated; a `time.changed` event is a mark on the axis.
 - **Hover** shows a tooltip with the value or the event's title and time; **click** selects the event or alert and
   shows its detail in a pane below (the same detail the Alerts and Events sections show); double-click a change opens
   its section with the item selected.
@@ -533,7 +608,9 @@ tiles' sparkline, the alert detail, and the full Timeline section.
   selected, the footer lists the changes in the 7 days before it, nearest first. It is a count, labelled as one –
   RemoteHub doesn't claim a cause. The subject of a change is its program (an app's uninstall entry and its crashing
   executable are matched by publisher and install folder from `apps`) or, for a driver, the device class; where no
-  match exists the footer says *no related problems recorded*.
+  match exists the footer says *no related problems recorded*. The counts come from the service, so the fleet view
+  (§11.4) can show the same correlation across devices (*this driver version: 41 devices, crashes of Zoom.exe up on
+  29 of them*).
 - **Drawing:** brushes from the theme only – the text and stroke brushes for the axis and grid, the accent for the
   selected item, `SessionStateToBrush` red, amber, green and grey for severities and states, the connection's colour
   for the curve's fill. Both themes are checked (the lab's U cases screenshot the tab in light and dark). Text in the
@@ -542,37 +619,54 @@ tiles' sparkline, the alert detail, and the full Timeline section.
   control is one `AutomationPeer` with the events as children, so FlaUI (the lab) and a screen reader see them.
 - **Recording** (`IRecordableView`) includes the tab, as every tab.
 
-### 11.3 Monitoring settings
+### 11.3 Activation and settings
 
-- **Per device:** the Device tab's *Settings* section shows the interval, the sections collected, the upload switch and
-  every rule of §5.4 as a row with on/off, threshold and window (`NumberBox`es with the ranges of §5.4), with the value's
-  source (*device*, *policy*, *default*). *Apply* sends `PUT /v1/monitoring/settings`; a value the policy configures is
-  greyed with the lock and *Set by your organisation*, as everywhere ([admx-design.md](admx-design.md) P2). Needs the
-  right `MonitoringSettings`; without it the section is read-only and says so.
+- **Entitlement:** *Settings → Monitoring* shows, per connected tenant, licensed or not, the tier, devices activated
+  of the cap, the region, and the tenant's **defaults** (interval, sections, the rules of §5.4) with *Save defaults*
+  (`PUT …/defaults`). An unlicensed tenant shows how to license it and nothing else is offered.
+- **Activate:** right-click a device, a folder or the tenant's synced folder → *Monitoring → Activate…*. The dialog
+  (built like `AgentInstallDialog`) names the tenant and region the data goes to, the tier, what is collected (a link
+  to the README's list) and whether account names are included (the policy's state if set), shows the devices it will
+  activate and which have no path (§2) or an older agent, and runs device by device like *Claim RemoteHub Agents…*,
+  reporting which took it, which refused (policy, right) and which weren't reached. *Deactivate…* is the same dialog
+  with the data question (*Keep the history until it ages out* / *Delete this device's data now*). Needs the right
+  `MonitoringSettings` on each device, and `AllowMonitoring` on this PC.
+- **Per device:** the Device tab's *Settings* section shows the activation state and path, the interval, the sections
+  collected, and every rule of §5.4 as a row with on/off, threshold and window (`NumberBox`es with the ranges of §5.4),
+  with the value's source (*device*, *tenant default*, *policy*). *Apply* sends `PUT /v1/monitoring/settings`; a value
+  the policy configures is greyed with the lock and *Set by your organisation*, as everywhere
+  ([admx-design.md](admx-design.md) P2). Without the right the section is read-only and says so.
 - **For many devices:** right-click a folder → *Monitoring settings…* opens the same form with *Apply to every device in
-  this folder* (and its subfolders), runs device by device like *Claim RemoteHub Agents…*, and reports which took it,
-  which refused (policy) and which weren't reached. Nothing is inherited or stored on the console: the device holds
-  its settings, so two consoles can't disagree.
-- **Console defaults** (*Settings → Monitoring*): the values pre-filled for a device that has none yet, offered by the
-  install dialog and written into the `.rhagent` enrolment file (`monitoring` object, format 2 stays – unknown fields
-  were always ignored by older agents, to confirm in A-HAND cases) so Intune installs start with them; the retention
-  (§10); *Open the Device tab with a connection*; *Show alerts in the navigation*.
+  this folder* (and its subfolders), runs device by device and reports. The device holds its settings, so two consoles
+  can't disagree about a device; the tenant's defaults apply only where no console set a value.
+- **Console settings** (*Settings → Monitoring*): *Open the Device tab with a connection*; *Show alerts in the
+  navigation*; the cache's size (default 50 devices).
 - **The navigation:** with that setting on, a connection with an open alert shows the alert dot on its icon (the
   broker state dot's position; red for a blue screen, hardware error, detection or a crash alert, amber for a
   threshold), and a folder shows the count of such devices in its caption. Turning it off keeps the Device tab's badge.
+  The console asks the service once a minute for the tenant's open alerts.
 
 ### 11.4 The Monitoring view (phase 5)
 
 A fourth view on the rail – `RailView("Monitoring", SymbolRegular.DataUsage24, "Monitoring", "Ctrl+4")`, gated by
 `AllowMonitoring` like Notes and Scripts ([notes-view-design.md](notes-view-design.md) §3.8). Three cards as in Scripts:
-a list of **dashboards and reports** on the left, the chosen one in the middle, its filters on the right.
+a list of **dashboards and reports** on the left, the chosen one in the middle, its filters on the right (tenant,
+folder, period).
 
-Built-in dashboards (tables and tiles from the store; each row opens the device's tab at the right section):
-*Open alerts*, *Devices not heard from* (longer than 2 intervals), *Pending restarts*, *Disk space*, *Crashing apps
-(last 7 days)*, *Blue screens and hardware errors*, *Recent changes*, *Patch level* (the newest cumulative update per
-build and who lacks it), *Drivers by version*, *Defender state*. **Reports** are the same tables for a chosen folder
-and period, exported as CSV or an HTML file (with the timeline as an SVG), through *Save as…*, never written to a
-temp file. Which of the request's "dashboards and reports" come first is an open question (§19).
+Dashboards are computed at the service (§10.2's materialised views) and shown as tables and tiles; each row opens the
+device's tab at the right section. **All of them ship in phase 5, and the customer picks which to show** (v1 Q4): the
+list's *Show* toggles, kept in `UiState`. The set:
+
+*Open alerts* · *Devices not heard from* (longer than 2 intervals) · *Pending restarts* · *Disk space* · *Crashing
+apps (last 7 days)* · *Blue screens and hardware errors* · *Recent changes* · *Patch level* (the newest cumulative
+update per build and who lacks it) · *Drivers by version* (with the correlation of §11.2 across devices) · *Defender
+state* · *Boot and sign-in duration* · *Configuration drift* (devices whose GPO or CSP values differ from the folder's
+most common).
+
+**Reports** are the same tables for a chosen folder and period, exported as CSV or an HTML file (with the timeline as
+an SVG), through *Save as…*, never written to a temp file; a report export is audited in the console. **Search**
+(`…/search`) answers *which devices have Zoom 6.2.1*, *which lack KB5064081* from the navigation search box with a
+`monitoring:` prefix, and from a row's *Which other devices have this version*.
 
 ## 12. Policy and settings
 
@@ -580,25 +674,26 @@ temp file. Which of the request's "dashboards and reports" come first is an open
 
 | Value (`HKLM|HKCU\SOFTWARE\Policies\RemoteHub`) | Type | Meaning (default) |
 |---|---|---|
-| `AllowMonitoring` | DWORD | 0: no Device tab, no fetching, no Monitoring view, and the store is emptied at the next start (1). Below `AllowAgent`, like the other agent tools |
-| `MonitoringRetentionDays` | DWORD 7–3650 | How long the console keeps history (90) |
-| `MonitoringFetch` | DWORD | 0: fetch only when a Device tab is open, never in the background (1) |
+| `AllowMonitoring` | DWORD | 0: no Device tab, no activation, no Monitoring view, and the cache is emptied at the next start (1). Below `AllowAgent` and `AllowBroker`, since the data path is the broker's |
+| `AllowMonitoringActivation` | DWORD | 0: this PC may look but not activate, deactivate or change settings (1) |
+| `AllowMonitoringExport` | DWORD | 0: no report export (1) |
 
 ### 12.2 Agent (`HKLM\SOFTWARE\Policies\RemoteHub\Agent`, ADMX category *RemoteHub Agent → Monitoring*)
 
-The same names, without the prefix, are the `monitoring` object in `agent.json` (written by the enrolment file and by
-`PUT /v1/monitoring/settings`); the policy wins and is shown locked (P1). Read when used, as the other agent policies.
+The same names, without the prefix, are the `monitoring` object in `agent.json` (written by the console's activation
+and `PUT /v1/monitoring/settings`); the policy wins and is shown locked (P1). Read when used, as the other agent
+policies.
 
 | Value | Type | Meaning (default) |
 |---|---|---|
-| `MonitoringEnabled` | DWORD | 0: nothing is collected or served; `/v1/monitoring/*` answers 404, health leaves out `monitoring`, the store is deleted at the next service start (1) |
+| `MonitoringEnabled` | DWORD | 0: the device can't be activated and an active device is deactivated at the next read; `/v1/monitoring/*` answers 404, health leaves out `monitoring`, the outbox is deleted (1 – *may be activated*; nothing is collected until the console activates) |
+| `MonitoringService` | SZ | The only service address the agent may upload to (any the activation names). For tenants that pin their broker with `BrokerUrl`, the same host |
+| `MonitoringRelay` | DWORD | 0: this device never forwards other devices' uploads (§9.3) (1 when `TunnelEnabled` is on) |
 | `MonitoringIntervalMinutes` | DWORD 60–10080 | The full inventory's interval (60) |
 | `MonitoringSections` | MULTI_SZ | Which sections are collected: any of `os`, `hardware`, `apps`, `updates`, `drivers`, `services`, `users`, `config`, `agent` (all) |
 | `MonitoringIncludeUsers` | DWORD | 0: no account names anywhere – sessions, local users, group members, crash and sign-in events say *a user*; per-user app entries and the user's GPOs and CSP values are left out (1) |
 | `MonitoringEvents` | DWORD | 0: no event watching, only the interval (1) |
 | `MonitoringPerformance` | DWORD | 0: no sampling, no threshold alerts (1) |
-| `MonitoringUploadToBroker` | DWORD | 0: never upload; consoles fetch (1) |
-| `MonitoringRetentionDays` | DWORD 1–90 | The device store's retention (30) |
 | `MonitoringCpuPercent`, `MonitoringCpuMinutes` | DWORD | 0 turns the rule off; else 50–100 and 1–60 (80, 5) |
 | `MonitoringMemoryPercent`, `MonitoringMemoryMinutes` | DWORD | (90, 5) |
 | `MonitoringDiskPercent`, `MonitoringDiskMinutes` | DWORD | Disk active time (90, 5) |
@@ -611,9 +706,8 @@ The same names, without the prefix, are the `monitoring` object in `agent.json` 
 Rights (subkey `Rights`): `Monitoring`, `MonitoringSettings` (§9.1). `RemoteHubAgent.exe policy` prints them all;
 *Settings → Policies* lists them from `PolicyCatalog.cs`; the ADMX test checks the template against it.
 
-Enrolment file (`.rhagent`, format 2): an optional `monitoring` object with the same names, applied by `enroll` to
-`agent.json` as the install's defaults; the install dialog gets a *Monitoring* group with the console defaults (§11.3).
-MSI property `MONITORING=0|1` for the switch alone, like `VIRTUALDISPLAY`.
+No install-time switch and no enrolment-file field: activation comes from the console (§6.4). The MSI and the
+`.rhagent` file stay as they are.
 
 ## 13. Audit and logging
 
@@ -621,49 +715,67 @@ Agent (`AuditEvent`, the Application log unless `AuditToEventLog` = 0):
 
 | Id | Event | Recorded |
 |---|---|---|
-| 1400 `MonitoringStarted` | Monitoring runs (once per service run) | Interval, sections, whether uploads go to a broker |
-| 1401 `MonitoringRead` | A console read bundles or sections | Account, source address, `after`, how many bundles – as PowerShell sessions are audited; never the content |
+| 1400 `MonitoringStarted` | Collection runs (once per service run while activated) | Interval, sections, path (direct or upstream) |
+| 1401 `MonitoringRead` | A console read status, settings or `now` | Account, source address, what – never the content |
 | 1402 `MonitoringSettingsChanged` | Settings changed through the endpoint | Account, source, which values and the new values (no secrets exist here) |
-| 1403 `MonitoringUploaded` | The first successful upload to a broker per service run, and again after a failure | Broker, `seq` |
+| 1403 `MonitoringUploaded` | The first successful upload per service run, and again after a failure | Service, `seq`, path |
+| 1404 `MonitoringActivated` / 1405 `MonitoringDeactivated` | Activation changed | Account, source, tenant id, service address, upstream; on deactivation whether the data was asked to be deleted |
+| 1406 `MonitoringForwarded` | This device forwarded other devices' uploads (per source and hour) | Source address, count, bytes |
 | 2500 `MonitoringAlert` | An alert opened or closed | Rule, value, duration, top programs – also for Intune or a SIEM |
-| 2501 `MonitoringRefused` | A read or write refused (right, policy) | Account, source, reason |
-| 3500 `MonitoringError` | A collector, the store or an upload failed | Which and `ex.Message`; the next interval retries |
+| 2501 `MonitoringRefused` | A read, write or activation refused (right, policy, token) | Account, source, reason |
+| 2502 `MonitoringForwardRefused` | A forward refused (policy, limit, source) | Source address, reason |
+| 2503 `MonitoringUploadRefused` | The service refused this device's uploads (licence, cap, revoked) | Reason, until when uploads pause |
+| 3500 `MonitoringError` | A collector, the outbox or an upload failed | Which and `ex.Message`; the next interval retries |
 
 The agent's log file additionally records each collection's duration and size (*inventory: 9 sections, 184 KB, 6.2 s*)
 so a slow device can be diagnosed. Never in any log: section contents, event messages, account names other than the
 audited reader's.
 
-Console: `DiagLog` records fetches and refusals as counts and durations – *monitoring: 12 devices fetched, 1 refused
-bundle, 2 not reached* – never names, hosts or contents. The console's audit log (`AuditEvents`) gets
-`MonitoringSettingsChanged` (which connection, which values) and `MonitoringFetchedNow` for *Refresh now*.
+Console: `DiagLog` records queries and refusals as counts and durations – *monitoring: 12 queries, 1 refused, 2 not
+reached* – never names, hosts or contents. The console's audit log (`AuditEvents`) gets `MonitoringActivated`,
+`MonitoringDeactivated` (which connection, data kept or deleted), `MonitoringSettingsChanged`, `MonitoringExport`
+(which report, period, folder) and `MonitoringDataDeleted`.
+
+Service: an audit log per tenant (activations, deactivations, deletions, exports, entitlement changes, support
+access) readable by the tenant's consoles under *Settings → Monitoring → Service audit*.
 
 ## 14. Security and privacy
 
-- **Reading needs a right, through a pinned connection.** No anonymous endpoint; `health` only gains the feature name.
-  Through the broker, the mailbox is readable only with a console proof of the organisation and only sealed.
-- **The console treats bundles as hostile** (TB8): the gzip is read through a size-limited stream (compressed and
-  uncompressed limits of §7 enforced while reading, not after), `System.Text.Json` with `MaxDepth` 8 and no comments,
-  every string clipped to its limit and stripped of control characters and bidirectional overrides before storing,
-  numbers range-checked, dates parsed as UTC or dropped. A refused bundle is counted and the device is marked in the
-  Device tab (*The device sent data RemoteHub refused*); the next bundles are still read. Nothing from a bundle is ever
-  a path the console opens, a URL it shows as a link, a command it runs, or markup it renders – text only, in
-  `TextBlock`s and cells.
-- **Identity of the data:** direct and through a session, the bundle comes from the pinned certificate's device; from
-  the mailbox, the seal binds it to the device id, store id and sequence. The console stores where each bundle came
-  from (`device_monitoring.path`).
+- **The trust statement.** Monitoring data is stored and queried by RemoteHub's service on the tenant's behalf. This is
+  a different model from broker sessions, which are sealed end to end, and it is said plainly in the README,
+  `PRIVACY.md` and the activation dialog: what is collected (§5.1), what never (§5.5), where it is kept (the tenant's
+  region), for how long (the tier), who at RemoteHub can see it (operations: ids, sizes, counts, errors; a tenant's rows
+  only with that tenant's support consent, logged in the tenant's service audit), and how it is deleted.
+- **Identity on every upload.** A bundle is signed with the device's certificate key, registered under the tenant at
+  activation; the front door verifies it before anything else, and a relay can't alter it. Consoles sign their queries
+  with their registered key; every query is tenant-scoped by that key, never by a parameter.
+- **Tenant isolation at the store:** tenant id on every row, in every `ORDER BY`, in every `WHERE` the Worker issues
+  (tested), row policies as the second fence, a region per tenant with no cross-region queries.
+- **The service treats bundles as hostile** (TB8): the gzip is read through a size-limited stream (compressed and
+  uncompressed limits of §7 enforced while reading, not after), the JSON parsed with depth 8 and no comments, every
+  string clipped to its limit and stripped of control characters and bidirectional overrides before storing, numbers
+  range-checked, dates parsed as UTC or dropped. A refused bundle is counted for the device and shown in the Device tab
+  (*The device sent data the service refused*); later bundles are still read. The console clips again what it shows and
+  renders text only: nothing from a device is a path it opens, a URL it shows as a link, a command it runs, or markup.
+- **Quotas** per device (60 uploads an hour, 4 MB), per tenant (cap, 200 MB an hour), per relay source and jump host
+  (§9.3), per console (queries a minute) – all answered with 429, logged, never blocking another tenant.
 - **The device gives up nothing new to the network:** monitoring adds no listener, no helper, no pipe. The settings
-  endpoint accepts a small fixed JSON object, range-checked, and nothing else.
+  and activation endpoints accept small fixed JSON objects, range-checked, behind a right. The relay endpoint accepts a
+  bounded body and forwards it to one fixed path.
+- **Keys:** the device's monitoring identity is its existing non-exportable certificate key; the console's is its
+  broker console key; the activation token lives 24 hours and names one device. No new secret is stored anywhere.
 - **People at the device:** `MonitoringIncludeUsers`, `MonitoringSections` and `MonitoringEvents` narrow what IT
-  collects; the Application log shows monitoring runs (1400) and every read (1401), so the collection is visible on the
-  device; `PRIVACY.md` and the README state what the agent collects and for whom (§18). Nothing goes to the vendor.
-- **Secrets in configuration values:** `config` leaves out any policy or CSP value whose name says *password*, *secret*,
-  *key*, *token*, *credential* or *pin*, and every REG_BINARY over 64 bytes. Paths are kept (they are configuration),
-  but a path under a user's profile is shortened to `%USERPROFILE%\…` with `MonitoringIncludeUsers` = 0.
-- **On the console** the data lives in the encrypted database under the same key hierarchy as passwords and notes
-  ([local-db-design.md](local-db-design.md) §4); exports (§11.4) are an explicit *Save as…* by the admin and audited.
-- **Resource exhaustion of the console:** bundles are processed one device at a time on a background queue with the
-  limits above; the UI shows per-device results as they arrive. A device uploading 60 bundles an hour costs the
-  console at most 240 MB an hour to read and far less to store; the broker's quota (§9.3) caps it.
+  collects; the Application log shows activation (1404) and every collection run (1400), so the collection is visible on
+  the device.
+- **Secrets in configuration values:** `config` leaves out any policy or CSP value whose name says *password*,
+  *secret*, *key*, *token*, *credential* or *pin*, and every REG_BINARY over 64 bytes. Paths are kept (they are
+  configuration), but a path under a user's profile is shortened to `%USERPROFILE%\…` with `MonitoringIncludeUsers` = 0.
+- **On the console** the cache lives in the encrypted database under the same key hierarchy as passwords and notes
+  ([local-db-design.md](local-db-design.md) §4) and is small (50 devices); exports (§11.4) are an explicit *Save as…*
+  by the admin and audited.
+- **Compliance groundwork** for the service, outside this document but named so it isn't forgotten: a data processing
+  agreement naming the sub-processors (Cloudflare, the ClickHouse host), the region choice, deletion within 30 days
+  of a tenant's end, backups' retention, and a security review of the Workers' code paths (§19).
 
 ## 15. Compatibility and budget
 
@@ -675,8 +787,8 @@ bundle, 2 not reached* – never names, hosts or contents. The console's audit l
 - Server Core and devices without a user: `users` has no sessions, sign-in rules never fire; everything else works.
 - WDAC/Constrained Language Mode and `PowerShellEnabled` = 0 don't matter: the collectors are native code in the
   agent, not PowerShell – which is why they are (§1.1).
-- An **older console** ignores unknown sections and kinds; an **older agent** has no `monitoring` feature and the
-  Device tab says so. The broker without the mailbox: §9.3.
+- An **older agent** has no `monitoring` feature and the Device tab says so; an **older jump host** has no relay
+  endpoint, so a device behind it has no path until the jump host is updated – the activation dialog says which.
 - The agent is published trimmed (`PublishTrimmed`, partial): WMI through `Microsoft.Management.Infrastructure` (the
   CIM client PowerShell itself uses; trim-safe with the usual root descriptors) rather than `System.Management`; the
   Windows Update Agent and `PackageManager` through the interop already in the agent (`StoreApps.cs`) or source-generated
@@ -687,10 +799,11 @@ bundle, 2 not reached* – never names, hosts or contents. The console's audit l
 | Part | Budget | How it is kept |
 |---|---|---|
 | Sampler | < 0.1 % CPU, < 10 MB | One PDH query, 10 s; process list from one `NtQuerySystemInformation` call |
-| Hourly inventory | < 30 s CPU, < 100 MB peak, finished within 5 minutes | Sections collected one after another on a thread at `BelowNormal` priority, each with its own stop (WMI 30 s, WU search 60 s); a section that overruns is skipped this hour and reported in `agent` |
+| Full inventory | < 30 s CPU, < 100 MB peak, finished within 5 minutes | Sections collected one after another on a thread at `BelowNormal` priority, each with its own stop (WMI 30 s, WU search 60 s); a section that overruns is skipped this time and reported in `agent` |
 | Event watching | < 0.1 % CPU | `EventLogWatcher` subscriptions with XPath filters per id, no polling |
-| Store | ≤ 256 MB, about 20 MB in practice for 30 days | §8 |
-| Uploads | ≤ 2 MB an hour in practice | Full bundles with hash-only sections; gzip |
+| Outbox | ≤ 64 MB, a few hundred KB in practice | §8 |
+| Uploads | ≤ 2 MB an hour in practice | Full bundles with hash-only sections; gzip (§22) |
+| Relay on a jump host | ≤ 600 forwards an hour, bytes in and out | §9.3 |
 
 The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and the result goes into this section.
 
@@ -701,15 +814,16 @@ The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and t
 - `ThresholdStateTests` – a fake clock: opens at 90 % of samples above, not at 4 of 5 minutes, hysteresis, cool-down,
   the boot grace period, a `time.changed` jump doesn't open or close anything.
 - `SectionDiffTests` – added, removed, changed apps; the same app in two scopes; a version that goes backwards; a
-  driver's INF rename; 10,000 items in under a second.
+  driver's INF rename; 10,000 items in under a second (shared with the service's implementation as test vectors).
 - `MonitoringBundleTests` – round trip; every limit of §7 refused (a 4 MB + 1 byte bundle, depth 9, a 1,025-character
   name clipped, 501 events refused, an unknown section ignored); a gzip bomb (1 GB of zeros) stopped at 32 MB; control
-  and bidirectional characters stripped.
-- `MonitoringSealTests` – the broker protocol's seal and open with test vectors, a moved sequence number refused,
-  a retired secret still opens, a console secret can't open.
-- `MonitoringClientTests` – the fetch schedule (spread, interval learned from status, retry only at the next
-  interval, no prompt without saved credentials); a `storeId` change marks a cut and asks from 0; a hash-only section
-  without a snapshot asks for the section.
+  and bidirectional characters stripped; the signature over the body verified and a changed byte refused.
+- `MonitoringActivationTests` – a token for another device or fingerprint refused (400), an expired one refused, the
+  policy's 409, deactivation deletes the outbox and sections, `MonitoringEnabled` = 0 deactivates.
+- `MonitoringRelayTests` – a forward goes to the fixed path and nowhere else; the pin check against the upstream; the
+  limits (size, per source, per host) answer 429; a source outside `TunnelTargets` refused; a chain of two forwards.
+- `MonitoringServiceClientTests` – the console's queries are signed and tenant-scoped; the cache is used when offline
+  and marked; nothing is queried in the background without an open tab or the navigation setting; answers are clipped.
 - `EventKindTests` – each Windows event of §5.2 (recorded XML from the lab) maps to its kind and fields; an event with
   a user name maps to *a user* with `MonitoringIncludeUsers` off.
 - `MonitoringPolicyTests` – `PolicyCatalog` entries, the ADMX template check, settings refused with 409 when configured.
@@ -719,39 +833,51 @@ The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and t
   parses, meets its limits, finishes within its stop, and contains none of §5.5 (a scan for `password`, the runner's
   known secrets' shapes).
 
+**Service tests** (the broker's repository): every query template carries the tenant predicate (a test walks them);
+a console of tenant A can't read tenant B's device by id (404, not 403); an upload with a bad signature, a repeated
+`seq`, a revoked activation or an over-cap tenant is refused with the right status; a bundle over each limit is refused
+and counted; TTL by tier; deletion of a device and a tenant; the materialised views against fixtures; ingestion of
+1,000 bundles a second on the test cluster.
+
 **Lab** (`docs/test-lab-cases.md` gets a section *Agent – monitoring (M)*; `lab/tests/M-*.Tests.ps1`, `# LabQuick`
-where a case applies to Server too):
+where a case applies to Server too; the lab broker gains the service with a local ClickHouse in the same
+`wrangler dev` setup, test-lab-spec §5.3):
 
 | ID | Case | Pass when | How | P |
 |---|---|---|---|---|
-| M-INV-01 | First inventory | within 10 minutes after install, `/v1/monitoring/status` shows `lastSeq` ≥ 1 and a full bundle with every section; health lists `monitoring` | H | 1 |
-| M-INV-02 | Sections' truth | the apps the VM has (the agent MSI, a test MSI), its KBs, its drivers, local users, the lab's GPO and the Defender state appear with the right values; nothing of §5.5 in the bundle (scan) | H PS | 1 |
-| M-INV-03 | Interval | with `MonitoringIntervalMinutes` = 60 the second full bundle comes 60 ± 10 minutes after the first; 30 is refused (invalid, logged once) and 60 stays | H PS | 2 |
-| M-INV-04 | Right | an account without `Monitoring` gets 403 on every monitoring path and 2501 is audited; without `MonitoringSettings`, PUT is 403 but GET works | H | 1 |
-| M-INV-05 | Policy off | `MonitoringEnabled` = 0 → 404, no `monitoring` in health, the store folder is gone after a service restart | H PS | 1 |
-| M-INV-06 | Users off | `MonitoringIncludeUsers` = 0 → no account name anywhere in a full bundle (scan for the VM's known accounts), counts still there | H | 1 |
-| M-EVT-01 | App installed | install a test MSI → a partial bundle with `app.installed` and the `apps` section within 90 s; uninstall → `app.removed` | H PS | 1 |
+| M-ACT-01 | Activation | the harness activates the VM through the agent → `status` shows activated, path direct, 1404 audited; within 10 minutes the service has a full bundle with every section; health lists `monitoring` | H | 1 |
+| M-ACT-02 | Not before activation | a fresh install collects nothing for 30 minutes: no outbox, no 1400, no upload at the lab service | H PS | 1 |
+| M-ACT-03 | Deactivation and policy | `DELETE` → collection stops, outbox gone, 1405; `MonitoringEnabled` = 0 on an active device → deactivated at the next read, 404, health without `monitoring` | H PS | 1 |
+| M-ACT-04 | Rights and tokens | an account without `MonitoringSettings` can't activate (403, 2501) but reads `status`; a token for another device id or fingerprint → 400; an expired token → 400 | H | 1 |
+| M-ACT-05 | Licence at the service | the lab tenant set over its cap or unlicensed → uploads 403, 2503 audited, `status.lastRefusal` names it, the Device tab shows it; licensed again → uploads resume within the interval | H | 1 |
+| M-INV-01 | Sections' truth | the apps the VM has (the agent MSI, a test MSI), its KBs, its drivers, local users, the lab's GPO and the Defender state appear with the right values at the service; nothing of §5.5 in the bundle (scan) | H PS | 1 |
+| M-INV-02 | Interval | with `MonitoringIntervalMinutes` = 60 the second full bundle arrives 60 ± 10 minutes after the first; 30 is refused (invalid, logged once) and 60 stays | H PS | 2 |
+| M-INV-03 | Users off | `MonitoringIncludeUsers` = 0 → no account name anywhere in a full bundle (scan for the VM's known accounts), counts still there | H | 1 |
+| M-INV-04 | Hash-only sections | the second full bundle carries unchanged sections as hashes; the service asked for none; a section deleted at the service is asked for and arrives whole with the next bundle | H | 2 |
+| M-EVT-01 | App installed | install a test MSI → a partial bundle with `app.installed` and the `apps` section at the service within 90 s; uninstall → `app.removed` | H PS | 1 |
 | M-EVT-02 | Store app and EXE installer | `Add-AppxPackage` and an Inno Setup test installer → events within 90 s, kind says Store / installer | H S | 2 |
-| M-EVT-03 | Driver and update | install a test driver (the lab's signed null driver) → `driver.installed`; install a `.msu` → `update.installed` and `os` pending restart | H PS | 2 |
+| M-EVT-03 | Driver and update | install a test driver (the lab's signed null driver) → `driver.installed`; install a `.msu` → `update.installed` and `os` pending restart; a definition update → recorded, no triggered bundle | H PS | 2 |
 | M-EVT-04 | Crash | a test program that faults → `app.crash` with module and code within 60 s, 3 faults → the crash alert; `app.hang` from a program that stops pumping messages | H S | 1 |
-| M-EVT-05 | Blue screen | `NotMyFault`-style crash through the lab's driver (or a forced bug check in the guest) → after the restart `os.bluescreen` with the code, `device.started` with the boot duration | H PS C | 1 |
+| M-EVT-05 | Blue screen | a forced bug check in the guest → after the restart `os.bluescreen` with the code, `device.started` with the boot duration | H PS C | 1 |
 | M-EVT-06 | Service failure | kill a test service's process → `service.failed` and the alert; the agent's own service isn't listed as failed after a lab-initiated restart | H PS | 2 |
-| M-EVT-07 | Group Policy | change the lab GPO and `gpupdate` → `config.gpo` with the changed values named within 2 minutes | H PS | 2 |
-| M-EVT-08 | Flood | 100 crashes in a minute → identical events counted, at most 30 triggered bundles an hour, the rest in the next full bundle with `heldBack` | H S | 2 |
+| M-EVT-07 | Group Policy | change the lab GPO and `gpupdate` → `config.gpo` with the changed values named within 2 minutes; `gpupdate` without a change → no bundle | H PS | 2 |
+| M-EVT-08 | Flood | 100 crashes in a minute → identical events counted, at most 30 triggered bundles an hour, the rest in the next full bundle with `heldBack`; 20 locks and unlocks → no triggered bundle | H S | 2 |
 | M-PERF-01 | CPU alert | a burner at 100 % on all cores for 6 minutes → the alert opens between 5:00 and 5:30 with the burner on top, the alert bundle holds the 10 s samples; the burner stops → closes within 6 minutes with duration and peak | H S | 1 |
 | M-PERF-02 | No false alert | 4 minutes at 100 %, then idle → no alert; 10 minutes alternating 30 s at 100 % and 30 s idle → no alert | H S | 1 |
-| M-PERF-03 | Thresholds from the console | set CPU 50 % / 2 min through PUT → status shows `device` as source and the alert opens after 2 minutes of a burner; set `MonitoringCpuPercent` by policy → PUT answers 409, status says `policy` | H PS | 1 |
+| M-PERF-03 | Thresholds from the console | set CPU 50 % / 2 min through PUT → status shows `device` as source and the alert opens after 2 minutes of a burner; set `MonitoringCpuPercent` by policy → PUT answers 409, status says `policy`; the tenant default applies where neither is set | H PS | 1 |
 | M-PERF-04 | Memory and disk | fill memory to 95 % / hammer the disk for 6 minutes → the alerts; free space under 5 GB → the free-space alert once, not every minute | H S | 2 |
 | M-PERF-05 | Budget | over 2 hours on W10-1809 the agent's CPU time grows by less than 60 s and its working set stays under 120 MB; the inventory's log line says under 60 s | PS | 1 |
 | M-PERF-06 | Boot and sign-in | restart; sign in as normaluser → `device.started` with a boot duration, `session.signIn` with a duration (confirms the measurement) | H C S | 2 |
-| M-CON-01 | Device tab | **2VM**, RemoteHub in the client VM: the tab shows the inventory, the events of M-EVT and the alert of M-PERF-01 on the timeline; screenshots in both themes | U | 1 |
-| M-CON-02 | Diff events | install a test app between two full bundles without the watcher (`MonitoringEvents` = 0) → the console shows *between HH:MM and HH:MM* for the change | U H | 2 |
-| M-CON-03 | Catch-up | the console is closed for 3 intervals → at start it fetches `after=<seq>` and the timeline has no gap; a re-enrolled device → the cut is marked and history kept | U H | 1 |
-| M-BRK-01 | Through the broker | **needs the lab broker with the mailbox**: the device uploads within the interval, the console gets it from the mailbox without a device session, sealed (the broker's log shows the size, not the content); `MonitoringUploadToBroker` = 0 stops uploads | H | 1 |
-| M-BRK-02 | Mailbox quota and retention | 61 uploads in an hour → 429 and the agent waits; bundles older than 7 days are gone from the broker, still on the device | H | 2 |
-| SEC-MON-01 | Hostile bundle | **2VM**: a device replaced by a test server that answers bundles over the limits (size, depth, a gzip bomb, strings with control and RTL characters, a `file://` and an `http://` string, a 100,000-item apps list) → the console refuses or clips each, stays responsive, shows text only, nothing is opened or fetched | U H | 1 |
-| SEC-MON-02 | Wrong device | a bundle with another device's id or `storeId` over a pinned connection → stored under the connection it came from with the mismatch marked, never under the other device | U H | 1 |
-| SEC-MON-03 | Broker can't read | the lab broker's stored bundle isn't readable without the device secret; a console secret alone can't open it; a bundle re-filed under another `seq` is refused by the console | H | 1 |
+| M-RELAY-01 | Through a jump host | **2VM**, the target without a broker connection: activation with the jump host as upstream → uploads arrive at the service signed by the target; the jump host audits 1406; `status` says *through JUMP01*; the jump host's log has no section contents | H | 1 |
+| M-RELAY-02 | Relay limits | `MonitoringRelay` = 0 → 404 and the target's outbox fills, then drains when it is 1 again; a body over 4 MB → 413; 61 forwards in an hour from one address → 429 and 2502; a source outside `TunnelTargets` → 403 | H | 1 |
+| M-RELAY-03 | Chain and loss | jump host behind a jump host: two hops, uploads arrive; the head's broker connection cut for 20 minutes → outboxes fill, nothing lost, all arrive within the interval after it is back | H N | 2 |
+| M-CON-01 | Device tab | **2VM**, RemoteHub in the client VM: the tab shows the inventory, the events of M-EVT and the alert of M-PERF-01 on the timeline from the lab service; offline → the cache is shown and marked; screenshots in both themes | U | 1 |
+| M-CON-02 | Diff events | install a test app between two full bundles without the watcher (`MonitoringEvents` = 0) → the tab shows *between HH:MM and HH:MM* for the change | U H | 2 |
+| M-CON-03 | Dashboards and search | the lab's devices appear in *Open alerts*, *Pending restarts*, *Crashing apps*; `monitoring:` search finds the test app's version; a CSV export has the rows and is audited | U | 2 |
+| SEC-MON-01 | Hostile bundle at the service | uploads from a test client with the VM's key: over the limits (size, depth, a gzip bomb, strings with control and RTL characters, a `file://` and an `http://` string, a 100,000-item apps list) → each refused or clipped at the service, counted; the console shows text only, nothing is opened or fetched | H U | 1 |
+| SEC-MON-02 | Wrong identity | a bundle signed by device A naming device B, a repeated `seq`, a bundle after deactivation, a token issued for another tenant → refused with the right status, nothing stored under B | H | 1 |
+| SEC-MON-03 | Tenant isolation | the lab makes two tenants: console A's queries for B's device id → 404; A's dashboards never list B's devices; a relay on A's jump host forwards a B device's upload and the service files it under B (identity is the signature, not the path) | H | 1 |
+| SEC-MON-04 | The relay is not a proxy | a request to `/v1/monitoring/forward` whose body isn't a signed upload is refused without being sent anywhere (the lab service sees nothing); the jump host forwards only to its configured service address | H N | 1 |
 
 A failing collector on a lab VM is a finding for §15.1's skip list, not a reason to lower a limit.
 
@@ -759,15 +885,17 @@ A failing collector on a lab VM is a finding for §15.1's skip list, not a reaso
 
 | Phase | Content | Done when |
 |---|---|---|
-| **1 – Inventory** | Agent: collectors (§5.1), store (§8), full bundles on the interval (§6.1), `/v1/monitoring/status`, `/bundles`, `/sections`, `/now`, rights, `MonitoringEnabled`, `…IntervalMinutes`, `…Sections`, `…IncludeUsers`, `…RetentionDays`, audit 1400/1401/2501/3500, cleanup. Console: `MonitoringStore`, `MonitoringClient` fetching directly and through jump hosts and broker sessions (§9.2), `SectionDiff`, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), `AllowMonitoring`, retention | M-INV-*, M-CON-02/03 pass; §15.2 measured |
-| **2 – Events and alerts** | Agent: watchers (§5.2), triggered bundles (§6.2), sampler (§5.3), thresholds (§5.4), settings endpoint, the remaining policies, 1402/2500. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, *Settings → Monitoring* | M-EVT-*, M-PERF-* pass |
-| **3 – Timeline** | `DeviceTimeline`, the Timeline section, sparklines on the tiles, correlation footer, keyboard and automation | M-CON-01, the U screenshots reviewed |
-| **4 – Broker mailbox** | The broker's part (its own repository), agent uploads with seals, console reads the mailbox and the notice, `MonitoringUploadToBroker`, 1403 | M-BRK-*, SEC-MON-03 pass |
-| **5 – Monitoring view** | The rail view, dashboards, reports and export, full-text search over sections in the navigation search | The first three dashboards agreed in §19 ship |
-| Later | GPU load; per-process network; a learned baseline per device and *unusual for this device* marks; software metering only if a privacy case for it is made; a RemoteHub Server as the home of the history, fed with the same bundles; alerts as toast notifications in the console; a Windows event forwarding guide so SIEMs read 2500 | – |
+| **1 – Inventory and the service** | Agent: collectors (§5.1), outbox (§8), full bundles on the interval (§6.1), activation (§6.4), the direct upload (§9.2), endpoints `status`, `now`, `settings`, `activation`, rights, `MonitoringEnabled`, `…Service`, `…IntervalMinutes`, `…Sections`, `…IncludeUsers`, audit 1400–1405, 2501, 2503, 3500, cleanup. Service: entitlement and activation in D1, the upload with signature and quotas, validation, ClickHouse tables for sections, events (diff), device state, the overview and section queries, TTL by tier, deletion. Console: `MonitoringServiceClient`, the cache, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), *Activate…* and *Deactivate…*, `AllowMonitoring`, the entitlement in Settings | M-ACT-*, M-INV-*, M-CON-02, SEC-MON-01–03 pass; §15.2 measured |
+| **2 – Events and alerts** | Agent: watchers (§5.2), triggered bundles (§6.2), sampler (§5.3), thresholds (§5.4), the remaining policies, 1402, 2500. Service: alerts, performance tables, the timeline queries, tenant defaults. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, tenant defaults in Settings | M-EVT-*, M-PERF-* pass |
+| **3 – Timeline** | `DeviceTimeline`, the Timeline section, sparklines on the tiles, correlation footer (service-side counts), keyboard and automation | M-CON-01, the U screenshots reviewed |
+| **4 – Relay through jump hosts** | Agent: `/v1/monitoring/forward`, upstreams, `MonitoringRelay`, 1406, 2502; console: upstreams from the tree in the activation | M-RELAY-*, SEC-MON-04 pass |
+| **5 – Monitoring view** | The rail view, every dashboard of §11.4 with the customer's choice, reports and export, search, the cross-device correlation, the service audit page | M-CON-03 |
+| **Later – remediation** | An alert runs a deployed script version (scripts-view-design.md) on the device: which alerts, which scripts, rings and stop conditions, approval, audit – a design of its own, decided for (v1 Q6) | – |
+| Later | GPU load; per-process network; a learned baseline per device and *unusual for this device* marks; alerts as toast notifications in the console and as e-mail from the service; a Windows event forwarding guide so SIEMs read 2500; a self-hosted service image; on-demand download of the agent's monitoring binaries | – |
 
-Phases 1 and 2 touch the agent and the console together; each ships behind `MonitoringEnabled` and `AllowMonitoring`
-so a release in between changes nothing for a device without them. Phase 4 can run in parallel with 3.
+Phases 1 and 2 touch the agent, the service and the console together; each ships behind `MonitoringEnabled`,
+`AllowMonitoring` and the entitlement, so a release in between changes nothing for a device or tenant without them.
+Phase 4 can run in parallel with 3.
 
 ## 18. Docs in step
 
@@ -775,142 +903,134 @@ When phase 1 lands:
 
 - [agent-spec.md](agent-spec.md): §2 gets a bullet for monitoring (as §2 has for the desktop); §6 the endpoints and the
   `monitoring` feature; §7 the `monitoring` object and §7.1 the policies and rights; §8 changes *Nothing leaves the
-  device* to *The agent sends no telemetry and no crash reports to anyone. With monitoring on it uploads inventory
-  bundles to the organisation's own RemoteHub Broker, sealed for the organisation's consoles*; §11 the row.
-- README: the *RemoteHub Agent* section gets *Device monitoring* (what is collected, where it goes, the policy
-  switch), *Remote tools* the Device tab, and line "The agent sends nothing anywhere" is qualified as above.
-- `PRIVACY.md`: the sentence *The RemoteHub Agent on your servers sends nothing at all* becomes *sends nothing to us.
-  With monitoring turned on by your organisation it sends an inventory of the device to your organisation's own
-  RemoteHub consoles or broker – see the README*; the list of what is and isn't collected (§5.1, §5.5) is linked.
-- [admx-design.md](admx-design.md) §9 gets the *Monitoring* category and the two rights; §5 `AllowMonitoring`.
-- [threat-model-technologies.md](threat-model-technologies.md): the new endpoints and the mailbox under §2.1 and a
-  *Console ← device data* boundary; [security-test-lab-design.md](security-test-lab-design.md) §3 TB8 gets SEC-MON.
-- [local-db-design.md](local-db-design.md) §6: the tables of §10 and the schema version.
+  device* to *The agent sends no telemetry and no crash reports to anyone. Once monitoring is activated from the
+  console, it uploads inventory bundles to the tenant's RemoteHub monitoring service*; §11 the row.
+- README: the *RemoteHub Agent* section gets *Device monitoring* (what is collected, where it goes, the activation, the
+  policy switch), *Remote tools* the Device tab, *RemoteHub Broker* the service, and the line "The agent sends nothing
+  anywhere" is qualified as above.
+- `PRIVACY.md`: the sentence *The RemoteHub Agent on your servers sends nothing at all* becomes *sends nothing to us
+  unless your organisation activates device monitoring; then it sends an inventory of the device to the RemoteHub
+  monitoring service in your organisation's region, where it is stored for your organisation – see the README*; the
+  list of what is and isn't collected (§5.1, §5.5), the retention tiers and the deletion are stated.
+- [admx-design.md](admx-design.md) §9 gets the *Monitoring* category and the two rights; §5 `AllowMonitoring`,
+  `AllowMonitoringActivation`, `AllowMonitoringExport`.
+- [threat-model-technologies.md](threat-model-technologies.md): the new endpoints, the relay and the service under
+  §2 and a *Device → service* and *Console ← service* boundary; [security-test-lab-design.md](security-test-lab-design.md)
+  §3 TB8 gets SEC-MON.
+- [jump-host-design.md](jump-host-design.md) §6: `MonitoringRelay` and the forward endpoint.
+- [local-db-design.md](local-db-design.md) §6: the cache table and the schema version.
 - `docs/test-lab-cases.md` §new *M* and `test-lab-test-document.md`, with `lab\Update-LabCaseStatus.ps1` after the
-  first run.
+  first run; `test-lab-spec.md` §5.3 the service in the lab broker.
 
 ## 19. Open questions
 
 | # | Question | Proposal |
 |---|---|---|
-| Q1 | **Account names by default?** §1.1 collects them unless IT turns them off. The alternative is off by default and IT turns them on. | On by default: a DEX view without the person is half a view, and the Application log shows that monitoring runs. The ADMX explain text says plainly what the value collects. |
-| Q2 | **Policy values in `config`** – sending every value under `SOFTWARE\Policies` and `PolicyManager` can be thousands of entries. Keep the full set, or only the GPO/profile list and let the admin open the registry tab for values? | Full set with the filter of §14 and the 5,000 cap; it is what "which setting changed on this device" needs, and it is sent only when its hash changes. |
-| Q3 | **The free-space rule's unit** – percent, GB, or both? | Both with *either opens*, as proposed; an admin who wants one sets the other to 0. |
-| Q4 | **Which dashboards first** (phase 5)? | *Open alerts*, *Crashing apps*, *Pending restarts* – the three the timeline can't answer across devices. |
-| Q5 | **The mailbox's retention on the broker** – 7 days and 64 MB per device is a guess at the broker's storage costs. | Confirm with the broker's hosting; the agent and console don't depend on the numbers. |
-| Q6 | **Should an alert be able to run a script** (remediation) in a later phase? | Not in this design; if ever, through the Scripts view's confirmation and audit, never unattended. |
-| Q7 | **Install default for `MonitoringEnabled`** – on for every new agent, or chosen in the install dialog like the virtual display? | On, with the dialog's *Monitoring* group to turn it off and set the defaults; an upgrade of an installed agent turns it on too (nothing is sent anywhere a console doesn't already reach, and IT has the policy). To confirm with the owner. |
-| Q9 | **Scale targets and a server.** How many devices should one console hold (50? 500? 5,000?), how long a history, and is a RemoteHub Server on the roadmap – one that may *read* the data, which ends the end-to-end seal of §9.3? These three answers decide §21. | Design for 500 devices and 90 days per console on SQLite; a server with ClickHouse when a fleet or a shared history is wanted (§21.4). |
-| Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement and needs the helper's session knowledge. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
+| Q1 | **ClickHouse Cloud or self-managed?** Cloud: no operations, encryption and backups included, about $440 a month for the smallest two-replica Scale service and compute-driven beyond (§22.4). Self-managed on three VMs per region: cheaper at 200,000 devices, but patching, backups and upgrades are RemoteHub's. | Cloud for v1 in both regions; revisit when a region's compute passes about $3,000 a month. |
+| Q2 | **Where does the ingestion run** – the Worker inserts into ClickHouse directly (simple, one hop) or through a queue (Cloudflare Queues) that smooths bursts and survives a ClickHouse outage? | Direct with asynchronous inserts in phase 1; the outbox on the device already smooths; a queue when the measured p99 of an upload passes 2 s. |
+| Q3 | **Tier change and data:** when a tenant moves from 90 to 30 days, is the older data deleted at once (TTL rewrite) or kept until it would have aged out? | Deleted at the next TTL merge (within a day), said in the tier dialog. |
+| Q4 | **Support access:** who at RemoteHub may open a tenant's rows, with what consent and for how long? | Only after the tenant's admin grants *support access* in *Settings → Monitoring* for 7 days; every read logged in the tenant's service audit. Needs the operations design. |
+| Q5 | **The console key for queries** – reuse the broker console key as proposed, or a separate monitoring key the tenant admin can revoke without ending broker access? | Reuse: one identity per console, revoked at *Remove* on the broker page. |
+| Q6 | **Alert notifications** from the service (e-mail, webhook, Teams) – phase 5 or later? | Later; phase 5 is dashboards. |
+| Q7 | **Upstream changes:** when a device is moved in the tree so its jump host changes, the console must re-send the upstream. Automatically when the console notices the move, or as part of the next *Monitoring settings…* on it? | Automatically at the move, like the credentials question the tree already asks, with a line in the move's confirmation. |
+| Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
 
 ## 20. Decided
 
-What settled each decision, so a reviewer sees where the request, the project's patterns and a judgement call were
-the deciding voice:
+What settled each decision, so a reviewer sees where the request, the project's patterns, the owner's answers and a
+judgement call were the deciding voice:
 
 | Decision | Settled by |
 |---|---|
 | Collection is native in the agent, not PowerShell scripts | The project: `PowerShellEnabled` = 0 and WDAC must not stop monitoring; the agent's own principle of no command set stays |
-| "Send every 60 minutes" is an upload to the organisation's broker; without a broker, consoles fetch at the interval | The architecture: consoles have no listener; the device store makes both paths lossless |
-| The interval's floor is 60 minutes | The request ("configurable to any higher number") and the budget |
-| Full inventory on the interval, changed sections on a trigger, the console computes diffs | The request ("send the selective information") and robustness – a snapshot can't be out of step |
-| Thresholds live on the device, set from the console per device or folder, policy wins | The project's P1 and P6 (the device is the boundary); two consoles can't disagree about a device |
-| Alerts need 90 % of samples above the threshold and close with hysteresis | Judgement: the request's "over 80 % for 5 min" read as sustained, not averaged, so a spike doesn't alert and a hover doesn't flap |
-| Account names collected by default, policy to turn off | Judgement, open as Q1 |
+| The history lives in a RemoteHub-hosted, multi-tenant service, not in consoles | The owner (v1 Q9): one environment holds a couple of hundred thousand devices across tenants, so the dedicated service is designed now rather than retrofitted |
+| The service reads the data (no end-to-end seal for monitoring); region per tenant, shared cluster, tenant id on rows | The owner: hosted SaaS, EU/US per tenant |
+| The console queries the service and keeps a small cache | The owner |
+| Monitoring is activated from the console under the tenant's entitlement; nothing is collected before | The owner (v1 Q7): the agent takes licence and choice from the console; entitlement on the tenant at the service |
+| Devices behind jump hosts upload through the chain as long as one device reaches the broker | The owner |
+| Retention tiers 30 (default), 60, 90 days | The owner |
+| All dashboards ship, the customer picks | The owner (v1 Q4) |
+| Remediation is a planned later phase | The owner (v1 Q6) |
+| Account names collected by default, policy to turn off; the full configuration value set | The owner (v1 Q1, Q2) |
+| "Send every 60 minutes" is an upload to the service; the interval's floor is 60 minutes | The request and the budget; §22 shows the interval saves requests, not bytes |
+| Full inventory on the interval, changed sections on a trigger, the service computes diffs | The request ("send the selective information") and robustness – a snapshot can't be out of step |
+| Thresholds live on the device, set from the console per tenant default, folder or device, policy wins | The project's P1 and P6 (the device is the boundary); two consoles can't disagree about a device |
+| Alerts need 90 % of samples above the threshold and close with hysteresis | Judgement: "over 80 % for 5 min" read as sustained, not averaged |
+| Session events and definition updates don't trigger bundles | The cost calculation (§22): dozens a day per device |
 | No SQLite on the device | The agent's dependency footprint as a LocalSystem service; files with `DurableFile` suffice |
-| The timeline is drawn by the project itself, from theme brushes | The project has no charting library and draws its own lists and toolbars; a library would be third-party code to notice and trim |
+| ClickHouse for the service's store, D1 for its metadata | §21 |
+| The timeline is drawn by the project itself, from theme brushes | The project has no charting library and draws its own lists and toolbars |
 | Correlation is a count, labelled as one | Honesty: RemoteHub shows the admin the order of things; it doesn't decide the cause |
-| Dashboards and reports are phase 5 | The request ("later in dashboards and reports") |
+| Free-space rule: percent or GB, either opens | Judgement; an admin who wants one sets the other to 0 |
 
-## 21. A second database? ClickHouse, DuckDB and SQLite weighed
-
-The request raises whether monitoring data needs a database of its own, such as ClickHouse. The honest answer has
-three parts: how much data there is, what is asked of it, and where it is – on an admin's PC, on the broker, or on a
-server that doesn't exist yet.
+## 21. The database: ClickHouse for the service, and why not elsewhere
 
 ### 21.1 How much data
 
-Per device and day, as the design stands:
+Per device and day, as the design stands (§22.1 has the assumptions):
 
-| Data | Rows or points | Stored (compressed) |
+| Data | Rows or points | Stored (gzip JSON) |
 |---|---|---|
 | 5-minute performance, 12 metrics × avg/max/min, plus top processes | 288 points × 12 metrics | about 15 KB |
 | 1-minute performance (7 days only) | 1,440 × 12 | about 200 KB |
 | Events (watched and diff), 50 a day | 50 | about 25 KB |
 | Section changes, about one a day (Windows apps update themselves) | 1 snapshot | 20–60 KB |
-| **Total for the 90-day history** | | **about 80 KB a day** |
+| **Total for the history** | | **about 80 KB a day** |
 
-| Devices per console | 90 days | with 7 days of 1-minute data | Rows in `device_perf` (hourly, packed) | Rows if one row per metric and point |
+| Devices in one environment | 30 days | 90 days | plus 7 days of 1-minute data | `perf_5m` rows a day |
 |---|---|---|---|---|
-| 50 | 0.36 GB | 0.43 GB | 108,000 | 15.6 million |
-| 500 | 3.6 GB | 4.3 GB | 1.08 million | 156 million |
-| 5,000 | 36 GB | 43 GB | 10.8 million | 1.56 billion |
+| 10,000 | 24 GB | 72 GB | + 14 GB | 35 million |
+| 100,000 | 240 GB | 720 GB | + 140 GB | 346 million |
+| 200,000 | 480 GB | 1.4 TB | + 280 GB | 691 million |
 
-The right-hand column is why the naive layout (a row per metric and point) was replaced in §10: it is the layout that
-makes SQLite look slow and a column store look necessary. Packed per hour, the row count is small, the blobs compress
-well, and the daily summary table carries what dashboards need.
+These are gzip-JSON sizes; a column store with typed columns holds the performance and event rows in roughly a third
+to a half of that (§22.3), the section blobs about the same.
 
 ### 21.2 What is asked of it
 
-| Question | Who asks | Rows touched (500 devices, packed layout) |
+| Question | Who asks | Shape |
 |---|---|---|
-| One device's timeline for a day / 90 days | Device tab | 24 / 2,160 `device_perf` rows plus its events |
-| One device's inventory and changes | Device tab | tens of rows |
-| Which devices have app X, driver Y, KB missing | navigation search, dashboards | 150,000 `device_apps` rows with an index – milliseconds |
-| Devices with open alerts, not heard from, pending restart | dashboards | 500 rows |
-| Average or p95 CPU per device over 30 days, the worst 20 | dashboards | 180,000 `device_perf_days` rows – well under a second |
-| Crashes per app across the fleet, 7 days | dashboards | 175,000 event rows with an index on kind and time |
-| Import of one hour's bundles | background | 500 inserts and 500 summary updates |
+| One device's timeline for a day / 90 days | Device tab | A range over `(tenant, device, metric, time)` – a few thousand rows |
+| One device's inventory and changes | Device tab | Point lookups in `sections_current`, a range in `events` |
+| Which devices have app X, driver Y, KB missing | search, dashboards | A filter over `apps_current` of one tenant – up to millions of rows |
+| Open alerts, not heard from, pending restarts | dashboards | `device_state` of one tenant |
+| p95 CPU per device over 30 days, the worst 20; crashes per app over 7 days; drivers by version with crash counts | dashboards | Aggregations over tens to hundreds of millions of rows per tenant – the analytical queries |
+| Ingestion | the front door | Hundreds of inserts a second at 200,000 devices (§22.3), append-only |
+| Retention | background | Delete by age per tenant tier |
 
-None of these is an analytical scan over raw points. The one query that would be – *the fleet's CPU curve at
-1-minute resolution for a month* – is not in the design, and a desktop console isn't where it belongs.
+That is an analytical workload: append-only, time-ordered, aggregated by tenant, device and time, with a retention.
 
-### 21.3 The candidates for the console
+### 21.3 The candidates for the service
 
-| | Encrypted SQLite (today) | DuckDB (embedded, columnar) | ClickHouse (server) or chDB (embedded ClickHouse) |
+| | ClickHouse | PostgreSQL + TimescaleDB | SQLite / D1 (what the broker has) |
 |---|---|---|---|
-| Fit for the console's queries (§21.2) | Good with the packed layout and summary tables | Very good for aggregations; no better for point lookups | Over-sized: a server process on an admin's PC, or chDB's several-hundred-MB library |
-| Encryption at rest under the console's key hierarchy | Done ([local-db-design.md](local-db-design.md) §4) | DuckDB added database encryption in 1.4 (2025) – a second key to wrap and rotate with the startup lock; to be verified against the current release | None in chDB; a ClickHouse server encrypts its disks, not per user |
-| Footprint | Already shipped | A second native engine, about 40–60 MB, with trimming and MSI work; MIT licence, a notice entry | chDB about 10× that and Linux-first; ClickHouse not installable per user |
-| Operations | None | None | A service to install, patch and back up |
-| Security surface | Known; `trusted_schema` off, no extensions | A second SQL engine with extensions to lock down | A listening server on the admin's PC |
-| Where it wins | Up to a few thousand devices with the layout of §10 | From about 5,000 devices per console, or when ad-hoc analytical queries over raw points are wanted in the console | Only on a server |
+| Ingest of ~700 million performance rows a day plus events | Made for it: MergeTree, asynchronous inserts, compression per column | Hypertables cope to a few hundred million rows a day with care; compression helps | No – a D1 database holds 10 GB |
+| Fleet aggregations over a quarter | Seconds over billions of rows; materialised views keep the dashboards incremental | Continuous aggregates do the same at smaller scale; tens of seconds beyond | No |
+| Per-tenant retention | `TTL` with a column expression – one table, every tier | Retention policies per hypertable, not per row; a table per tier or a job | – |
+| Multi-tenancy and isolation | Tenant id in the key, row policies, a cluster per region | Row-level security, schemas per tenant possible | – |
+| Point lookups and updates (current state, acknowledgements) | Fine with `ReplacingMergeTree`; not a transactional store | Its home ground | – |
+| Operations | ClickHouse Cloud, or three nodes per region self-managed | Managed PostgreSQL anywhere; Timescale Cloud | Already there |
+| Cost at 200,000 devices (§22.4) | about $2,700 a month on ClickHouse Cloud | Comparable managed instances need more compute for the same aggregations | – |
 
-**Decision for the console: stay with the encrypted SQLite**, and spend the effort on the layout instead – packed hourly
-rows, the daily summary table, the normalised current apps table, indexes on kind and time, and import in one
-transaction per device. Phase 1 measures 500 devices (import of an hour's bundles, the timeline queries, each
-dashboard of §11.4) on the lab's client VMs, and §21.1's numbers are replaced by measured ones. If a query doesn't make
-its budget (timeline under 200 ms, a dashboard under 2 s) at 500 devices, the first answer is a summary table, the
-second is DuckDB for the performance tables alone, with the sections, events and alerts staying where they are.
-The bundles (§7) are the source of truth on the device for the retention, so a console can rebuild its tables from the
-devices, and a different engine later is an import, not a migration.
+**Decision: ClickHouse for sections, events, alerts and performance; the broker's D1 for metadata** (tenants,
+entitlements, activations, keys, quota counters), where the transactional, small, point-lookup data already lives.
+PostgreSQL would carry 10,000 devices well and 100,000 with effort; the owner's target of a couple of hundred thousand
+devices in one environment, with dashboards that aggregate a quarter, is where a column store stops being optional.
+Open: Cloud or self-managed (§19 Q1).
 
-### 21.4 A server, and the broker
+### 21.4 And the console?
 
-- **The broker can't be the database.** It stores bundles it can't read (§9.3) – that is the point of the seal. Any
-  store that *queries* monitoring data must hold the organisation's keys, so a central database is first a trust
-  decision (does the organisation accept that its server reads device inventories?), then a technology choice. The
-  broker on Cloudflare also has no place to run ClickHouse; its storage is for sealed blobs with a short retention.
-- **If a RemoteHub Server comes** – for a shared fleet history, several admins, more than a few thousand devices, or a
-  history longer than a year – **ClickHouse is the right engine for the events and performance tables**: MergeTree
-  with a TTL for retention, compression that makes the 1-minute history affordable, materialised views for the
-  dashboards, and bundles as the ingestion format unchanged. Inventory sections and the current state fit PostgreSQL
-  better (point lookups, per-row updates, constraints); a server would likely have both, or PostgreSQL with
-  TimescaleDB alone below about 10,000 devices to keep one engine. That is a server design of its own, outside this
-  document; what this document guarantees is that nothing in the bundle format or the console's tables stands in its
-  way, and that the device keeps its own store so a server can backfill.
-- **Thresholds for revisiting:** a console asked to hold more than about 2,000 devices, a retention over a year, an
-  admin team that needs one shared view, or analytical questions over raw performance points. Any one of them is a
-  server conversation, not a console database swap.
+The console stores no history (v1 Q9's answer ended that): a cache of the last overview and 24 hours for up to 50
+devices in its encrypted SQLite, a few MB. v1's analysis of DuckDB and an embedded ClickHouse for the console is moot;
+if a self-hosted service ever comes, it is the service's image that carries ClickHouse, not the console.
 
-## 22. Data volumes and Cloudflare costs at 1, 4 and 8 hours
+## 22. Data volumes and costs at 1, 4 and 8 hours
 
-The question: what does the broker (Cloudflare Workers with D1, as the lab spec and `BrokerProtocol.cs` have it) and the
-console's database carry if the full inventory goes every hour, every 4 hours or every 8 hours? Prices are Cloudflare's
-published ones at the time of writing (Workers Paid $5 a month with 10 million requests and 30 million CPU-ms included,
-then $0.30 and $0.02 per million; D1 5 GB, 25 billion rows read and 50 million rows written included, then $0.75 per
-GB-month, $0.001 and $1.00 per million; R2 10 GB-months, 1 million class A and 10 million class B included, then $0.015
-per GB-month, $4.50 and $0.36 per million; no charge for traffic in or out). Check them again before a budget.
+Prices are the published ones at the time of writing – Cloudflare Workers Paid $5 a month with 10 million requests and
+30 million CPU-ms included, then $0.30 and $0.02 per million; D1 5 GB, 25 billion rows read and 50 million rows written
+included, then $0.75 per GB-month, $0.001 and $1.00 per million; no charge for traffic; ClickHouse Cloud Scale tier
+$0.2985 per compute unit-hour (8 GiB RAM, 2 vCPU) in AWS us-east-1, Enterprise $0.3903, more in European regions
+(Germany Enterprise $0.52), storage $25.30 per TB-month compressed. Check them again before a budget.
 
 ### 22.1 Assumptions per device
 
@@ -919,21 +1039,18 @@ per GB-month, $4.50 and $0.36 per million; no charge for traffic in or out). Che
 | Envelope and hash-only sections | 1.5 KB | §7 |
 | 5-minute performance summaries | 1.7 KB per hour covered | 12 metrics × avg/max/min × 12 points, top processes, gzip |
 | Section changes | 40 KB a day | about one `apps` change a day (Edge, Teams and Store apps update themselves); other sections rarely |
-| Triggered bundles | 3 a day, 15 KB on average | app changes, crashes, updates, alerts; session events don't trigger (§5.2) |
-| Consoles reading the mailbox | 2 | each fetches once per upload notice |
-| Worker CPU per request | 5 ms | pass-through of a sealed body, a D1 insert or select |
-| Broker retention | 7 days | §9.3 |
-| Console history | 90 days, plus 7 days of 1-minute data | §10 |
+| Triggered bundles | 3 a day, 15 KB on average | app changes, crashes, updates, alerts; session events and definition updates don't trigger (§5.2) |
+| Worker CPU per upload | 10 ms | signature check, decompression within limits, validation, diff, insert |
+| Console queries | 0.1 per upload | a tab open for a tenth of devices; dashboards cached a minute |
+| Column-store size | 40 % of gzip JSON for performance and events, 100 % for section blobs | typical ClickHouse ratios for typed numeric columns; measured in phase 1 |
 
 ### 22.2 Per device
 
-| Interval | Full bundle | On the wire a day | Uploads a day | Uploads a month | Held on the broker (7 days) | Snapshot-only variant, a day |
-|---|---|---|---|---|---|---|
-| 1 h | 3.2 KB | 162 KB | 27 | 810 | 1.1 MB | 119 KB |
-| 4 h | 8.4 KB | 135 KB | 9 | 270 | 0.9 MB | 88 KB |
-| 8 h | 15.2 KB | 131 KB | 6 | 180 | 0.9 MB | 83 KB |
-
-Two things the table shows:
+| Interval | Full bundle | On the wire a day | Uploads a day | Uploads a month | Snapshot-only variant, a day |
+|---|---|---|---|---|---|
+| 1 h | 3.2 KB | 162 KB | 27 | 810 | 119 KB |
+| 4 h | 8.4 KB | 135 KB | 9 | 270 | 88 KB |
+| 8 h | 15.2 KB | 131 KB | 6 | 180 | 83 KB |
 
 - **The interval saves requests, not bytes.** Three quarters of the bytes are section changes and triggered bundles,
   which happen when they happen; the performance summaries cover the same hours whichever bundle carries them. Going
@@ -941,50 +1058,64 @@ Two things the table shows:
 - **The snapshot-only variant** – no continuous sampling, one reading per interval – saves about a quarter of the bytes
   and loses every threshold alert: *CPU at or above 80 % for 5 minutes* can't be seen in a reading every hour. Sampling
   stays on the device (it costs the device nothing measurable, §15.2); the interval only decides how often the
-  summaries travel. Longer intervals do make the timeline later: a 4-hour interval shows the morning's load at noon,
+  summaries travel. Longer intervals make the timeline later: a 4-hour interval shows the morning's load at noon,
   unless an alert sent it earlier.
+- **On the device's link:** 5 MB a month at 1 hour; a metered link needs no longer interval.
 
-### 22.3 Per fleet and month
+### 22.3 Per environment and month
 
-Requests are uploads plus two consoles' reads. D1 rows written are one per upload with its index, plus the retention
-delete. The R2 column is the alternative store for the same bundles (one class A put and one delete per upload, one
-class B get per console read). The console column is one console holding every device.
+Ingest is what arrives; the store is the 30-day tier plus 7 days of 1-minute data, at the column-store ratio of
+§22.1; rows are `perf_5m` plus events. Worker requests are uploads plus console queries.
 
-| Devices | Interval | Worker requests | Workers | D1 rows written | Broker store | D1 cost | R2 cost | Traffic in | Console DB (90 days) |
-|---|---|---|---|---|---|---|---|---|---|
-| 100 | 1 h | 0.24 M | $5.00 (plan) | 0.2 M | 0.11 GB | $0 | $0 | 0.5 GB | 0.8 GB |
-| 100 | 4 h | 0.08 M | $5.00 | 0.1 M | 0.09 GB | $0 | $0 | 0.4 GB | 0.8 GB |
-| 100 | 8 h | 0.05 M | $5.00 | 0.1 M | 0.09 GB | $0 | $0 | 0.4 GB | 0.8 GB |
-| 1,000 | 1 h | 2.4 M | $5.00 | 2.4 M | 1.1 GB | $0 | $4.50 | 4.6 GB | 8.2 GB |
-| 1,000 | 4 h | 0.8 M | $5.00 | 0.8 M | 0.9 GB | $0 | $0 | 3.9 GB | 8.2 GB |
-| 1,000 | 8 h | 0.5 M | $5.00 | 0.5 M | 0.9 GB | $0 | $0 | 3.7 GB | 8.2 GB |
-| 10,000 | 1 h | 24.3 M | $11.12 | 24.3 M | 10.8 GB | $4.37 | $74.53 | 46 GB | 82 GB |
-| 10,000 | 4 h | 8.1 M | $5.21 | 8.1 M | 9.0 GB | $3.02 | $22.50 | 39 GB | 82 GB |
-| 10,000 | 8 h | 5.4 M | $5.00 | 5.4 M | 8.7 GB | $2.79 | $13.50 | 37 GB | 82 GB |
+| Devices | Interval | Uploads a month | Ingest | Store (30 d) | Store (90 d) | Rows a day | Worker requests | Workers |
+|---|---|---|---|---|---|---|---|---|
+| 10,000 | 1 h | 8.1 M | 46 GB | 15 GB | 34 GB | 35 M | 8.9 M | $5.00 |
+| 10,000 | 4 h | 2.7 M | 39 GB | 15 GB | 34 GB | 35 M | 3.0 M | $5.00 |
+| 10,000 | 8 h | 1.8 M | 37 GB | 15 GB | 34 GB | 35 M | 2.0 M | $5.00 |
+| 100,000 | 1 h | 81 M | 463 GB | 150 GB | 340 GB | 346 M | 89 M | $45 |
+| 100,000 | 4 h | 27 M | 386 GB | 150 GB | 340 GB | 346 M | 30 M | $17 |
+| 100,000 | 8 h | 18 M | 374 GB | 150 GB | 340 GB | 346 M | 20 M | $11 |
+| 200,000 | 1 h | 162 M | 927 GB | 300 GB | 680 GB | 691 M | 178 M | $88 |
+| 200,000 | 4 h | 54 M | 772 GB | 300 GB | 680 GB | 691 M | 59 M | $29 |
+| 200,000 | 8 h | 36 M | 749 GB | 300 GB | 680 GB | 691 M | 39 M | $17 |
 
-### 22.4 What follows
+The store is the same whatever the interval – the same summaries, events and changes arrive – and D1's part
+(metadata, a few hundred bytes per device) stays inside the plan at every size.
 
-- **The broker's cost is noise at every size.** Up to 1,000 devices everything is inside the $5 plan at any interval.
-  At 10,000 devices and 1 hour it is about $15 a month on D1. The interval matters only for R2, whose price is per
-  put: there 1 hour costs five times 8 hours. So **D1, the database the broker has, is the right mailbox store**, and
-  the interval can be chosen for freshness, not for cost.
-- **D1's hard limit is size, not money:** 10 GB per database, which at the 7-day retention is about 9,000 devices at
-  1 hour (11,000 at 8 hours) in one organisation's database. Options in that order: a shorter mailbox retention (3 days
-  halves it – the console still catches up from the device, §9.2), a mailbox database per organisation, R2 for that
-  organisation (§9.3). None changes the agent or the console.
-- **The console is the real limit, and the interval doesn't move it.** One console holding 1,000 devices has an 8 GB
-  database after 90 days, 10,000 devices 82 GB – whatever the interval, because the console keeps the same
-  summaries, events and changes. That confirms §21.3: a console is designed for about 500 devices and 90 days (4 GB);
-  a fleet beyond about 2,000 devices or a shared history is a server (§21.4). The levers that do shrink the console
-  are the retention (§12.1), the 1-minute history (7 days, 0.7 GB per 500 devices), and the summaries' step (15-minute
-  summaries cut the performance part by two thirds and are still enough for a 90-day timeline).
-- **Traffic is free on Cloudflare, but not on the device's link:** 160 KB a day per device at 1 hour is 5 MB a month
-  – a 4-hour interval saves 1 MB of that. Metered links don't need a longer interval; the summaries and section
-  hashes keep the hourly bundle at 3 KB.
-- **Recommendation:** keep **60 minutes as the default**, because the cost case for a longer interval doesn't exist
-  and the hourly bundle is what makes the timeline current without an alert. Offer 4 and 8 hours (and up to a week)
-  in the settings for organisations that want less chatter – the policy range of §12.2 already allows it.
+### 22.4 ClickHouse Cloud
 
-The figures come from the assumptions of §22.1; phase 1 replaces them with measured bundle sizes from the lab (M-INV-01
-records the first full bundle's size per VM), and §22.2–22.3 are recomputed then.
+Compute is what costs; storage is cents. The sizing below is a judgement from the ingest rate (at 200,000 devices and
+1 hour about 1,900 uploads a minute, 700 million small rows a day) and the dashboards' aggregations, to be replaced by
+a load test in phase 1:
 
+| Devices | Service (Scale tier, 2 replicas) | Compute a month | Storage a month (30 d / 90 d) | Total, 1 h interval | Per device |
+|---|---|---|---|---|---|
+| 10,000 | 2 × 1 unit (8 GiB) | $436 | $0.40 / $0.90 | about $440 | $0.044 |
+| 100,000 | 2 × 3 units (24 GiB) | $1,308 | $3.80 / $8.60 | about $1,360 | $0.014 |
+| 200,000 | 2 × 6 units (48 GiB) | $2,615 | $7.60 / $17 | about $2,700 | $0.014 |
+
+- A second region doubles the fixed part: two tenants' worth of devices in EU and US are two services. The smallest
+  Scale service is about $440 a month per region whether it holds 1 or 10,000 devices, so the EU and US clusters are
+  the floor of the service's cost: about **$900 a month** before the first device.
+- The **interval moves the compute only a little** (ingestion is a minor part of the load next to the dashboards);
+  it moves the Workers line by 3–5×, which is tens of dollars. The 8-hour interval is not a cost measure at any size.
+- **Enterprise tier** (private networking, customer-managed keys, SSO) is 1.3× the compute; a European region 1.3×
+  again. For the EU cluster budget about $570 a month for the smallest service on Enterprise in Germany.
+- **Self-managed** (three nodes per region, 8 vCPU / 32 GiB each) is about $900–1,200 a month per region in compute
+  on a major cloud at 200,000 devices, plus RemoteHub's operations – cheaper at the top, costlier at the bottom (§19 Q1).
+- Traffic out of Cloudflare is free; traffic from the Workers into ClickHouse Cloud is counted by the cloud provider
+  the cluster sits in (about 1 TB a month at 200,000 devices and 1 hour, at that provider's rates).
+
+### 22.5 What follows
+
+- At 10,000 devices the whole service costs about $440 a month per region, at 200,000 about $2,700 – **1.4 cents per
+  device per month at the top**, and the ClickHouse floor of two regions dominates at the bottom.
+- The retention tiers change storage, which is cents, not compute: the price difference between 30 and 90 days is
+  not in the infrastructure. A tier is a licence decision.
+- **Keep 60 minutes as the default**, because the cost case for a longer interval doesn't exist and the hourly bundle
+  is what makes the timeline current without an alert. Offer 4 and 8 hours (and up to a week) for tenants that want
+  less chatter.
+
+The figures come from the assumptions of §22.1 and the sizing of §22.4; phase 1 replaces them with measured bundle
+sizes from the lab (M-ACT-01 records the first full bundle's size per VM) and a load test of the service, and §22.3–22.4
+are recomputed then.
