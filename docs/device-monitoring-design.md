@@ -203,7 +203,7 @@ Every **10 s** the sampler reads these counters through PDH (`PdhCollectQueryDat
 | `sessions` | Number of active user sessions | count |
 
 Summaries: the 10 s samples are folded into **1-minute** summaries (average, maximum, top processes) kept for 48 hours
-on the device, and **5-minute** summaries (average, maximum, minimum) that travel in the bundles. The full bundle
+on the device, and **5-minute** summaries (average, maximum, minimum) that travel in the bundles. The
 digest carries the 5-minute summaries since the last one (§6.3); an alert bundle carries the 1-minute summaries of the 15 minutes before and
 the 10 s samples of the alert's window, so the timeline can show the exact shape of the spike. Nothing is sampled per
 user.
