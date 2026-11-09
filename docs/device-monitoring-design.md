@@ -1,12 +1,15 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
-Status: Draft v4 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+Status: Draft v5 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
 protocol `remotehub-broker/1`). v2 takes in the answers to v1's open questions (§20): the history lives in a
 **RemoteHub-hosted, multi-tenant monitoring service** sized for hundreds of thousands of devices, not in the console;
 monitoring is **activated from the console** under the tenant's licence; devices behind **jump hosts** upload through
 them; the console **queries** the service. v3 makes delivery **event-driven first**: changes travel when they happen, the full sync is a daily hash-only
 reconciliation, and only the performance digest has a cadence (§6). v4 makes the bundle **Protobuf, gzip-compressed**
-(§7) and spells out where every change notification comes from (§6.7). §19 has what is still open, §21 the database
+(§7) and spells out where every change notification comes from (§6.7). v5 sits on
+[environment-enrollment-design.md](environment-enrollment-design.md): every device has an environment and a broker
+connection, knows its monitoring front door from discovery, and activation and settings reach it over that connection
+(§6.5, §6.6) – the console never has to connect to a device for monitoring. §19 has what is still open, §21 the database
 choice, §22 volumes and costs by interval.
 Owner: Grischa Ernst
 
@@ -94,7 +97,7 @@ device on one timeline – and, across a tenant's devices, dashboards and report
 ```
 Device                                   Jump host (optional)            RemoteHub monitoring service                Console(s)
 ┌──────────────────────────────────┐    ┌──────────────────────────┐    ┌──────────────────────────────────────┐    ┌───────────────────────┐
-│ RemoteHubAgent (LocalSystem)     │    │ RemoteHubAgent           │    │ Front door: the broker's Workers       │    │ MonitoringService     │
+│ RemoteHubAgent (LocalSystem)     │    │ RemoteHubAgent           │    │ Front door: a Worker of the environment│    │ MonitoringService     │
 │  Monitoring/                     │    │  /v1/monitoring/forward  │    │  POST /v1/o/{org}/monitoring/upload    │◀───│  (queries, cache)     │
 │  ├ Activation (from the console) │    │  → the service, bounded, │    │  GET  /v1/o/{org}/monitoring/…  (query)│    │ Device tab · Timeline │
 │  ├ Collectors  – sections (§5.1) │ ──▶│  forwards bytes only     │───▶│  activation, entitlement, tenant meta  │    │ Monitoring view       │
@@ -111,20 +114,22 @@ Device                                   Jump host (optional)            RemoteH
 - **One store, at the service.** The device keeps an outbox only until the service has acknowledged a bundle (§8);
   the console keeps a small cache (§11.1). History, search and dashboards are the service's, so every console of a
   tenant sees the same thing and nothing depends on a console being on.
-- **The front door is the broker.** It already knows tenants (organisations), devices (registration proofs with the
-  device's key), consoles (their keys), regions and quotas, and runs on Cloudflare Workers with D1. Monitoring adds an
-  upload endpoint that verifies the device and writes to ClickHouse, a query API for consoles, and the activation and
-  entitlement records in D1 (§10).
-- **Two ways up, one identity.** A device with its own broker connection uploads straight to the front door. A device
-  without one uploads to its jump host's agent, which forwards the bytes to the front door (or to its own jump host –
-  the chain); the upload is signed by the device for the service either way, so the relay adds nothing and can change
-  nothing (§9.3). The console decides the route by the tree, as for everything else ([jump-host-design.md](jump-host-design.md)).
+- **The front door is part of the environment.** The device learns its address by discovery when it enrols
+  ([environment-enrollment-design.md](environment-enrollment-design.md) §5), next to its broker. The environment already
+  knows tenants, devices (their registered keys), consoles, regions and quotas, and runs on Cloudflare Workers with D1.
+  Monitoring adds an upload endpoint that verifies the device and writes to ClickHouse, a query API for consoles, and
+  the activation and entitlement records in D1 (§10).
+- **One way up, one identity.** Every enrolled device has a path to its environment – directly, or through its jump
+  host's environment relay ([environment-enrollment-design.md](environment-enrollment-design.md) §10), which forwards
+  bytes to the environment's hosts and nothing else. The upload is signed by the device for the service either way
+  (§9.2, §9.3).
 - **The service computes the differences.** The device sends inventory sections whole (or their hash when unchanged);
   the service keeps the last snapshot of each section and turns the difference into change events (*Zoom 6.2.1 →
   6.3.0*, *driver igdkmd64 updated*, *GPO "Default Domain Policy" version 42 → 43*). The device does the same diff
   locally only to decide whether a change happened and to name it in the triggered bundle (§6.2), so both agree.
-- **The console talks to the device only to activate and configure**, over the pinned agent connection with the
-  connection's Windows credentials, directly, through a jump host or through a broker session, as every agent request.
+- **The console never needs the device for monitoring.** Activation and settings are written to the service; the
+  broker connection tells the device something is waiting and the device fetches it (§6.5, §6.6). The console connects
+  to a device only for *Refresh now* and *Apply now*, over the pinned agent connection as every agent request.
 
 ## 5. What is collected
 
@@ -314,39 +319,39 @@ connection and marks the cut.
 
 ### 6.5 Activation
 
-Nothing is collected until the console activates the device (v1 Q7: the agent takes the licence and the choice from
-the console, not from its install).
+Nothing is collected until the tenant activates the device (v1 Q7: the agent takes the licence and the choice from the
+console, not from its install). Every device already has its environment, its registered key and the monitoring front
+door's address from enrolment ([environment-enrollment-design.md](environment-enrollment-design.md) §5), so activation
+needs no connection from the console to the device:
 
-1. **Entitlement.** RemoteHub sets on the tenant's record at the service: monitoring licensed, the tier (30, 60 or
-   90 days), the device cap, the region. The console reads it when it connects to the broker and shows it under
-   *Settings → RemoteHub Broker* and *Settings → Monitoring*.
+1. **Entitlement.** RemoteHub sets on the tenant's record at the environment: monitoring licensed, the tier (30, 60 or
+   90 days), the device cap, the region. The console reads it with its discovery and shows it under
+   *Settings → Environment* and *Settings → Monitoring*.
 2. **Activate.** The admin chooses *Monitoring → Activate…* on the tenant's synced folder, a folder or a device
-   (§11.3). For each device the console asks the service for an **activation**: a token signed by the service with the
-   tenant, the device id, the device's certificate fingerprint and a 24-hour expiry. The console sends it to the agent
-   with `PUT /v1/monitoring/activation` (right `MonitoringSettings`) over the pinned connection, with the settings
-   (§11.3) and, for a device reached through a jump host, the **upstream** (§9.3).
-3. **Register.** The agent presents the activation to the service (directly or through its upstream) and registers
-   the public key of its **device certificate** – the same RSA key the TLS pin and the broker registration use, which
-   never leaves the device – signing the registration with it (PS256, as `BrokerProtocol` does). From then on every
-   upload is signed with that key, and the service knows which tenant the device belongs to. A device that already has
-   a broker registration in the same tenant is recognised by its key.
-4. **Collect.** The agent writes the activation state to `agent.json` (`monitoring.activated`, the service address,
-   the tenant id, the upstream), audits 1404 and sends the baseline after 5 minutes (§6.1).
-5. **Deactivate.** `DELETE /v1/monitoring/activation` from the console (or *Deactivate* at the service for the whole
-   tenant, which the agent learns from the next upload's answer) stops collection, deletes the outbox and the
-   sections, audits 1405, and the service marks the device inactive; its rows age out with the tier or are deleted at
-   once with *Delete this device's data…*. The policy `MonitoringEnabled` = 0 refuses an activation and deactivates an
-   active device at the next policy read.
+   (§11.3). The console writes the activation – which devices, with which settings – to the service
+   (`POST …/activations`, §9.4). Nothing is sent to a device.
+3. **The device learns of it** over its broker connection: the broker sends a `wake` of kind `monitoring` to each
+   device named, as it sends session offers today; a device that is offline gets it when it connects next. The agent
+   then fetches its activation and settings from the front door (`GET …/devices/{id}/activation`, signed with its
+   device key, §9.2) – device-initiated, as everything else.
+4. **Collect.** The agent writes the activation state to `agent.json` (`monitoring.activated`, the settings version),
+   audits 1404 and sends the baseline after 5 minutes (§6.1).
+5. **Deactivate.** The same path in reverse: the console writes it, the device is woken, fetches, stops collecting,
+   deletes the outbox and the sections, audits 1405; the service marks the device inactive and its rows age out with
+   the tier or are deleted at once with *Delete this device's data…*. The policy `MonitoringEnabled` = 0 makes the
+   agent ignore an activation and deactivate an active device at the next policy read, reporting why in its next
+   upload.
 
 The service refuses uploads from a device whose tenant isn't licensed, is over its cap or whose activation was
 revoked (403 with the reason); the agent backs off to the next digest, logs 3500 once per service run, and the Device
-tab shows the reason.
+tab shows the reason. A device without an environment – a legacy, console-enrolled one – can't be activated; the
+Device tab says *Join environment… first*.
 
 ### 6.6 Settings without a connection to the device
 
-Settings are **device-initiated** too, wherever the console doesn't need them applied this second: the console writes
-a device's or a folder's settings to the service (`PUT …/devices/{id}/settings`, §9.4), and the device picks them up
-in the answer to its next upload (§9.2) – at the latest at the next digest, 4 hours by default. The direct
+Settings are **device-initiated** too: the console writes a device's or a folder's settings to the service
+(`PUT …/devices/{id}/settings`, §9.4); the broker wakes the device (§6.5 step 3) and it fetches them, or – if it was
+offline – finds them in the answer to its next upload (§9.2). In practice seconds, at the latest the next digest. The direct
 `PUT /v1/monitoring/settings` (§9.1) stays for *Apply now* while the console is connected to the device, and the agent
 reports which it has in `status`. Either way the device holds the settings and the policy wins (§12.2).
 
@@ -474,7 +479,7 @@ LocalSystem service shouldn't gain a native one for this. Files, written with `D
 
 | File | Contents |
 |---|---|
-| `state.json` | Activation (service address, tenant, upstream), next `seq`, event-log bookmarks, last hash per section, the thresholds' state, last upload and acknowledged `seq`, settings in force |
+| `state.json` | Activation state and settings version (the front door's address comes from `agent.json`'s `environment`), next `seq`, event-log bookmarks, last hash per section, the thresholds' state, last upload and acknowledged `seq`, settings in force |
 | `outbox/<seq>.rhmon` | One bundle each (gzip Protobuf, §7) until the service acknowledges it. Kept at most **7 days or 64 MB**, oldest first – a device without a path for a week keeps its newest full bundle and the console sees a gap, not an outage |
 | `sections/<name>.json` | The last copy of each section, for the diffs of §6.2 |
 | `perf/<yyyyMMdd>.bin` | The day's 1-minute summaries, a fixed binary record per minute (about 200 bytes), 48 hours kept |
@@ -490,15 +495,14 @@ LocalSystem service shouldn't gain a native one for this. Files, written with `D
 
 Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as `/v1/powershell`
 ([agent-spec.md](agent-spec.md) §4, §6). New rights in `Rights`: **`Monitoring`** (read) and **`MonitoringSettings`**
-(activate, deactivate, change thresholds and the interval), both defaulting to `allowedGroups` like `PowerShell`.
+(*Apply now* for thresholds and intervals), both defaulting to `allowedGroups` like `PowerShell`. Activation itself
+needs no right on the device: it is the tenant's decision at the service (§6.5).
 
 | Method | Path | Right | Purpose |
 |---|---|---|---|
-| GET | `/v1/monitoring/status` | Monitoring | `{enabled, activated, tenant, path (direct / through <upstream>), lastSeq, acknowledgedSeq, lastUpload, lastFullSync, nextFullSync, nextDigest, fullSyncHours, digestMinutes, settings, settingsSource (policy/console/service/default), settingsVersion, openAlerts, outboxBytes, lastRefusal, time}` – `time` is the device's clock, so the console can note a skew |
+| GET | `/v1/monitoring/status` | Monitoring | `{enabled, activated, tenant, path (direct / through the relay of <upstream>), lastSeq, acknowledgedSeq, lastUpload, lastFullSync, nextFullSync, nextDigest, fullSyncHours, digestMinutes, settings, settingsSource (policy/console/service/default), settingsVersion, openAlerts, outboxBytes, lastRefusal, time}` – `time` is the device's clock, so the console can note a skew |
 | GET | `/v1/monitoring/now?sections=apps,drivers` | Monitoring | Collects the named sections now and the current 10 s samples and returns them to the console without writing a bundle (*Refresh now* in the Device tab, at most once a minute per account); the console shows them and the service isn't involved |
-| PUT / DELETE | `/v1/monitoring/activation` | MonitoringSettings | The activation of §6.5 (token, service address, upstream) / deactivation. 409 with the policy's name when `MonitoringEnabled` = 0; 400 for a token that doesn't name this device |
 | PUT / GET | `/v1/monitoring/settings` | MonitoringSettings / Monitoring | The device settings of §12.2 as JSON. Values a policy configures are refused with 409 and the policy's name; invalid values 400 with the reason. Written to `agent.json`, audited (1402) |
-| POST | `/v1/monitoring/forward` | none – devices, not consoles (§9.3) | A relay: the body is another device's signed upload, forwarded to the service unchanged |
 
 - Health (`/v1/health`) lists the feature **`monitoring`** when `MonitoringEnabled` is on, so a console knows before
   signing in; an older agent lists nothing and the Device tab says the agent needs updating. It never says whether the
@@ -509,11 +513,13 @@ Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as
 
 ### 9.2 Device → service: the upload
 
-- `POST https://<broker>/v1/o/{org}/monitoring/upload` with the gzip-compressed Protobuf bundle as the body
+- `POST https://<monitoring front door>/v1/o/{org}/monitoring/upload` – the host discovery gave the device
+  ([environment-enrollment-design.md](environment-enrollment-design.md) §5.2) – with the gzip-compressed Protobuf bundle as the body
   (`Content-Type: application/x-protobuf`, `Content-Encoding: gzip`) and the device's signature over
   `remotehub-broker/1|<org>|monitoring|<deviceId>|<seq>|SHA-256(body as sent)` in a header (PS256 with the device
   certificate's key, §6.5 step 3 – the signature the broker's registration already uses, so the Workers verify it
-  with the stored public key). TLS to the front door as the broker connection uses it (`BrokerHttpProxy` applies).
+  with the stored public key). TLS to the front door as the broker connection uses it (`BrokerHttpProxy` applies); through a jump host, inside
+  the environment relay (§9.3).
 - The answer, an `UploadResult` message of the same schema (JSON shown for readability): `{acknowledged: <seq>,
   sections: ["apps", …], settings?: {…}, settingsVersion?: 12, deactivated?: true, reason?: "…"}` – `sections` names sections whose hash differs from the service's copy or that it lacks, which the
   agent sends whole in a partial bundle at once (§6.1); `settings` are the settings waiting at the service for this
@@ -526,36 +532,17 @@ Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as
 - Quota at the service: 60 uploads per device per hour, 4 MB each; per tenant, the entitlement's device cap and
   200 MB an hour; beyond that 429. The console never uploads on a device's behalf.
 
-### 9.3 Through a jump host: the relay
+### 9.3 Through a jump host: the environment relay
 
-A device whose agent has no broker connection uploads through the device it is reached by, as long as one device in
-the chain has one (v1 Q3 follow-up). The route is the tree, as for every jump-host connection
-([jump-host-design.md](jump-host-design.md) §1.1): the console, which knows the chain, gives the device its **upstream**
-with the activation – the jump host's address, port and certificate fingerprint. The jump host's own upstream, if it has
-one, is the next hop; the device with a broker connection posts to the front door.
+A device without a path to the environment reaches it through its jump host's agent, for everything – enrolment, the
+broker connection and monitoring uploads alike: the environment relay of
+[environment-enrollment-design.md](environment-enrollment-design.md) §10. The jump host forwards bytes to the
+environment's discovered hosts only, TLS runs from the device to the front door inside the forward, and the upload is
+signed by the device, so the relay sees sizes and hosts and can change nothing. Monitoring adds no rule of its own to
+it; the limits, the policy `EnvironmentRelay` and the audit (1203, 2202) are the relay's. A chain whose head loses its
+path fills outboxes down the chain until it is back; nothing is lost for 7 days (§8).
 
-- The device opens TLS to its upstream's agent and **checks the pin** it was given – the same check the console makes.
-  It posts its signed upload to `/v1/monitoring/forward`. No Windows sign-in: a device has no account on its jump
-  host, and the body carries its identity for the service.
-- The jump host's agent **forwards bytes only**: the body, as is, to its own upstream or to the front door's fixed
-  path for its own tenant (`/v1/o/{org}/monitoring/upload`), and returns the answer unchanged. It can't read the bundle
-  beyond its size – it is gzip signed for the service, and TLS from the jump host to the front door is the jump
-  host's; the device's signature makes any change visible to the service. It never forwards anywhere else, so it is
-  not a proxy.
-- **Limits on the relay:** policy `MonitoringRelay` (default on when `TunnelEnabled` is on; §12.2); a body at most
-  4 MB; 60 forwards an hour per source address and 600 an hour per jump host, else 429; sources must be in
-  `TunnelTargets` when that is set, since the devices behind a jump host are the targets it is allowed to reach – the
-  same filter in the other direction; special addresses refused as for tunnels. A forward counts as a session for
-  `maxSessions` only while it runs.
-- **Audit on the jump host:** 1406 `MonitoringForwarded` per source device and hour (source address, count, bytes –
-  the device id is inside the signed body and not read), 2502 `MonitoringForwardRefused` with the reason.
-- **Chains:** the console builds the upstream list from the tree – a device three levels down gets the next device
-  up; each hop forwards one step. The agent's `status` says *through JUMP01 → JUMP00*. A chain whose head loses its
-  broker connection fills outboxes down the chain until it is back; nothing is lost for 7 days (§8).
-- A device that has both a broker connection and a jump host above it uploads directly; the console gives it no
-  upstream.
-
-### 9.4 Console → service: queries and activation
+### 9.4 Console → service: queries, activation and settings
 
 The console talks to the service with its **console key** of the broker protocol (the registered console's PS256 or
 ES256 signature over each request), tenant-scoped:
@@ -563,7 +550,8 @@ ES256 signature over each request), tenant-scoped:
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/o/{org}/monitoring/entitlement` | Licensed, tier, cap, region, devices active |
-| POST | `/v1/o/{org}/monitoring/activations` | An activation token for a device id and fingerprint (§6.5) |
+| POST / DELETE | `/v1/o/{org}/monitoring/activations` | Activate or deactivate devices or a folder, with settings; the service wakes each device over its broker connection (§6.5) |
+| GET | `…/devices/{id}/activation` | **Device-signed**, not console: the device fetches its activation state and settings after a wake or at any upload |
 | GET | `/v1/o/{org}/monitoring/devices/{id}/overview` | The tiles of the Device tab: current health, open alerts, last received, last 2 hours of 5-minute summaries |
 | GET | `…/devices/{id}/sections/{name}[?at=<time>]` | The current (or a past) copy of a section, and `…/changes?from&to` the diff events |
 | GET | `…/devices/{id}/events?from&to&lanes` · `…/alerts?open` · `…/performance?from&to&step&metrics` | The timeline's data, at the step the zoom needs |
@@ -825,8 +813,6 @@ policies.
 | Value | Type | Meaning (default) |
 |---|---|---|
 | `MonitoringEnabled` | DWORD | 0: the device can't be activated and an active device is deactivated at the next read; `/v1/monitoring/*` answers 404, health leaves out `monitoring`, the outbox is deleted (1 – *may be activated*; nothing is collected until the console activates) |
-| `MonitoringService` | SZ | The only service address the agent may upload to (any the activation names). For tenants that pin their broker with `BrokerUrl`, the same host |
-| `MonitoringRelay` | DWORD | 0: this device never forwards other devices' uploads (§9.3) (1 when `TunnelEnabled` is on) |
 | `MonitoringFullSyncHours` | DWORD 12–168 | The daily reconciliation's interval (24; §6.1) |
 | `MonitoringDigestMinutes` | DWORD 60–1440 | The performance digest's interval (240; §6.3) |
 | `MonitoringSections` | MULTI_SZ | Which sections are collected: any of `os`, `hardware`, `apps`, `updates`, `drivers`, `services`, `users`, `config`, `agent` (all) |
@@ -842,7 +828,9 @@ policies.
 | `MonitoringCrashCount`, `MonitoringCrashHours` | DWORD | (3, 24) |
 | `MonitoringServiceFailures` | DWORD | 0: no alert for a failed service, the event is still recorded (1) |
 
-Rights (subkey `Rights`): `Monitoring`, `MonitoringSettings` (§9.1). `RemoteHubAgent.exe policy` prints them all;
+The service address comes from the environment's discovery and the only allowed environment from the policy
+`Environment` ([environment-enrollment-design.md](environment-enrollment-design.md) §9); the relay is governed by
+`EnvironmentRelay` there. Rights (subkey `Rights`): `Monitoring`, `MonitoringSettings` (§9.1). `RemoteHubAgent.exe policy` prints them all;
 *Settings → Policies* lists them from `PolicyCatalog.cs`; the ADMX test checks the template against it.
 
 No install-time switch and no enrolment-file field: activation comes from the console (§6.5). The MSI and the
@@ -858,11 +846,9 @@ Agent (`AuditEvent`, the Application log unless `AuditToEventLog` = 0):
 | 1401 `MonitoringRead` | A console read status, settings or `now` | Account, source address, what – never the content |
 | 1402 `MonitoringSettingsChanged` | Settings changed through the endpoint | Account, source, which values and the new values (no secrets exist here) |
 | 1403 `MonitoringUploaded` | The first successful upload per service run, and again after a failure | Service, `seq`, path |
-| 1404 `MonitoringActivated` / 1405 `MonitoringDeactivated` | Activation changed | Account, source, tenant id, service address, upstream; on deactivation whether the data was asked to be deleted |
-| 1406 `MonitoringForwarded` | This device forwarded other devices' uploads (per source and hour) | Source address, count, bytes |
+| 1404 `MonitoringActivated` / 1405 `MonitoringDeactivated` | Activation changed (fetched from the service after a wake) | Tenant id, settings version; on deactivation whether the data was asked to be deleted. The relay's forwards are audited by the relay (1203, 2202) |
 | 2500 `MonitoringAlert` | An alert opened or closed | Rule, value, duration, top programs – also for Intune or a SIEM |
-| 2501 `MonitoringRefused` | A read, write or activation refused (right, policy, token) | Account, source, reason |
-| 2502 `MonitoringForwardRefused` | A forward refused (policy, limit, source) | Source address, reason |
+| 2501 `MonitoringRefused` | A read or *Apply now* refused (right, policy), or an activation ignored (policy) | Account, source, reason |
 | 2503 `MonitoringUploadRefused` | The service refused this device's uploads (licence, cap, revoked) | Reason, until when uploads pause |
 | 3500 `MonitoringError` | A collector, the outbox or an upload failed | Which and `ex.Message`; the next interval retries |
 
@@ -903,7 +889,8 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
   and activation endpoints accept small fixed JSON objects, range-checked, behind a right. The relay endpoint accepts a
   bounded body and forwards it to one fixed path.
 - **Keys:** the device's monitoring identity is its existing non-exportable certificate key; the console's is its
-  broker console key; the activation token lives 24 hours and names one device. No new secret is stored anywhere.
+  broker console key; activation is a record at the service the device fetches with that same key. No new secret is
+  stored anywhere.
 - **People at the device:** `MonitoringIncludeUsers`, `MonitoringSections` and `MonitoringEvents` narrow what IT
   collects; the Application log shows activation (1404) and every collection run (1400), so the collection is visible on
   the device.
@@ -960,10 +947,9 @@ The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and t
   zeros) stopped at 32 MB; control and bidirectional characters stripped; the signature over the body verified and a
   changed byte refused; the canonical hash equal for the same content in a different item order; the `.proto`'s
   checksum equal to the broker repository's copy.
-- `MonitoringActivationTests` – a token for another device or fingerprint refused (400), an expired one refused, the
-  policy's 409, deactivation deletes the outbox and sections, `MonitoringEnabled` = 0 deactivates.
-- `MonitoringRelayTests` – a forward goes to the fixed path and nowhere else; the pin check against the upstream; the
-  limits (size, per source, per host) answer 429; a source outside `TunnelTargets` refused; a chain of two forwards.
+- `MonitoringActivationTests` – a wake leads to one fetch; an activation fetched for another device is refused; the
+  policy makes the agent ignore it and say why; deactivation deletes the outbox and sections; `MonitoringEnabled` = 0
+  deactivates; an upload answer carries a pending activation for a device that missed the wake.
 - `MonitoringServiceClientTests` – the console's queries are signed and tenant-scoped; the cache is used when offline
   and marked; nothing is queried in the background without an open tab or the navigation setting; answers are clipped.
 - `EventKindTests` – each Windows event of §5.2 (recorded XML from the lab) maps to its kind and fields; an event with
@@ -991,10 +977,10 @@ where a case applies to Server too; the lab broker gains the service with a loca
 
 | ID | Case | Pass when | How | P |
 |---|---|---|---|---|
-| M-ACT-01 | Activation | the harness activates the VM through the agent → `status` shows activated, path direct, 1404 audited; within 10 minutes the service has the baseline with every section (its size recorded); health lists `monitoring` | H | 1 |
+| M-ACT-01 | Activation | the harness activates the VM at the lab service → the broker wakes the agent, `status` shows activated within a minute, 1404 audited; within 10 minutes the service has the baseline with every section (its size recorded); health lists `monitoring` | H | 1 |
 | M-ACT-02 | Not before activation | a fresh install collects nothing for 30 minutes: no outbox, no 1400, no upload at the lab service | H PS | 1 |
-| M-ACT-03 | Deactivation and policy | `DELETE` → collection stops, outbox gone, 1405; `MonitoringEnabled` = 0 on an active device → deactivated at the next read, 404, health without `monitoring` | H PS | 1 |
-| M-ACT-04 | Rights and tokens | an account without `MonitoringSettings` can't activate (403, 2501) but reads `status`; a token for another device id or fingerprint → 400; an expired token → 400 | H | 1 |
+| M-ACT-03 | Deactivation and policy | deactivated at the service → the device is woken, collection stops, outbox gone, 1405; a device offline during activation fetches it at its next broker connection; `MonitoringEnabled` = 0 on an active device → deactivated at the next read, 404, health without `monitoring` | H PS | 1 |
+| M-ACT-04 | Rights and identity | an account without `MonitoringSettings` can't *Apply now* (403, 2501) but reads `status`; a device fetching another device's activation with its own key → 404; a legacy device without an environment can't be activated and the Device tab says so | H | 1 |
 | M-ACT-05 | Licence at the service | the lab tenant set over its cap or unlicensed → uploads 403, 2503 audited, `status.lastRefusal` names it, the Device tab shows it; licensed again → uploads resume with the next digest | H | 1 |
 | M-INV-01 | Sections' truth | the apps the VM has (the agent MSI, a test MSI), its KBs, its drivers, local users, the lab's GPO and the Defender state appear with the right values at the service; nothing of §5.5 in the bundle (scan) | H PS | 1 |
 | M-INV-02 | Sync and digest intervals | with `MonitoringFullSyncHours` = 12 and `MonitoringDigestMinutes` = 60 a hash-only sync arrives 12 h ± 1 h after the baseline and a digest every 60 ± 5 minutes; 6 and 30 are refused (invalid, logged once) and the defaults stay | H PS | 2 |
@@ -1016,8 +1002,8 @@ where a case applies to Server too; the lab broker gains the service with a loca
 | M-PERF-04 | Memory and disk | fill memory to 95 % / hammer the disk for 6 minutes → the alerts; free space under 5 GB → the free-space alert once, not every minute | H S | 2 |
 | M-PERF-05 | Budget | over 2 hours on W10-1809 the agent's CPU time grows by less than 60 s and its working set stays under 120 MB; the inventory's log line says under 60 s | PS | 1 |
 | M-PERF-06 | Boot and sign-in | restart; sign in as normaluser → `device.started` with a boot duration, `session.signIn` with a duration (confirms the measurement) | H C S | 2 |
-| M-RELAY-01 | Through a jump host | **2VM**, the target without a broker connection: activation with the jump host as upstream → uploads arrive at the service signed by the target; the jump host audits 1406; `status` says *through JUMP01*; the jump host's log has no section contents | H | 1 |
-| M-RELAY-02 | Relay limits | `MonitoringRelay` = 0 → 404 and the target's outbox fills, then drains when it is 1 again; a body over 4 MB → 413; 61 forwards in an hour from one address → 429 and 2502; a source outside `TunnelTargets` → 403 | H | 1 |
+| M-RELAY-01 | Through a jump host | **2VM**, the target enrolled through the jump host's environment relay (E-RELAY-01): activation reaches it over its relayed broker connection, uploads arrive at the service signed by the target; the jump host audits 1203; `status` says *through the relay of JUMP01*; the jump host's log has no section contents | H | 1 |
+| M-RELAY-02 | Relay off | `EnvironmentRelay` = 0 on the jump host → the target's outbox fills (and its broker connection drops), then drains when it is 1 again; a bundle over 4 MB is refused by the service, not the relay | H | 1 |
 | M-RELAY-03 | Chain and loss | jump host behind a jump host: two hops, uploads arrive; the head's broker connection cut for 20 minutes → outboxes fill, nothing lost, all arrive within a digest interval after it is back | H N | 2 |
 | M-CON-01 | Device tab | **2VM**, RemoteHub in the client VM: the tab shows the inventory, the events of M-EVT and the alert of M-PERF-01 on the timeline from the lab service; offline → the cache is shown and marked; screenshots in both themes | U | 1 |
 | M-CON-02 | Diff events | install a test app with the watcher off (`MonitoringEvents` = 0) → after the next sync's reconciliation the tab shows *between HH:MM and HH:MM* for the change | U H | 2 |
@@ -1033,10 +1019,10 @@ A failing collector on a lab VM is a finding for §15.1's skip list, not a reaso
 
 | Phase | Content | Done when |
 |---|---|---|
-| **1 – Inventory and the service** | Agent: collectors (§5.1), outbox (§8), the baseline and the daily hash-only sync (§6.1), the section watchers and partial bundles (§6.2 – the change events of every section, so phase 1 is already event-driven), activation (§6.5), settings from the upload answer (§6.6), the direct upload (§9.2), endpoints `status`, `now`, `settings`, `activation`, rights, `MonitoringEnabled`, `…Service`, `…FullSyncHours`, `…DigestMinutes`, `…Sections`, `…IncludeUsers`, audit 1400–1405, 2501, 2503, 3500, cleanup. Service: entitlement and activation in D1, the upload with signature and quotas, validation, ClickHouse tables for sections, events (diff), device state, the overview and section queries, TTL by tier, deletion. Console: `MonitoringServiceClient`, the cache, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), *Activate…* and *Deactivate…*, `AllowMonitoring`, the entitlement in Settings | M-ACT-*, M-INV-*, M-CON-02, SEC-MON-01–03 pass; §15.2 measured |
+| **1 – Inventory and the service** | Agent: collectors (§5.1), outbox (§8), the baseline and the daily hash-only sync (§6.1), the section watchers and partial bundles (§6.2 – the change events of every section, so phase 1 is already event-driven), activation and settings over the environment (§6.5, §6.6 – needs environment-enrollment-design.md phase 1), the upload (§9.2), endpoints `status`, `now`, `settings`, rights, `MonitoringEnabled`, `…FullSyncHours`, `…DigestMinutes`, `…Sections`, `…IncludeUsers`, audit 1400–1405, 2501, 2503, 3500, cleanup. Service: entitlement and activation in D1, the upload with signature and quotas, validation, ClickHouse tables for sections, events (diff), device state, the overview and section queries, TTL by tier, deletion. Console: `MonitoringServiceClient`, the cache, the Device tab with Overview (no sparklines yet), the inventory sections and Events (diff events only), *Activate…* and *Deactivate…*, `AllowMonitoring`, the entitlement in Settings | M-ACT-*, M-INV-*, M-CON-02, SEC-MON-01–03 pass; §15.2 measured |
 | **2 – Problems, performance and alerts** | Agent: the problem and session watchers (§5.2), sampler (§5.3), the digest (§6.3), thresholds (§5.4), the remaining policies, 1402, 2500. Service: alerts, performance tables, the timeline queries, tenant defaults. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, tenant defaults in Settings | M-EVT-*, M-PERF-* pass |
 | **3 – Timeline** | `DeviceTimeline`, the Timeline section, sparklines on the tiles, correlation footer (service-side counts), keyboard and automation | M-CON-01, the U screenshots reviewed |
-| **4 – Relay through jump hosts** | Agent: `/v1/monitoring/forward`, upstreams, `MonitoringRelay`, 1406, 2502; console: upstreams from the tree in the activation | M-RELAY-*, SEC-MON-04 pass |
+| **4 – Through jump hosts** | Monitoring over the environment relay (environment-enrollment-design.md phase 3): outbox behaviour down a chain, the lab cases | M-RELAY-*, SEC-MON-04 pass |
 | **5 – Monitoring view** | The rail view, every dashboard of §11.4 with the customer's choice, reports and export, search, the cross-device correlation, the service audit page | M-CON-03 |
 | **Later – remediation** | An alert runs a deployed script version (scripts-view-design.md) on the device: which alerts, which scripts, rings and stop conditions, approval, audit – a design of its own, decided for (v1 Q6) | – |
 | Later | GPU load; per-process network; a learned baseline per device and *unusual for this device* marks; alerts as toast notifications in the console and as e-mail from the service; a Windows event forwarding guide so SIEMs read 2500; a self-hosted service image; on-demand download of the agent's monitoring binaries | – |
@@ -1065,7 +1051,7 @@ When phase 1 lands:
 - [threat-model-technologies.md](threat-model-technologies.md): the new endpoints, the relay and the service under
   §2 and a *Device → service* and *Console ← service* boundary; [security-test-lab-design.md](security-test-lab-design.md)
   §3 TB8 gets SEC-MON.
-- [jump-host-design.md](jump-host-design.md) §6: `MonitoringRelay` and the forward endpoint.
+- [jump-host-design.md](jump-host-design.md) §6: monitoring over the environment relay.
 - [local-db-design.md](local-db-design.md) §6: the cache table and the schema version.
 - `THIRD-PARTY-NOTICES.md`: `Google.Protobuf`, `Grpc.Tools`, `Microsoft.Management.Infrastructure` and the Windows
   packages the collectors add; `build/` gets the `protoc` step and the proto checksum check.
@@ -1082,7 +1068,6 @@ When phase 1 lands:
 | Q4 | **Support access:** who at RemoteHub may open a tenant's rows, with what consent and for how long? | Only after the tenant's admin grants *support access* in *Settings → Monitoring* for 7 days; every read logged in the tenant's service audit. Needs the operations design. |
 | Q5 | **The console key for queries** – reuse the broker console key as proposed, or a separate monitoring key the tenant admin can revoke without ending broker access? | Reuse: one identity per console, revoked at *Remove* on the broker page. |
 | Q6 | **Alert notifications** from the service (e-mail, webhook, Teams) – phase 5 or later? | Later; phase 5 is dashboards. |
-| Q7 | **Upstream changes:** when a device is moved in the tree so its jump host changes, the console must re-send the upstream. Automatically when the console notices the move, or as part of the next *Monitoring settings…* on it? | Automatically at the move, like the credentials question the tree already asks, with a line in the move's confirmation. |
 | Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
 
 ## 20. Decided
@@ -1103,7 +1088,7 @@ judgement call were the deciding voice:
 | Remediation is a planned later phase | The owner (v1 Q6) |
 | Account names collected by default, policy to turn off; the full configuration value set | The owner (v1 Q1, Q2) |
 | Event-driven first: changes travel when they happen, the full sync is a daily hash-only reconciliation, the performance digest every 4 hours | The owner (v2): client-initiated updates wherever possible and a full sync once or twice a day; §22 shows the request count drops to a third at the same information |
-| Settings reach the device in the upload's answer; a direct push only for *Apply now* | The same: the device initiates; it also reaches devices the console can't connect to right now |
+| Activation and settings reach the device over its broker connection and a device-signed fetch; the console never connects to a device for monitoring | The owner (v4): the broker is the main device connection point, every device has one ([environment-enrollment-design.md](environment-enrollment-design.md)) |
 | Full inventory on the interval, changed sections on a trigger, the service computes diffs | The request ("send the selective information") and robustness – a snapshot can't be out of step |
 | Thresholds live on the device, set from the console per tenant default, folder or device, policy wins | The project's P1 and P6 (the device is the boundary); two consoles can't disagree about a device |
 | Alerts need 90 % of samples above the threshold and close with hysteresis | Judgement: "over 80 % for 5 min" read as sustained, not averaged |

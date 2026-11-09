@@ -26,6 +26,7 @@ WinRM can stay disabled on the device.
 - **No listener other than the agent's own.** RemoteHub needs a network path to the device, for example through VPN or routing, through another device's agent used as a jump host (`/v1/tunnel`, §6), or through the RemoteHub Broker, which is optional (§11 and the README).
 - ~~No screen or input.~~ Changed: the agent also offers its own remote desktop for devices where RDP is off – see [agent-desktop-draft.md](agent-desktop-draft.md) and §12.
 - **No own command set.** The agent never interprets commands. It authenticates the account, starts PowerShell as that account and forwards the protocol.
+- ~~Enrolment by a console's file or a broker join.~~ Proposed: devices join an **environment** (URL + enrolment token) and learn broker, monitoring and update hosts by discovery; the broker becomes the main connection point – see [environment-enrollment-design.md](environment-enrollment-design.md) (draft, not built; §5 of this document changes with it).
 - ~~No data collection.~~ Proposed: the agent collects an inventory of the device, watches events and performance and makes them available to RemoteHub – see [device-monitoring-design.md](device-monitoring-design.md) (draft, not built). It stays within "no own command set": monitoring reads the device and changes nothing on it.
 
 ## 3. Architecture
