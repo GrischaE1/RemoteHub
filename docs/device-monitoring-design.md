@@ -1,7 +1,8 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
 Status: Draft v1 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
-protocol `remotehub-broker/1`). The open questions are in §19 and the decisions taken so far in §20.
+protocol `remotehub-broker/1`). The open questions are in §19, the decisions taken so far in §20, and §21 weighs a second database (ClickHouse,
+DuckDB) against the encrypted SQLite the console has.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -407,8 +408,15 @@ device_events     (id TEXT PK, connection_id TEXT, time_utc INT, kind TEXT, lane
                                                                             -- source: 'device' (watched) or 'diff' (the console's comparison)
 device_alerts     (id TEXT PK, connection_id TEXT, rule TEXT, opened_utc INT, closed_utc INT, peak REAL, average REAL,
                    detail TEXT, acknowledged_utc INT)
-device_perf       (connection_id TEXT, time_utc INT, step INT, metric TEXT, avg REAL, max REAL, min REAL, top TEXT,
-                   PRIMARY KEY (connection_id, step, metric, time_utc))      -- step 300 kept for the retention, step 60 and 10 for 7 days
+device_perf       (connection_id TEXT, hour_utc INT, step INT, data BLOB,
+                   PRIMARY KEY (connection_id, step, hour_utc))               -- one row per device and hour: every metric's points packed
+                                                                            -- (float32 avg/max/min, top processes), gzip; step 300 for the
+                                                                            -- retention, 60 and 10 for 7 days
+device_perf_days  (connection_id TEXT, day_utc INT, metric TEXT, avg REAL, max REAL, p95 REAL, above_threshold_min INT,
+                   PRIMARY KEY (connection_id, metric, day_utc))             -- maintained on import; what fleet dashboards read
+device_apps       (connection_id TEXT, key TEXT, name TEXT, version TEXT, publisher TEXT, scope TEXT,
+                   PRIMARY KEY (connection_id, key))                         -- the current apps section, one row per app, for
+                                                                            -- "which devices have Zoom 6.2.1" without opening blobs
 ```
 
 - **Retention** (*Settings → Monitoring*, console policy `MonitoringRetentionDays` 7–3650, default **90**): sections
@@ -420,9 +428,14 @@ device_perf       (connection_id TEXT, time_utc INT, step INT, metric TEXT, avg 
   `device_events` with `source = 'diff'`, with the **time of the device's own event when one matches** (the watched
   `app.installed` from §5.2 for the same key within the debounce) and otherwise the section's `collectedAt` – the event
   then says *between 08:00 and 09:00* in the timeline.
-- Sizes: a device's `apps` section compressed is 20–60 KB and is stored only when its hash changes; 24 bundles a day
-  of 5-minute summaries for 12 metrics are about 30 KB a day. 500 devices for 90 days stay under 2 GB, within what
-  the database design was measured for ([local-db-design.md](local-db-design.md) §7).
+- **Sizes, honestly estimated** (§21.1 has the arithmetic): about 80 KB a day per device for the 90-day history
+  (5-minute performance about 15 KB, events about 25 KB, a section change about 40 KB), plus about 200 KB a day per
+  device for the 1-minute performance kept 7 days. 50 devices for 90 days are about 0.4 GB; **500 devices about
+  4 GB**, of which 0.7 GB is the 1-minute history. That is within SQLite's range but beyond what
+  [local-db-design.md](local-db-design.md) §7 measured, so phase 1 measures import and query times at 500 devices and
+  the retention defaults (§12.1) are confirmed against them. The performance rows are packed per hour and the daily
+  summaries are kept separately, so the timeline reads a few hundred rows and a fleet dashboard reads the summary
+  table, never the packed points (§21.2).
 - **Full-text search** (`device_sections_fts` over app names, publishers, KB numbers, driver names) feeds the
   navigation search later (*which devices have Zoom 6.2.1?* – phase 5).
 
@@ -780,6 +793,7 @@ When phase 1 lands:
 | Q5 | **The mailbox's retention on the broker** – 7 days and 64 MB per device is a guess at the broker's storage costs. | Confirm with the broker's hosting; the agent and console don't depend on the numbers. |
 | Q6 | **Should an alert be able to run a script** (remediation) in a later phase? | Not in this design; if ever, through the Scripts view's confirmation and audit, never unattended. |
 | Q7 | **Install default for `MonitoringEnabled`** – on for every new agent, or chosen in the install dialog like the virtual display? | On, with the dialog's *Monitoring* group to turn it off and set the defaults; an upgrade of an installed agent turns it on too (nothing is sent anywhere a console doesn't already reach, and IT has the policy). To confirm with the owner. |
+| Q9 | **Scale targets and a server.** How many devices should one console hold (50? 500? 5,000?), how long a history, and is a RemoteHub Server on the roadmap – one that may *read* the data, which ends the end-to-end seal of §9.3? These three answers decide §21. | Design for 500 devices and 90 days per console on SQLite; a server with ClickHouse when a fleet or a shared history is wanted (§21.4). |
 | Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement and needs the helper's session knowledge. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
 
 ## 20. Decided
@@ -800,3 +814,85 @@ the deciding voice:
 | The timeline is drawn by the project itself, from theme brushes | The project has no charting library and draws its own lists and toolbars; a library would be third-party code to notice and trim |
 | Correlation is a count, labelled as one | Honesty: RemoteHub shows the admin the order of things; it doesn't decide the cause |
 | Dashboards and reports are phase 5 | The request ("later in dashboards and reports") |
+
+## 21. A second database? ClickHouse, DuckDB and SQLite weighed
+
+The request raises whether monitoring data needs a database of its own, such as ClickHouse. The honest answer has
+three parts: how much data there is, what is asked of it, and where it is – on an admin's PC, on the broker, or on a
+server that doesn't exist yet.
+
+### 21.1 How much data
+
+Per device and day, as the design stands:
+
+| Data | Rows or points | Stored (compressed) |
+|---|---|---|
+| 5-minute performance, 12 metrics × avg/max/min, plus top processes | 288 points × 12 metrics | about 15 KB |
+| 1-minute performance (7 days only) | 1,440 × 12 | about 200 KB |
+| Events (watched and diff), 50 a day | 50 | about 25 KB |
+| Section changes, about one a day (Windows apps update themselves) | 1 snapshot | 20–60 KB |
+| **Total for the 90-day history** | | **about 80 KB a day** |
+
+| Devices per console | 90 days | with 7 days of 1-minute data | Rows in `device_perf` (hourly, packed) | Rows if one row per metric and point |
+|---|---|---|---|---|
+| 50 | 0.36 GB | 0.43 GB | 108,000 | 15.6 million |
+| 500 | 3.6 GB | 4.3 GB | 1.08 million | 156 million |
+| 5,000 | 36 GB | 43 GB | 10.8 million | 1.56 billion |
+
+The right-hand column is why the naive layout (a row per metric and point) was replaced in §10: it is the layout that
+makes SQLite look slow and a column store look necessary. Packed per hour, the row count is small, the blobs compress
+well, and the daily summary table carries what dashboards need.
+
+### 21.2 What is asked of it
+
+| Question | Who asks | Rows touched (500 devices, packed layout) |
+|---|---|---|
+| One device's timeline for a day / 90 days | Device tab | 24 / 2,160 `device_perf` rows plus its events |
+| One device's inventory and changes | Device tab | tens of rows |
+| Which devices have app X, driver Y, KB missing | navigation search, dashboards | 150,000 `device_apps` rows with an index – milliseconds |
+| Devices with open alerts, not heard from, pending restart | dashboards | 500 rows |
+| Average or p95 CPU per device over 30 days, the worst 20 | dashboards | 180,000 `device_perf_days` rows – well under a second |
+| Crashes per app across the fleet, 7 days | dashboards | 175,000 event rows with an index on kind and time |
+| Import of one hour's bundles | background | 500 inserts and 500 summary updates |
+
+None of these is an analytical scan over raw points. The one query that would be – *the fleet's CPU curve at
+1-minute resolution for a month* – is not in the design, and a desktop console isn't where it belongs.
+
+### 21.3 The candidates for the console
+
+| | Encrypted SQLite (today) | DuckDB (embedded, columnar) | ClickHouse (server) or chDB (embedded ClickHouse) |
+|---|---|---|---|
+| Fit for the console's queries (§21.2) | Good with the packed layout and summary tables | Very good for aggregations; no better for point lookups | Over-sized: a server process on an admin's PC, or chDB's several-hundred-MB library |
+| Encryption at rest under the console's key hierarchy | Done ([local-db-design.md](local-db-design.md) §4) | DuckDB added database encryption in 1.4 (2025) – a second key to wrap and rotate with the startup lock; to be verified against the current release | None in chDB; a ClickHouse server encrypts its disks, not per user |
+| Footprint | Already shipped | A second native engine, about 40–60 MB, with trimming and MSI work; MIT licence, a notice entry | chDB about 10× that and Linux-first; ClickHouse not installable per user |
+| Operations | None | None | A service to install, patch and back up |
+| Security surface | Known; `trusted_schema` off, no extensions | A second SQL engine with extensions to lock down | A listening server on the admin's PC |
+| Where it wins | Up to a few thousand devices with the layout of §10 | From about 5,000 devices per console, or when ad-hoc analytical queries over raw points are wanted in the console | Only on a server |
+
+**Decision for the console: stay with the encrypted SQLite**, and spend the effort on the layout instead – packed hourly
+rows, the daily summary table, the normalised current apps table, indexes on kind and time, and import in one
+transaction per device. Phase 1 measures 500 devices (import of an hour's bundles, the timeline queries, each
+dashboard of §11.4) on the lab's client VMs, and §21.1's numbers are replaced by measured ones. If a query doesn't make
+its budget (timeline under 200 ms, a dashboard under 2 s) at 500 devices, the first answer is a summary table, the
+second is DuckDB for the performance tables alone, with the sections, events and alerts staying where they are.
+The bundles (§7) are the source of truth on the device for the retention, so a console can rebuild its tables from the
+devices, and a different engine later is an import, not a migration.
+
+### 21.4 A server, and the broker
+
+- **The broker can't be the database.** It stores bundles it can't read (§9.3) – that is the point of the seal. Any
+  store that *queries* monitoring data must hold the organisation's keys, so a central database is first a trust
+  decision (does the organisation accept that its server reads device inventories?), then a technology choice. The
+  broker on Cloudflare also has no place to run ClickHouse; its storage is for sealed blobs with a short retention.
+- **If a RemoteHub Server comes** – for a shared fleet history, several admins, more than a few thousand devices, or a
+  history longer than a year – **ClickHouse is the right engine for the events and performance tables**: MergeTree
+  with a TTL for retention, compression that makes the 1-minute history affordable, materialised views for the
+  dashboards, and bundles as the ingestion format unchanged. Inventory sections and the current state fit PostgreSQL
+  better (point lookups, per-row updates, constraints); a server would likely have both, or PostgreSQL with
+  TimescaleDB alone below about 10,000 devices to keep one engine. That is a server design of its own, outside this
+  document; what this document guarantees is that nothing in the bundle format or the console's tables stands in its
+  way, and that the device keeps its own store so a server can backfill.
+- **Thresholds for revisiting:** a console asked to hold more than about 2,000 devices, a retention over a year, an
+  admin team that needs one shared view, or analytical questions over raw performance points. Any one of them is a
+  server conversation, not a console database swap.
+
