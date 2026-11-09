@@ -1,11 +1,12 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
-Status: Draft v3 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+Status: Draft v4 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
 protocol `remotehub-broker/1`). v2 takes in the answers to v1's open questions (§20): the history lives in a
 **RemoteHub-hosted, multi-tenant monitoring service** sized for hundreds of thousands of devices, not in the console;
 monitoring is **activated from the console** under the tenant's licence; devices behind **jump hosts** upload through
 them; the console **queries** the service. v3 makes delivery **event-driven first**: changes travel when they happen, the full sync is a daily hash-only
-reconciliation, and only the performance digest has a cadence (§6). §19 has what is still open, §21 the database
+reconciliation, and only the performance digest has a cadence (§6). v4 makes the bundle **Protobuf, gzip-compressed**
+(§7) and spells out where every change notification comes from (§6.7). §19 has what is still open, §21 the database
 choice, §22 volumes and costs by interval.
 Owner: Grischa Ernst
 
@@ -129,7 +130,7 @@ Device                                   Jump host (optional)            RemoteH
 
 ### 5.1 Inventory sections
 
-Each section is collected whole, as a JSON object, and sent whole. The sources are listed so the collector can be
+Each section is collected whole, as one message of the schema (§7), and sent whole. The sources are listed so the collector can be
 reviewed against them; where a source needs confirming on real devices it says *lab*.
 
 | Section | Contents | Source | Limits |
@@ -349,44 +350,121 @@ in the answer to its next upload (§9.2) – at the latest at the next digest, 4
 `PUT /v1/monitoring/settings` (§9.1) stays for *Apply now* while the console is connected to the device, and the agent
 reports which it has in `status`. Either way the device holds the settings and the policy wins (§12.2).
 
+### 6.7 Where the change notifications come from
+
+The watchers are the heart of event-driven delivery, so their sources are listed here, not left to the implementation.
+A notification never produces a bundle by itself: it starts the section's 30 s debounce, the agent re-collects the
+section and diffs it, and only a non-empty diff is sent (§6.2). A change without a notification is caught by the daily
+sync's hash reconciliation (§6.1).
+
+| Section | Primary source (starts the debounce) | Corroboration and source of the change | Deliberately not used |
+|---|---|---|---|
+| `apps` | `RegNotifyChangeKeyValue`, subtree, names and values, on `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`, the same under `WOW6432Node`, and `…\Uninstall` in every loaded user hive under `HKEY_USERS`; plus the AppX repositories – `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Appx\AppxAllUserStore` and each hive's `Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages`. Every installer that registers an app writes there: MSI, Inno Setup, NSIS, Squirrel, Store and MSIX deployments | MsiInstaller 1033/1034/1035/1036, 11707/11724 (Application log) say *MSI* and name the product; AppXDeploymentServer/Operational 854 says *Store/MSIX* and names the package | WMI `Win32_Product` events – each query makes Windows Installer reconfigure every product; file system watchers on Program Files – noisy, and blind to per-user installs. Portable apps with no registry entry aren't inventoried at all (§5.1) |
+| `updates` | Microsoft-Windows-WindowsUpdateClient 19, 20 (System log) and Setup log 1, 2 – `EventLogWatcher` with an XPath filter per id | The Windows Update Agent's history, re-read on the trigger, names KB and result; definition updates are recorded, not triggered | Polling `IUpdateSearcher` – the search is slow and the events are reliable |
+| `drivers` | Microsoft-Windows-UserPnp 20001, 20003 and Kernel-PnP 400, 410, 411 | The diff of `Win32_PnPSignedDriver` names old and new version and INF | A notification on the driver store – too broad |
+| `services` | `RegNotifyChangeKeyValue` on `HKLM\SYSTEM\CurrentControlSet\Services`, **key names only** (a service added or removed – values change constantly under `Parameters` and would fire all day); Service Control Manager 7040 (start type changed), 7045 (installed) | `EnumServicesStatusEx` and `QueryServiceConfig` re-read in about 10 ms | Watching service values |
+| `users` | Security 4720, 4722, 4725, 4726, 4738, 4740 (accounts) and 4728, 4732, 4733, 4735 (group members) where the audit policy records them; otherwise `RegNotifyChangeKeyValue` on `HKLM\SAM\SAM\Domains\Account`, which LocalSystem may read (confirmed in the lab, M-EVT-09); the service control handler's `SERVICE_CONTROL_SESSIONCHANGE` for sign-ins, which also tells the apps watcher a user hive was loaded | `NetUserEnum`, `NetLocalGroupGetMembers` | Polling `NetUserEnum` |
+| `hardware` | `RegisterDeviceNotification` with the service's status handle for `DEVICE_NOTIFY_ALL_INTERFACE_CLASSES` (`DBT_DEVICEARRIVAL`, `DBT_DEVICEREMOVECOMPLETE`); Kernel-PnP 400, 410, 420; `WM_POWERBROADCAST`-equivalent `SERVICE_CONTROL_POWEREVENT` for battery and dock changes | The diff of the hardware section | A WMI `__InstanceCreationEvent` on `Win32_PnPEntity` – polling in disguise |
+| `config` | `RegNotifyChangeKeyValue`, subtree, on `HKLM\SOFTWARE\Policies`, `HKLM\SOFTWARE\Microsoft\PolicyManager\current`, and each loaded hive's `Software\Policies`; Microsoft-Windows-GroupPolicy/Operational 8004–8007 (processing done – `gpupdate` rewrites values without changing them, which is why the diff decides); the MDM diagnostics provider's sync-completed event (id confirmed in the lab); Windows Defender/Operational 5001/5010/5012, 2000/2001; Windows Firewall 2003–2005 | The diff of the policy and CSP values, the Defender and firewall state | Watching `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Group Policy\History` alone – it changes on every refresh |
+| `os` | `RegNotifyChangeKeyValue` on the CBS `RebootPending` and Windows Update `RebootRequired` keys (names – the keys appear and disappear), `CurrentVersion` (values); Kernel-General 12 (start), User32 1074 (restart or shutdown asked) | The diff of the OS section | – |
+
+**Mechanics.** One watcher thread holds every registry notification's event handle in a `WaitForMultipleObjects`
+loop (the notifications are opened with `REG_NOTIFY_THREAD_AGNOSTIC`, so they outlive the thread that armed them, and
+re-armed after each signal because they are one-shot). `EventLogWatcher` subscriptions call back on their own threads
+and hand the event to the same debounce. A user hive that unloads signals once; the watcher drops it and re-opens on
+the next session sign-in. Every watcher's failure (a key that can't be opened on an edition that lacks it, an event
+log that doesn't exist on Server Core) is logged once and leaves the other watchers running; the daily sync covers
+what a missing watcher would have caught.
+
 ## 7. Bundles
 
-A bundle is a UTF-8 JSON document, **gzip-compressed**, signed by the device for the service (§9.2), with the envelope:
+A bundle is a **Protobuf (proto3) message, gzip-compressed as a whole**, signed by the device for the service (§9.2).
+The schema is one `.proto` file, the contract compiled into both ends the way `AgentProtocol.cs` and
+`BrokerProtocol.cs` are today – except that here the other end is TypeScript, which is why it is Protobuf and not a
+C# file: generated types on both sides, field numbers as the versioning rule, unknown fields ignored.
 
-```json
-{
-  "format": 1,
-  "deviceId": "3f1a9e2c-…",
-  "tenant": "o_…",
-  "seq": 4711,
-  "kind": "sync" | "digest" | "partial",
-  "time": "2026-11-09T09:00:03Z",  // the device's clock, UTC
-  "uptimeMs": 1234567,              // monotonic, for placing samples when the clock jumped
-  "agentVersion": "0.23.0",
-  "kindDetail": "baseline" | "sync" | "digest" | "section" | "event" | "alert",
-  "settingsVersion": 12,              // the settings the device has applied (§6.6)
-  "sections": {
-    "apps":     { "hash": "sha256-…", "collectedAt": "…", "items": [ … ] },
-    "drivers":  { "hash": "sha256-…" },                      // unchanged: hash only
-    …
-  },
-  "events":   [ { "id": "…", "kind": "app.crash", "time": "…", "recordId": 12345, "log": "Application", … } ],
-  "alerts":   [ { "id": "…", "rule": "cpu", "state": "open" | "closed", "openedAt": "…", "closedAt": null, "peak": 97.2, "average": 88.1, "top": [ … ] } ],
-  "performance": { "step": 300, "from": "…", "series": { "cpu": { "avg": [ … ], "max": [ … ] }, … }, "samples": { "step": 10, … } },
-  "heldBack": 0
+```protobuf
+syntax = "proto3";
+package remotehub.monitoring.v1;
+
+message Bundle {
+  string device_id = 1;            // lower-case GUID
+  string tenant = 2;               // o_…
+  uint64 seq = 3;                  // per-device monotonic (§6.4)
+  Kind kind = 4;                   // SYNC, DIGEST, PARTIAL
+  Detail detail = 5;               // BASELINE, SYNC, DIGEST, SECTION, EVENT, ALERT
+  google.protobuf.Timestamp time = 6;      // the device's clock, UTC
+  uint64 uptime_ms = 7;            // monotonic, for placing samples when the clock jumped (§5.3)
+  string agent_version = 8;
+  uint32 settings_version = 9;     // the settings the device has applied (§6.6)
+  repeated Section sections = 10;
+  repeated Event events = 11;
+  repeated Alert alerts = 12;
+  Performance performance = 13;
+  uint32 held_back = 14;           // events kept for flood control (§6.2)
 }
+
+message Section {
+  string name = 1;                 // os, hardware, apps, …
+  bytes hash = 2;                  // SHA-256 of the canonical content (below)
+  google.protobuf.Timestamp collected_at = 3;
+  oneof content {                  // absent = hash only (unchanged)
+    Os os = 10; Hardware hardware = 11; Apps apps = 12; Updates updates = 13; Drivers drivers = 14;
+    Services services = 15; Users users = 16; Config config = 17; AgentInfo agent = 18;
+  }
+  repeated string unavailable = 4; // sources this edition lacks (§15.1)
+}
+
+message Apps { repeated App items = 1; }
+message App { string key = 1; string name = 2; string version = 3; string publisher = 4; google.protobuf.Timestamp installed = 5;
+              uint64 size = 6; Scope scope = 7; string user = 8; Kind kind = 9; bool system_component = 10; }
+// … one message per section, mirroring §5.1
+
+message Event { string id = 1; string kind = 2; google.protobuf.Timestamp time = 3; string lane = 4; uint32 severity = 5;
+                string subject = 6; string title = 7; map<string,string> fields = 8; uint32 count = 9; int64 record_id = 10; string log = 11; }
+message Alert { string id = 1; string rule = 2; State state = 3; google.protobuf.Timestamp opened = 4; google.protobuf.Timestamp closed = 5;
+                float peak = 6; float average = 7; repeated TopProcess top = 8; }
+message Performance {
+  uint32 step_seconds = 1; google.protobuf.Timestamp from = 2;
+  repeated Series series = 3;      // one per metric
+  Samples samples = 4;             // the 10 s samples around an alert
+}
+message Series { string metric = 1; repeated float avg = 2 [packed = true]; repeated float max = 3 [packed = true]; repeated float min = 4 [packed = true]; }
 ```
 
-- **Limits** (checked by the service before parsing further, and by the agent before writing): compressed ≤ 4 MB,
-  uncompressed ≤ 32 MB, nesting depth ≤ 8, strings ≤ 1,024 characters (section-specific limits in §5.1), arrays as
-  in §5.1, at most 500 events and 50 alerts per bundle. A bundle over a limit is refused whole and counted for the
-  device; the agent never produces one (it clips while collecting), so a refused bundle means a changed device.
-- **Unknown fields and sections are ignored**, not refused: an older service reads a newer agent's bundle and stores
-  what it knows. `format` changes only when the envelope changes incompatibly.
-- Section hashes are SHA-256 over the canonical JSON of `items` (sorted keys, as `BrokerProtocol.Canonical`), so the
-  device and the service agree on "unchanged" – the daily sync is nothing but these hashes (§6.1).
-- The format is self-describing, per device, ordered, with the device's own time: what a self-hosted service would
-  ingest unchanged later.
+- **Compression:** the serialised message is gzipped by the agent (`GZipStream`, level *Optimal*) and sent with
+  `Content-Type: application/x-protobuf` and `Content-Encoding: gzip`; the Worker inflates with the built-in
+  `DecompressionStream`. Protobuf makes the numeric part – the digest's series – compact on its own; the sections are
+  strings (names, publishers, paths, policy values) and compress to a third or a quarter, so the whole message is
+  compressed, not only the sections. The signature (§9.2) is over the bytes as sent.
+- **Limits** (checked by the service before decoding further, and by the agent before writing): compressed ≤ 4 MB,
+  uncompressed ≤ 32 MB (a streaming inflate that stops at the cap), nesting as the schema allows (no recursive
+  messages), strings ≤ 1,024 characters (section-specific limits in §5.1), repeated fields as in §5.1, at most 500
+  events and 50 alerts per bundle. Protobuf doesn't enforce lengths or counts, so these are an explicit validation
+  pass on the Worker (`validate.ts`, generated from the same table as the agent's `BundleLimits.cs`), run on the
+  decoded message before anything is stored. A bundle over a limit is refused whole and counted for the device; the
+  agent never produces one (it clips while collecting), so a refused bundle means a changed device.
+- **Evolution:** field numbers are never reused or renumbered; a removed field is `reserved`. Unknown fields are
+  ignored (an older service reads a newer agent's bundle and stores what it knows), unknown `Section.name`s are
+  stored as opaque bytes with their hash and shown as *unknown section (agent newer than the service)*. The package
+  name carries the major version (`v1`); it changes only when a message changes incompatibly, which the field rules
+  make unnecessary in practice.
+- **Hashes:** `Section.hash` is SHA-256 over the section message serialised in **canonical form** – fields in number
+  order, no unknown fields, default values omitted, repeated items in the order the collector sorts them (by `key`) –
+  so the device and the service compute the same hash for the same content and the daily sync is nothing but these
+  hashes (§6.1). Both implementations are checked against shared test vectors.
+- **The file lives in** `src/RemoteHub.Agent/Monitoring/monitoring.proto`, compiled for C# with `Grpc.Tools`
+  (`protoc` at build, no runtime cost) for the agent and the console, and copied into the broker's repository where
+  `protobuf-es` generates the TypeScript. A test on each side keeps the two copies identical (a checksum, as
+  `BrokerProtocolTests` already does for the broker's test vectors). `Google.Protobuf` (BSD-3-Clause) and `Grpc.Tools`
+  (Apache-2.0, build only) get their entries in `THIRD-PARTY-NOTICES.md`.
+- **Reading one by hand:** the canonical proto3 JSON mapping (`JsonFormatter` in C#, `toJson` in `protobuf-es`) turns
+  a bundle into readable JSON for a lab's evidence, a support case or `RemoteHubAgent.exe monitoring show <seq>`; the
+  no-secrets rule applies to that output as to the bundle.
+- **The same messages everywhere:** `now` (§9.1) returns a `Bundle` without a sequence number; the service's query API
+  (§9.4) answers the console with the same `Section`, `Event`, `Alert` and `Performance` messages (gzip, or JSON through
+  the canonical mapping with `Accept: application/json` for debugging), so there is one contract from the device to
+  the screen.
 
 ## 8. The device outbox
 
@@ -431,12 +509,13 @@ Same listener, same TLS pin, same HTTP Basic Windows sign-in and `SignInGate` as
 
 ### 9.2 Device → service: the upload
 
-- `POST https://<broker>/v1/o/{org}/monitoring/upload` with the gzip bundle as the body and the device's signature
-  over `remotehub-broker/1|<org>|monitoring|<deviceId>|<seq>|SHA-256(body)` in a header (PS256 with the device
+- `POST https://<broker>/v1/o/{org}/monitoring/upload` with the gzip-compressed Protobuf bundle as the body
+  (`Content-Type: application/x-protobuf`, `Content-Encoding: gzip`) and the device's signature over
+  `remotehub-broker/1|<org>|monitoring|<deviceId>|<seq>|SHA-256(body as sent)` in a header (PS256 with the device
   certificate's key, §6.5 step 3 – the signature the broker's registration already uses, so the Workers verify it
   with the stored public key). TLS to the front door as the broker connection uses it (`BrokerHttpProxy` applies).
-- The answer: `{acknowledged: <seq>, sections: ["apps", …], settings?: {…}, settingsVersion?: 12, deactivated?: true,
-  reason?: "…"}` – `sections` names sections whose hash differs from the service's copy or that it lacks, which the
+- The answer, an `UploadResult` message of the same schema (JSON shown for readability): `{acknowledged: <seq>,
+  sections: ["apps", …], settings?: {…}, settingsVersion?: 12, deactivated?: true, reason?: "…"}` – `sections` names sections whose hash differs from the service's copy or that it lacks, which the
   agent sends whole in a partial bundle at once (§6.1); `settings` are the settings waiting at the service for this
   device – the console's per-device or per-folder values, else the tenant's defaults (§6.6) – with a version the agent
   echoes in its next upload so the console sees them applied; `deactivated` ends collection (§6.5). The answer is the
@@ -493,7 +572,8 @@ ES256 signature over each request), tenant-scoped:
 | GET | `/v1/o/{org}/monitoring/search?q=` | Devices by app, version, KB, driver (§11.4) |
 | PUT | `/v1/o/{org}/monitoring/defaults` · `…/devices/{id}/settings` · `…/folders/{id}/settings` | The tenant's defaults; settings waiting for a device or every device of a folder, handed over in the next upload's answer (§6.6); a folder's apply to new devices too |
 
-Answers are JSON with the same limits as bundles; the console clips again when it shows them (§14). Nothing is
+Answers are the schema's messages (§7), gzip-compressed, with the same limits as bundles; tabular dashboard answers
+are a `Table` message (columns, typed cells, a page token). The console clips again when it shows them (§14). Nothing is
 queried in the background except the overview of devices with an open Device tab and, with *Show alerts in the
 navigation*, one call per minute for the tenant's open alerts.
 
@@ -508,8 +588,8 @@ navigation*, one call per minute for the tenant's open alerts.
 | **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** – one cluster per region (EU, US), shared by the region's tenants, tenant id on every row (§21) |
 | **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
 
-Ingestion path: the Worker verifies the signature and quota, decompresses within the limits, validates, computes the
-section diffs against the device's current rows, and inserts rows into ClickHouse over its HTTP interface with
+Ingestion path: the Worker verifies the signature and quota, inflates within the limits, decodes the Protobuf message
+with `protobuf-es`, validates (§7), computes the section diffs against the device's current rows, and inserts rows into ClickHouse over its HTTP interface with
 **asynchronous inserts** (the Worker never waits for a merge). An upload is acknowledged when the insert is accepted.
 
 ### 10.2 Tables (ClickHouse, sketched)
@@ -562,7 +642,7 @@ Where thousands of uploads a second would bite, in the order they cost (§22.3 h
 |---|---|---|---|
 | Signature check (RSA-3072 PSS, WebCrypto) | about 0.3 ms CPU | 55 a second at the digest peak | Spread across the edge by construction; nothing to do |
 | Device key, tenant and entitlement lookup | a D1 read, milliseconds, one database | the first real queue at a few hundred a second | Cached in Workers KV or the Cache API with a 5-minute TTL; quota counters in a Durable Object per tenant |
-| Inflate and parse (15 KB) | about 0.15 ms CPU | negligible | Streaming inflate under the §7 caps |
+| Inflate and decode (15 KB) | about 0.1 ms CPU | negligible | Streaming inflate under the §7 caps; Protobuf decoding is a few times faster than JSON parsing |
 | Validation and clipping | about 0.2 ms CPU | negligible | – |
 | Diff of a changed section | 2–5 ms, a read of the stored copy | about 14 a second on Patch Tuesday | Current sections in `sections_current`, one read per changed section |
 | ClickHouse insert | I/O | hundreds of small inserts a second | Asynchronous inserts batch on the server; a Cloudflare Queue in front if the measured p99 passes 2 s (§19 Q2) |
@@ -807,7 +887,8 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
 - **Tenant isolation at the store:** tenant id on every row, in every `ORDER BY`, in every `WHERE` the Worker issues
   (tested), row policies as the second fence, a region per tenant with no cross-region queries.
 - **The service treats bundles as hostile** (TB8): the gzip is read through a size-limited stream (compressed and
-  uncompressed limits of §7 enforced while reading, not after), the JSON parsed with depth 8 and no comments, every
+  uncompressed limits of §7 enforced while reading, not after), the Protobuf decoded by the generated code (no
+  recursion in the schema, unknown fields ignored) and validated against the limits table before any use, every
   string clipped to its limit and stripped of control characters and bidirectional overrides before storing, numbers
   range-checked, dates parsed as UTC or dropped. A refused bundle is counted for the device and shown in the Device tab
   (*The device sent data the service refused*); later bundles are still read. The console clips again what it shows and
@@ -870,9 +951,11 @@ The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and t
   the boot grace period, a `time.changed` jump doesn't open or close anything.
 - `SectionDiffTests` – added, removed, changed apps; the same app in two scopes; a version that goes backwards; a
   driver's INF rename; 10,000 items in under a second (shared with the service's implementation as test vectors).
-- `MonitoringBundleTests` – round trip; every limit of §7 refused (a 4 MB + 1 byte bundle, depth 9, a 1,025-character
-  name clipped, 501 events refused, an unknown section ignored); a gzip bomb (1 GB of zeros) stopped at 32 MB; control
-  and bidirectional characters stripped; the signature over the body verified and a changed byte refused.
+- `MonitoringBundleTests` – Protobuf round trip; every limit of §7 refused (a 4 MB + 1 byte bundle, a 1,025-character
+  name clipped, 501 events refused, an unknown field ignored, an unknown section stored opaque); a gzip bomb (1 GB of
+  zeros) stopped at 32 MB; control and bidirectional characters stripped; the signature over the body verified and a
+  changed byte refused; the canonical hash equal for the same content in a different item order; the `.proto`'s
+  checksum equal to the broker repository's copy.
 - `MonitoringActivationTests` – a token for another device or fingerprint refused (400), an expired one refused, the
   policy's 409, deactivation deletes the outbox and sections, `MonitoringEnabled` = 0 deactivates.
 - `MonitoringRelayTests` – a forward goes to the fixed path and nowhere else; the pin check against the upstream; the
@@ -881,6 +964,10 @@ The lab measures these (M-PERF-05, M-PERF-06) on the slowest VM (W10-1809) and t
   and marked; nothing is queried in the background without an open tab or the navigation setting; answers are clipped.
 - `EventKindTests` – each Windows event of §5.2 (recorded XML from the lab) maps to its kind and fields; an event with
   a user name maps to *a user* with `MonitoringIncludeUsers` off.
+- `ChangeWatcherTests` – on the CI runner: a value written under a temporary Uninstall key, a service created and
+  deleted, a key under `SOFTWARE\Policies` → the right section's debounce fires once for a burst of writes, the
+  notification re-arms, a key that can't be opened leaves the other watchers running; a `.reg` import of 1,000 values
+  fires one re-collection.
 - `MonitoringPolicyTests` – `PolicyCatalog` entries, the ADMX template check, settings refused with 409 when configured.
 - `DeviceTimelineTests` – bucketing to the zoom, the correlation counts, a gap stays a gap; rendered to a
   `RenderTargetBitmap` in both themes with no exception (`[SkippableFact]` when there is no desktop).
@@ -976,6 +1063,8 @@ When phase 1 lands:
   §3 TB8 gets SEC-MON.
 - [jump-host-design.md](jump-host-design.md) §6: `MonitoringRelay` and the forward endpoint.
 - [local-db-design.md](local-db-design.md) §6: the cache table and the schema version.
+- `THIRD-PARTY-NOTICES.md`: `Google.Protobuf`, `Grpc.Tools`, `Microsoft.Management.Infrastructure` and the Windows
+  packages the collectors add; `build/` gets the `protoc` step and the proto checksum check.
 - `docs/test-lab-cases.md` §new *M* and `test-lab-test-document.md`, with `lab\Update-LabCaseStatus.ps1` after the
   first run; `test-lab-spec.md` §5.3 the service in the lab broker.
 
@@ -1015,6 +1104,8 @@ judgement call were the deciding voice:
 | Thresholds live on the device, set from the console per tenant default, folder or device, policy wins | The project's P1 and P6 (the device is the boundary); two consoles can't disagree about a device |
 | Alerts need 90 % of samples above the threshold and close with hysteresis | Judgement: "over 80 % for 5 min" read as sustained, not averaged |
 | Session events and definition updates don't trigger bundles | The cost calculation (§22): dozens a day per device |
+| Protobuf with gzip for bundles and the query API | The owner (v3): the cross-language contract (C# agent and console, TypeScript service) generated from one file; gzip stays because the sections are strings; the server's cost was never in the format (§10.4) |
+| Change notifications from the registry and the event logs, the diff decides | §6.7: every installer writes the Uninstall keys; `Win32_Product` events and file watchers ruled out |
 | No SQLite on the device | The agent's dependency footprint as a LocalSystem service; files with `DurableFile` suffice |
 | ClickHouse for the service's store, D1 for its metadata | §21 |
 | The timeline is drawn by the project itself, from theme brushes | The project has no charting library and draws its own lists and toolbars |
@@ -1027,7 +1118,7 @@ judgement call were the deciding voice:
 
 Per device and day, as the design stands (§22.1 has the assumptions):
 
-| Data | Rows or points | Stored (gzip JSON) |
+| Data | Rows or points | Stored (compressed bundle) |
 |---|---|---|
 | 5-minute performance, 12 metrics × avg/max/min, plus top processes | 288 points × 12 metrics | about 15 KB |
 | 1-minute performance (7 days only) | 1,440 × 12 | about 200 KB |
@@ -1041,7 +1132,7 @@ Per device and day, as the design stands (§22.1 has the assumptions):
 | 100,000 | 240 GB | 720 GB | + 140 GB | 346 million |
 | 200,000 | 480 GB | 1.4 TB | + 280 GB | 691 million |
 
-These are gzip-JSON sizes; a column store with typed columns holds the performance and event rows in roughly a third
+These are compressed-bundle sizes; a column store with typed columns holds the performance and event rows in roughly a third
 to a half of that (§22.3), the section blobs about the same.
 
 ### 21.2 What is asked of it
@@ -1099,7 +1190,8 @@ $0.2985 per compute unit-hour (8 GiB RAM, 2 vCPU) in AWS us-east-1, Enterprise $
 | Triggered bundles | 3 a day: one `apps` change of 40 KB (Edge, Teams and Store apps update themselves), two of 5 KB (a crash with its 15 minutes of samples, an update, an alert) – 50 KB | §6.2 |
 | Worker CPU per upload | 1 ms typical, 5 ms for a changed section | signature check, decompression within limits, validation, diff, insert (§10.4) |
 | Console queries | 0.1 per upload | a tab open for a tenth of devices; dashboards cached a minute |
-| Column-store size | 40 % of gzip JSON for performance and events, 100 % for section blobs | typical ClickHouse ratios for typed numeric columns; measured in phase 1 |
+| Column-store size | 40 % of the compressed bundle for performance and events, 100 % for section blobs | typical ClickHouse ratios for typed numeric columns; measured in phase 1 |
+| Protobuf against JSON | the same sizes are kept | packed floats make the digest a little smaller and the strings compress the same; the difference is inside the rounding of these estimates |
 
 ### 22.2 Per device
 
