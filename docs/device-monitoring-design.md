@@ -8,8 +8,8 @@ them; the console **queries** the service. v3 makes delivery **event-driven firs
 reconciliation, and only the performance digest has a cadence (§6). v4 makes the bundle **Protobuf, gzip-compressed**
 (§7) and spells out where every change notification comes from (§6.7). v5 sits on
 [environment-enrollment-design.md](environment-enrollment-design.md): every device has an environment and knows its
-monitoring front door from discovery; activation and settings reach it over its broker connection, or by a poll
-through its jump host's relay where it has none (§6.5, §6.6) – the console never has to connect to a device for
+monitoring front door from discovery; activation and settings reach it over its broker connection, or over a wake
+channel through its jump host's relay where it has none (§6.5, §6.6) – the console never has to connect to a device for
 monitoring. v6 closes the last open questions (§20) and adds how the store runs cheaply outside production (§21.5). §19 has what is still open, §21 the database
 choice, §22 volumes and costs by interval.
 Owner: Grischa Ernst
@@ -129,8 +129,8 @@ Device                                   Jump host (optional)            RemoteH
   6.3.0*, *driver igdkmd64 updated*, *GPO "Default Domain Policy" version 42 → 43*). The device does the same diff
   locally only to decide whether a change happened and to name it in the triggered bundle (§6.2), so both agree.
 - **The console never needs the device for monitoring.** Activation and settings are written to the service; the
-  broker connection tells the device something is waiting, or a device behind a jump host asks every quarter of an
-  hour, and the device fetches it (§6.5, §6.6). The console connects
+  broker connection – or, behind a jump host, the wake channel through the relay – tells the device something is
+  waiting, and the device fetches it (§6.5, §6.6). The console connects
   to a device only for *Refresh now* and *Apply now*, over the pinned agent connection as every agent request.
 
 ## 5. What is collected
@@ -334,8 +334,10 @@ needs no connection from the console to the device:
    (`POST …/activations`, §9.4). Nothing is sent to a device.
 3. **The device learns of it** over its broker connection: the broker sends a `wake` of kind `monitoring` to each
    device named, as it sends session offers today; a device that is offline gets it when it connects next. A device
-   behind a jump host has no broker connection and **polls** instead: every `MonitoringPollMinutes` (15 by default,
-   5–1440) and with every upload it asks the front door through the relay whether anything waits for it. Either way
+   behind a jump host has no broker connection; it holds a **wake channel** through the jump host's relay to the
+   front door instead ([environment-enrollment-design.md](environment-enrollment-design.md) §7.5), and where that is
+   down **polls**: every `MonitoringPollMinutes` (15 by default, 5–1440) and with every upload it asks the front door
+   through the relay whether anything waits for it. Either way
    the agent then fetches its activation and settings from the front door (`GET …/devices/{id}/activation`, signed
    with its device key, §9.2) – device-initiated, as everything else.
 4. **Collect.** The agent writes the activation state to `agent.json` (`monitoring.activated`, the settings version),
@@ -354,9 +356,9 @@ Device tab says *Join environment… first*.
 ### 6.6 Settings without a connection to the device
 
 Settings are **device-initiated** too: the console writes a device's or a folder's settings to the service
-(`PUT …/devices/{id}/settings`, §9.4); the broker wakes the device (§6.5 step 3) and it fetches them, or – offline, or behind a jump host – it finds them
-at its next poll or in the answer to its next upload (§9.2). In practice seconds with a broker connection, a quarter
-of an hour behind a jump host, at the latest the next digest. The direct
+(`PUT …/devices/{id}/settings`, §9.4); the broker – or the wake channel through the relay – wakes the device (§6.5 step 3) and it fetches them, or, offline,
+it finds them at its next poll or in the answer to its next upload (§9.2). In practice seconds, at the latest the
+next digest. The direct
 `PUT /v1/monitoring/settings` (§9.1) stays for *Apply now* while the console is connected to the device, and the agent
 reports which it has in `status`. Either way the device holds the settings and the policy wins (§12.2).
 
@@ -540,7 +542,7 @@ needs no right on the device: it is the tenant's decision at the service (§6.5)
 ### 9.3 Through a jump host: the environment relay
 
 A device behind a jump host has no broker connection. It reaches the environment through its jump host's agent for
-its enrolment, its monitoring uploads and its poll for activation and settings – the environment relay of
+its enrolment, its monitoring uploads and its wake channel for activation and settings – the environment relay of
 [environment-enrollment-design.md](environment-enrollment-design.md) §10; consoles reach the device itself through the
 jump host's tunnel as today. The jump host forwards bytes to the
 environment's discovered hosts only, TLS runs from the device to the front door inside the forward, and the upload is
@@ -827,7 +829,7 @@ policies.
 | `MonitoringEnabled` | DWORD | 0: the device can't be activated and an active device is deactivated at the next read; `/v1/monitoring/*` answers 404, health leaves out `monitoring`, the outbox is deleted (1 – *may be activated*; nothing is collected until the console activates) |
 | `MonitoringFullSyncHours` | DWORD 12–168 | The daily reconciliation's interval (24; §6.1) |
 | `MonitoringDigestMinutes` | DWORD 60–1440 | The performance digest's interval (240; §6.3) |
-| `MonitoringPollMinutes` | DWORD 5–1440 | How often a device behind a jump host, which has no broker connection, asks the service for an activation or settings through the relay (15; §6.5) |
+| `MonitoringPollMinutes` | DWORD 5–1440 | How often a device behind a jump host asks the service for an activation or settings through the relay while its wake channel is down (15; §6.5) |
 | `MonitoringSections` | MULTI_SZ | Which sections are collected: any of `os`, `hardware`, `apps`, `updates`, `drivers`, `services`, `users`, `config`, `agent` (all) |
 | `MonitoringIncludeUsers` | DWORD | 0: no account names anywhere – sessions, local users, group members, crash and sign-in events say *a user*; per-user app entries and the user's GPOs and CSP values are left out (1) |
 | `MonitoringEvents` | DWORD | 0: no event watching – changes are found only by the daily sync's reconciliation (1) |
@@ -1016,7 +1018,7 @@ where a case applies to Server too; the lab broker gains the service with a loca
 | M-PERF-04 | Memory and disk | fill memory to 95 % / hammer the disk for 6 minutes → the alerts; free space under 5 GB → the free-space alert once, not every minute | H S | 2 |
 | M-PERF-05 | Budget | over 2 hours on W10-1809 the agent's CPU time grows by less than 60 s and its working set stays under 120 MB; the inventory's log line says under 60 s | PS | 1 |
 | M-PERF-06 | Boot and sign-in | restart; sign in as normaluser → `device.started` with a boot duration, `session.signIn` with a duration (confirms the measurement) | H C S | 2 |
-| M-RELAY-01 | Through a jump host | **2VM**, the target enrolled through the jump host's environment relay (E-RELAY-01), no broker connection: activation reaches it at its next poll (`MonitoringPollMinutes` = 5), uploads arrive at the service signed by the target; the jump host audits 1203; `status` says *through the relay of JUMP01*; the jump host's log has no section contents | H | 1 |
+| M-RELAY-01 | Through a jump host | **2VM**, the target enrolled through the jump host's environment relay (E-RELAY-01), no broker connection: activation reaches it over the wake channel within a minute, and at its next poll (`MonitoringPollMinutes` = 5) with the channel cut; uploads arrive at the service signed by the target; the jump host audits 1203; `status` says *through the relay of JUMP01*; the jump host's log has no section contents | H | 1 |
 | M-RELAY-02 | Relay off | `EnvironmentRelay` = 0 on the jump host → the target's outbox fills and its polls fail quietly, then it drains and a waiting activation arrives when it is 1 again; a bundle over 4 MB is refused by the service, not the relay | H | 1 |
 | M-RELAY-03 | Chain and loss | jump host behind a jump host: two hops, uploads arrive; the head's broker connection cut for 20 minutes → outboxes fill, nothing lost, all arrive within a digest interval after it is back | H N | 2 |
 | M-CON-01 | Device tab | **2VM**, RemoteHub in the client VM: the tab shows the inventory, the events of M-EVT and the alert of M-PERF-01 on the timeline from the lab service; offline → the cache is shown and marked; screenshots in both themes | U | 1 |
