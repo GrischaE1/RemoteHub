@@ -26,6 +26,7 @@ WinRM can stay disabled on the device.
 - **No listener other than the agent's own.** RemoteHub needs a network path to the device, for example through VPN or routing, through another device's agent used as a jump host (`/v1/tunnel`, §6), or through the RemoteHub Broker, which is optional (§11 and the README).
 - ~~No screen or input.~~ Changed: the agent also offers its own remote desktop for devices where RDP is off – see [agent-desktop-draft.md](agent-desktop-draft.md) and §12.
 - **No own command set.** The agent never interprets commands. It authenticates the account, starts PowerShell as that account and forwards the protocol.
+- ~~No data collection.~~ Proposed: the agent collects an inventory of the device, watches events and performance and makes them available to RemoteHub – see [device-monitoring-design.md](device-monitoring-design.md) (draft, not built). It stays within "no own command set": monitoring reads the device and changes nothing on it.
 
 ## 3. Architecture
 
@@ -334,7 +335,7 @@ zero-filled after a hard power-off, and the service didn't start).
 - Logged: start and stop, port, certificate fingerprint, every sign-in and refusal (account, source address, reason), and session start and end (account, source, duration, PowerShell PID).
 - Audit entries (sign-in refused, session start and end, desktop, tunnel, automatic sign-in) also go to the Windows Application log, source *RemoteHub Agent*, unless the policy `AuditToEventLog` = 0.
 - Never logged: passwords and command content.
-- Nothing leaves the device. The agent sends no telemetry and no crash reports.
+- Nothing leaves the device. The agent sends no telemetry and no crash reports. (Device monitoring, [device-monitoring-design.md](device-monitoring-design.md) §9.3, would upload inventory bundles to the organisation's own RemoteHub Broker, sealed for its consoles – still nothing to the vendor; this line changes when that is built.)
 
 ## 9. Updates
 
