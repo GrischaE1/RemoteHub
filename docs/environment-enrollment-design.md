@@ -91,7 +91,7 @@ enrolment, its monitoring uploads and a periodic poll go through the jump host's
   today), or written into a `.rhagent` file or a token file for `ENROLLMENT_TOKEN_FILE`. The list shows each token's
   uses and last use; a token used from an unexpected network is the admin's to notice.
 - **A console secret** (`rhc1…`) gets the same lifecycle (name, expiry, revoke, uses) in the same list, under
-  *Console tokens* (§16 Q5).
+  *Console tokens*, in phase 2 (decided; §17). Signing consoles in as people instead is later work (§16 Q9).
 
 ## 5. Discovery
 
@@ -346,7 +346,7 @@ endpoint, test-lab-spec §5.3):
 | **1 – Environment on the device and the environment side** | Discovery document and enrol endpoint at the environment (the broker's repository); `enroll` with `ENVIRONMENT`/`ENROLLMENT_TOKEN_FILE`, the format-3 file, `agent.json` `environment`, rediscovery, migration of `broker`, policies `Environment`, `EnvironmentKeys`; audit 1304/1305/2401/3401; the lab environment |
 | **2 – The console** | *Settings → Environment*, tokens with their lifecycle and audit, `.rhbroker` with the environment, *Save enrolment file…* format 3, *Join environment…*, the legacy page, `AllowEnvironments`, the device's environment in the editor |
 | **3 – The relay** | `/v1/environment/forward`, upstreams from the tree, records naming the upstream and the console's placement under it, `EnvironmentRelay`, 1203/2202; monitoring's relay folds into it |
-| Later | Agent updates from the environment's feed ([agent-spec.md](agent-spec.md) §9); console tokens' lifecycle if not in phase 2; a customer-hosted environment; removing the legacy path |
+| Later | Agent updates from the environment's feed ([agent-spec.md](agent-spec.md) §9); consoles signing in as people with roles (§16 Q9); a customer-hosted environment; removing the legacy path |
 
 Monitoring's phase 1 ([device-monitoring-design.md](device-monitoring-design.md) §17) needs this phase 1: a device
 uploads to the front door discovery gave it.
@@ -368,7 +368,7 @@ and [security-test-lab-design.md](security-test-lab-design.md) (TB2/TB3, SEC-ENV
 | Q2 | **Keep the `rhd1` wire form** or introduce `rhe1` for tokens? | Keep `rhd1`: every existing agent and broker parses it, and the lifecycle is metadata at the environment, not in the string. |
 | Q3 | **Listener default for new installs** – keep the inbound port and firewall rule on (direct path first), or broker-only by default now that every device has a broker? | Keep it on, scoped by the file's firewall addresses: the direct path is faster on the local network and nothing new is exposed. `ListenEnabled` and `BROKER_ONLY` stay for the other choice. |
 | Q4 | **Tenant creation** – an environment-level token that lets an MSP's installer create tenants, or tenants only through the console? | Console only in v1; MSP flows are a later design. |
-| Q5 | **Console secrets** – the same lifecycle (name, expiry, revoke, uses) in phase 2, or later? | Phase 2: the same list, the same code. |
+| Q9 | **Consoles signing in as people** – instead of a shared console secret, a person signs in to the environment (Entra ID or another identity provider) and the console receives the tenant's keyring for that person with a role: per-admin identity in the audit, revocation by disabling the person, and the home for the RBAC the desktop design reserved rights names for ([agent-desktop-draft.md](agent-desktop-draft.md) §2 decision 9). | A design of its own, after enrolment v1 ships; the keyring would be sealed per person rather than per console secret. Console tokens (§4) are the step before it. |
 | Q6 | **`UPSTREAM` in the file** – the file is per fleet, the upstream per site. One file per site, or the console sets the upstream after enrolment through the jump host's tunnel? | One file per site in v1 (Intune already targets by group); the console's *Monitoring settings…* can change it later. |
 | Q8 | **A wake for relayed devices** – later, could the relay carry a long-lived channel so a device behind a jump host hears of an activation at once instead of polling? | Not in v1; the poll is cheap and the jump host's tunnel is the console's path. Revisit with the first customer who needs minutes, not a quarter of an hour. |
 | Q7 | **Deprecation of the legacy path** – when is format 2 refused for new installs? | Two minor versions after phase 2 ships, announced in the console's update notes. |
@@ -383,4 +383,5 @@ and [security-test-lab-design.md](security-test-lab-design.md) (TB2/TB3, SEC-ENV
 | The token is today's device secret with a lifecycle; its wire form stays | Compatibility: existing agents and brokers parse it; the end-to-end key model is unchanged |
 | The environment stores only derived keys and public keys | The broker's model today; discovery names hosts and can't grant trust |
 | Legacy devices keep working; the console keeps the claim for them | Principle 6; removal is a later decision (Q7) |
+| Console secrets become console tokens with the same lifecycle, in phase 2 | The owner (v1 Q5) |
 | The jump-host relay forwards to the environment's discovered hosts only, never the broker; relayed devices poll | Not a proxy; one relay for enrolment and monitoring; the owner: no broker connection behind a jump host |
