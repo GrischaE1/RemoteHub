@@ -539,9 +539,10 @@ needs no right on the device: it is the tenant's decision at the service (§6.5)
 
 ### 9.3 Through a jump host: the environment relay
 
-A device without a path to the environment reaches it through its jump host's agent, for everything – enrolment, the
-broker connection and monitoring uploads alike: the environment relay of
-[environment-enrollment-design.md](environment-enrollment-design.md) §10. The jump host forwards bytes to the
+A device behind a jump host has no broker connection. It reaches the environment through its jump host's agent for
+its enrolment, its monitoring uploads and its poll for activation and settings – the environment relay of
+[environment-enrollment-design.md](environment-enrollment-design.md) §10; consoles reach the device itself through the
+jump host's tunnel as today. The jump host forwards bytes to the
 environment's discovered hosts only, TLS runs from the device to the front door inside the forward, and the upload is
 signed by the device, so the relay sees sizes and hosts and can change nothing. Monitoring adds no rule of its own to
 it; the limits, the policy `EnvironmentRelay` and the audit (1203, 2202) are the relay's. A chain whose head loses its
