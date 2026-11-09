@@ -1,6 +1,6 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
-Status: Draft v5 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+Status: Draft v6 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
 protocol `remotehub-broker/1`). v2 takes in the answers to v1's open questions (§20): the history lives in a
 **RemoteHub-hosted, multi-tenant monitoring service** sized for hundreds of thousands of devices, not in the console;
 monitoring is **activated from the console** under the tenant's licence; devices behind **jump hosts** upload through
@@ -10,7 +10,7 @@ reconciliation, and only the performance digest has a cadence (§6). v4 makes th
 [environment-enrollment-design.md](environment-enrollment-design.md): every device has an environment and knows its
 monitoring front door from discovery; activation and settings reach it over its broker connection, or by a poll
 through its jump host's relay where it has none (§6.5, §6.6) – the console never has to connect to a device for
-monitoring. §19 has what is still open, §21 the database
+monitoring. v6 closes the last open questions (§20) and adds how the store runs cheaply outside production (§21.5). §19 has what is still open, §21 the database
 choice, §22 volumes and costs by interval.
 Owner: Grischa Ernst
 
@@ -581,7 +581,7 @@ navigation*, one call per minute for the tenant's open alerts.
 |---|---|---|
 | **Front door** | A **Worker of its own** in the broker's repository, next to the session broker's, bound to the same D1 and to KV through service bindings and deployed on its own: ingestion takes hundreds of uploads a second and runs a validator over hostile input, and a bug or a load spike there must not take down session brokering. It verifies device and console signatures, enforces entitlement and quotas, validates bundles against §7, writes to the store, answers queries, runs activation | Cloudflare, every region – serverless, no container |
 | **Metadata** | Tenants, entitlements (tier, cap, region), activations, device → tenant and key, members and consoles, quotas' counters | The environment's D1 (today's broker database) |
-| **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** – one cluster per region (EU, US), shared by the region's tenants, tenant id on every row (§21) |
+| **Store** | Sections (current and history), events, alerts, performance; materialised views for the dashboards | **ClickHouse** (open source) – one cluster per region (EU, US) in production, shared by the region's tenants, tenant id on every row; a single self-hosted node for staging and the lab (§21, §21.5) |
 | **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
 
 Nothing in the service is a container in v1: the Workers are serverless and ClickHouse Cloud is managed. A container
@@ -617,7 +617,8 @@ device_state (tenant, device, last_seen, last_full, interval, path, agent_versio
 ```
 
 - **Retention per tenant** is a column, so one table serves every tier: `TTL time + toIntervalDay(retention_days)`.
-  A tier change rewrites the column for the tenant's rows (`ALTER … UPDATE`, background). The 1-minute and 10 s data
+  A tier change rewrites the column for the tenant's rows (`ALTER … UPDATE`, background); a downgrade deletes the older
+  rows at the next TTL merge, within a day, and the tier dialog says so. The 1-minute and 10 s data
   keep 7 days on every tier.
 - **Isolation:** every query the Worker issues starts with `WHERE tenant = {tenant}` from the verified access token's
   membership;
@@ -1036,9 +1037,9 @@ A failing collector on a lab VM is a finding for §15.1's skip list, not a reaso
 | **2 – Problems, performance and alerts** | Agent: the problem and session watchers (§5.2), sampler (§5.3), the digest (§6.3), thresholds (§5.4), the remaining policies, 1402, 2500. Service: alerts, performance tables, the timeline queries, tenant defaults. Console: Alerts section, Events with lanes, settings section, folder apply, navigation dots, tenant defaults in Settings | M-EVT-*, M-PERF-* pass |
 | **3 – Timeline** | `DeviceTimeline`, the Timeline section, sparklines on the tiles, correlation footer (service-side counts), keyboard and automation | M-CON-01, the U screenshots reviewed |
 | **4 – Through jump hosts** | Monitoring over the environment relay (environment-enrollment-design.md phase 3): outbox behaviour down a chain, the lab cases | M-RELAY-*, SEC-MON-04 pass |
-| **5 – Monitoring view** | The rail view, every dashboard of §11.4 with the customer's choice, reports and export, search, the cross-device correlation, the service audit page | M-CON-03 |
+| **5 – Monitoring view and notifications** | The rail view, every dashboard of §11.4 with the customer's choice, reports and export, search, the cross-device correlation, the service audit page; alert notifications from the service by e-mail and a generic webhook (per tenant: which rules, which recipients, a throttle of one message per device and rule per hour) | M-CON-03, M-CON-04 (a notification arrives for M-PERF-01's alert) |
 | **Later – remediation** | An alert runs a deployed script version (scripts-view-design.md) on the device: which alerts, which scripts, rings and stop conditions, approval, audit – a design of its own, decided for (v1 Q6) | – |
-| Later | GPU load; per-process network; a learned baseline per device and *unusual for this device* marks; alerts as toast notifications in the console and as e-mail from the service; a Windows event forwarding guide so SIEMs read 2500; a self-hosted service image; on-demand download of the agent's monitoring binaries | – |
+| Later | GPU load; per-process network; a learned baseline per device and *unusual for this device* marks; alerts as toast notifications in the console, Teams and other channels; a Windows event forwarding guide so SIEMs read 2500; a self-hosted service image; on-demand download of the agent's monitoring binaries | – |
 
 Phases 1 and 2 touch the agent, the service and the console together; each ships behind `MonitoringEnabled`,
 `AllowMonitoring` and the entitlement, so a release in between changes nothing for a device or tenant without them.
@@ -1073,14 +1074,8 @@ When phase 1 lands:
 
 ## 19. Open questions
 
-| # | Question | Proposal |
-|---|---|---|
-| Q1 | **ClickHouse Cloud or self-managed?** Cloud: no operations, encryption and backups included, about $440 a month for the smallest two-replica Scale service and compute-driven beyond (§22.4). Self-managed on three VMs per region: cheaper at 200,000 devices, but patching, backups and upgrades are RemoteHub's. | Cloud for v1 in both regions; revisit when a region's compute passes about $3,000 a month. |
-| Q2 | **Where does the ingestion run** – the Worker inserts into ClickHouse directly (simple, one hop) or through a queue (Cloudflare Queues) that smooths bursts and survives a ClickHouse outage? | Direct with asynchronous inserts in phase 1; the outbox on the device already smooths; a queue when the measured p99 of an upload passes 2 s. |
-| Q3 | **Tier change and data:** when a tenant moves from 90 to 30 days, is the older data deleted at once (TTL rewrite) or kept until it would have aged out? | Deleted at the next TTL merge (within a day), said in the tier dialog. |
-| Q4 | **Support access:** who at RemoteHub may open a tenant's rows, with what consent and for how long? | Only after the tenant's admin grants *support access* in *Settings → Monitoring* for 7 days; every read logged in the tenant's service audit. Needs the operations design. |
-| Q6 | **Alert notifications** from the service (e-mail, webhook, Teams) – phase 5 or later? | Later; phase 5 is dashboards. |
-| Q8 | **Sign-in duration measurement** (§5.2) – 7001 to the shell's first window is the agent's own measurement. Acceptable, or boot duration only in v1? | Try it in the lab (M-PERF-06); fall back to boot duration only if it isn't reliable. |
+Every question of v1–v5 is decided (§20). What remains is measured, not decided: the bundle sizes, the service's
+throughput and the ClickHouse sizing of §22 are replaced by lab and load-test figures in phase 1.
 
 ## 20. Decided
 
@@ -1112,6 +1107,12 @@ judgement call were the deciding voice:
 | The timeline is drawn by the project itself, from theme brushes | The project has no charting library and draws its own lists and toolbars |
 | Correlation is a count, labelled as one | Honesty: RemoteHub shows the admin the order of things; it doesn't decide the cause |
 | Free-space rule: percent or GB, either opens | Judgement; an admin who wants one sets the other to 0 |
+| ClickHouse is open source and self-hosted for staging and the lab (one container); production on ClickHouse Cloud or three self-hosted nodes per region, decided when production load is known | The owner (v5): the managed price is too much for staging; the same engine and schema everywhere, so the choice is operational, not architectural (§21.5) |
+| The Worker inserts into ClickHouse directly with asynchronous inserts; a queue only if the measured p99 of an upload passes 2 s | The owner (v5) |
+| A tier downgrade deletes the older data within a day, said in the dialog | The owner (v5) |
+| Support access to a tenant's rows only when an Owner or Admin grants it for 7 days, every read in the tenant's audit | The owner (v5) |
+| Alert notifications (e-mail, a generic webhook) ship in phase 5 with the dashboards; Teams and others later | The owner (v5) |
+| Sign-in duration is tried in the lab (M-PERF-06) and falls back to boot duration only | The owner (v5) |
 
 ## 21. The database: ClickHouse for the service, and why not elsewhere
 
@@ -1173,6 +1174,26 @@ Open: Cloud or self-managed (§19 Q1).
 The console stores no history (v1 Q9's answer ended that): a cache of the last overview and 24 hours for up to 50
 devices in its encrypted SQLite, a few MB. v1's analysis of DuckDB and an embedded ClickHouse for the console is moot;
 if a self-hosted service ever comes, it is the service's image that carries ClickHouse, not the console.
+
+### 21.5 Running the store cheaply: staging, the lab, and production
+
+ClickHouse is open source (Apache 2.0) and runs as one container; the $440 a month of §22.4 is the managed Cloud
+price for a two-replica service, which staging and testing don't need.
+
+| Environment | Store | Cost | Notes |
+|---|---|---|---|
+| **The lab** | One `clickhouse-server` container on the lab host, next to `wrangler dev` (test-lab-spec §5.3) | none | Started by the lab harness with the environment; a fresh database per run |
+| **Staging** (`staging.remotehub.dev`) | One self-hosted node in a container on a small VM (2 vCPU, 8 GB, 100 GB disk) in the region's cloud | about $20–40 a month | Same schema and version as production; no replica – staging data is disposable. Backups to R2 nightly with `clickhouse-backup` so a schema migration can be rehearsed on real data |
+| **Production** | ClickHouse Cloud (Scale, two replicas) **or** three self-hosted nodes per region with a keeper | Cloud about $440 a month per region at the start, about $2,700 at 200,000 devices (§22.4); self-hosted about $900–1,200 a month per region at that size plus operations | Decided when production load is known; nothing in the design depends on it. The Worker speaks ClickHouse's HTTP interface either way |
+
+ClickHouse Cloud's *Basic* tier (one replica, idles when nothing queries it) is the managed middle ground for staging
+if nobody wants to run a VM: third-party figures put it at about $70 a month at six active hours a day and about
+$190 around the clock – to confirm against the current price list, which doesn't publish the monthly number.
+Self-hosted is cheaper and is the same engine, so it is the proposal.
+
+Other open-source stores were weighed in §21.3; PostgreSQL with TimescaleDB would serve staging as cheaply and
+production to about 100,000 devices, but it isn't the engine production needs at the owner's target, and running two
+engines across environments is the one thing to avoid.
 
 ## 22. Data volumes and costs by digest interval
 
@@ -1259,7 +1280,8 @@ a load test in phase 1:
 - **Enterprise tier** (private networking, customer-managed keys, SSO) is 1.3× the compute; a European region 1.3×
   again. For the EU cluster budget about $570 a month for the smallest service on Enterprise in Germany.
 - **Self-managed** (three nodes per region, 8 vCPU / 32 GiB each) is about $900–1,200 a month per region in compute
-  on a major cloud at 200,000 devices, plus RemoteHub's operations – cheaper at the top, costlier at the bottom (§19 Q1).
+  on a major cloud at 200,000 devices, plus RemoteHub's operations – cheaper at the top, costlier at the bottom.
+  Staging and the lab run one self-hosted node for tens of dollars or nothing (§21.5).
 - Traffic out of Cloudflare is free; traffic from the Workers into ClickHouse Cloud is counted by the cloud provider
   the cluster sits in (about 1 TB a month at 200,000 devices and 1 hour, at that provider's rates).
 
