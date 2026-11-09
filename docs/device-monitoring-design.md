@@ -585,8 +585,8 @@ navigation*, one call per minute for the tenant's open alerts.
 | **Jobs** | Diffs of sections into change events at ingestion; retention by TTL; nightly materialised-view refreshes where a view isn't incremental | ClickHouse and a Workers cron |
 
 Nothing in the service is a container in v1: the Workers are serverless and ClickHouse Cloud is managed. A container
-appears only with self-managed ClickHouse (§19 Q1), a customer-hosted service (§2, later), or an ingestion buffer
-beyond what Cloudflare Queues gives (§19 Q2).
+appears only with self-hosted ClickHouse (§21.5), a customer-hosted service (§2, later), or an ingestion buffer
+beyond what Cloudflare Queues gives (§20).
 
 Ingestion path: the Worker verifies the signature and quota, inflates within the limits, decodes the Protobuf message
 with `protobuf-es`, validates (§7), computes the section diffs against the device's current rows, and inserts rows into ClickHouse over its HTTP interface with
@@ -647,7 +647,7 @@ Where thousands of uploads a second would bite, in the order they cost (§22.3 h
 | Inflate and decode (15 KB) | about 0.1 ms CPU | negligible | Streaming inflate under the §7 caps; Protobuf decoding is a few times faster than JSON parsing |
 | Validation and clipping | about 0.2 ms CPU | negligible | – |
 | Diff of a changed section | 2–5 ms, a read of the stored copy | about 14 a second on Patch Tuesday | Current sections in `sections_current`, one read per changed section |
-| ClickHouse insert | I/O | hundreds of small inserts a second | Asynchronous inserts batch on the server; a Cloudflare Queue in front if the measured p99 passes 2 s (§19 Q2) |
+| ClickHouse insert | I/O | hundreds of small inserts a second | Asynchronous inserts batch on the server; a Cloudflare Queue in front if the measured p99 passes 2 s (§20) |
 
 Decompression is last on the list: zlib inflates hundreds of MB a second on one core and the aligned-fleet peak is
 under a megabyte a second. Nothing here is a single server – each upload is a Worker invocation on the edge node the
@@ -916,7 +916,7 @@ access) readable by the tenant's consoles under *Settings → Monitoring → Ser
   by the admin and audited.
 - **Compliance groundwork** for the service, outside this document but named so it isn't forgotten: a data processing
   agreement naming the sub-processors (Cloudflare, the ClickHouse host), the region choice, deletion within 30 days
-  of a tenant's end, backups' retention, and a security review of the Workers' code paths (§19).
+  of a tenant's end, backups' retention, and a security review of the Workers' code paths.
 
 ## 15. Compatibility and budget
 
@@ -1167,7 +1167,7 @@ That is an analytical workload: append-only, time-ordered, aggregated by tenant,
 entitlements, activations, keys, quota counters), where the transactional, small, point-lookup data already lives.
 PostgreSQL would carry 10,000 devices well and 100,000 with effort; the owner's target of a couple of hundred thousand
 devices in one environment, with dashboards that aggregate a quarter, is where a column store stops being optional.
-Open: Cloud or self-managed (§19 Q1).
+Cloud or self-hosted for production is decided when the load is known; staging and the lab are self-hosted (§21.5).
 
 ### 21.4 And the console?
 
