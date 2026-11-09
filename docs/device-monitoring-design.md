@@ -86,7 +86,7 @@ device on one timeline – and, across a tenant's devices, dashboards and report
 
 | Asset | Threat | Where it is handled |
 |---|---|---|
-| The inventory of a device (apps, patch level, users, configuration) – a map for an attacker | Read by someone without the right; read in transit; read by another tenant; read at RemoteHub beyond what the service needs | Rights on the device (§9.1), TLS everywhere, device and console proofs of the broker protocol, tenant id on every row and every query (§10.3), region per tenant, access at RemoteHub limited to operations (§14) |
+| The inventory of a device (apps, patch level, users, configuration) – a map for an attacker | Read by someone without the right; read in transit; read by another tenant; read at RemoteHub beyond what the service needs | Rights on the device (§9.1), TLS everywhere, the device's signature on every upload and the person's access token and role on every query, tenant id on every row and every query (§10.3), region per tenant, access at RemoteHub limited to operations (§14) |
 | The service | A device floods it or sends bundles made to crash the parser; a tenant reads another's rows | Quotas per device and tenant, limits on every field at ingestion, tenant-scoped queries only, the device's identity on every upload (§9.2, §14) |
 | The console | A device's data misleads the admin or exploits the console's rendering | Everything shown is text, clipped at the service and again in the console; nothing from a bundle is a link, a path or markup (§14) |
 | The device | Monitoring slows it down, fills its disk, or opens a new way in | Budget and outbox limits (§8, §15.2); no new listener; the settings endpoint needs a right; the relay endpoint on a jump host forwards only to the service, bounded (§9.3) |
@@ -329,7 +329,7 @@ needs no connection from the console to the device:
 1. **Entitlement.** RemoteHub sets on the tenant's record at the environment: monitoring licensed, the tier (30, 60 or
    90 days), the device cap, the region. The console reads it with the person's memberships and shows it under
    *Settings → Environment* and *Settings → Monitoring*.
-2. **Activate.** The admin chooses *Monitoring → Activate…* on the tenant's synced folder, a folder or a device
+2. **Activate.** The admin chooses *Monitoring → Activate…* on the tenant's folder, a folder or a device
    (§11.3). The console writes the activation – which devices, with which settings – to the service
    (`POST …/activations`, §9.4). Nothing is sent to a device.
 3. **The device learns of it** over its broker connection: the broker sends a `wake` of kind `monitoring` to each
@@ -761,10 +761,12 @@ tiles' sparkline, the alert detail, and the full Timeline section.
 - **Activate:** right-click a device, a folder or the tenant's synced folder → *Monitoring → Activate…*. The dialog
   (built like `AgentInstallDialog`) names the tenant and region the data goes to, the tier, what is collected (a link
   to the README's list) and whether account names are included (the policy's state if set), shows the devices it will
-  activate and which have no path (§2) or an older agent, and runs device by device like *Claim RemoteHub Agents…*,
-  reporting which took it, which refused (policy, right) and which weren't reached. *Deactivate…* is the same dialog
-  with the data question (*Keep the history until it ages out* / *Delete this device's data now*). Needs the right
-  `MonitoringSettings` on each device, and `AllowMonitoring` on this PC.
+  activate and which have no path (§2), an older agent or a device policy that forbids it (known from its last
+  upload or `status`), and writes the activation to the service in one call (§6.5); the dialog then shows each device
+  confirm as it is woken or polls (*activated 09:14*, *waiting – offline*, *refused by policy*). *Deactivate…* is the
+  same dialog with the data question (*Keep the history until it ages out* / *Delete this device's data now*). Needs
+  the role *Admin* or *Owner* in the tenant ([environment-enrollment-design.md](environment-enrollment-design.md) §8.2)
+  and `AllowMonitoring` on this PC; no right on the device.
 - **Per device:** the Device tab's *Settings* section shows the activation state and path, the full sync and digest
   intervals, the sections collected, and every rule of §5.4 as a row with on/off, threshold and window (`NumberBox`es with the ranges of §5.4),
   with the value's source (*device*, *tenant default*, *policy*). *Apply* writes them to the service for the device's next upload, *Apply now* also sends
@@ -810,7 +812,7 @@ an SVG), through *Save as…*, never written to a temp file; a report export is 
 | Value (`HKLM|HKCU\SOFTWARE\Policies\RemoteHub`) | Type | Meaning (default) |
 |---|---|---|
 | `AllowMonitoring` | DWORD | 0: no Device tab, no activation, no Monitoring view, and the cache is emptied at the next start (1). Below `AllowAgent` and `AllowBroker`, since the data path is the broker's |
-| `AllowMonitoringActivation` | DWORD | 0: this PC may look but not activate, deactivate or change settings (1) |
+| `AllowMonitoringActivation` | DWORD | 0: this PC may look but not activate, deactivate or change settings, whatever the person's role (1) |
 | `AllowMonitoringExport` | DWORD | 0: no report export (1) |
 
 ### 12.2 Agent (`HKLM\SOFTWARE\Policies\RemoteHub\Agent`, ADMX category *RemoteHub Agent → Monitoring*)
