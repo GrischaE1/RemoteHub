@@ -1,8 +1,9 @@
 # RemoteHub – Device monitoring and inventory (DEX)
 
 Status: Draft v1 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
-protocol `remotehub-broker/1`). The open questions are in §19, the decisions taken so far in §20, and §21 weighs a second database (ClickHouse,
-DuckDB) against the encrypted SQLite the console has.
+protocol `remotehub-broker/1`). The open questions are in §19, the decisions taken so far in §20, §21 weighs a second database (ClickHouse, DuckDB)
+against the encrypted SQLite the console has, and §22 puts numbers on data volumes and Cloudflare costs at 1, 4 and
+8 hour intervals.
 Owner: Grischa Ernst
 
 ## 1. Goal
@@ -140,7 +141,7 @@ Event Viewer tab. A kind that changes an inventory section also triggers that se
 | Kind | Lane | Windows source and ids | Fields kept | Triggers |
 |---|---|---|---|---|
 | `app.installed`, `app.updated`, `app.removed` | Changes | Registry change on the Uninstall keys (machine and loaded user hives) and the AppX database – the agent re-reads `apps`, diffs it against its last copy and names what changed; MsiInstaller 1033/1034/1035/1036 and AppXDeploymentServer 854 only confirm the source (MSI, Store) | App name, old and new version, publisher, scope, how (MSI, Store, installer) | `apps` |
-| `update.installed`, `update.failed` | Changes | System: Microsoft-Windows-WindowsUpdateClient 19, 20; Setup log (servicing) 1, 2; a feature update is noticed as a changed OS build at the next `os` collection and as a `device.restarted` after setup | Title, KB, result code, whether a restart is pending | `updates`, `os` |
+| `update.installed`, `update.failed` | Changes | System: Microsoft-Windows-WindowsUpdateClient 19, 20; Setup log (servicing) 1, 2; a feature update is noticed as a changed OS build at the next `os` collection and as a `device.restarted` after setup | Title, KB, result code, whether a restart is pending | `updates`, `os` – except definition updates (Defender signatures arrive several times a day): recorded, not triggered |
 | `driver.installed`, `driver.failed` | Changes | System: Microsoft-Windows-UserPnp 20001 (install done), 20003; Microsoft-Windows-Kernel-PnP 400/410/411; the agent diffs `drivers` to name old and new version | Device, provider, old and new version, INF | `drivers` |
 | `config.gpo` | Changes | Microsoft-Windows-GroupPolicy/Operational 8004–8007 (processing done), 1085/1125/1129 (failed); then a diff of the `config` GPO list and policy values | Scope (computer, user), result, which GPOs and how many values changed | `config` |
 | `config.mdm` | Changes | DeviceManagement-Enterprise-Diagnostics-Provider/Admin sync-completed and failed events (ids confirmed in the lab, M-CFG), then a diff of the CSP values | Result, values changed | `config` |
@@ -152,7 +153,7 @@ Event Viewer tab. A kind that changes an inventory section also triggers that se
 | `memory.low` | Problems | Microsoft-Windows-Resource-Exhaustion-Detector 2004 | Top consumers the event names (program names) | performance samples |
 | `security.detection` | Problems | Windows Defender/Operational 1116, 1117, 1118, 1119 | Threat name, severity, action, path's folder only (no file name) | – |
 | `device.restarted`, `device.shutDown`, `device.started` | Sessions | System: User32 1074 (who asked and the reason), Kernel-General 12/13, EventLog 6005/6006, Kernel-Boot (fast startup) | Reason, process that asked, initiating user (with `MonitoringIncludeUsers`), boot duration from Diagnostics-Performance/Operational 100 (`MainPathBootTime` + `BootPostBootTime`), shutdown duration from 200 | `os` |
-| `session.signIn`, `session.signOut`, `session.lock`, `session.unlock`, `session.connect`, `session.disconnect` | Sessions | Microsoft-Windows-Winlogon 7001/7002, TerminalServices-LocalSessionManager/Operational 21–25, 39/40; sign-in duration measured by the agent from 7001 to the shell's first window (lab) | Session id, account (with `MonitoringIncludeUsers`), console or RDP, duration | `users` |
+| `session.signIn`, `session.signOut`, `session.lock`, `session.unlock`, `session.connect`, `session.disconnect` | Sessions | Microsoft-Windows-Winlogon 7001/7002, TerminalServices-LocalSessionManager/Operational 21–25, 39/40; sign-in duration measured by the agent from 7001 to the shell's first window (lab) | Session id, account (with `MonitoringIncludeUsers`), console or RDP, duration | none – a device sees dozens a day; they go with the next full bundle, and `users` is re-read only there |
 | `time.changed` | Sessions | Kernel-General 1 (system time changed), with the old and new time | Delta | – |
 | `agent.*` | Sessions | The agent's own audit events as they happen (sessions, refusals, broker) | Event id and the message | – |
 
@@ -373,6 +374,12 @@ here as the contract the agent and the console are written to, in the broker's o
   whichever is reached first, oldest first, and answers with the highest `seq` it holds (the agent's
   acknowledgement). A quota of 60 uploads per device per hour, 4 MB each; more is 429 and the agent waits for the
   next interval.
+- **Where the broker keeps them:** in its existing D1 database, a table of its own (`org, device_id, seq, time, size,
+  body BLOB`) with the retention run by the broker's scheduled worker. D1's row limit is 2 MB, so a bundle over 1.9 MB
+  is stored in numbered chunks and reassembled on read – rare, since a full bundle is a few KB (§22). §22 shows D1 is
+  the cheaper store up to the 10 GB a D1 database may hold (about 9,000 devices in one organisation at the 7-day
+  retention); an organisation beyond that gets its mailbox in R2 instead, behind the same paths. Nothing on the agent
+  or console side depends on which.
 - **Consoles read:** `GET /v1/o/{org}/devices/{deviceId}/monitoring?after=<seq>` with the console's proof, for every
   device in the organisation's synced folder the console has; the broker also pushes a `monitoring` notice on the
   console's existing connection when a device uploads, so the console fetches within seconds while it runs. A console
@@ -895,4 +902,89 @@ devices, and a different engine later is an import, not a migration.
 - **Thresholds for revisiting:** a console asked to hold more than about 2,000 devices, a retention over a year, an
   admin team that needs one shared view, or analytical questions over raw performance points. Any one of them is a
   server conversation, not a console database swap.
+
+## 22. Data volumes and Cloudflare costs at 1, 4 and 8 hours
+
+The question: what does the broker (Cloudflare Workers with D1, as the lab spec and `BrokerProtocol.cs` have it) and the
+console's database carry if the full inventory goes every hour, every 4 hours or every 8 hours? Prices are Cloudflare's
+published ones at the time of writing (Workers Paid $5 a month with 10 million requests and 30 million CPU-ms included,
+then $0.30 and $0.02 per million; D1 5 GB, 25 billion rows read and 50 million rows written included, then $0.75 per
+GB-month, $0.001 and $1.00 per million; R2 10 GB-months, 1 million class A and 10 million class B included, then $0.015
+per GB-month, $4.50 and $0.36 per million; no charge for traffic in or out). Check them again before a budget.
+
+### 22.1 Assumptions per device
+
+| Item | Value | Why |
+|---|---|---|
+| Envelope and hash-only sections | 1.5 KB | §7 |
+| 5-minute performance summaries | 1.7 KB per hour covered | 12 metrics × avg/max/min × 12 points, top processes, gzip |
+| Section changes | 40 KB a day | about one `apps` change a day (Edge, Teams and Store apps update themselves); other sections rarely |
+| Triggered bundles | 3 a day, 15 KB on average | app changes, crashes, updates, alerts; session events don't trigger (§5.2) |
+| Consoles reading the mailbox | 2 | each fetches once per upload notice |
+| Worker CPU per request | 5 ms | pass-through of a sealed body, a D1 insert or select |
+| Broker retention | 7 days | §9.3 |
+| Console history | 90 days, plus 7 days of 1-minute data | §10 |
+
+### 22.2 Per device
+
+| Interval | Full bundle | On the wire a day | Uploads a day | Uploads a month | Held on the broker (7 days) | Snapshot-only variant, a day |
+|---|---|---|---|---|---|---|
+| 1 h | 3.2 KB | 162 KB | 27 | 810 | 1.1 MB | 119 KB |
+| 4 h | 8.4 KB | 135 KB | 9 | 270 | 0.9 MB | 88 KB |
+| 8 h | 15.2 KB | 131 KB | 6 | 180 | 0.9 MB | 83 KB |
+
+Two things the table shows:
+
+- **The interval saves requests, not bytes.** Three quarters of the bytes are section changes and triggered bundles,
+  which happen when they happen; the performance summaries cover the same hours whichever bundle carries them. Going
+  from 1 to 8 hours cuts uploads by 4.5× and bytes by 20 %.
+- **The snapshot-only variant** – no continuous sampling, one reading per interval – saves about a quarter of the bytes
+  and loses every threshold alert: *CPU at or above 80 % for 5 minutes* can't be seen in a reading every hour. Sampling
+  stays on the device (it costs the device nothing measurable, §15.2); the interval only decides how often the
+  summaries travel. Longer intervals do make the timeline later: a 4-hour interval shows the morning's load at noon,
+  unless an alert sent it earlier.
+
+### 22.3 Per fleet and month
+
+Requests are uploads plus two consoles' reads. D1 rows written are one per upload with its index, plus the retention
+delete. The R2 column is the alternative store for the same bundles (one class A put and one delete per upload, one
+class B get per console read). The console column is one console holding every device.
+
+| Devices | Interval | Worker requests | Workers | D1 rows written | Broker store | D1 cost | R2 cost | Traffic in | Console DB (90 days) |
+|---|---|---|---|---|---|---|---|---|---|
+| 100 | 1 h | 0.24 M | $5.00 (plan) | 0.2 M | 0.11 GB | $0 | $0 | 0.5 GB | 0.8 GB |
+| 100 | 4 h | 0.08 M | $5.00 | 0.1 M | 0.09 GB | $0 | $0 | 0.4 GB | 0.8 GB |
+| 100 | 8 h | 0.05 M | $5.00 | 0.1 M | 0.09 GB | $0 | $0 | 0.4 GB | 0.8 GB |
+| 1,000 | 1 h | 2.4 M | $5.00 | 2.4 M | 1.1 GB | $0 | $4.50 | 4.6 GB | 8.2 GB |
+| 1,000 | 4 h | 0.8 M | $5.00 | 0.8 M | 0.9 GB | $0 | $0 | 3.9 GB | 8.2 GB |
+| 1,000 | 8 h | 0.5 M | $5.00 | 0.5 M | 0.9 GB | $0 | $0 | 3.7 GB | 8.2 GB |
+| 10,000 | 1 h | 24.3 M | $11.12 | 24.3 M | 10.8 GB | $4.37 | $74.53 | 46 GB | 82 GB |
+| 10,000 | 4 h | 8.1 M | $5.21 | 8.1 M | 9.0 GB | $3.02 | $22.50 | 39 GB | 82 GB |
+| 10,000 | 8 h | 5.4 M | $5.00 | 5.4 M | 8.7 GB | $2.79 | $13.50 | 37 GB | 82 GB |
+
+### 22.4 What follows
+
+- **The broker's cost is noise at every size.** Up to 1,000 devices everything is inside the $5 plan at any interval.
+  At 10,000 devices and 1 hour it is about $15 a month on D1. The interval matters only for R2, whose price is per
+  put: there 1 hour costs five times 8 hours. So **D1, the database the broker has, is the right mailbox store**, and
+  the interval can be chosen for freshness, not for cost.
+- **D1's hard limit is size, not money:** 10 GB per database, which at the 7-day retention is about 9,000 devices at
+  1 hour (11,000 at 8 hours) in one organisation's database. Options in that order: a shorter mailbox retention (3 days
+  halves it – the console still catches up from the device, §9.2), a mailbox database per organisation, R2 for that
+  organisation (§9.3). None changes the agent or the console.
+- **The console is the real limit, and the interval doesn't move it.** One console holding 1,000 devices has an 8 GB
+  database after 90 days, 10,000 devices 82 GB – whatever the interval, because the console keeps the same
+  summaries, events and changes. That confirms §21.3: a console is designed for about 500 devices and 90 days (4 GB);
+  a fleet beyond about 2,000 devices or a shared history is a server (§21.4). The levers that do shrink the console
+  are the retention (§12.1), the 1-minute history (7 days, 0.7 GB per 500 devices), and the summaries' step (15-minute
+  summaries cut the performance part by two thirds and are still enough for a 90-day timeline).
+- **Traffic is free on Cloudflare, but not on the device's link:** 160 KB a day per device at 1 hour is 5 MB a month
+  – a 4-hour interval saves 1 MB of that. Metered links don't need a longer interval; the summaries and section
+  hashes keep the hourly bundle at 3 KB.
+- **Recommendation:** keep **60 minutes as the default**, because the cost case for a longer interval doesn't exist
+  and the hourly bundle is what makes the timeline current without an alert. Offer 4 and 8 hours (and up to a week)
+  in the settings for organisations that want less chatter – the policy range of §12.2 already allows it.
+
+The figures come from the assumptions of §22.1; phase 1 replaces them with measured bundle sizes from the lab (M-INV-01
+records the first full bundle's size per VM), and §22.2–22.3 are recomputed then.
 
