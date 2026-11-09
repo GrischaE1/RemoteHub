@@ -20,8 +20,10 @@ msiexec /i RemoteHub-Agent.msi ENVIRONMENT=staging.remotehub.dev ENROLLMENT_TOKE
 
 The agent asks the environment where everything is – the broker for its tenant's region, the monitoring front door,
 the update feed – and keeps asking, so a service can move without touching a device. The broker is no longer
-optional: **every enrolled device has a broker connection**, and direct connections on the local network stay what
-they are today, the faster path when it is there (*Reach → Automatic*).
+optional: **every device that can reach the environment has a broker connection**, and direct connections on the
+local network stay what they are today, the faster path when it is there (*Reach → Automatic*). A device behind a
+jump host has no broker connection of its own: consoles reach it through the jump host as today, and only its
+enrolment, its monitoring uploads and a periodic poll go through the jump host's relay to the environment (§10).
 
 | Part | What |
 |---|---|
@@ -30,14 +32,16 @@ they are today, the faster path when it is there (*Reach → Automatic*).
 | **Discovery** | `GET https://<environment>/.well-known/remotehub` and, after the proof, a tenant-specific answer: region, broker, monitoring, updates, STUN, protocol versions, the environment's key (§5). Repeated daily and whenever a service doesn't answer. |
 | **The agent** | `enroll` takes the environment and the token (MSI properties, the `.rhagent` file in format 3, or the command line with the token on standard input), makes the device's own key and certificate as today, proves the token to the environment, registers with its region's broker, and writes everything it learned into `agent.json` (§6). |
 | **The console** | *Settings → Environment* replaces *Settings → RemoteHub Broker*: an environment URL and a console secret, the same discovery, the tenants' synced folders as today. Devices appear with their pins from the sealed records; the console's own enrolment secret and the claim become the legacy path (§7). |
-| **Jump hosts** | A device without a path to the environment joins through its jump host's agent, which relays to the environment's discovered hosts and nothing else – enrolment, the broker connection and monitoring uploads alike (§10). |
+| **Jump hosts** | A device without a path to the environment enrols through its jump host's agent, which relays to the environment's discovered hosts and nothing else – the enrolment, monitoring uploads and a poll for what the console left for it. It has **no broker connection**; consoles reach it through the jump host's tunnel as today, and the environment's record says which jump host, so it lands under it in the tenant's folder (§10). |
 
 ### 1.1 Principles
 
 1. **One home for a device: its environment.** The device knows one name and one token at install. Everything else –
    which broker, which region, which service – comes from the environment and can change.
-2. **The broker is the main connection point.** Every device is reachable through it from anywhere; direct
-   connections on the local network are an optimisation the console tries first, as today.
+2. **The broker is the main connection point.** Every device that can reach the environment is reachable through
+   it from anywhere; direct connections on the local network are an optimisation the console tries first, as today.
+   A device behind a jump host is reached through the jump host – the tree is the route, as
+   [jump-host-design.md](jump-host-design.md) §1.1 has it – and has no broker connection.
 3. **End to end stays end to end.** The token carries the organisation's key material, the environment stores only
    keys derived from it (the enroll key), and the device's record is sealed with a key the environment never holds –
    exactly the broker's model today ([agent-spec.md](agent-spec.md) §7, `BrokerProtocol.cs`). Discovery tells a device
@@ -68,7 +72,7 @@ they are today, the faster path when it is there (*Reach → Automatic*).
 | Where the broker's address comes from | Typed at install or in a policy | Discovery from the environment, per tenant and region |
 | Where a new service's address comes from | A new property or policy per service | Discovery |
 | A secret's lifecycle | The console's enrolment secret: replace and revoke; the device secret: retire at the broker | The token: name, expiry, use cap, revoke, audit of every use |
-| A device without a broker | Normal | Legacy only; new devices always have one |
+| A device without a broker | Normal | Only behind a jump host (reached through it; enrolled and monitored through its relay), or legacy |
 | Consoles | *Settings → RemoteHub Broker*, address + console secret | *Settings → Environment*, environment + console secret; the same discovery |
 
 ## 4. The enrolment token
@@ -135,7 +139,8 @@ the environment's key:
 - Refusals: 401 (proof), 403 with a reason (token expired, revoked, over its cap, tenant disabled), 426 (agent older
   than `minAgent`), 429. Each is audited at the environment for the tenant and logged on the device (2401).
 - **Rediscovery:** the agent asks again every `rediscoverHours` (24; 1–168), after three failed connections to a
-  service in a row, when the broker closes with a new code `4301 Moved`, and at every service start – with the same
+  service in a row, when the broker closes with a new code `4301 Moved`, and at every service start (a device behind
+  a jump host asks through the relay, §10) – with the same
   proof, so a revoked token also ends rediscovery (the device keeps working with what it has until the admin acts;
   §9). A changed answer is applied without a restart: the broker link reconnects to the new address, monitoring
   uploads go to the new front door.
@@ -202,9 +207,11 @@ agent and still claimed by the console, for the legacy path; a format-1 file sta
 
 ### 6.4 After enrolment
 
-The service connects to its region's broker as `BrokerLink` does today (the enroll key, the sealed record, 1300 and
-1303), serves direct connections when `ListenEnabled`, uploads monitoring bundles to the front door it was given once
-the tenant activates monitoring, and rediscovers on the schedule of §5.2. Health (`/v1/health`) gains
+A device with a path to the environment connects to its region's broker as `BrokerLink` does today (the enroll key,
+the sealed record, 1300 and 1303), serves direct connections when `ListenEnabled`, uploads monitoring bundles to the
+front door it was given once the tenant activates monitoring, and rediscovers on the schedule of §5.2. A device behind
+a jump host (`environment.upstream` set) opens no broker connection: it serves its listener for the jump host's tunnel
+as today, and uses the relay for the enrolment, the uploads, the rediscovery and a poll (§10). Health (`/v1/health`) gains
 `environment: {id, region}` – names only.
 
 ## 7. The console
@@ -214,7 +221,9 @@ the tenant activates monitoring, and rediscovers on the schedule of §5.2. Healt
   monitoring, tenant name), the registered consoles, the enrolment and console tokens (§4), *Save enrolment file…*,
   *Disconnect*. Several environments and tenants can be connected, as several brokers can today.
 - **Devices** appear in the tenant's synced folder with their pins from the sealed records, as broker devices do
-  today. *Claim RemoteHub Agent…*, the console's enrolment secret and `AgentEnrollmentKeys` stay for legacy devices and
+  today. A device enrolled through a jump host carries the jump host's device id in its record, so the console places
+  it **under the jump host** in the synced folder (the tree is the route) and shows *reached through JUMP01* instead of
+  an online dot of its own – the jump host's state stands in. *Claim RemoteHub Agent…*, the console's enrolment secret and `AgentEnrollmentKeys` stay for legacy devices and
   are shown under *Legacy enrolment* in the same page, with a note that new devices don't need them.
 - **Install RemoteHub Agent** writes a format-3 file with a chosen token; *Assign to RemoteHub Broker…* becomes **Join
   environment…** and does for an installed legacy agent what the MSI does for a new one, over the agent's PowerShell
@@ -249,24 +258,34 @@ Console: `AllowEnvironments` (MULTI_SZ, the environments this PC may connect to;
 ## 10. Jump hosts: the environment relay
 
 A device on a network without a path to the environment – a lab segment, an OT network, a customer site behind a
-single jump host – becomes a full member through its jump host's agent, which already runs the tunnel
-([jump-host-design.md](jump-host-design.md)):
+single jump host – **has no broker connection**. Consoles reach it as they do today: through the jump host's tunnel,
+by its place in the tree ([jump-host-design.md](jump-host-design.md)). What the environment adds for it is an identity
+in the tenant and a way for its monitoring data to get out, both through the jump host's agent:
 
 - The console, which knows the chain from the tree, gives the device an **upstream** with its enrolment (the jump
   host's address, port and certificate fingerprint; in the format-3 file or the MSI property `UPSTREAM`). The device
-  reaches the environment through `https://<upstream>:58732/v1/environment/forward/<host>/<path>` – discovery, the
-  enrolment proof, the broker WebSocket and monitoring uploads alike – checking the upstream's pin as the console does.
+  reaches the environment through `https://<upstream>:58732/v1/environment/forward/<host>/<path>` – the discovery
+  document, the enrolment proof, monitoring uploads, the rediscovery and the poll below – checking the upstream's pin
+  as the console does. It opens no WebSocket to the broker, through the relay or otherwise.
+- **The record** the device registers through the relay names its upstream's device id, so consoles place it under
+  the jump host in the synced folder and route to it through the tunnel as today. It has no online state at the
+  broker; the console shows *reached through JUMP01* and the jump host's state.
+- **No wake, so a poll.** Without a broker connection nothing can tell the device that the console left it something
+  (an activation, settings). It asks the monitoring front door through the relay every `MonitoringPollMinutes`
+  (15 by default, 5–1440; [device-monitoring-design.md](device-monitoring-design.md) §6.5) and with every upload – a
+  signed request of a few hundred bytes.
 - The jump host's agent forwards **only to the environment's discovered hosts** (its own `environment` object: the
-  environment, its broker, monitoring and update hosts), byte for byte, TLS from the device to the environment running
-  inside the forward, so the jump host sees sizes and hosts, not content. Anything else is refused (2202). Limits:
-  `EnvironmentRelay`, at most 64 concurrent forwards per source and 1,024 per jump host, sources within
-  `TunnelTargets` when set, special addresses refused as for tunnels. Audit 1203 per source and hour.
+  environment, its monitoring and update hosts – not the broker, which no relayed device talks to), byte for byte,
+  TLS from the device to the environment running inside the forward, so the jump host sees sizes and hosts, not
+  content. Anything else is refused (2202). Limits: `EnvironmentRelay`, at most 16 concurrent forwards per source and
+  256 per jump host, sources within `TunnelTargets` when set, special addresses refused as for tunnels. Audit 1203 per
+  source and hour.
 - Chains work hop by hop; the console builds the upstream list from the tree, and re-sends it when a device is moved
   (the move's confirmation says so).
 - This replaces the monitoring-only relay of [device-monitoring-design.md](device-monitoring-design.md) §9.3, which
   becomes one use of it.
 
-Until the relay is built (phase 3), a device without a path to the environment stays on the legacy path.
+Until the relay is built (phase 3), a device behind a jump host stays on the legacy path.
 
 ## 11. Security
 
@@ -316,9 +335,9 @@ endpoint, test-lab-spec §5.3):
 | E-DISC-02 | Signature and policy | a document with a bad signature refused; `Environment` set to another name → enrol refused; `EnvironmentKeys` pinned to a wrong key → refused and logged | PS | 1 |
 | E-LEG-01 | Legacy devices | a device joined with `BROKER_URL` + device secret before the update → after it, `environment` filled from discovery, same device id and keys, still online; a console-enrolled device without a broker works as before and is marked legacy in the console | H PS | 1 |
 | E-CON-01 | Console | **2VM**: *Settings → Environment → Connect* with environment and console secret → tenants' folders, devices with pins, a token created, shown once and used by E-ENR-01's install; *Join environment…* moves a legacy device | U H | 1 |
-| E-RELAY-01 | Through a jump host | **2VM**, the target without a path: `UPSTREAM` in the file → enrolled, online at the broker and uploading monitoring through the jump host; 1203 on the jump host; its log has no content | H N | 1 |
+| E-RELAY-01 | Through a jump host | **2VM**, the target without a path: `UPSTREAM` in the file → enrolled through the relay, its record names the jump host, it appears under the jump host in the synced folder and is reached through the tunnel; it opens no broker connection (no 1300, the broker lists it as relayed); monitoring uploads and polls go through the relay; 1203 on the jump host; its log has no content | H N | 1 |
 | SEC-ENV-01 | Rogue device | a token used from the attacker VM → the device lands in *New devices*, no console connects to it with credentials, the cap and revoke stop further uses, the audit shows the source | H | 1 |
-| SEC-ENV-02 | Relay is not a proxy | forwards to a host outside the jump host's discovered set, a CONNECT, a body over the limit, a 65th concurrent forward → refused (2202), nothing sent | H N | 1 |
+| SEC-ENV-02 | Relay is not a proxy | forwards to a host outside the jump host's discovered set (the broker included), a CONNECT, a WebSocket upgrade, a body over the limit, a 17th concurrent forward → refused (2202), nothing sent | H N | 1 |
 
 ## 14. Phases
 
@@ -326,7 +345,7 @@ endpoint, test-lab-spec §5.3):
 |---|---|
 | **1 – Environment on the device and the environment side** | Discovery document and enrol endpoint at the environment (the broker's repository); `enroll` with `ENVIRONMENT`/`ENROLLMENT_TOKEN_FILE`, the format-3 file, `agent.json` `environment`, rediscovery, migration of `broker`, policies `Environment`, `EnvironmentKeys`; audit 1304/1305/2401/3401; the lab environment |
 | **2 – The console** | *Settings → Environment*, tokens with their lifecycle and audit, `.rhbroker` with the environment, *Save enrolment file…* format 3, *Join environment…*, the legacy page, `AllowEnvironments`, the device's environment in the editor |
-| **3 – The relay** | `/v1/environment/forward`, upstreams from the tree, `EnvironmentRelay`, 1203/2202; monitoring's relay folds into it |
+| **3 – The relay** | `/v1/environment/forward`, upstreams from the tree, records naming the upstream and the console's placement under it, `EnvironmentRelay`, 1203/2202; monitoring's relay folds into it |
 | Later | Agent updates from the environment's feed ([agent-spec.md](agent-spec.md) §9); console tokens' lifecycle if not in phase 2; a customer-hosted environment; removing the legacy path |
 
 Monitoring's phase 1 ([device-monitoring-design.md](device-monitoring-design.md) §17) needs this phase 1: a device
@@ -351,16 +370,17 @@ and [security-test-lab-design.md](security-test-lab-design.md) (TB2/TB3, SEC-ENV
 | Q4 | **Tenant creation** – an environment-level token that lets an MSP's installer create tenants, or tenants only through the console? | Console only in v1; MSP flows are a later design. |
 | Q5 | **Console secrets** – the same lifecycle (name, expiry, revoke, uses) in phase 2, or later? | Phase 2: the same list, the same code. |
 | Q6 | **`UPSTREAM` in the file** – the file is per fleet, the upstream per site. One file per site, or the console sets the upstream after enrolment through the jump host's tunnel? | One file per site in v1 (Intune already targets by group); the console's *Monitoring settings…* can change it later. |
+| Q8 | **A wake for relayed devices** – later, could the relay carry a long-lived channel so a device behind a jump host hears of an activation at once instead of polling? | Not in v1; the poll is cheap and the jump host's tunnel is the console's path. Revisit with the first customer who needs minutes, not a quarter of an hour. |
 | Q7 | **Deprecation of the legacy path** – when is format 2 refused for new installs? | Two minor versions after phase 2 ships, announced in the console's update notes. |
 
 ## 17. Decided
 
 | Decision | Settled by |
 |---|---|
-| The broker is mandatory for new devices; direct connections stay as the first try | The owner: the broker is the main device connection point |
+| The broker is mandatory for new devices that can reach the environment; a device behind a jump host has none and is reached through the jump host | The owner: the broker is the main device connection point, not the only one |
 | Environment URL + enrolment token replace both enrolment paths | The owner |
 | The agent learns broker, monitoring and update hosts by discovery and rediscovers daily and on failure | The owner's request that the agent get its information from the environment; services can then move |
 | The token is today's device secret with a lifecycle; its wire form stays | Compatibility: existing agents and brokers parse it; the end-to-end key model is unchanged |
 | The environment stores only derived keys and public keys | The broker's model today; discovery names hosts and can't grant trust |
 | Legacy devices keep working; the console keeps the claim for them | Principle 6; removal is a later decision (Q7) |
-| The jump-host relay forwards to the environment's discovered hosts only | Not a proxy; one relay for enrolment, broker and monitoring |
+| The jump-host relay forwards to the environment's discovered hosts only, never the broker; relayed devices poll | Not a proxy; one relay for enrolment and monitoring; the owner: no broker connection behind a jump host |
