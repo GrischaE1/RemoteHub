@@ -475,7 +475,7 @@ LocalSystem service shouldn't gain a native one for this. Files, written with `D
 | File | Contents |
 |---|---|
 | `state.json` | Activation (service address, tenant, upstream), next `seq`, event-log bookmarks, last hash per section, the thresholds' state, last upload and acknowledged `seq`, settings in force |
-| `outbox/<seq>.rhmon` | One bundle each (gzip JSON, §7) until the service acknowledges it. Kept at most **7 days or 64 MB**, oldest first – a device without a path for a week keeps its newest full bundle and the console sees a gap, not an outage |
+| `outbox/<seq>.rhmon` | One bundle each (gzip Protobuf, §7) until the service acknowledges it. Kept at most **7 days or 64 MB**, oldest first – a device without a path for a week keeps its newest full bundle and the console sees a gap, not an outage |
 | `sections/<name>.json` | The last copy of each section, for the diffs of §6.2 |
 | `perf/<yyyyMMdd>.bin` | The day's 1-minute summaries, a fixed binary record per minute (about 200 bytes), 48 hours kept |
 
@@ -606,7 +606,7 @@ alerts      (tenant, device, alert_id UUID, rule, opened DateTime64, closed Null
 perf_5m     (tenant, device, time DateTime, metric LowCardinality(String), avg Float32, max Float32, min Float32, top String, retention_days)
   ENGINE MergeTree PARTITION BY toYYYYMM(time) ORDER BY (tenant, device, metric, time) TTL time + toIntervalDay(retention_days)
 perf_fine   (… step UInt16, values Array(Float32) …)     -- 1-minute and 10 s samples around alerts, TTL 7 days
-sections    (tenant, device, name, collected DateTime, hash FixedString(32), data String /* gzip JSON */, retention_days)
+sections    (tenant, device, name, collected DateTime, hash FixedString(32), data String /* the gzip Protobuf section, §7 */, retention_days)
   ENGINE MergeTree ORDER BY (tenant, device, name, collected) TTL collected + toIntervalDay(retention_days)
 sections_current  (tenant, device, name, hash, collected, data) ENGINE ReplacingMergeTree(collected) ORDER BY (tenant, device, name)
 apps_current (tenant, device, key, name, version, publisher, scope …) ENGINE ReplacingMergeTree ORDER BY (tenant, device, key)
