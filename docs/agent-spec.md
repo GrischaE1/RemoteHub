@@ -26,6 +26,8 @@ WinRM can stay disabled on the device.
 - **No listener other than the agent's own.** RemoteHub needs a network path to the device, for example through VPN or routing, through another device's agent used as a jump host (`/v1/tunnel`, §6), or through the RemoteHub Broker, which is optional (§11 and the README).
 - ~~No screen or input.~~ Changed: the agent also offers its own remote desktop for devices where RDP is off – see [agent-desktop-draft.md](agent-desktop-draft.md) and §12.
 - **No own command set.** The agent never interprets commands. It authenticates the account, starts PowerShell as that account and forwards the protocol.
+- ~~Enrolment by a console's file or a broker join.~~ Proposed: devices join an **environment** (URL + enrolment token) and learn broker, monitoring and update hosts by discovery; consoles sign in as people, sessions carry the environment's attestation of the person, and a device's `Rights` may grant them to roles (RBAC); the broker becomes the main connection point – see [environment-enrollment-design.md](environment-enrollment-design.md) (draft, not built; §5 of this document changes with it).
+- ~~No data collection.~~ Proposed: the agent collects an inventory of the device, watches events and performance and makes them available to RemoteHub – see [device-monitoring-design.md](device-monitoring-design.md) (draft, not built). It stays within "no own command set": monitoring reads the device and changes nothing on it.
 
 ## 3. Architecture
 
@@ -334,7 +336,7 @@ zero-filled after a hard power-off, and the service didn't start).
 - Logged: start and stop, port, certificate fingerprint, every sign-in and refusal (account, source address, reason), and session start and end (account, source, duration, PowerShell PID).
 - Audit entries (sign-in refused, session start and end, desktop, tunnel, automatic sign-in) also go to the Windows Application log, source *RemoteHub Agent*, unless the policy `AuditToEventLog` = 0.
 - Never logged: passwords and command content.
-- Nothing leaves the device. The agent sends no telemetry and no crash reports.
+- Nothing leaves the device. The agent sends no telemetry and no crash reports. (Device monitoring, [device-monitoring-design.md](device-monitoring-design.md) §9.2, would – once activated from the console – upload inventory bundles to the tenant's RemoteHub monitoring service, which stores and queries them for that tenant; still no telemetry about the agent itself. This line changes when that is built.)
 
 ## 9. Updates
 
