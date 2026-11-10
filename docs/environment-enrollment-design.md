@@ -382,8 +382,9 @@ A tenant comes into being in one of two ways, and carries **entitlements** the c
 
 - **Self-service:** a person signs up at the environment (`https://<environment>/signup`: e-mail, the identity
   provider or a RemoteHub account, company, region EU or US, and **payment details**, verified but not charged), and
-  gets a tenant as its *Owner* with a **14-day trial** of everything: agents without a device cap, monitoring at the
-  90-day tier, the broker. During the trial the console shows the days left; at its end the tenant falls to what was
+  gets a tenant as its *Owner* with a **14-day trial** of everything for **10 devices**: agents, monitoring at the
+  90-day tier, the broker. The eleventh device's enrolment is refused with the reason (`trial cap`), and the console
+  says so where it offers the install; sales can raise the cap for a tenant. During the trial the console shows the days left; at its end the tenant falls to what was
   bought, and devices beyond the bought licences stop being served (sessions refused with the reason, monitoring
   uploads refused with 403 `unlicensed`) until the Owner buys more – nothing is deleted for 30 days.
 - **Sales:** RemoteHub creates a tenant for an enterprise customer with its first Owner's e-mail, assigns licences and
@@ -551,7 +552,7 @@ provider and the console endpoints, test-lab-spec §5.3):
 | E-SIGN-02 | Roles | a *Viewer* sees devices and gets no session (the attestation is refused with the role, 2400 on the device); an *Operator* connects; an *Admin* creates a token; the person's membership removed → the folder greys within an hour, sessions refused at once | U H | 1 |
 | E-SIGN-03 | Attestation on the device | a session request without an attestation, with an expired one, one for another device, one signed by another key → refused (2400, the reason named); a valid one → the Windows sign-in follows as today; `BrokerUsers` excluding the person → refused; the device audit names the UPN | H | 1 |
 | E-RBAC-01 | Roles as rights | an *Operator* with no account on the device opens PowerShell and the desktop through the broker without credentials; the session runs as SYSTEM; the device audit names the UPN and role; a *Viewer* gets view-only and no PowerShell; `AttestedSessions` = 0 → credentials asked again; `Rights\PowerShell` without `role:Operator` → 403 | H PS E | 1 |
-| E-TRIAL-01 | Trial and licences | a self-service tenant at the lab environment: 14 days of everything, the console shows the days; the trial expired with no licence → sessions and uploads refused with `unlicensed`, nothing deleted; a licence assigned through the admin API → served again within a minute | H U | 1 |
+| E-TRIAL-01 | Trial and licences | a self-service tenant at the lab environment: 14 days of everything for 10 devices, the console shows the days and the count; an eleventh enrolment is refused with `trial cap` and 2401 on the device; the trial expired with no licence → sessions and uploads refused with `unlicensed`, nothing deleted; a licence assigned through the admin API → served again within a minute | H U | 1 |
 | E-KEY-01 | Tenant key | an Owner turns it on → a device enrolled with a token is *pending* and unreachable until *Admit*; a member from a directory group is pending and sees nothing; auto-admit for the Owner's tokens admits E-ENR-01's device without a click; a second console becomes a holder only after the first approves it; the recovery phrase restores the key into a fresh console | U H | 1 |
 | SEC-ENV-04 | The environment alone | the lab environment's admin API adds a device and a member to a tenant with the key on → both pending, no console trusts the device's record, the member's attestation is refused by a device with `TenantKey` = 1 and by one with the tenant setting (2400 names the missing co-signature) | H | 1 |
 | E-LEG-01 | Legacy | a device joined with `BROKER_URL` + device secret and a console with the console secret before the update → the organisation is a tenant, the console's person is *Owner* after the first sign-in, the device's signed record replaces the sealed one at its next connection, same device id and pin | H PS | 1 |
@@ -593,7 +594,7 @@ someone objects:
 |---|---|---|
 | J1 | Four roles – Owner, Admin, Operator, Viewer – and what each may do | §8.2 |
 | J2 | The rights an Operator gets by default on an environment-enrolled device (SecureDesktop included – confirmed) | §8.5 |
-| J3 | Trial: everything for 14 days with no device cap; 14 days of tolerated over-use; 30 days of retention after a lapse | §8.6 |
+| J3 | Trial: 14 days of tolerated over-use after a licence lapse; 30 days of retention after it | §8.6 |
 | J4 | Refresh tokens live at most 90 days; access tokens an hour | §8.1 |
 | J5 | Rediscovery every 24 hours; the relay's limits (16 forwards per source, 256 per jump host) | §6.2, §7.5 |
 | J6 | The tenant key is ES256 with a 24-word recovery phrase; holders are Owners and, optionally, Admins | §8.7 |
@@ -621,3 +622,4 @@ someone objects:
 | Stripe, with a card authorisation at sign-up and invoices for sales-created tenants | The owner (v4) |
 | An attestation is valid for 10 minutes to reach the device; the session then lives by the device's rules | The owner (v4) |
 | Operator gets SecureDesktop by default; the device policy can take it away | The owner (v4) |
+| The trial is capped at 10 devices; sales can raise it | The owner (v4) |
