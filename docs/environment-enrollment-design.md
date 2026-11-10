@@ -1,12 +1,13 @@
 # RemoteHub – The environment: devices and consoles join it
 
-Status: Draft v3 (2026-11-09), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
+Status: Draft v4 (2026-11-10), a proposal – nothing is built yet. Written against main as of 0.22.x (agent 0.22, broker
 protocol `remotehub-broker/1`). v1 made the broker the main connection point and gave devices an environment URL and
 an enrolment token. v2 does the same for consoles: **a person signs in to the environment, and the console gets
 everything from there** – no console secret, no joining a broker. That moves the trust anchor (§4), so the broker
 protocol becomes v2. v3 closes the open questions: **roles grant agent rights** (RBAC, §8.5), tenants start as a
 **14-day trial with payment details** and licences bought by the admin or assigned by sales (§8.6), legacy formats go
-with phase 2, and relayed devices get a wake channel in phase 3. [device-monitoring-design.md](device-monitoring-design.md)
+with phase 2, and relayed devices get a wake channel in phase 3. v4 adds the **tenant key** (§8.7): with it the environment
+alone can add neither a device nor a person the tenant trusts. [device-monitoring-design.md](device-monitoring-design.md)
 builds on this document. §17 has what is still open.
 Owner: Grischa Ernst
 
@@ -99,13 +100,13 @@ What this design keeps, and why it is enough:
 |---|---|---|
 | An existing device's pin can't be changed by the service | The record is sealed with the record key | The record is **signed by the device's own key**; the environment stores the key at enrolment and can't sign with it. A changed pin means a changed key means a *new* device |
 | A rogue device can't take an existing device's place | Same | Same: a new device appears in *New devices* with a new id; a console's connection to the existing device keeps its pin and refuses the newcomer |
-| A rogue device can't be slipped into a tenant unnoticed | Needs the device secret | Needs an enrolment token – or a compromised environment, which can register a device as if a token were used. **This is the new exposure:** it shows as a new device in the tenant's folder, under *New devices*, never as an existing one; no credentials go to it until an admin uses it; the tenant's audit shows a registration without a token use. For tenants that can't accept it, §17 Q1 proposes a tenant-held key as later work |
+| A rogue device can't be slipped into a tenant unnoticed | Needs the device secret | Needs an enrolment token – or a compromised environment, which can register a device as if a token were used. **This is the new exposure:** it shows as a new device in the tenant's folder, under *New devices*, never as an existing one; no credentials go to it until an admin uses it; the tenant's audit shows a registration without a token use. A tenant that turns on the **tenant key** (§8.7) closes it: nothing the environment adds is trusted until a holder of the key co-signs it |
 | A console can't be used without the person | The console secret | The person's sign-in, the console's key, an attestation that expires within hours (§8.4) |
 | The device decides who may do what | Windows sign-in, rights, policy | The device's policy decides whether an attested role is enough (RBAC, §8.5) or Windows credentials are still asked; either way the decision and the mapping are on the device, in `Rights`, and the person is in the audit |
 | The service reads no session content | TLS end to end to the device's pin | Unchanged |
 
-So the environment can, at worst, add a device or a person to a tenant; it can't impersonate an existing device or
-read a session. **With RBAC on (§8.5) adding a person is adding an operator of every device whose policy accepts the
+So the environment can, at worst, add a device or a person to a tenant – and not even that where the tenant key is
+on (§8.7); it can't impersonate an existing device or read a session. **With RBAC on (§8.5) adding a person is adding an operator of every device whose policy accepts the
 role**, so a tenant's device policy, not the environment, is where that reach is bounded – `Rights` names which roles
 count, `BrokerUsers` which people, and both default to the tenant's members with the role the device's `Rights` map. That is the model most device-management services run on, said plainly in the README
 and `PRIVACY.md` (§15). The seals and the keyring of `remotehub-broker/1` go; the broker protocol becomes **v2** (§10).
@@ -394,8 +395,43 @@ A tenant comes into being in one of two ways, and carries **entitlements** the c
 - **Entitlement record** (D1): `{org, trialEndsUtc, agentDevices, monitoringTier, monitoringDevices, region, terms,
   gracePeriodEndsUtc, billingCustomerId}` – read by the console with the memberships (§6.3), by the broker on every
   session, by the monitoring front door on every upload and activation. The environment's audit records every change.
-- The payment provider, invoices, tax and refunds are a design of their own; this document fixes only that payment
-  details are taken at sign-up, that the trial is 14 days, and what an entitlement is.
+- **Payment:** Stripe – hosted checkout and the customer portal in the browser, a **card authorisation at sign-up**
+  (verified, not charged), subscriptions monthly or yearly; sales-created tenants are **invoiced** through the same
+  provider. The environment stores the customer id and the subscription state, never card data; webhooks from the
+  provider update the entitlement record. Invoices, tax and refunds are the commerce design's; this document fixes
+  the provider, the authorisation at sign-up, the 14-day trial and the entitlement record.
+
+### 8.7 The tenant key
+
+For a tenant that can't accept that the environment alone may add a device or a person (§4), a key the tenant holds
+must **co-sign** every admission before consoles and devices trust it. Off by default; an Owner turns it on in
+*Settings → Environment → <tenant> → Security* and the console says what it costs (below).
+
+- **The key:** an ES256 key pair made in the Owner's console when the setting is turned on. The private key lives in
+  that console's encrypted database ([local-db-design.md](local-db-design.md) §4) and in the databases of the other
+  **holders**; the public key is published for the tenant by the environment and pinned by every device at its next
+  rediscovery (and in the enrolment file for new devices) and by every console at sign-in.
+- **Holders:** Owners and, if the Owner chooses, Admins. A new holder's console gets the key **wrapped for its console
+  key** by a holder's console that is signed in (a linking step the new console shows as *waiting for an Owner to
+  approve this console*; the approving console shows who and which console). A **recovery phrase** (24 words, shown
+  once when the key is made) restores the key into a console with no holder left.
+- **What is co-signed:** a device admission `{org, deviceId, spki, admitted}` and a membership `{org, userId, upn,
+  role, since}`, each by the tenant key over the canonical JSON. The environment stores the co-signatures with the
+  records and delivers them with the device list and inside attestations.
+- **What checks them:** a console trusts a device's record only with a valid admission co-signature; a device accepts
+  an attestation only when the membership it names is co-signed (the attestation carries it). Policy `TenantKey`
+  (§11) lets IT require the co-signature on devices regardless of the tenant's setting.
+- **How admissions happen:** a holder's console co-signs **on sight** – each new device and each new member (from an
+  invitation or an identity-provider group) appears as *pending* in the tenant's folder and under *Members* with
+  *Admit*; an Owner can set *admit devices enrolled with a token I created automatically* so an Intune rollout doesn't
+  wait for clicks, and *admit members from directory groups automatically while a holder's console is signed in*. A
+  pending device is reachable by nobody; a pending member can see nothing.
+- **What it costs:** a holder's console must be signed in for anything to be admitted; losing every holder and the
+  recovery phrase makes a new tenant key necessary, which re-admits every device and member (a guided step). The
+  environment's own operations (support access, entitlements) don't need it.
+- **What it closes:** the environment can list a device or a member, but no console or device trusts them until a
+  holder co-signs; it can't sign a membership or an admission, since it never holds the key. The device-signed record
+  still prevents an existing device from being replaced. What remains is denial of service, as in §6.2.
 
 ## 9. Legacy and migration
 
@@ -423,7 +459,8 @@ What changes in `BrokerProtocol.cs` and on the broker, as a list for the broker'
 - **Layouts** (the shared folder structure) are signed by the environment on write by an Admin, instead of sealed
   with the layout key.
 - **New endpoints:** `/.well-known/remotehub`, `/v1/enrol`, `/v1/auth/*` (OpenID Connect), `/v1/console/me`,
-  `/v1/o/{org}/attest`, `/v1/o/{org}/tokens`, `/v1/o/{org}/members`, `/v1/o/{org}/audit`; the monitoring front door's
+  `/v1/o/{org}/attest`, `/v1/o/{org}/tokens`, `/v1/o/{org}/members`, `/v1/o/{org}/audit`, `/v1/o/{org}/tenantkey`
+  (the public key, pending admissions, co-signatures, console linking); the monitoring front door's
   of [device-monitoring-design.md](device-monitoring-design.md) §9.
 - **Attested sessions carry the role** the device maps onto its rights (§8.5); the session start names the person
   and role in the device's audit.
@@ -443,6 +480,7 @@ Agent (`HKLM\SOFTWARE\Policies\RemoteHub\Agent`, ADMX category *RemoteHub Agent 
 | `BrokerUsers` | MULTI_SZ | UPNs or identity-provider object ids whose attestations are accepted (every member of the tenant) |
 | `BrokerRoles` | SZ | The least role an attestation must carry to reach the device at all: `Viewer`, `Operator`, `Admin`, `Owner` (`Viewer`) |
 | `AttestedSessions` | DWORD | 0: an attested person must still sign in with Windows credentials – roles in `Rights` are ignored, the roles are a gate only (1) |
+| `TenantKey` | DWORD | 1: accept only attestations whose membership carries the tenant key's co-signature (§8.7), whatever the tenant's setting (0) |
 | `Rights\<right>` | MULTI_SZ | As today, plus `role:Viewer`, `role:Operator`, `role:Admin`, `role:Owner` entries (§8.5); the enrolment's defaults as listed there |
 | `BrokerConsoles` | MULTI_SZ | Legacy consoles' ids, as today, until the seals go |
 | `BrokerEnabled`, `BrokerUrl`, `BrokerHttpProxy`, `BrokerKeepAliveSeconds`, `BrokerDirect`, `BrokerStun`, `ListenEnabled`, `TunnelOwnPorts` | as today | `BrokerUrl` doubles as an allowed environment |
@@ -455,8 +493,7 @@ Console (`SOFTWARE\Policies\RemoteHub`): `AllowEnvironments` (MULTI_SZ, the envi
 - **The new exposure, stated:** the environment can add a device or a person to a tenant (§4). It can't change an
   existing device's pin, speak as a device, read a session or sign in to one. Mitigations: new devices land in *New
   devices* and get no credentials until used; a registration without a token use is in the tenant's audit; members
-  added outside the directory mapping are in it too; §17 Q1 offers a tenant-held key for those who need the stronger
-  model.
+  added outside the directory mapping are in it too; the tenant key (§8.7) closes the exposure for tenants that turn it on.
 - **A role is administrative access** to the tenant's devices whose `Rights` accept it (§8.5): the controls are MFA at the
   identity provider, the 10-minute attestation bound to the console key, `BrokerUsers`, `AttestedSessions` and the
   device's audit naming the person. The README says so where it describes roles.
@@ -515,6 +552,8 @@ provider and the console endpoints, test-lab-spec §5.3):
 | E-SIGN-03 | Attestation on the device | a session request without an attestation, with an expired one, one for another device, one signed by another key → refused (2400, the reason named); a valid one → the Windows sign-in follows as today; `BrokerUsers` excluding the person → refused; the device audit names the UPN | H | 1 |
 | E-RBAC-01 | Roles as rights | an *Operator* with no account on the device opens PowerShell and the desktop through the broker without credentials; the session runs as SYSTEM; the device audit names the UPN and role; a *Viewer* gets view-only and no PowerShell; `AttestedSessions` = 0 → credentials asked again; `Rights\PowerShell` without `role:Operator` → 403 | H PS E | 1 |
 | E-TRIAL-01 | Trial and licences | a self-service tenant at the lab environment: 14 days of everything, the console shows the days; the trial expired with no licence → sessions and uploads refused with `unlicensed`, nothing deleted; a licence assigned through the admin API → served again within a minute | H U | 1 |
+| E-KEY-01 | Tenant key | an Owner turns it on → a device enrolled with a token is *pending* and unreachable until *Admit*; a member from a directory group is pending and sees nothing; auto-admit for the Owner's tokens admits E-ENR-01's device without a click; a second console becomes a holder only after the first approves it; the recovery phrase restores the key into a fresh console | U H | 1 |
+| SEC-ENV-04 | The environment alone | the lab environment's admin API adds a device and a member to a tenant with the key on → both pending, no console trusts the device's record, the member's attestation is refused by a device with `TenantKey` = 1 and by one with the tenant setting (2400 names the missing co-signature) | H | 1 |
 | E-LEG-01 | Legacy | a device joined with `BROKER_URL` + device secret and a console with the console secret before the update → the organisation is a tenant, the console's person is *Owner* after the first sign-in, the device's signed record replaces the sealed one at its next connection, same device id and pin | H PS | 1 |
 | E-RELAY-01 | Through a jump host | **2VM**, the target without a path: `UPSTREAM` in the file → enrolled through the relay, its record names the jump host, it appears under the jump host and is reached through the tunnel; no broker connection (no 1300); monitoring uploads go through the relay, the wake channel is up and an activation reaches it within seconds, the poll takes over when the channel is cut; 1203 on the jump host; its log has no content | H N | 1 |
 | SEC-ENV-01 | Rogue device | a token used from the attacker VM → the device lands in *New devices* with a record of its own, no console connects to it with credentials, the cap and revoke stop further uses, the audit shows the source; a record claiming an existing device's id with another key → *not verified*, never connected to | H | 1 |
@@ -538,21 +577,26 @@ console key for queries).
 | Phase | Content |
 |---|---|
 | **1 – Devices and the environment** | Discovery, `/v1/enrol`, signed records, the lab environment; `enroll` with `ENVIRONMENT`/`ENROLLMENT_TOKEN_FILE`, format 3, `agent.json` `environment`, rediscovery, migration of `broker`; policies `Environment`, `EnvironmentKeys`; audit 1304/1305/2401/3401. Consoles still join with the console secret during this phase |
-| **2 – People** | The authorisation server with Entra ID and RemoteHub accounts (generic OpenID Connect in the release after); members and roles; `/v1/console/me`; attestations and the device's check (`BrokerUsers`, `BrokerRoles`); **roles as agent rights** (`role:` entries in `Rights`, `AttestedSessions`, SYSTEM sessions with the person in the audit, §8.5); **sign-up, the 14-day trial and entitlements** (§8.6; the billing page against the chosen payment provider); *Settings → Environment* with sign-in, tenants, tokens, members, licences and the audit; environment-signed layouts; the migration of organisations and console secrets (§9); **format 2 refused for new installs, seals and the keyring removed**; `AllowEnvironments`, `EnvironmentSignInAccounts` |
+| **2 – People** | The authorisation server with Entra ID and RemoteHub accounts (generic OpenID Connect in the release after); members and roles; `/v1/console/me`; attestations and the device's check (`BrokerUsers`, `BrokerRoles`); **roles as agent rights** (`role:` entries in `Rights`, `AttestedSessions`, SYSTEM sessions with the person in the audit, §8.5); **sign-up, the 14-day trial and entitlements** (§8.6; Stripe checkout and portal, webhooks into the entitlement record); the **tenant key** (§8.7: key, holders and linking, admissions, co-signatures in attestations, `TenantKey`); *Settings → Environment* with sign-in, tenants, tokens, members, licences and the audit; environment-signed layouts; the migration of organisations and console secrets (§9); **format 2 refused for new installs, seals and the keyring removed**; `AllowEnvironments`, `EnvironmentSignInAccounts` |
 | **3 – The relay** | `/v1/environment/forward`, upstreams from the tree, records naming the upstream and the console's placement under it, the wake channel through the relay, `EnvironmentRelay`, 1203/2202; monitoring's relay folds into it |
-| Later | Agent updates from the environment's feed; the commerce design (payment provider, invoices, tax); a tenant-held key (§17); a customer-hosted environment; removing the claim and the console's enrolment secret once no legacy device is left |
+| Later | Agent updates from the environment's feed; the commerce design (invoices, tax, refunds); a customer-hosted environment; removing the claim and the console's enrolment secret once no legacy device is left |
 
 Monitoring's phase 1 ([device-monitoring-design.md](device-monitoring-design.md) §17) needs phase 1 here; its
 console side needs phase 2 (the access token for queries).
 
 ## 17. Open questions
 
-| # | Question | Proposal |
+Every question put to the owner is decided (§18). The judgement calls below were made without asking and stand until
+someone objects:
+
+| # | Judgement call | Where |
 |---|---|---|
-| Q1 | **A tenant-held co-signing key** for tenants that can't accept that the environment may add a device or a person – weightier now that a person can be an operator by role (§8.5). | Later work, when a customer asks; `AttestedSessions` = 0 and `BrokerUsers` are the controls until then. |
-| Q2 | **The payment provider** and what sign-up verifies (a card authorisation, SEPA, invoice for enterprise). | The commerce design; this document only fixes the trial and the entitlement record. |
-| Q3 | **Attestation lifetime** – 10 minutes as proposed, or per session? | 10 minutes to reach the device; the session then lives as the Windows sign-in – or the SYSTEM session's idle rules – allow; a reconnect gets a new attestation. |
-| Q4 | **Which rights a role should never get by default** – `ConsentBypass` and `AutoSignIn` are left to nobody; should `SecureDesktop` (the sign-in screen and UAC prompts) also wait for an explicit policy? | Keep it with *Operator*: an admin at a server's console needs it, and the device policy can take it away. |
+| J1 | Four roles – Owner, Admin, Operator, Viewer – and what each may do | §8.2 |
+| J2 | The rights an Operator gets by default on an environment-enrolled device (SecureDesktop included – confirmed) | §8.5 |
+| J3 | Trial: everything for 14 days with no device cap; 14 days of tolerated over-use; 30 days of retention after a lapse | §8.6 |
+| J4 | Refresh tokens live at most 90 days; access tokens an hour | §8.1 |
+| J5 | Rediscovery every 24 hours; the relay's limits (16 forwards per source, 256 per jump host) | §6.2, §7.5 |
+| J6 | The tenant key is ES256 with a 24-word recovery phrase; holders are Owners and, optionally, Admins | §8.7 |
 
 ## 18. Decided
 
@@ -573,3 +617,7 @@ console side needs phase 2 (the access token for queries).
 | The listener stays on by default for new installs, scoped by the file's firewall addresses | The owner (v3) |
 | Entra ID and RemoteHub accounts in phase 2, generic OpenID Connect in the release after | The owner (v3) |
 | The token is `rhe1` | The owner (v3) |
+| The tenant key is designed and built in phase 2, off by default, turned on per tenant | The owner (v4): with roles as rights, a tenant must be able to keep the environment from adding operators on its own |
+| Stripe, with a card authorisation at sign-up and invoices for sales-created tenants | The owner (v4) |
+| An attestation is valid for 10 minutes to reach the device; the session then lives by the device's rules | The owner (v4) |
+| Operator gets SecureDesktop by default; the device policy can take it away | The owner (v4) |
