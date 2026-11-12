@@ -32,7 +32,7 @@
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.6" />
     <!-- Local database: SQLite with whole-file encryption (SQLite3 Multiple Ciphers, ChaCha20-Poly1305). Only the
          .Core package â€“ the full Microsoft.Data.Sqlite brings an unencrypted SQLite that conflicts with this bundle. -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="11.0.0" />
     <PackageReference Include="SQLite3MC.PCLRaw.bundle" Version="2.4.0" />
     <!-- Network shares: SFTP, FTP/FTPS, and SMB when Windows' own client can't be used (another account on the same server) -->
     <PackageReference Include="SSH.NET" Version="2026.0.0" />
